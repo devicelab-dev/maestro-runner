@@ -15,3 +15,4 @@ coverage.html
 # OS
 .DS_Store
 pkg/cli/reports/
+apks/
