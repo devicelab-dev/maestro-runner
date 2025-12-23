@@ -1,11 +1,18 @@
 package cli
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/devicelab-dev/maestro-runner/pkg/driver/mock"
+	"github.com/devicelab-dev/maestro-runner/pkg/executor"
+	"github.com/devicelab-dev/maestro-runner/pkg/flow"
+	"github.com/devicelab-dev/maestro-runner/pkg/report"
+	"github.com/devicelab-dev/maestro-runner/pkg/validator"
 	"github.com/urfave/cli/v2"
 )
 
@@ -192,36 +199,121 @@ func resolveOutputDir(output string, flatten bool) (string, error) {
 }
 
 func executeTest(cfg *RunConfig) error {
-	// TODO: Implement test execution
-	// 1. Validate all flows using validator package
-	// 2. Connect to device
-	// 3. Execute flows
-	// 4. Generate reports in OutputDir
+	// 1. Validate all flows
+	v := validator.New(cfg.IncludeTags, cfg.ExcludeTags)
+	var allTestCases []string
+	var allErrors []error
 
-	fmt.Println("Test command received:")
-	fmt.Printf("  Flows: %v\n", cfg.FlowPaths)
-	if cfg.ConfigPath != "" {
-		fmt.Printf("  Config: %s\n", cfg.ConfigPath)
-	}
-	if len(cfg.Env) > 0 {
-		fmt.Printf("  Env: %v\n", cfg.Env)
-	}
-	if len(cfg.IncludeTags) > 0 {
-		fmt.Printf("  Include tags: %v\n", cfg.IncludeTags)
-	}
-	if len(cfg.ExcludeTags) > 0 {
-		fmt.Printf("  Exclude tags: %v\n", cfg.ExcludeTags)
-	}
-	fmt.Printf("  Output: %s\n", cfg.OutputDir)
-	if cfg.Platform != "" {
-		fmt.Printf("  Platform: %s\n", cfg.Platform)
-	}
-	if cfg.Device != "" {
-		fmt.Printf("  Device: %s\n", cfg.Device)
+	for _, path := range cfg.FlowPaths {
+		result := v.Validate(path)
+		allTestCases = append(allTestCases, result.TestCases...)
+		allErrors = append(allErrors, result.Errors...)
 	}
 
-	fmt.Println("\n[Not yet implemented - will validate and run flows]")
+	// Report validation errors
+	if len(allErrors) > 0 {
+		fmt.Fprintf(os.Stderr, "Validation errors:\n")
+		for _, err := range allErrors {
+			fmt.Fprintf(os.Stderr, "  - %v\n", err)
+		}
+		return fmt.Errorf("validation failed with %d error(s)", len(allErrors))
+	}
+
+	if len(allTestCases) == 0 {
+		return fmt.Errorf("no test flows found")
+	}
+
+	fmt.Printf("Found %d test flow(s)\n", len(allTestCases))
+
+	// 2. Parse all validated flows
+	var flows []flow.Flow
+	for _, path := range allTestCases {
+		f, err := flow.ParseFile(path)
+		if err != nil {
+			return fmt.Errorf("failed to parse %s: %w", path, err)
+		}
+		flows = append(flows, *f)
+	}
+
+	// 3. Create driver (mock for now)
+	driver := mock.New(mock.Config{
+		Platform: cfg.Platform,
+		DeviceID: cfg.Device,
+	})
+
+	// 4. Create and run executor
+	runner := executor.New(driver, executor.RunnerConfig{
+		OutputDir:   cfg.OutputDir,
+		Parallelism: 0, // Sequential for now
+		Artifacts:   executor.ArtifactOnFailure,
+		Device: report.Device{
+			ID:       driver.GetPlatformInfo().DeviceID,
+			Platform: driver.GetPlatformInfo().Platform,
+			Name:     driver.GetPlatformInfo().DeviceName,
+		},
+		App: report.App{
+			ID: cfg.AppFile,
+		},
+		RunnerVersion: "0.1.0",
+		DriverName:    "mock",
+	})
+
+	fmt.Printf("Running tests...\n")
+	fmt.Printf("Output: %s\n\n", cfg.OutputDir)
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		return fmt.Errorf("execution failed: %w", err)
+	}
+
+	// 5. Print summary
+	printSummary(result)
+
+	// Return error if any flows failed
+	if result.Status != report.StatusPassed {
+		return fmt.Errorf("test run failed: %d/%d flows failed", result.FailedFlows, result.TotalFlows)
+	}
+
 	return nil
+}
+
+func printSummary(result *executor.RunResult) {
+	fmt.Println("=" + strings.Repeat("=", 59))
+	fmt.Println("TEST RESULTS")
+	fmt.Println("=" + strings.Repeat("=", 59))
+
+	// Print each flow result
+	for _, fr := range result.FlowResults {
+		status := "PASS"
+		if fr.Status == report.StatusFailed {
+			status = "FAIL"
+		} else if fr.Status == report.StatusSkipped {
+			status = "SKIP"
+		}
+		fmt.Printf("  [%s] %s (%dms)\n", status, fr.Name, fr.Duration)
+		if fr.Error != "" {
+			fmt.Printf("         Error: %s\n", fr.Error)
+		}
+	}
+
+	fmt.Println("-" + strings.Repeat("-", 59))
+
+	// Print totals
+	fmt.Printf("Total:  %d flows\n", result.TotalFlows)
+	fmt.Printf("Passed: %d\n", result.PassedFlows)
+	fmt.Printf("Failed: %d\n", result.FailedFlows)
+	if result.SkippedFlows > 0 {
+		fmt.Printf("Skipped: %d\n", result.SkippedFlows)
+	}
+	fmt.Printf("Duration: %dms\n", result.Duration)
+	fmt.Println("=" + strings.Repeat("=", 59))
+
+	// Overall status
+	if result.Status == report.StatusPassed {
+		fmt.Println("Status: PASSED")
+	} else {
+		fmt.Println("Status: FAILED")
+	}
 }
 
 func parseEnvVars(envs []string) map[string]string {

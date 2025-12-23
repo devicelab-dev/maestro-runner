@@ -1,0 +1,7 @@
+- launchApp: com.example.app
+- tapOn: "Email"
+- inputText: "test@example.com"
+- tapOn: "Password"
+- inputText: "secret123"
+- tapOn: "Login"
+- assertVisible: "Welcome"

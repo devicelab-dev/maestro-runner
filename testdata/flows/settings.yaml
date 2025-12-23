@@ -1,0 +1,5 @@
+- launchApp: com.example.app
+- tapOn: "Settings"
+- assertVisible: "Preferences"
+- tapOn: "Notifications"
+- assertVisible: "Push notifications"

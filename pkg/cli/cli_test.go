@@ -266,23 +266,25 @@ func TestStartDeviceCommand_AllFlags(t *testing.T) {
 }
 
 func TestExecuteTest(t *testing.T) {
+	// Create a temp directory with a test flow
+	dir := t.TempDir()
+	flowFile := dir + "/test.yaml"
+	if err := os.WriteFile(flowFile, []byte(`- tapOn: "Button"`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	// Capture stdout to suppress output
 	oldStdout := os.Stdout
 	os.Stdout, _ = os.Open(os.DevNull)
 	defer func() { os.Stdout = oldStdout }()
 
 	cfg := &RunConfig{
-		FlowPaths:   []string{"flow.yaml"},
-		ConfigPath:  "config.yaml",
-		Env:         map[string]string{"USER": "test"},
-		IncludeTags: []string{"smoke"},
-		ExcludeTags: []string{"wip"},
-		OutputDir:   "./reports/test",
-		Platform:    "ios",
-		Device:      "iPhone-15",
+		FlowPaths: []string{flowFile},
+		OutputDir: dir + "/reports",
+		Platform:  "ios",
+		Device:    "iPhone-15",
 	}
 
-	// executeTest is not yet implemented, should return nil
 	err := executeTest(cfg)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
@@ -316,7 +318,12 @@ func TestTestCommand_WithFlowFile(t *testing.T) {
 func TestTestCommand_WithAllFlags(t *testing.T) {
 	dir := t.TempDir()
 	flowFile := dir + "/test.yaml"
-	if err := os.WriteFile(flowFile, []byte(`- tapOn: "Button"`), 0o644); err != nil {
+	// Flow with smoke tag to match include-tags filter
+	flowContent := `tags:
+  - smoke
+---
+- tapOn: "Button"`
+	if err := os.WriteFile(flowFile, []byte(flowContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
