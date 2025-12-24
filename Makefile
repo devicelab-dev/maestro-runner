@@ -7,6 +7,9 @@ COMMIT?=$(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
 BUILD_DATE?=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS=-ldflags "-X github.com/devicelab-dev/maestro-runner/cmd.Version=${VERSION} -X github.com/devicelab-dev/maestro-runner/cmd.Commit=${COMMIT} -X github.com/devicelab-dev/maestro-runner/cmd.BuildDate=${BUILD_DATE}"
 
+# Install directory
+INSTALL_DIR=$(HOME)/.maestro
+
 # Go commands
 GOCMD=go
 GOBUILD=$(GOCMD) build
@@ -20,6 +23,9 @@ all: build
 
 build:
 	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) .
+	@mkdir -p $(INSTALL_DIR)
+	@cp $(BINARY_NAME) $(INSTALL_DIR)/
+	@echo "Installed to $(INSTALL_DIR)/$(BINARY_NAME)"
 
 build-linux:
 	GOOS=linux GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME)-linux-amd64 .

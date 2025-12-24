@@ -166,11 +166,11 @@ const (
 // Locator strategies.
 const (
 	StrategyID              = "id"
-	StrategyAccessibilityID = "accessibilityId"
+	StrategyAccessibilityID = "accessibility id"
 	StrategyXPath           = "xpath"
-	StrategyClassName       = "className"
+	StrategyClassName       = "class name"
 	StrategyText            = "text"
-	StrategyUiAutomator     = "androidUiAutomator"
+	StrategyUiAutomator     = "-android uiautomator"
 )
 
 // Swipe/scroll directions.

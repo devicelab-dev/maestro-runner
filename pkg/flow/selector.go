@@ -109,3 +109,17 @@ func (s *Selector) Describe() string {
 		return ""
 	}
 }
+
+// DescribeQuoted returns a quoted description like text="value" or id="value".
+func (s *Selector) DescribeQuoted() string {
+	switch {
+	case s.Text != "":
+		return "text=\"" + s.Text + "\""
+	case s.ID != "":
+		return "id=\"" + s.ID + "\""
+	case s.CSS != "":
+		return "css=\"" + s.CSS + "\""
+	default:
+		return ""
+	}
+}

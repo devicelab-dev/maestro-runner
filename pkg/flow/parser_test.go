@@ -3,6 +3,7 @@ package flow
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -423,8 +424,24 @@ func TestParse_StepNotMapping(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected ParseError, got %T", err)
 	}
-	if parseErr.Message != "step must be a mapping" {
-		t.Errorf("expected 'step must be a mapping' error, got %q", parseErr.Message)
+	// Unknown scalar step names should give "unknown step type" error
+	if !strings.Contains(parseErr.Message, "unknown step type") {
+		t.Errorf("expected 'unknown step type' error, got %q", parseErr.Message)
+	}
+}
+
+func TestParse_ScalarStep(t *testing.T) {
+	// Steps without colon (like Maestro allows)
+	yaml := `- waitForAnimationToEnd`
+	flow, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(flow.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(flow.Steps))
+	}
+	if flow.Steps[0].Type() != StepWaitForAnimationToEnd {
+		t.Errorf("expected waitForAnimationToEnd, got %s", flow.Steps[0].Type())
 	}
 }
 

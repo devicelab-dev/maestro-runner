@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -17,6 +19,7 @@ type Client struct {
 	baseURL    string
 	sessionID  string
 	socketPath string
+	logger     *log.Logger
 }
 
 // NewClient creates a client using Unix socket (Linux/Mac).
@@ -34,6 +37,7 @@ func NewClient(socketPath string) *Client {
 		},
 		baseURL:    "http://localhost",
 		socketPath: socketPath,
+		logger:     createLogger(),
 	}
 }
 
@@ -44,7 +48,27 @@ func NewClientTCP(port int) *Client {
 			Timeout: 30 * time.Second,
 		},
 		baseURL: fmt.Sprintf("http://127.0.0.1:%d", port),
+		logger:  createLogger(),
 	}
+}
+
+// createLogger creates a logger that writes to /tmp/maestro-client.log (default)
+func createLogger() *log.Logger {
+	return createLoggerWithPath("/tmp/maestro-client.log")
+}
+
+// createLoggerWithPath creates a logger that writes to the specified path
+func createLoggerWithPath(path string) *log.Logger {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return log.New(io.Discard, "", 0)
+	}
+	return log.New(f, "", log.Ltime|log.Lmicroseconds)
+}
+
+// SetLogPath sets the log file path for HTTP request timing
+func (c *Client) SetLogPath(path string) {
+	c.logger = createLoggerWithPath(path)
 }
 
 // SessionID returns the current session ID.
@@ -59,13 +83,20 @@ func (c *Client) HasSession() bool {
 
 // request makes an HTTP request to UIAutomator2.
 func (c *Client) request(method, path string, body interface{}) ([]byte, error) {
+	start := time.Now()
+
 	var reqBody io.Reader
+	var bodyStr string
 	if body != nil {
 		data, err := json.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("marshal request: %w", err)
 		}
 		reqBody = bytes.NewReader(data)
+		bodyStr = string(data)
+		if len(bodyStr) > 100 {
+			bodyStr = bodyStr[:100] + "..."
+		}
 	}
 
 	req, err := http.NewRequest(method, c.baseURL+path, reqBody)
@@ -75,7 +106,9 @@ func (c *Client) request(method, path string, body interface{}) ([]byte, error) 
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.http.Do(req)
+	elapsed := time.Since(start)
 	if err != nil {
+		c.logger.Printf("%s %s [%v] ERROR: %v", method, path, elapsed, err)
 		return nil, fmt.Errorf("send request: %w", err)
 	}
 	defer resp.Body.Close()
@@ -84,6 +117,13 @@ func (c *Client) request(method, path string, body interface{}) ([]byte, error) 
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
+
+	// Log request timing
+	status := "OK"
+	if resp.StatusCode >= 400 {
+		status = fmt.Sprintf("ERR:%d", resp.StatusCode)
+	}
+	c.logger.Printf("%s %s [%v] %s body=%s", method, path, elapsed, status, bodyStr)
 
 	if resp.StatusCode >= 400 {
 		var errResp Response
@@ -195,4 +235,17 @@ func (c *Client) DeleteSession() error {
 // Close ends the session and cleans up.
 func (c *Client) Close() error {
 	return c.DeleteSession()
+}
+
+// SetImplicitWait sets the implicit wait timeout for element finding.
+// When set, the server automatically polls for elements until found or timeout.
+func (c *Client) SetImplicitWait(timeout time.Duration) error {
+	if c.sessionID == "" {
+		return fmt.Errorf("no active session")
+	}
+
+	_, err := c.request("POST", c.sessionPath("/timeouts"), map[string]interface{}{
+		"implicit": timeout.Milliseconds(),
+	})
+	return err
 }

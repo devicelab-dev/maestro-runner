@@ -281,8 +281,8 @@ func TestExecuteTest(t *testing.T) {
 	cfg := &RunConfig{
 		FlowPaths: []string{flowFile},
 		OutputDir: dir + "/reports",
-		Platform:  "ios",
-		Device:    "iPhone-15",
+		Platform:  "mock",
+		Device:    "test-device",
 	}
 
 	err := executeTest(cfg)
@@ -309,7 +309,7 @@ func TestTestCommand_WithFlowFile(t *testing.T) {
 	os.Stdout, _ = os.Open(os.DevNull)
 	defer func() { os.Stdout = oldStdout }()
 
-	err := app.Run([]string{"test-app", "test", flowFile})
+	err := app.Run([]string{"test-app", "-p", "mock", "test", flowFile})
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -341,8 +341,8 @@ func TestTestCommand_WithAllFlags(t *testing.T) {
 	// Note: global flags before command, command flags before positional args
 	err := app.Run([]string{
 		"test-app",
-		"-p", "ios",
-		"--device", "iPhone-15",
+		"-p", "mock",
+		"--device", "mock-device",
 		"--verbose",
 		"--app-file", "app.ipa",
 		"test",
@@ -378,9 +378,9 @@ func TestTestCommand_FlattenWithOutput(t *testing.T) {
 	os.Stdout, _ = os.Open(os.DevNull)
 	defer func() { os.Stdout = oldStdout }()
 
-	// Note: flags must come before positional args
+	// Note: global flags before command, command flags before positional args
 	err := app.Run([]string{
-		"test-app", "test",
+		"test-app", "-p", "mock", "test",
 		"--output", dir + "/reports",
 		"--flatten",
 		flowFile,
@@ -428,5 +428,34 @@ func TestHierarchyCommand_WithDevice(t *testing.T) {
 	err := app.Run([]string{"test-app", "--device", "emulator-5554", "hierarchy"})
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestFormatDuration(t *testing.T) {
+	tests := []struct {
+		ms       int64
+		expected string
+	}{
+		{0, "0ms"},
+		{50, "50ms"},
+		{500, "500ms"},
+		{999, "999ms"},
+		{1000, "1.0s"},
+		{1500, "1.5s"},
+		{2126, "2.1s"},
+		{10500, "10.5s"},
+		{59999, "60.0s"},
+		{60000, "1m 0s"},
+		{61000, "1m 1s"},
+		{90000, "1m 30s"},
+		{120000, "2m 0s"},
+		{125000, "2m 5s"},
+	}
+
+	for _, tc := range tests {
+		result := formatDuration(tc.ms)
+		if result != tc.expected {
+			t.Errorf("formatDuration(%d) = %q, expected %q", tc.ms, result, tc.expected)
+		}
 	}
 }

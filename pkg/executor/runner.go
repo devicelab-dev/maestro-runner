@@ -38,6 +38,13 @@ type RunnerConfig struct {
 	// Runner metadata
 	RunnerVersion string
 	DriverName    string
+
+	// Live progress callbacks
+	OnFlowStart       func(flowIdx, totalFlows int, name, file string)
+	OnStepComplete    func(idx int, desc string, passed bool, durationMs int64, err string)
+	OnNestedStep      func(depth int, desc string, passed bool, durationMs int64, err string)
+	OnNestedFlowStart func(depth int, desc string)
+	OnFlowEnd         func(name string, passed bool, durationMs int64)
 }
 
 // RunResult contains the outcome of a test run.
@@ -53,11 +60,15 @@ type RunResult struct {
 
 // FlowResult contains the outcome of a single flow execution.
 type FlowResult struct {
-	ID       string
-	Name     string
-	Status   report.Status
-	Duration int64
-	Error    string
+	ID           string
+	Name         string
+	Status       report.Status
+	Duration     int64
+	Error        string
+	StepsTotal   int
+	StepsPassed  int
+	StepsFailed  int
+	StepsSkipped int
 }
 
 // Runner orchestrates flow execution.
@@ -117,6 +128,7 @@ func (r *Runner) Run(ctx context.Context, flows []flow.Flow) (*RunResult, error)
 func (r *Runner) executeFlows(ctx context.Context, flows []flow.Flow, flowDetails []report.FlowDetail, indexWriter *report.IndexWriter) []FlowResult {
 	results := make([]FlowResult, len(flows))
 
+	totalFlows := len(flows)
 	if r.config.Parallelism <= 0 {
 		// Sequential execution
 		for i := range flows {
@@ -130,7 +142,7 @@ func (r *Runner) executeFlows(ctx context.Context, flows []flow.Flow, flowDetail
 				}
 				continue
 			}
-			results[i] = r.executeFlow(ctx, flows[i], &flowDetails[i], indexWriter)
+			results[i] = r.executeFlow(ctx, flows[i], &flowDetails[i], indexWriter, i, totalFlows)
 		}
 	} else {
 		// Parallel execution with semaphore
@@ -160,7 +172,7 @@ func (r *Runner) executeFlows(ctx context.Context, flows []flow.Flow, flowDetail
 				sem <- struct{}{}        // Acquire
 				defer func() { <-sem }() // Release
 
-				result := r.executeFlow(ctx, flows[idx], &flowDetails[idx], indexWriter)
+				result := r.executeFlow(ctx, flows[idx], &flowDetails[idx], indexWriter, idx, totalFlows)
 				results[idx] = result
 
 				// Check if we should stop all
@@ -178,7 +190,7 @@ func (r *Runner) executeFlows(ctx context.Context, flows []flow.Flow, flowDetail
 }
 
 // executeFlow runs a single flow.
-func (r *Runner) executeFlow(ctx context.Context, f flow.Flow, detail *report.FlowDetail, indexWriter *report.IndexWriter) FlowResult {
+func (r *Runner) executeFlow(ctx context.Context, f flow.Flow, detail *report.FlowDetail, indexWriter *report.IndexWriter, flowIdx, totalFlows int) FlowResult {
 	fr := &FlowRunner{
 		ctx:         ctx,
 		flow:        f,
@@ -186,6 +198,8 @@ func (r *Runner) executeFlow(ctx context.Context, f flow.Flow, detail *report.Fl
 		driver:      r.driver,
 		config:      r.config,
 		indexWriter: indexWriter,
+		flowIdx:     flowIdx,
+		totalFlows:  totalFlows,
 	}
 	return fr.Run()
 }

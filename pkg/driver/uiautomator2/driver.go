@@ -17,15 +17,47 @@ type ShellExecutor interface {
 	Shell(cmd string) (string, error)
 }
 
+// UIA2Client defines the interface for UIAutomator2 client operations.
+// Implemented by uiautomator2.Client. Allows mocking in tests.
+type UIA2Client interface {
+	// Element finding
+	FindElement(strategy, selector string) (*uiautomator2.Element, error)
+	ActiveElement() (*uiautomator2.Element, error)
+
+	// Timeouts
+	SetImplicitWait(timeout time.Duration) error
+
+	// Gestures
+	Click(x, y int) error
+	DoubleClick(x, y int) error
+	DoubleClickElement(elementID string) error
+	LongClick(x, y, durationMs int) error
+	LongClickElement(elementID string, durationMs int) error
+	ScrollInArea(area uiautomator2.RectModel, direction string, percent float64, speed int) error
+	SwipeInArea(area uiautomator2.RectModel, direction string, percent float64, speed int) error
+
+	// Navigation
+	Back() error
+	PressKeyCode(keyCode int) error
+
+	// Device state
+	Screenshot() ([]byte, error)
+	Source() (string, error)
+	GetOrientation() (string, error)
+	SetOrientation(orientation string) error
+	GetClipboard() (string, error)
+	SetClipboard(text string) error
+}
+
 // Driver implements core.Driver using UIAutomator2.
 type Driver struct {
-	client *uiautomator2.Client
+	client UIA2Client
 	info   *core.PlatformInfo
 	device ShellExecutor // for ADB commands (launchApp, stopApp, clearState)
 }
 
 // New creates a new UIAutomator2 driver.
-func New(client *uiautomator2.Client, info *core.PlatformInfo, device ShellExecutor) *Driver {
+func New(client UIA2Client, info *core.PlatformInfo, device ShellExecutor) *Driver {
 	return &Driver{
 		client: client,
 		info:   info,
@@ -84,6 +116,8 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 		result = d.launchApp(s)
 	case *flow.StopAppStep:
 		result = d.stopApp(s)
+	case *flow.KillAppStep:
+		result = d.killApp(s)
 	case *flow.ClearStateStep:
 		result = d.clearState(s)
 
@@ -92,6 +126,38 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 		result = d.copyTextFrom(s)
 	case *flow.PasteTextStep:
 		result = d.pasteText(s)
+
+	// Device control
+	case *flow.SetOrientationStep:
+		result = d.setOrientation(s)
+	case *flow.OpenLinkStep:
+		result = d.openLink(s)
+	case *flow.OpenBrowserStep:
+		result = d.openBrowser(s)
+	case *flow.SetLocationStep:
+		result = d.setLocation(s)
+	case *flow.SetAirplaneModeStep:
+		result = d.setAirplaneMode(s)
+	case *flow.ToggleAirplaneModeStep:
+		result = d.toggleAirplaneMode(s)
+	case *flow.TravelStep:
+		result = d.travel(s)
+
+	// Wait commands
+	case *flow.WaitUntilStep:
+		result = d.waitUntil(s)
+	case *flow.WaitForAnimationToEndStep:
+		result = d.waitForAnimationToEnd(s)
+
+	// Media
+	case *flow.TakeScreenshotStep:
+		result = d.takeScreenshot(s)
+	case *flow.StartRecordingStep:
+		result = d.startRecording(s)
+	case *flow.StopRecordingStep:
+		result = d.stopRecording(s)
+	case *flow.AddMediaStep:
+		result = d.addMedia(s)
 
 	default:
 		result = &core.CommandResult{
@@ -139,27 +205,69 @@ func (d *Driver) GetPlatformInfo() *core.PlatformInfo {
 	return d.info
 }
 
-// findElement finds an element using a selector.
+// findElement finds an element using a selector with client-side polling.
 // Tries multiple locator strategies in order until one succeeds.
 // For relative selectors, uses page source parsing.
 // Uses 17s timeout for required elements, 7s for optional.
 func (d *Driver) findElement(sel flow.Selector, optional bool) (*uiautomator2.Element, *core.ElementInfo, error) {
-	timeout := DefaultFindTimeout
+	timeout := time.Duration(DefaultFindTimeout) * time.Millisecond
 	if optional {
-		timeout = OptionalFindTimeout
+		timeout = time.Duration(OptionalFindTimeout) * time.Millisecond
 	}
 
 	// Handle relative selectors via page source
 	if sel.HasRelativeSelector() {
-		return d.findElementRelative(sel, timeout)
+		return d.findElementRelative(sel, int(timeout.Milliseconds()))
 	}
 
-	strategies, err := buildSelectors(sel, timeout)
+	strategies, err := buildSelectors(sel, int(timeout.Milliseconds()))
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// Try each strategy until one succeeds
+	// Client-side polling - UIAutomator2 server doesn't reliably respect implicit wait
+	// No sleep between retries - HTTP round-trip (~100ms) is the natural rate limit
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+
+	for {
+		// Try each strategy
+		elem, info, err := d.tryFindElement(strategies)
+		if err == nil {
+			return elem, info, nil
+		}
+		lastErr = err
+
+		// Check if we've exceeded timeout
+		if time.Now().After(deadline) {
+			break
+		}
+	}
+
+	// All strategies failed after timeout
+	if lastErr != nil {
+		return nil, nil, lastErr
+	}
+	return nil, nil, fmt.Errorf("element not found after %v", timeout)
+}
+
+// findElementQuick finds an element without polling (single attempt).
+// Used by waitUntil which has its own polling loop.
+func (d *Driver) findElementQuick(sel flow.Selector) (*uiautomator2.Element, *core.ElementInfo, error) {
+	if sel.HasRelativeSelector() {
+		return d.findElementRelative(sel, 1000) // Short timeout for relative
+	}
+
+	strategies, err := buildSelectors(sel, 1000)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return d.tryFindElement(strategies)
+}
+
+// tryFindElement attempts to find element using given strategies (single attempt).
+func (d *Driver) tryFindElement(strategies []LocatorStrategy) (*uiautomator2.Element, *core.ElementInfo, error) {
 	var lastErr error
 	for _, s := range strategies {
 		elem, err := d.client.FindElement(s.Strategy, s.Value)
@@ -197,7 +305,6 @@ func (d *Driver) findElement(sel flow.Selector, optional bool) (*uiautomator2.El
 		return elem, info, nil
 	}
 
-	// All strategies failed
 	if lastErr != nil {
 		return nil, nil, lastErr
 	}
@@ -344,17 +451,17 @@ const (
 // Returns multiple strategies to try in order (first match wins).
 // Mimics Maestro's case-insensitive contains matching behavior.
 // Note: Relative selectors are handled separately in findElementRelative.
+// Note: Timeout/waiting is handled via polling in findElement, not in selectors.
 func buildSelectors(sel flow.Selector, timeoutMs int) ([]LocatorStrategy, error) {
 	var strategies []LocatorStrategy
 	stateFilters := buildStateFilters(sel)
-	waitFor := fmt.Sprintf(".waitForExists(%d)", timeoutMs)
 
 	// ID-based selector - use resourceIdMatches for partial matching
 	if sel.ID != "" {
 		escaped := escapeUiAutomator(sel.ID)
 		strategies = append(strategies, LocatorStrategy{
 			Strategy: uiautomator2.StrategyUiAutomator,
-			Value:    `new UiSelector().resourceIdMatches(".*` + escaped + `.*")` + stateFilters + waitFor,
+			Value:    `new UiSelector().resourceIdMatches(".*` + escaped + `.*")` + stateFilters,
 		})
 	}
 
@@ -364,12 +471,12 @@ func buildSelectors(sel flow.Selector, timeoutMs int) ([]LocatorStrategy, error)
 		// Try text first
 		strategies = append(strategies, LocatorStrategy{
 			Strategy: uiautomator2.StrategyUiAutomator,
-			Value:    `new UiSelector().textMatches("(?is).*` + escaped + `.*")` + stateFilters + waitFor,
+			Value:    `new UiSelector().textMatches("(?is).*` + escaped + `.*")` + stateFilters,
 		})
 		// Also try description (content-desc) for Flutter apps
 		strategies = append(strategies, LocatorStrategy{
 			Strategy: uiautomator2.StrategyUiAutomator,
-			Value:    `new UiSelector().descriptionMatches("(?is).*` + escaped + `.*")` + stateFilters + waitFor,
+			Value:    `new UiSelector().descriptionMatches("(?is).*` + escaped + `.*")` + stateFilters,
 		})
 	}
 

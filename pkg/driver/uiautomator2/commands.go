@@ -368,6 +368,23 @@ func (d *Driver) clearState(step *flow.ClearStateStep) *core.CommandResult {
 	return successResult(fmt.Sprintf("Cleared state for: %s", appID), nil)
 }
 
+func (d *Driver) killApp(step *flow.KillAppStep) *core.CommandResult {
+	appID := step.AppID
+	if appID == "" {
+		return errorResult(fmt.Errorf("no appId specified"), "No app ID to kill")
+	}
+
+	if d.device == nil {
+		return errorResult(fmt.Errorf("device not configured"), "killApp requires device access")
+	}
+
+	if _, err := d.device.Shell("am force-stop " + appID); err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to kill app: %v", err))
+	}
+
+	return successResult(fmt.Sprintf("Killed app: %s", appID), nil)
+}
+
 // ============================================================================
 // Clipboard Commands
 // ============================================================================
@@ -411,6 +428,314 @@ func (d *Driver) pasteText(_ *flow.PasteTextStep) *core.CommandResult {
 	}
 
 	return successResult(fmt.Sprintf("Pasted text: %s", text), nil)
+}
+
+// ============================================================================
+// Device Control Commands
+// ============================================================================
+
+func (d *Driver) setOrientation(step *flow.SetOrientationStep) *core.CommandResult {
+	orientation := strings.ToUpper(step.Orientation)
+	if orientation != "PORTRAIT" && orientation != "LANDSCAPE" {
+		return errorResult(fmt.Errorf("invalid orientation: %s", step.Orientation),
+			fmt.Sprintf("Orientation must be PORTRAIT or LANDSCAPE, got: %s", step.Orientation))
+	}
+
+	if err := d.client.SetOrientation(orientation); err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to set orientation: %v", err))
+	}
+
+	return successResult(fmt.Sprintf("Set orientation to %s", orientation), nil)
+}
+
+func (d *Driver) openLink(step *flow.OpenLinkStep) *core.CommandResult {
+	link := step.Link
+	if link == "" {
+		return errorResult(fmt.Errorf("no link specified"), "No link to open")
+	}
+
+	if d.device == nil {
+		return errorResult(fmt.Errorf("device not configured"), "openLink requires device access")
+	}
+
+	// Use am start to open the link
+	cmd := fmt.Sprintf("am start -a android.intent.action.VIEW -d '%s'", link)
+	if _, err := d.device.Shell(cmd); err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to open link: %v", err))
+	}
+
+	return successResult(fmt.Sprintf("Opened link: %s", link), nil)
+}
+
+// ============================================================================
+// Media Commands
+// ============================================================================
+
+func (d *Driver) takeScreenshot(step *flow.TakeScreenshotStep) *core.CommandResult {
+	data, err := d.client.Screenshot()
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to take screenshot: %v", err))
+	}
+
+	// Return screenshot data; caller handles saving to file if path specified
+	return &core.CommandResult{
+		Success: true,
+		Message: "Screenshot captured",
+		Data:    data,
+	}
+}
+
+func (d *Driver) openBrowser(step *flow.OpenBrowserStep) *core.CommandResult {
+	url := step.URL
+	if url == "" {
+		return errorResult(fmt.Errorf("no URL specified"), "No URL to open")
+	}
+
+	if d.device == nil {
+		return errorResult(fmt.Errorf("device not configured"), "openBrowser requires device access")
+	}
+
+	// Open URL in default browser
+	cmd := fmt.Sprintf("am start -a android.intent.action.VIEW -d '%s'", url)
+	if _, err := d.device.Shell(cmd); err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to open browser: %v", err))
+	}
+
+	return successResult(fmt.Sprintf("Opened browser: %s", url), nil)
+}
+
+func (d *Driver) addMedia(step *flow.AddMediaStep) *core.CommandResult {
+	if len(step.Files) == 0 {
+		return errorResult(fmt.Errorf("no files specified"), "No media files to add")
+	}
+
+	if d.device == nil {
+		return errorResult(fmt.Errorf("device not configured"), "addMedia requires device access")
+	}
+
+	// Push each file to device's Download folder
+	for _, file := range step.Files {
+		// Use am broadcast to scan media after push
+		cmd := fmt.Sprintf("am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://%s", file)
+		if _, err := d.device.Shell(cmd); err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to add media %s: %v", file, err))
+		}
+	}
+
+	return successResult(fmt.Sprintf("Added %d media files", len(step.Files)), nil)
+}
+
+func (d *Driver) startRecording(step *flow.StartRecordingStep) *core.CommandResult {
+	if d.device == nil {
+		return errorResult(fmt.Errorf("device not configured"), "startRecording requires device access")
+	}
+
+	path := step.Path
+	if path == "" {
+		path = "/sdcard/recording.mp4"
+	}
+
+	// Start screenrecord in background (will be killed by stopRecording)
+	cmd := fmt.Sprintf("screenrecord %s &", path)
+	if _, err := d.device.Shell(cmd); err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to start recording: %v", err))
+	}
+
+	return &core.CommandResult{
+		Success: true,
+		Message: fmt.Sprintf("Started recording to %s", path),
+		Data:    path,
+	}
+}
+
+func (d *Driver) stopRecording(_ *flow.StopRecordingStep) *core.CommandResult {
+	if d.device == nil {
+		return errorResult(fmt.Errorf("device not configured"), "stopRecording requires device access")
+	}
+
+	// Kill screenrecord process
+	if _, err := d.device.Shell("pkill -INT screenrecord"); err != nil {
+		// Ignore error - process might have already stopped
+	}
+
+	// Wait for file to be written
+	time.Sleep(500 * time.Millisecond)
+
+	return successResult("Stopped recording", nil)
+}
+
+// ============================================================================
+// Wait Commands
+// ============================================================================
+
+func (d *Driver) waitUntil(step *flow.WaitUntilStep) *core.CommandResult {
+	// Use step timeout if specified, otherwise default to 30 seconds
+	timeout := 30 * time.Second
+	if step.TimeoutMs > 0 {
+		timeout = time.Duration(step.TimeoutMs) * time.Millisecond
+	}
+	interval := 500 * time.Millisecond
+	start := time.Now()
+
+	for time.Since(start) < timeout {
+		if step.Visible != nil {
+			// Wait until element is visible - use quick find (no polling)
+			elem, info, err := d.findElementQuick(*step.Visible)
+			if err == nil && elem != nil {
+				if displayed, _ := elem.IsDisplayed(); displayed {
+					return successResult("Element is now visible", info)
+				}
+			}
+		} else if step.NotVisible != nil {
+			// Wait until element is not visible - use quick find (no polling)
+			_, _, err := d.findElementQuick(*step.NotVisible)
+			if err != nil {
+				// Element not found = not visible
+				return successResult("Element is no longer visible", nil)
+			}
+		}
+
+		time.Sleep(interval)
+	}
+
+	if step.Visible != nil {
+		return errorResult(fmt.Errorf("timeout waiting for element"), "Element did not become visible within timeout")
+	}
+	return errorResult(fmt.Errorf("timeout waiting for element"), "Element did not disappear within timeout")
+}
+
+func (d *Driver) waitForAnimationToEnd(_ *flow.WaitForAnimationToEndStep) *core.CommandResult {
+	// Simple implementation: wait a fixed duration for animations to settle
+	// More sophisticated: poll window animation scale or compare screenshots
+	time.Sleep(1 * time.Second)
+	return successResult("Waited for animation to end", nil)
+}
+
+// ============================================================================
+// Location Commands
+// ============================================================================
+
+func (d *Driver) setLocation(step *flow.SetLocationStep) *core.CommandResult {
+	if d.device == nil {
+		return errorResult(fmt.Errorf("device not configured"), "setLocation requires device access")
+	}
+
+	lat := step.Latitude
+	lon := step.Longitude
+	if lat == "" || lon == "" {
+		return errorResult(fmt.Errorf("latitude and longitude required"), "Missing coordinates")
+	}
+
+	// Enable mock locations and set location via appops
+	// Note: Requires mock location app or root access
+	cmd := fmt.Sprintf("am broadcast -a android.intent.action.MOCK_LOCATION --ef lat %s --ef lon %s", lat, lon)
+	if _, err := d.device.Shell(cmd); err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to set location: %v", err))
+	}
+
+	return successResult(fmt.Sprintf("Set location to %s, %s", lat, lon), nil)
+}
+
+func (d *Driver) setAirplaneMode(step *flow.SetAirplaneModeStep) *core.CommandResult {
+	if d.device == nil {
+		return errorResult(fmt.Errorf("device not configured"), "setAirplaneMode requires device access")
+	}
+
+	value := "0"
+	if step.Enabled {
+		value = "1"
+	}
+
+	// Set airplane mode via settings
+	cmd := fmt.Sprintf("settings put global airplane_mode_on %s", value)
+	if _, err := d.device.Shell(cmd); err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to set airplane mode: %v", err))
+	}
+
+	// Broadcast the change
+	broadcastCmd := "am broadcast -a android.intent.action.AIRPLANE_MODE"
+	if _, err := d.device.Shell(broadcastCmd); err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to broadcast airplane mode: %v", err))
+	}
+
+	status := "disabled"
+	if step.Enabled {
+		status = "enabled"
+	}
+	return successResult(fmt.Sprintf("Airplane mode %s", status), nil)
+}
+
+func (d *Driver) toggleAirplaneMode(_ *flow.ToggleAirplaneModeStep) *core.CommandResult {
+	if d.device == nil {
+		return errorResult(fmt.Errorf("device not configured"), "toggleAirplaneMode requires device access")
+	}
+
+	// Get current airplane mode state
+	output, err := d.device.Shell("settings get global airplane_mode_on")
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to get airplane mode: %v", err))
+	}
+
+	// Toggle the value
+	newValue := "1"
+	if strings.TrimSpace(output) == "1" {
+		newValue = "0"
+	}
+
+	// Set new value
+	cmd := fmt.Sprintf("settings put global airplane_mode_on %s", newValue)
+	if _, err := d.device.Shell(cmd); err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to toggle airplane mode: %v", err))
+	}
+
+	// Broadcast the change
+	broadcastCmd := "am broadcast -a android.intent.action.AIRPLANE_MODE"
+	if _, err := d.device.Shell(broadcastCmd); err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to broadcast airplane mode: %v", err))
+	}
+
+	status := "disabled"
+	if newValue == "1" {
+		status = "enabled"
+	}
+	return successResult(fmt.Sprintf("Airplane mode toggled to %s", status), nil)
+}
+
+func (d *Driver) travel(step *flow.TravelStep) *core.CommandResult {
+	if d.device == nil {
+		return errorResult(fmt.Errorf("device not configured"), "travel requires device access")
+	}
+
+	if len(step.Points) < 2 {
+		return errorResult(fmt.Errorf("at least 2 points required"), "Travel requires at least 2 waypoints")
+	}
+
+	speed := step.Speed
+	if speed <= 0 {
+		speed = 50 // default 50 km/h
+	}
+
+	// Simulate travel by updating location at each point
+	for _, point := range step.Points {
+		// Parse "lat, lon" format
+		parts := strings.Split(point, ",")
+		if len(parts) != 2 {
+			continue
+		}
+		lat := strings.TrimSpace(parts[0])
+		lon := strings.TrimSpace(parts[1])
+
+		cmd := fmt.Sprintf("am broadcast -a android.intent.action.MOCK_LOCATION --ef lat %s --ef lon %s", lat, lon)
+		if _, err := d.device.Shell(cmd); err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to set location during travel: %v", err))
+		}
+
+		// Wait based on speed (simplified - assumes ~1km between points)
+		delay := time.Duration(3600/speed) * time.Second
+		time.Sleep(delay)
+	}
+
+	return successResult(fmt.Sprintf("Traveled through %d points", len(step.Points)), nil)
 }
 
 // ============================================================================

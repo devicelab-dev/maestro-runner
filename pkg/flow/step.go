@@ -473,3 +473,81 @@ type UnsupportedStep struct {
 func (s *UnsupportedStep) Describe() string {
 	return string(s.StepType) + " (unsupported: " + s.Reason + ")"
 }
+
+// ============================================
+// Describe() implementations for detailed output
+// ============================================
+
+func (s *TapOnStep) Describe() string {
+	return "tapOn: " + s.Selector.DescribeQuoted()
+}
+
+func (s *DoubleTapOnStep) Describe() string {
+	return "doubleTapOn: " + s.Selector.DescribeQuoted()
+}
+
+func (s *LongPressOnStep) Describe() string {
+	return "longPressOn: " + s.Selector.DescribeQuoted()
+}
+
+func (s *AssertVisibleStep) Describe() string {
+	return "assertVisible: " + s.Selector.DescribeQuoted()
+}
+
+func (s *AssertNotVisibleStep) Describe() string {
+	return "assertNotVisible: " + s.Selector.DescribeQuoted()
+}
+
+func (s *InputTextStep) Describe() string {
+	return "inputText: \"" + s.Text + "\""
+}
+
+func (s *LaunchAppStep) Describe() string {
+	if s.ClearState {
+		return "launchApp (clearState)"
+	}
+	return "launchApp"
+}
+
+func (s *WaitUntilStep) Describe() string {
+	if s.Visible != nil {
+		return "extendedWaitUntil: visible " + s.Visible.DescribeQuoted()
+	}
+	if s.NotVisible != nil {
+		return "extendedWaitUntil: notVisible " + s.NotVisible.DescribeQuoted()
+	}
+	return "extendedWaitUntil"
+}
+
+func (s *ScrollUntilVisibleStep) Describe() string {
+	return "scrollUntilVisible: " + s.Selector.DescribeQuoted()
+}
+
+func (s *CopyTextFromStep) Describe() string {
+	return "copyTextFrom: " + s.Selector.DescribeQuoted()
+}
+
+func (s *RunFlowStep) Describe() string {
+	if s.File != "" {
+		return "runFlow: " + s.File
+	}
+	return "runFlow"
+}
+
+func (s *PressKeyStep) Describe() string {
+	return "pressKey: " + s.Key
+}
+
+func (s *SwipeStep) Describe() string {
+	if s.Direction != "" {
+		return "swipe: " + s.Direction
+	}
+	return "swipe"
+}
+
+func (s *ScrollStep) Describe() string {
+	if s.Direction != "" {
+		return "scroll: " + s.Direction
+	}
+	return "scroll"
+}

@@ -2,6 +2,9 @@ package executor
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
+	"time"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
@@ -17,12 +20,49 @@ type FlowRunner struct {
 	config      RunnerConfig
 	indexWriter *report.IndexWriter
 	flowWriter  *report.FlowWriter
+	script      *ScriptEngine
+	depth       int // Nesting depth for runFlow reporting
+	flowIdx     int // Current flow index (0-based)
+	totalFlows  int // Total number of flows
+	// Step counters
+	stepsPassed  int
+	stepsFailed  int
+	stepsSkipped int
 }
 
 // Run executes the flow and returns the result.
 func (fr *FlowRunner) Run() FlowResult {
+	flowStart := time.Now()
+
 	// Create flow writer for this flow's updates
 	fr.flowWriter = report.NewFlowWriter(fr.detail, fr.config.OutputDir, fr.indexWriter)
+
+	// Initialize script engine
+	fr.script = NewScriptEngine()
+	defer fr.script.Close()
+
+	// Set flow directory for relative path resolution
+	if fr.flow.SourcePath != "" {
+		fr.script.SetFlowDir(filepath.Dir(fr.flow.SourcePath))
+	}
+
+	// Set platform in JS engine
+	if info := fr.driver.GetPlatformInfo(); info != nil {
+		fr.script.SetPlatform(info.Platform)
+	}
+
+	// Apply flow config variables
+	if fr.flow.Config.AppID != "" {
+		fr.script.SetVariable("APP_ID", fr.flow.Config.AppID)
+	}
+	fr.script.SetVariables(fr.flow.Config.Env)
+
+	// Notify flow start
+	flowName := fr.detail.Name
+	flowFile := filepath.Base(fr.flow.SourcePath)
+	if fr.config.OnFlowStart != nil {
+		fr.config.OnFlowStart(fr.flowIdx, fr.totalFlows, flowName, flowFile)
+	}
 
 	// Mark flow as started
 	fr.flowWriter.Start()
@@ -41,7 +81,22 @@ func (fr *FlowRunner) Run() FlowResult {
 		}
 
 		// Execute step
-		stepStatus, stepError := fr.executeStep(i, step)
+		stepStatus, stepError, stepDuration := fr.executeStep(i, step)
+
+		// Notify step complete
+		if fr.config.OnStepComplete != nil {
+			fr.config.OnStepComplete(i, step.Describe(), stepStatus == report.StatusPassed, stepDuration, stepError)
+		}
+
+		// Track step counts
+		switch stepStatus {
+		case report.StatusPassed:
+			fr.stepsPassed++
+		case report.StatusFailed:
+			fr.stepsFailed++
+		case report.StatusSkipped:
+			fr.stepsSkipped++
+		}
 
 		// Handle step result
 		if stepStatus == report.StatusFailed {
@@ -51,6 +106,8 @@ func (fr *FlowRunner) Run() FlowResult {
 			}
 			// Required step failed - skip remaining and fail flow
 			fr.flowWriter.SkipRemainingCommands(i + 1)
+			// Count remaining steps as skipped
+			fr.stepsSkipped += len(fr.flow.Steps) - i - 1
 			flowStatus = report.StatusFailed
 			flowError = stepError
 			break
@@ -60,23 +117,32 @@ func (fr *FlowRunner) Run() FlowResult {
 	// Mark flow as complete
 	fr.flowWriter.End(flowStatus)
 
-	// Get duration from flow detail
-	var duration int64
-	if fr.detail.Duration != nil {
-		duration = *fr.detail.Duration
+	// Calculate duration
+	flowDuration := time.Since(flowStart).Milliseconds()
+
+	// Notify flow end
+	if fr.config.OnFlowEnd != nil {
+		fr.config.OnFlowEnd(flowName, flowStatus == report.StatusPassed, flowDuration)
 	}
 
 	return FlowResult{
-		ID:       fr.detail.ID,
-		Name:     fr.detail.Name,
-		Status:   flowStatus,
-		Duration: duration,
-		Error:    flowError,
+		ID:           fr.detail.ID,
+		Name:         fr.detail.Name,
+		Status:       flowStatus,
+		Duration:     flowDuration,
+		Error:        flowError,
+		StepsTotal:   len(fr.flow.Steps),
+		StepsPassed:  fr.stepsPassed,
+		StepsFailed:  fr.stepsFailed,
+		StepsSkipped: fr.stepsSkipped,
 	}
 }
 
 // executeStep executes a single step and updates the report.
-func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, string) {
+// Returns status, error message, and duration in milliseconds.
+func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, string, int64) {
+	stepStart := time.Now()
+
 	// Mark step as started
 	fr.flowWriter.CommandStart(idx)
 
@@ -90,8 +156,61 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 		artifacts = fr.captureArtifacts(idx, "before")
 	}
 
-	// Execute step via driver
-	result := fr.driver.Execute(step)
+	// Expand variables in step before execution
+	fr.script.ExpandStep(step)
+
+	// Execute step - route to appropriate handler
+	var result *core.CommandResult
+
+	switch s := step.(type) {
+	// JS/Scripting steps - handled by ScriptEngine
+	case *flow.DefineVariablesStep:
+		result = fr.script.ExecuteDefineVariables(s)
+	case *flow.RunScriptStep:
+		result = fr.script.ExecuteRunScript(s)
+	case *flow.EvalScriptStep:
+		result = fr.script.ExecuteEvalScript(s)
+	case *flow.AssertTrueStep:
+		result = fr.script.ExecuteAssertTrue(s)
+	case *flow.AssertConditionStep:
+		result = fr.script.ExecuteAssertCondition(fr.ctx, s, fr.driver)
+
+	// Flow control steps - handled by FlowRunner
+	case *flow.RepeatStep:
+		result = fr.executeRepeat(s)
+	case *flow.RetryStep:
+		result = fr.executeRetry(s)
+	case *flow.RunFlowStep:
+		result = fr.executeRunFlow(s)
+
+	// App lifecycle steps - inject flow's appId if not specified
+	case *flow.LaunchAppStep:
+		if s.AppID == "" && fr.flow.Config.AppID != "" {
+			s.AppID = fr.flow.Config.AppID
+		}
+		result = fr.driver.Execute(step)
+	case *flow.StopAppStep:
+		if s.AppID == "" && fr.flow.Config.AppID != "" {
+			s.AppID = fr.flow.Config.AppID
+		}
+		result = fr.driver.Execute(step)
+	case *flow.KillAppStep:
+		if s.AppID == "" && fr.flow.Config.AppID != "" {
+			s.AppID = fr.flow.Config.AppID
+		}
+		result = fr.driver.Execute(step)
+	case *flow.ClearStateStep:
+		if s.AppID == "" && fr.flow.Config.AppID != "" {
+			s.AppID = fr.flow.Config.AppID
+		}
+		result = fr.driver.Execute(step)
+
+	// All other steps - delegate to driver
+	default:
+		result = fr.driver.Execute(step)
+	}
+
+	stepDuration := time.Since(stepStart).Milliseconds()
 
 	// Determine status and error
 	var status report.Status
@@ -125,7 +244,270 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 	// Update report
 	fr.flowWriter.CommandEnd(idx, status, element, errorInfo, artifacts)
 
-	return status, errorMsg
+	return status, errorMsg, stepDuration
+}
+
+// executeRepeat handles repeat step execution.
+func (fr *FlowRunner) executeRepeat(step *flow.RepeatStep) *core.CommandResult {
+	times := fr.script.ParseInt(step.Times, 1)
+	if times <= 0 {
+		times = 1000 // Default max iterations for while loops
+	}
+
+	hasWhile := step.While.Visible != nil || step.While.NotVisible != nil || step.While.Script != ""
+
+	for i := 0; i < times; i++ {
+		// Check context
+		if fr.ctx.Err() != nil {
+			return &core.CommandResult{
+				Success: false,
+				Error:   fr.ctx.Err(),
+				Message: "Repeat cancelled",
+			}
+		}
+
+		// Check while condition
+		if hasWhile {
+			if !fr.script.CheckCondition(fr.ctx, step.While, fr.driver) {
+				break // Condition no longer met
+			}
+		}
+
+		// Execute nested steps
+		for _, nestedStep := range step.Steps {
+			result := fr.executeNestedStep(nestedStep)
+			if !result.Success && !nestedStep.IsOptional() {
+				return result
+			}
+		}
+	}
+
+	return &core.CommandResult{
+		Success: true,
+		Message: fmt.Sprintf("Repeat completed (%d iterations)", times),
+	}
+}
+
+// executeRetry handles retry step execution.
+func (fr *FlowRunner) executeRetry(step *flow.RetryStep) *core.CommandResult {
+	maxRetries := fr.script.ParseInt(step.MaxRetries, 3)
+
+	// Apply env variables with restore
+	defer fr.script.withEnvVars(step.Env)()
+
+	// If file is specified, load and execute that flow
+	if step.File != "" && len(step.Steps) == 0 {
+		filePath := fr.script.ResolvePath(step.File)
+		subFlow, err := flow.ParseFile(filePath)
+		if err != nil {
+			return &core.CommandResult{
+				Success: false,
+				Error:   err,
+				Message: fmt.Sprintf("Failed to parse flow file: %s", filePath),
+			}
+		}
+		return fr.executeSubFlowWithRetry(*subFlow, maxRetries)
+	}
+
+	// Execute inline steps with retry
+	var lastErr error
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		if fr.ctx.Err() != nil {
+			return &core.CommandResult{
+				Success: false,
+				Error:   fr.ctx.Err(),
+				Message: "Retry cancelled",
+			}
+		}
+
+		success := true
+		for _, nestedStep := range step.Steps {
+			result := fr.executeNestedStep(nestedStep)
+			if !result.Success && !nestedStep.IsOptional() {
+				lastErr = result.Error
+				success = false
+				break
+			}
+		}
+
+		if success {
+			return &core.CommandResult{
+				Success: true,
+				Message: fmt.Sprintf("Retry succeeded on attempt %d", attempt),
+			}
+		}
+	}
+
+	return &core.CommandResult{
+		Success: false,
+		Error:   lastErr,
+		Message: fmt.Sprintf("Retry failed after %d attempts", maxRetries),
+	}
+}
+
+// executeRunFlow handles runFlow step execution.
+func (fr *FlowRunner) executeRunFlow(step *flow.RunFlowStep) *core.CommandResult {
+	// Check when condition
+	if step.When != nil {
+		if !fr.script.CheckCondition(fr.ctx, *step.When, fr.driver) {
+			return &core.CommandResult{
+				Success: true,
+				Message: "Skipped (when condition not met)",
+			}
+		}
+	}
+
+	// Report nested flow start
+	if fr.config.OnNestedFlowStart != nil && step.File != "" {
+		fr.config.OnNestedFlowStart(fr.depth+1, "Run "+step.File)
+	}
+
+	// Increment depth for nested execution
+	fr.depth++
+	defer func() { fr.depth-- }()
+
+	// Apply env variables with restore
+	defer fr.script.withEnvVars(step.Env)()
+
+	// Execute inline steps if present
+	if len(step.Steps) > 0 {
+		for _, nestedStep := range step.Steps {
+			result := fr.executeNestedStep(nestedStep)
+			if !result.Success && !nestedStep.IsOptional() {
+				return result
+			}
+		}
+		return &core.CommandResult{
+			Success: true,
+			Message: "Inline flow completed",
+		}
+	}
+
+	// Load and execute external flow file
+	if step.File == "" {
+		return &core.CommandResult{
+			Success: false,
+			Error:   fmt.Errorf("no flow file or commands specified"),
+			Message: "runFlow requires file or inline steps",
+		}
+	}
+
+	filePath := fr.script.ResolvePath(step.File)
+	subFlow, err := flow.ParseFile(filePath)
+	if err != nil {
+		return &core.CommandResult{
+			Success: false,
+			Error:   err,
+			Message: fmt.Sprintf("Failed to parse flow file: %s", filePath),
+		}
+	}
+
+	return fr.executeSubFlow(*subFlow)
+}
+
+// executeNestedStep executes a step without report tracking (for nested execution).
+func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
+	start := time.Now()
+	var result *core.CommandResult
+
+	switch s := step.(type) {
+	case *flow.DefineVariablesStep:
+		result = fr.script.ExecuteDefineVariables(s)
+	case *flow.RunScriptStep:
+		result = fr.script.ExecuteRunScript(s)
+	case *flow.EvalScriptStep:
+		result = fr.script.ExecuteEvalScript(s)
+	case *flow.AssertTrueStep:
+		result = fr.script.ExecuteAssertTrue(s)
+	case *flow.AssertConditionStep:
+		result = fr.script.ExecuteAssertCondition(fr.ctx, s, fr.driver)
+	case *flow.RepeatStep:
+		result = fr.executeRepeat(s)
+	case *flow.RetryStep:
+		result = fr.executeRetry(s)
+	case *flow.RunFlowStep:
+		result = fr.executeRunFlow(s)
+	default:
+		// Expand variables before driver execution
+		fr.script.ExpandStep(step)
+		result = fr.driver.Execute(step)
+	}
+
+	// Report nested step progress
+	if fr.config.OnNestedStep != nil && fr.depth > 0 {
+		duration := time.Since(start).Milliseconds()
+		errMsg := ""
+		if !result.Success && result.Error != nil {
+			errMsg = result.Error.Error()
+		}
+		fr.config.OnNestedStep(fr.depth, step.Describe(), result.Success, duration, errMsg)
+	}
+
+	return result
+}
+
+// executeSubFlow executes a sub-flow without separate report tracking.
+func (fr *FlowRunner) executeSubFlow(subFlow flow.Flow) *core.CommandResult {
+	// Save current flow dir
+	prevDir := fr.script.flowDir
+	if subFlow.SourcePath != "" {
+		fr.script.SetFlowDir(filepath.Dir(subFlow.SourcePath))
+	}
+	defer func() { fr.script.flowDir = prevDir }()
+
+	// Apply sub-flow env
+	defer fr.script.withEnvVars(subFlow.Config.Env)()
+
+	// Execute steps
+	for _, step := range subFlow.Steps {
+		if fr.ctx.Err() != nil {
+			return &core.CommandResult{
+				Success: false,
+				Error:   fr.ctx.Err(),
+				Message: "Sub-flow cancelled",
+			}
+		}
+
+		result := fr.executeNestedStep(step)
+		if !result.Success && !step.IsOptional() {
+			return result
+		}
+	}
+
+	return &core.CommandResult{
+		Success: true,
+		Message: fmt.Sprintf("Sub-flow '%s' completed", subFlow.Config.Name),
+	}
+}
+
+// executeSubFlowWithRetry executes a sub-flow with retry logic.
+func (fr *FlowRunner) executeSubFlowWithRetry(subFlow flow.Flow, maxRetries int) *core.CommandResult {
+	var lastErr error
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		if fr.ctx.Err() != nil {
+			return &core.CommandResult{
+				Success: false,
+				Error:   fr.ctx.Err(),
+				Message: "Retry cancelled",
+			}
+		}
+
+		result := fr.executeSubFlow(subFlow)
+		if result.Success {
+			return &core.CommandResult{
+				Success: true,
+				Message: fmt.Sprintf("Retry succeeded on attempt %d", attempt),
+			}
+		}
+		lastErr = result.Error
+	}
+
+	return &core.CommandResult{
+		Success: false,
+		Error:   lastErr,
+		Message: fmt.Sprintf("Retry failed after %d attempts", maxRetries),
+	}
 }
 
 // captureArtifacts captures screenshots and hierarchy.

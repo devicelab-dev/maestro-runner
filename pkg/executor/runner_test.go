@@ -2,6 +2,8 @@ package executor
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -502,5 +504,1438 @@ func TestRunner_Run_ArtifactsOnFailure(t *testing.T) {
 
 	if result.Status != report.StatusFailed {
 		t.Errorf("Status = %v, want %v", result.Status, report.StatusFailed)
+	}
+}
+
+// ===========================================
+// Flow Control Handler Tests
+// ===========================================
+
+func TestRunner_RepeatStep_FixedTimes(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	execCount := 0
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			execCount++
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Repeat Test"},
+			Steps: []flow.Step{
+				&flow.RepeatStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepRepeat},
+					Times:    "3",
+					Steps: []flow.Step{
+						&flow.TapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepTapOn}},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+	// Should execute 3 times
+	if execCount != 3 {
+		t.Errorf("execCount = %d, want 3", execCount)
+	}
+}
+
+func TestRunner_RepeatStep_WhileCondition(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	execCount := 0
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			execCount++
+			// Simulate element disappearing after 3 iterations
+			if _, ok := step.(*flow.AssertVisibleStep); ok {
+				if execCount <= 3 {
+					return &core.CommandResult{Success: true}
+				}
+				return &core.CommandResult{Success: false}
+			}
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "While Test"},
+			Steps: []flow.Step{
+				&flow.RepeatStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepRepeat},
+					While: flow.Condition{
+						Visible: &flow.Selector{Text: "Loading"},
+					},
+					Steps: []flow.Step{
+						&flow.BackStep{BaseStep: flow.BaseStep{StepType: flow.StepBack}},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+}
+
+func TestRunner_RepeatStep_NestedStepFailure(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	execCount := 0
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			execCount++
+			if execCount == 2 {
+				return &core.CommandResult{Success: false, Error: &testError{msg: "nested fail"}}
+			}
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Repeat Fail Test"},
+			Steps: []flow.Step{
+				&flow.RepeatStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepRepeat},
+					Times:    "5",
+					Steps: []flow.Step{
+						&flow.TapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepTapOn}},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	// Should fail because nested step failed
+	if result.Status != report.StatusFailed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusFailed)
+	}
+}
+
+func TestRunner_RetryStep_Success(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	attemptCount := 0
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			attemptCount++
+			// Succeed on third attempt
+			if attemptCount == 3 {
+				return &core.CommandResult{Success: true}
+			}
+			return &core.CommandResult{Success: false, Error: &testError{msg: "not yet"}}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Retry Test"},
+			Steps: []flow.Step{
+				&flow.RetryStep{
+					BaseStep:   flow.BaseStep{StepType: flow.StepRetry},
+					MaxRetries: "5",
+					Steps: []flow.Step{
+						&flow.TapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepTapOn}},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+}
+
+func TestRunner_RetryStep_Exhausted(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			return &core.CommandResult{Success: false, Error: &testError{msg: "always fails"}}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Retry Fail Test"},
+			Steps: []flow.Step{
+				&flow.RetryStep{
+					BaseStep:   flow.BaseStep{StepType: flow.StepRetry},
+					MaxRetries: "3",
+					Steps: []flow.Step{
+						&flow.TapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepTapOn}},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	// Should fail after exhausting retries
+	if result.Status != report.StatusFailed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusFailed)
+	}
+}
+
+func TestRunner_RetryStep_WithEnv(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Retry Env Test"},
+			Steps: []flow.Step{
+				&flow.RetryStep{
+					BaseStep:   flow.BaseStep{StepType: flow.StepRetry},
+					MaxRetries: "2",
+					Env: map[string]string{
+						"RETRY_VAR": "value",
+					},
+					Steps: []flow.Step{
+						&flow.TapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepTapOn}},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+}
+
+func TestRunner_RunFlowStep_InlineSteps(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	execCount := 0
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			execCount++
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "RunFlow Test"},
+			Steps: []flow.Step{
+				&flow.RunFlowStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepRunFlow},
+					Steps: []flow.Step{
+						&flow.TapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepTapOn}},
+						&flow.SwipeStep{BaseStep: flow.BaseStep{StepType: flow.StepSwipe}},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+	if execCount != 2 {
+		t.Errorf("execCount = %d, want 2", execCount)
+	}
+}
+
+func TestRunner_RunFlowStep_WhenCondition(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	execCount := 0
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			execCount++
+			// First call is condition check (AssertVisible)
+			if _, ok := step.(*flow.AssertVisibleStep); ok {
+				return &core.CommandResult{Success: false} // Condition not met
+			}
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "RunFlow When Test"},
+			Steps: []flow.Step{
+				&flow.RunFlowStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepRunFlow},
+					When: &flow.Condition{
+						Visible: &flow.Selector{Text: "Login"},
+					},
+					Steps: []flow.Step{
+						&flow.TapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepTapOn}},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	// Should pass but skip execution due to when condition
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+	// Only one call for condition check, inner steps skipped
+	if execCount != 1 {
+		t.Errorf("execCount = %d, want 1", execCount)
+	}
+}
+
+func TestRunner_RunFlowStep_NoFileOrSteps(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	driver := &mockDriver{}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "RunFlow Empty Test"},
+			Steps: []flow.Step{
+				&flow.RunFlowStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepRunFlow},
+					// No file, no steps
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	// Should fail - no file or steps
+	if result.Status != report.StatusFailed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusFailed)
+	}
+}
+
+func TestRunner_DefineVariablesStep(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	driver := &mockDriver{}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Define Variables Test"},
+			Steps: []flow.Step{
+				&flow.DefineVariablesStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepDefineVariables},
+					Env: map[string]string{
+						"USER": "testuser",
+						"PASS": "testpass",
+					},
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+}
+
+func TestRunner_RunScriptStep(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	driver := &mockDriver{}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Run Script Test"},
+			Steps: []flow.Step{
+				&flow.RunScriptStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepRunScript},
+					Script:   "output.value = 42",
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+}
+
+func TestRunner_EvalScriptStep(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	driver := &mockDriver{}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Eval Script Test"},
+			Steps: []flow.Step{
+				&flow.EvalScriptStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepEvalScript},
+					Script:   "var x = 1 + 2;",
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+}
+
+func TestRunner_AssertTrueStep(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	driver := &mockDriver{}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Assert True Test"},
+			Steps: []flow.Step{
+				&flow.AssertTrueStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepAssertTrue},
+					Script:   "1 + 1 == 2",
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+}
+
+func TestRunner_AssertConditionStep(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Assert Condition Test"},
+			Steps: []flow.Step{
+				&flow.AssertConditionStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepAssertCondition},
+					Condition: flow.Condition{
+						Script: "true",
+					},
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+}
+
+func TestRunner_RepeatStep_ContextCancellation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	execCount := 0
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			execCount++
+			time.Sleep(50 * time.Millisecond)
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Repeat Cancel Test"},
+			Steps: []flow.Step{
+				&flow.RepeatStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepRepeat},
+					Times:    "100",
+					Steps: []flow.Step{
+						&flow.TapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepTapOn}},
+					},
+				},
+			},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	result, err := runner.Run(ctx, flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	// Should be failed or skipped due to cancellation
+	if result.Status == report.StatusPassed {
+		t.Errorf("Status should not be passed after cancellation")
+	}
+	// Should have executed less than 100 times
+	if execCount >= 100 {
+		t.Errorf("execCount = %d, should be less than 100", execCount)
+	}
+}
+
+func TestRunner_RunFlowStep_ExternalFile(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create an external flow file
+	subFlowContent := `appId: com.test
+name: Sub Flow
+---
+- launchApp:
+- tapOn:
+    text: "Login"
+`
+	subFlowPath := filepath.Join(tmpDir, "subflow.yaml")
+	if err := os.WriteFile(subFlowPath, []byte(subFlowContent), 0644); err != nil {
+		t.Fatalf("Failed to write subflow: %v", err)
+	}
+
+	execCount := 0
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			execCount++
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: filepath.Join(tmpDir, "main.yaml"),
+			Config:     flow.Config{Name: "Main Flow"},
+			Steps: []flow.Step{
+				&flow.RunFlowStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepRunFlow},
+					File:     "subflow.yaml",
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+	// Sub-flow has 2 steps
+	if execCount != 2 {
+		t.Errorf("execCount = %d, want 2", execCount)
+	}
+}
+
+func TestRunner_RunFlowStep_ExternalFileNotFound(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	driver := &mockDriver{}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: filepath.Join(tmpDir, "main.yaml"),
+			Config:     flow.Config{Name: "Main Flow"},
+			Steps: []flow.Step{
+				&flow.RunFlowStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepRunFlow},
+					File:     "nonexistent.yaml",
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusFailed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusFailed)
+	}
+}
+
+func TestRunner_RetryStep_ExternalFile(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create an external flow file
+	subFlowContent := `appId: com.test
+name: Sub Flow
+---
+- tapOn:
+    text: OK
+`
+	subFlowPath := filepath.Join(tmpDir, "retry_flow.yaml")
+	if err := os.WriteFile(subFlowPath, []byte(subFlowContent), 0644); err != nil {
+		t.Fatalf("Failed to write subflow: %v", err)
+	}
+
+	attemptCount := 0
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			attemptCount++
+			// Succeed on second attempt
+			if attemptCount >= 2 {
+				return &core.CommandResult{Success: true}
+			}
+			return &core.CommandResult{Success: false, Error: &testError{msg: "not yet"}}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: filepath.Join(tmpDir, "main.yaml"),
+			Config:     flow.Config{Name: "Retry External Test"},
+			Steps: []flow.Step{
+				&flow.RetryStep{
+					BaseStep:   flow.BaseStep{StepType: flow.StepRetry},
+					MaxRetries: "3",
+					File:       "retry_flow.yaml",
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+}
+
+func TestRunner_RetryStep_ExternalFileNotFound(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	driver := &mockDriver{}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: filepath.Join(tmpDir, "main.yaml"),
+			Config:     flow.Config{Name: "Retry External Fail Test"},
+			Steps: []flow.Step{
+				&flow.RetryStep{
+					BaseStep:   flow.BaseStep{StepType: flow.StepRetry},
+					MaxRetries: "2",
+					File:       "nonexistent.yaml",
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusFailed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusFailed)
+	}
+}
+
+func TestRunner_NestedFlowControl(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	execCount := 0
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			execCount++
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	// Test nested repeat inside runFlow
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Nested Test"},
+			Steps: []flow.Step{
+				&flow.RunFlowStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepRunFlow},
+					Steps: []flow.Step{
+						&flow.RepeatStep{
+							BaseStep: flow.BaseStep{StepType: flow.StepRepeat},
+							Times:    "2",
+							Steps: []flow.Step{
+								&flow.TapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepTapOn}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+	// Repeat 2 times
+	if execCount != 2 {
+		t.Errorf("execCount = %d, want 2", execCount)
+	}
+}
+
+func TestRunner_RetryStep_ContextCancellation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	execCount := 0
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			execCount++
+			time.Sleep(50 * time.Millisecond)
+			return &core.CommandResult{Success: false, Error: &testError{msg: "fail"}}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Retry Cancel Test"},
+			Steps: []flow.Step{
+				&flow.RetryStep{
+					BaseStep:   flow.BaseStep{StepType: flow.StepRetry},
+					MaxRetries: "100",
+					Steps: []flow.Step{
+						&flow.TapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepTapOn}},
+					},
+				},
+			},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	result, err := runner.Run(ctx, flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	// Should be failed due to cancellation
+	if result.Status == report.StatusPassed {
+		t.Errorf("Status should not be passed after cancellation")
+	}
+	// Should have executed less than 100 times
+	if execCount >= 100 {
+		t.Errorf("execCount = %d, should be less than 100", execCount)
+	}
+}
+
+// ===========================================
+// Nested Step Type Tests (executeNestedStep coverage)
+// ===========================================
+
+func TestRunner_NestedDefineVariables(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	driver := &mockDriver{}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Nested DefineVariables Test"},
+			Steps: []flow.Step{
+				&flow.RepeatStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepRepeat},
+					Times:    "2",
+					Steps: []flow.Step{
+						&flow.DefineVariablesStep{
+							BaseStep: flow.BaseStep{StepType: flow.StepDefineVariables},
+							Env:      map[string]string{"VAR": "value"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+}
+
+func TestRunner_NestedRunScript(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	driver := &mockDriver{}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Nested RunScript Test"},
+			Steps: []flow.Step{
+				&flow.RunFlowStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepRunFlow},
+					Steps: []flow.Step{
+						&flow.RunScriptStep{
+							BaseStep: flow.BaseStep{StepType: flow.StepRunScript},
+							Script:   "output.x = 1",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+}
+
+func TestRunner_NestedEvalScript(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	driver := &mockDriver{}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Nested EvalScript Test"},
+			Steps: []flow.Step{
+				&flow.RetryStep{
+					BaseStep:   flow.BaseStep{StepType: flow.StepRetry},
+					MaxRetries: "1",
+					Steps: []flow.Step{
+						&flow.EvalScriptStep{
+							BaseStep: flow.BaseStep{StepType: flow.StepEvalScript},
+							Script:   "var y = 2",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+}
+
+func TestRunner_NestedAssertTrue(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	driver := &mockDriver{}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Nested AssertTrue Test"},
+			Steps: []flow.Step{
+				&flow.RepeatStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepRepeat},
+					Times:    "1",
+					Steps: []flow.Step{
+						&flow.AssertTrueStep{
+							BaseStep: flow.BaseStep{StepType: flow.StepAssertTrue},
+							Script:   "1 + 1 == 2",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+}
+
+func TestRunner_NestedAssertCondition(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Nested AssertCondition Test"},
+			Steps: []flow.Step{
+				&flow.RunFlowStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepRunFlow},
+					Steps: []flow.Step{
+						&flow.AssertConditionStep{
+							BaseStep:  flow.BaseStep{StepType: flow.StepAssertCondition},
+							Condition: flow.Condition{Script: "true"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+}
+
+func TestRunner_NestedRetry(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	execCount := 0
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			execCount++
+			// Fail first, succeed second
+			if execCount == 1 {
+				return &core.CommandResult{Success: false, Error: &testError{msg: "fail"}}
+			}
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Nested Retry Test"},
+			Steps: []flow.Step{
+				&flow.RunFlowStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepRunFlow},
+					Steps: []flow.Step{
+						&flow.RetryStep{
+							BaseStep:   flow.BaseStep{StepType: flow.StepRetry},
+							MaxRetries: "3",
+							Steps: []flow.Step{
+								&flow.TapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepTapOn}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+}
+
+func TestRunner_NestedRunFlow(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	execCount := 0
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			execCount++
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Nested RunFlow Test"},
+			Steps: []flow.Step{
+				&flow.RepeatStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepRepeat},
+					Times:    "2",
+					Steps: []flow.Step{
+						&flow.RunFlowStep{
+							BaseStep: flow.BaseStep{StepType: flow.StepRunFlow},
+							Steps: []flow.Step{
+								&flow.TapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepTapOn}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+	// RunFlow with 1 tap, repeated 2 times
+	if execCount != 2 {
+		t.Errorf("execCount = %d, want 2", execCount)
+	}
+}
+
+func TestRunner_RetryStep_ExternalFile_Exhausted(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create an external flow file
+	subFlowContent := `appId: com.test
+name: Sub Flow
+---
+- tapOn:
+    text: OK
+`
+	subFlowPath := filepath.Join(tmpDir, "retry_flow.yaml")
+	if err := os.WriteFile(subFlowPath, []byte(subFlowContent), 0644); err != nil {
+		t.Fatalf("Failed to write subflow: %v", err)
+	}
+
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			return &core.CommandResult{Success: false, Error: &testError{msg: "always fails"}}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: filepath.Join(tmpDir, "main.yaml"),
+			Config:     flow.Config{Name: "Retry External Exhausted Test"},
+			Steps: []flow.Step{
+				&flow.RetryStep{
+					BaseStep:   flow.BaseStep{StepType: flow.StepRetry},
+					MaxRetries: "2",
+					File:       "retry_flow.yaml",
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	// Should fail after exhausting retries
+	if result.Status != report.StatusFailed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusFailed)
+	}
+}
+
+func TestRunner_RetryStep_ExternalFile_ContextCancellation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create an external flow file
+	subFlowContent := `appId: com.test
+name: Sub Flow
+---
+- tapOn:
+    text: OK
+`
+	subFlowPath := filepath.Join(tmpDir, "retry_flow.yaml")
+	if err := os.WriteFile(subFlowPath, []byte(subFlowContent), 0644); err != nil {
+		t.Fatalf("Failed to write subflow: %v", err)
+	}
+
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			time.Sleep(50 * time.Millisecond)
+			return &core.CommandResult{Success: false, Error: &testError{msg: "fails"}}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: filepath.Join(tmpDir, "main.yaml"),
+			Config:     flow.Config{Name: "Retry External Cancel Test"},
+			Steps: []flow.Step{
+				&flow.RetryStep{
+					BaseStep:   flow.BaseStep{StepType: flow.StepRetry},
+					MaxRetries: "100",
+					File:       "retry_flow.yaml",
+				},
+			},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	result, err := runner.Run(ctx, flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	// Should fail due to cancellation
+	if result.Status == report.StatusPassed {
+		t.Errorf("Status should not be passed after cancellation")
+	}
+}
+
+func TestRunner_NestedOptionalStepFailure(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			return &core.CommandResult{Success: false, Error: &testError{msg: "fail"}}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Nested Optional Test"},
+			Steps: []flow.Step{
+				&flow.RepeatStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepRepeat},
+					Times:    "1",
+					Steps: []flow.Step{
+						&flow.TapOnStep{
+							BaseStep: flow.BaseStep{
+								StepType: flow.StepTapOn,
+								Optional: true,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	// Should pass because nested step is optional
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
 	}
 }

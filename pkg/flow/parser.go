@@ -174,11 +174,26 @@ func parseSteps(content string, flow *Flow) error {
 }
 
 func parseStep(node *yaml.Node, sourcePath string) (Step, error) {
+	// Handle scalar nodes like "- waitForAnimationToEnd" (no colon, no params)
+	if node.Kind == yaml.ScalarNode {
+		stepType := node.Value
+		if !isStepType(stepType) {
+			return nil, &ParseError{
+				Path:    sourcePath,
+				Line:    node.Line,
+				Message: fmt.Sprintf("unknown step type: %s", stepType),
+			}
+		}
+		// Create empty value node for steps with no parameters
+		emptyNode := &yaml.Node{Kind: yaml.MappingNode}
+		return decodeStep(StepType(stepType), emptyNode, sourcePath)
+	}
+
 	if node.Kind != yaml.MappingNode {
 		return nil, &ParseError{
 			Path:    sourcePath,
 			Line:    node.Line,
-			Message: "step must be a mapping",
+			Message: "step must be a mapping or command name",
 		}
 	}
 

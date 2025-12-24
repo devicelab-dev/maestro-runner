@@ -25,6 +25,19 @@ var GlobalFlags = []cli.Flag{
 		Usage:   "Device ID to run on (can be comma-separated)",
 		EnvVars: []string{"MAESTRO_DEVICE"},
 	},
+	&cli.StringFlag{
+		Name:    "driver",
+		Aliases: []string{"d"},
+		Usage:   "Driver to use (uiautomator2, appium)",
+		Value:   "uiautomator2",
+		EnvVars: []string{"MAESTRO_DRIVER"},
+	},
+	&cli.StringFlag{
+		Name:    "appium-url",
+		Usage:   "Appium server URL (for appium driver)",
+		Value:   "http://127.0.0.1:4723",
+		EnvVars: []string{"APPIUM_URL"},
+	},
 	&cli.BoolFlag{
 		Name:    "verbose",
 		Usage:   "Enable verbose logging",
@@ -32,7 +45,7 @@ var GlobalFlags = []cli.Flag{
 	},
 	&cli.StringFlag{
 		Name:    "app-file",
-		Usage:   "App binary (.apk, .app, .ipa) for installation",
+		Usage:   "App binary (.apk, .app, .ipa) to install before testing",
 		EnvVars: []string{"MAESTRO_APP_FILE"},
 	},
 	&cli.IntFlag{

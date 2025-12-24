@@ -8,10 +8,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devicelab-dev/maestro-runner/pkg/core"
+	"github.com/devicelab-dev/maestro-runner/pkg/device"
 	"github.com/devicelab-dev/maestro-runner/pkg/driver/mock"
+	uia2driver "github.com/devicelab-dev/maestro-runner/pkg/driver/uiautomator2"
 	"github.com/devicelab-dev/maestro-runner/pkg/executor"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
 	"github.com/devicelab-dev/maestro-runner/pkg/report"
+	"github.com/devicelab-dev/maestro-runner/pkg/uiautomator2"
 	"github.com/devicelab-dev/maestro-runner/pkg/validator"
 	"github.com/urfave/cli/v2"
 )
@@ -137,7 +141,11 @@ type RunConfig struct {
 	Platform string
 	Device   string
 	Verbose  bool
-	AppFile  string
+	AppFile  string // App binary to install before testing
+
+	// Driver
+	Driver    string // uiautomator2, appium
+	AppiumURL string // Appium server URL
 }
 
 func runTest(c *cli.Context) error {
@@ -170,6 +178,8 @@ func runTest(c *cli.Context) error {
 		Device:      c.String("device"),
 		Verbose:     c.Bool("verbose"),
 		AppFile:     c.String("app-file"),
+		Driver:      c.String("driver"),
+		AppiumURL:   c.String("appium-url"),
 	}
 
 	return executeTest(cfg)
@@ -223,7 +233,9 @@ func executeTest(cfg *RunConfig) error {
 		return fmt.Errorf("no test flows found")
 	}
 
-	fmt.Printf("Found %d test flow(s)\n", len(allTestCases))
+	fmt.Printf("\n%sSetup%s\n", color(colorBold), color(colorReset))
+	fmt.Println(strings.Repeat("─", 40))
+	printSetupSuccess(fmt.Sprintf("Found %d test flow(s)", len(allTestCases)))
 
 	// 2. Parse all validated flows
 	var flows []flow.Flow
@@ -235,13 +247,18 @@ func executeTest(cfg *RunConfig) error {
 		flows = append(flows, *f)
 	}
 
-	// 3. Create driver (mock for now)
-	driver := mock.New(mock.Config{
-		Platform: cfg.Platform,
-		DeviceID: cfg.Device,
-	})
+	// 3. Create driver
+	driver, cleanup, err := createDriver(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to create driver: %w", err)
+	}
+	defer cleanup()
 
 	// 4. Create and run executor
+	driverName := "uiautomator2"
+	if cfg.Platform == "mock" {
+		driverName = "mock"
+	}
 	runner := executor.New(driver, executor.RunnerConfig{
 		OutputDir:   cfg.OutputDir,
 		Parallelism: 0, // Sequential for now
@@ -255,11 +272,18 @@ func executeTest(cfg *RunConfig) error {
 			ID: cfg.AppFile,
 		},
 		RunnerVersion: "0.1.0",
-		DriverName:    "mock",
+		DriverName:    driverName,
+		// Live progress callbacks
+		OnFlowStart:       onFlowStart,
+		OnStepComplete:    onStepComplete,
+		OnNestedStep:      onNestedStep,
+		OnNestedFlowStart: onNestedFlowStart,
+		OnFlowEnd:         onFlowEnd,
 	})
 
-	fmt.Printf("Running tests...\n")
-	fmt.Printf("Output: %s\n\n", cfg.OutputDir)
+	printSetupSuccess(fmt.Sprintf("Output: %s", cfg.OutputDir))
+	fmt.Printf("\n%sExecution%s\n", color(colorBold), color(colorReset))
+	fmt.Println(strings.Repeat("─", 40))
 
 	result, err := runner.Run(context.Background(), flows)
 	if err != nil {
@@ -277,43 +301,208 @@ func executeTest(cfg *RunConfig) error {
 	return nil
 }
 
+// ANSI color codes
+const (
+	colorReset  = "\033[0m"
+	colorBold   = "\033[1m"
+	colorDim    = "\033[2m"
+	colorGreen  = "\033[32m"
+	colorRed    = "\033[31m"
+	colorYellow = "\033[33m"
+	colorCyan   = "\033[36m"
+	colorGray   = "\033[90m"
+)
+
+// Slow step threshold in milliseconds (5 seconds)
+const slowThresholdMs = 5000
+
+// colorsEnabled determines if ANSI colors should be used
+var colorsEnabled = true
+
+func init() {
+	// Respect NO_COLOR environment variable
+	if os.Getenv("NO_COLOR") != "" {
+		colorsEnabled = false
+		return
+	}
+	// Check if stdout is a terminal
+	if fileInfo, err := os.Stdout.Stat(); err == nil {
+		if (fileInfo.Mode() & os.ModeCharDevice) == 0 {
+			colorsEnabled = false
+		}
+	}
+}
+
+// color returns the color code if colors are enabled, empty string otherwise
+func color(c string) string {
+	if colorsEnabled {
+		return c
+	}
+	return ""
+}
+
+// Live progress callbacks
+func onFlowStart(flowIdx, totalFlows int, name, file string) {
+	fmt.Printf("\n  %s[%d/%d]%s %s%s%s (%s)\n",
+		color(colorCyan), flowIdx+1, totalFlows, color(colorReset),
+		color(colorBold), name, color(colorReset), file)
+	fmt.Println(strings.Repeat("─", 60))
+}
+
+func onStepComplete(idx int, desc string, passed bool, durationMs int64, errMsg string) {
+	// Don't mark runFlow/repeat/retry as slow - they contain multiple steps
+	isCompoundStep := strings.HasPrefix(desc, "runFlow:") ||
+		strings.HasPrefix(desc, "repeat:") ||
+		strings.HasPrefix(desc, "retry:")
+	isSlow := durationMs >= slowThresholdMs && !isCompoundStep
+	durStr := formatDuration(durationMs)
+
+	if passed {
+		symbol := "✓"
+		symbolColor := color(colorGreen)
+		durColor := ""
+		if isSlow {
+			durColor = color(colorYellow)
+			symbol = "⚠"
+			symbolColor = color(colorYellow)
+		}
+		fmt.Printf("    %s%s%s %s %s(%s)%s\n",
+			symbolColor, symbol, color(colorReset), desc, durColor, durStr, color(colorReset))
+	} else {
+		fmt.Printf("    %s✗%s %s (%s)\n", color(colorRed), color(colorReset), desc, durStr)
+		if errMsg != "" {
+			fmt.Printf("      %s╰─%s %s\n", color(colorGray), color(colorReset), errMsg)
+		}
+	}
+}
+
+func onNestedFlowStart(depth int, desc string) {
+	// Base indent (4 spaces) + 2 spaces per depth level
+	indent := strings.Repeat("  ", 2+depth)
+	fmt.Printf("%s%s▸%s %s\n", indent, color(colorCyan), color(colorReset), desc)
+}
+
+func onNestedStep(depth int, desc string, passed bool, durationMs int64, errMsg string) {
+	// Base indent (4 spaces) + 2 spaces per depth level + 2 more for being inside the flow
+	indent := strings.Repeat("  ", 2+depth+1)
+	isSlow := durationMs >= slowThresholdMs
+	durStr := formatDuration(durationMs)
+
+	if passed {
+		symbol := "✓"
+		symbolColor := color(colorGreen)
+		durColor := ""
+		if isSlow {
+			durColor = color(colorYellow)
+			symbol = "⚠"
+			symbolColor = color(colorYellow)
+		}
+		fmt.Printf("%s%s%s%s %s %s(%s)%s\n",
+			indent, symbolColor, symbol, color(colorReset), desc, durColor, durStr, color(colorReset))
+	} else {
+		fmt.Printf("%s%s✗%s %s (%s)\n", indent, color(colorRed), color(colorReset), desc, durStr)
+		if errMsg != "" {
+			fmt.Printf("%s  %s╰─%s %s\n", indent, color(colorGray), color(colorReset), errMsg)
+		}
+	}
+}
+
+func onFlowEnd(name string, passed bool, durationMs int64) {
+	if passed {
+		fmt.Printf("%s✓ %s%s %s%s%s\n",
+			color(colorGreen), color(colorReset), name, color(colorGray), formatDuration(durationMs), color(colorReset))
+	} else {
+		fmt.Printf("%s✗ %s%s %s%s%s\n",
+			color(colorRed), color(colorReset), name, color(colorGray), formatDuration(durationMs), color(colorReset))
+	}
+}
+
 func printSummary(result *executor.RunResult) {
-	fmt.Println("=" + strings.Repeat("=", 59))
-	fmt.Println("TEST RESULTS")
-	fmt.Println("=" + strings.Repeat("=", 59))
+	// Calculate totals
+	totalSteps := 0
+	passedSteps := 0
+	failedSteps := 0
+	skippedSteps := 0
+	for _, fr := range result.FlowResults {
+		totalSteps += fr.StepsTotal
+		passedSteps += fr.StepsPassed
+		failedSteps += fr.StepsFailed
+		skippedSteps += fr.StepsSkipped
+	}
+
+	// Print step summary
+	fmt.Println()
+	if passedSteps > 0 {
+		fmt.Printf("  %s%d steps passing%s (%s)\n", color(colorGreen), passedSteps, color(colorReset), formatDuration(result.Duration))
+	}
+	if failedSteps > 0 {
+		fmt.Printf("  %s%d steps failing%s\n", color(colorRed), failedSteps, color(colorReset))
+	}
+	if skippedSteps > 0 {
+		fmt.Printf("  %s%d steps skipped%s\n", color(colorCyan), skippedSteps, color(colorReset))
+	}
+	fmt.Println()
+
+	// Print table
+	tableWidth := 92
+	fmt.Println(strings.Repeat("═", tableWidth))
+	fmt.Printf("  %-42s %6s %7s %6s %6s %6s %10s\n", "Flow", "Status", "Steps", "Pass", "Fail", "Skip", "Duration")
+	fmt.Println(strings.Repeat("─", tableWidth))
 
 	// Print each flow result
 	for _, fr := range result.FlowResults {
-		status := "PASS"
+		var status string
+		var statusColor string
 		if fr.Status == report.StatusFailed {
-			status = "FAIL"
+			status = "✗ FAIL"
+			statusColor = color(colorRed)
 		} else if fr.Status == report.StatusSkipped {
-			status = "SKIP"
+			status = "- SKIP"
+			statusColor = color(colorCyan)
+		} else {
+			status = "✓ PASS"
+			statusColor = color(colorGreen)
 		}
-		fmt.Printf("  [%s] %s (%dms)\n", status, fr.Name, fr.Duration)
-		if fr.Error != "" {
-			fmt.Printf("         Error: %s\n", fr.Error)
+
+		// Truncate name if too long
+		name := fr.Name
+		if len(name) > 42 {
+			name = name[:39] + "..."
 		}
+
+		fmt.Printf("  %-42s %s%6s%s %7d %6d %6d %6d %10s\n",
+			name, statusColor, status, color(colorReset),
+			fr.StepsTotal, fr.StepsPassed, fr.StepsFailed, fr.StepsSkipped,
+			formatDuration(fr.Duration))
 	}
 
-	fmt.Println("-" + strings.Repeat("-", 59))
-
-	// Print totals
-	fmt.Printf("Total:  %d flows\n", result.TotalFlows)
-	fmt.Printf("Passed: %d\n", result.PassedFlows)
-	fmt.Printf("Failed: %d\n", result.FailedFlows)
-	if result.SkippedFlows > 0 {
-		fmt.Printf("Skipped: %d\n", result.SkippedFlows)
+	// Print totals row
+	fmt.Println(strings.Repeat("─", tableWidth))
+	statusStr := fmt.Sprintf("%d/%d", result.PassedFlows, result.TotalFlows)
+	statusColor := color(colorGreen)
+	if result.FailedFlows > 0 {
+		statusColor = color(colorRed)
 	}
-	fmt.Printf("Duration: %dms\n", result.Duration)
-	fmt.Println("=" + strings.Repeat("=", 59))
+	fmt.Printf("  %s%-42s%s %s%6s%s %7d %6d %6d %6d %10s\n",
+		color(colorBold), "TOTAL", color(colorReset),
+		statusColor, statusStr, color(colorReset),
+		totalSteps, passedSteps, failedSteps, skippedSteps,
+		formatDuration(result.Duration))
+	fmt.Println(strings.Repeat("═", tableWidth))
+}
 
-	// Overall status
-	if result.Status == report.StatusPassed {
-		fmt.Println("Status: PASSED")
-	} else {
-		fmt.Println("Status: FAILED")
+// formatDuration formats milliseconds to a human-readable string.
+// Shows milliseconds for values < 1s, seconds otherwise.
+func formatDuration(ms int64) string {
+	if ms < 1000 {
+		return fmt.Sprintf("%dms", ms)
 	}
+	if ms < 60000 {
+		return fmt.Sprintf("%.1fs", float64(ms)/1000)
+	}
+	mins := ms / 60000
+	secs := (ms % 60000) / 1000
+	return fmt.Sprintf("%dm %ds", mins, secs)
 }
 
 func parseEnvVars(envs []string) map[string]string {
@@ -325,4 +514,199 @@ func parseEnvVars(envs []string) map[string]string {
 		}
 	}
 	return result
+}
+
+// createDriver creates the appropriate driver for the platform.
+// Returns the driver, a cleanup function, and any error.
+func createDriver(cfg *RunConfig) (core.Driver, func(), error) {
+	platform := strings.ToLower(cfg.Platform)
+	driverType := strings.ToLower(cfg.Driver)
+
+	// Mock driver for testing
+	if platform == "mock" || driverType == "mock" {
+		driver := mock.New(mock.Config{
+			Platform: cfg.Platform,
+			DeviceID: cfg.Device,
+		})
+		return driver, func() {}, nil
+	}
+
+	switch platform {
+	case "android", "":
+		return createAndroidDriver(cfg)
+	case "ios":
+		return nil, nil, fmt.Errorf("iOS driver not yet implemented")
+	default:
+		return nil, nil, fmt.Errorf("unsupported platform: %s", platform)
+	}
+}
+
+// printSetupStep prints a setup step with spinner-style prefix
+func printSetupStep(msg string) {
+	fmt.Printf("  %s⏳%s %s\n", color(colorCyan), color(colorReset), msg)
+}
+
+// printSetupSuccess prints a success message for setup
+func printSetupSuccess(msg string) {
+	fmt.Printf("  %s✓%s %s\n", color(colorGreen), color(colorReset), msg)
+}
+
+// createAndroidDriver creates an Android driver based on cfg.Driver type.
+func createAndroidDriver(cfg *RunConfig) (core.Driver, func(), error) {
+	driverType := strings.ToLower(cfg.Driver)
+	if driverType == "" {
+		driverType = "uiautomator2"
+	}
+
+	// 1. Connect to device
+	printSetupStep(fmt.Sprintf("Connecting to device %s...", cfg.Device))
+	dev, err := device.New(cfg.Device)
+	if err != nil {
+		return nil, nil, fmt.Errorf("connect to device: %w", err)
+	}
+
+	// Get device info for reporting
+	info, err := dev.Info()
+	if err != nil {
+		return nil, nil, fmt.Errorf("get device info: %w", err)
+	}
+	printSetupSuccess(fmt.Sprintf("Connected to %s %s (SDK %s)", info.Brand, info.Model, info.SDK))
+
+	// 2. Install app if specified
+	if cfg.AppFile != "" {
+		printSetupStep(fmt.Sprintf("Installing app: %s", cfg.AppFile))
+		if err := dev.Install(cfg.AppFile); err != nil {
+			return nil, nil, fmt.Errorf("install app: %w", err)
+		}
+		printSetupSuccess("App installed")
+	}
+
+	// 3. Create driver based on type
+	switch driverType {
+	case "uiautomator2":
+		return createUIAutomator2Driver(cfg, dev, info)
+	case "appium":
+		return createAppiumDriver(cfg, dev, info)
+	default:
+		return nil, nil, fmt.Errorf("unsupported driver: %s (use uiautomator2 or appium)", driverType)
+	}
+}
+
+// createUIAutomator2Driver creates a direct UIAutomator2 driver (no Appium server needed).
+func createUIAutomator2Driver(cfg *RunConfig, dev *device.AndroidDevice, info device.DeviceInfo) (core.Driver, func(), error) {
+	// 1. Check/install UIAutomator2 APKs
+	if !dev.IsInstalled(device.UIAutomator2Server) {
+		printSetupStep("Installing UIAutomator2 APKs...")
+		apksDir := "./apks"
+		if err := dev.InstallUIAutomator2(apksDir); err != nil {
+			return nil, nil, fmt.Errorf("install UIAutomator2: %w", err)
+		}
+		printSetupSuccess("UIAutomator2 installed")
+	}
+
+	// 2. Start UIAutomator2 server
+	printSetupStep("Starting UIAutomator2 server...")
+	uia2Cfg := device.DefaultUIAutomator2Config()
+	if err := dev.StartUIAutomator2(uia2Cfg); err != nil {
+		return nil, nil, fmt.Errorf("start UIAutomator2: %w", err)
+	}
+	printSetupSuccess("UIAutomator2 server started")
+
+	// 3. Create client
+	var client *uiautomator2.Client
+	if dev.SocketPath() != "" {
+		client = uiautomator2.NewClient(dev.SocketPath())
+	} else {
+		client = uiautomator2.NewClientTCP(dev.LocalPort())
+	}
+
+	// Set log path to report folder
+	if cfg.OutputDir != "" {
+		client.SetLogPath(filepath.Join(cfg.OutputDir, "client.log"))
+	}
+
+	// 4. Create session
+	printSetupStep("Creating session...")
+	caps := uiautomator2.Capabilities{
+		PlatformName: "Android",
+		DeviceName:   info.Model,
+	}
+	if err := client.CreateSession(caps); err != nil {
+		dev.StopUIAutomator2()
+		return nil, nil, fmt.Errorf("create session: %w", err)
+	}
+	printSetupSuccess("Session created")
+
+	// Set default implicit wait timeout (17 seconds like Maestro)
+	// This enables server-side polling for element finding
+	if err := client.SetImplicitWait(17 * time.Second); err != nil {
+		// Non-fatal: findElement will still work with its own polling
+		fmt.Printf("  %s⚠%s Warning: failed to set implicit wait: %v\n", color(colorYellow), color(colorReset), err)
+	}
+
+	// 5. Create driver
+	platformInfo := &core.PlatformInfo{
+		Platform:    "android",
+		DeviceID:    info.Serial,
+		DeviceName:  fmt.Sprintf("%s %s", info.Brand, info.Model),
+		OSVersion:   info.SDK,
+		IsSimulator: info.IsEmulator,
+	}
+	driver := uia2driver.New(client, platformInfo, dev)
+
+	// Cleanup function
+	cleanup := func() {
+		printSetupStep("Cleaning up...")
+		client.Close()
+		dev.StopUIAutomator2()
+	}
+
+	return driver, cleanup, nil
+}
+
+// createAppiumDriver creates a driver that connects to an external Appium server.
+func createAppiumDriver(cfg *RunConfig, dev *device.AndroidDevice, info device.DeviceInfo) (core.Driver, func(), error) {
+	printSetupStep(fmt.Sprintf("Connecting to Appium server: %s", cfg.AppiumURL))
+
+	// Create client pointing to Appium server
+	client := uiautomator2.NewClientTCP(4723) // TODO: parse port from cfg.AppiumURL
+
+	// Set log path to report folder
+	if cfg.OutputDir != "" {
+		client.SetLogPath(filepath.Join(cfg.OutputDir, "client.log"))
+	}
+
+	// Create session with Appium capabilities
+	printSetupStep("Creating Appium session...")
+	caps := uiautomator2.Capabilities{
+		PlatformName: "Android",
+		DeviceName:   info.Model,
+	}
+	if err := client.CreateSession(caps); err != nil {
+		return nil, nil, fmt.Errorf("create Appium session: %w", err)
+	}
+	printSetupSuccess("Appium session created")
+
+	// Set default implicit wait timeout (17 seconds like Maestro)
+	if err := client.SetImplicitWait(17 * time.Second); err != nil {
+		fmt.Printf("  %s⚠%s Warning: failed to set implicit wait: %v\n", color(colorYellow), color(colorReset), err)
+	}
+
+	// Create driver
+	platformInfo := &core.PlatformInfo{
+		Platform:    "android",
+		DeviceID:    info.Serial,
+		DeviceName:  fmt.Sprintf("%s %s", info.Brand, info.Model),
+		OSVersion:   info.SDK,
+		IsSimulator: info.IsEmulator,
+	}
+	driver := uia2driver.New(client, platformInfo, dev)
+
+	// Cleanup function
+	cleanup := func() {
+		printSetupStep("Cleaning up Appium session...")
+		client.Close()
+	}
+
+	return driver, cleanup, nil
 }
