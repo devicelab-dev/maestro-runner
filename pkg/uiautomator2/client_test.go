@@ -12,8 +12,20 @@ func newTestClient(handler http.HandlerFunc) (*Client, *httptest.Server) {
 	client := &Client{
 		http:    server.Client(),
 		baseURL: server.URL,
+		logger:  createLogger(), // Required for request logging
 	}
 	return client, server
+}
+
+// newErrorTestClient creates a client that will fail on any request.
+// Used for testing error handling paths.
+func newErrorTestClient() *Client {
+	return &Client{
+		http:      &http.Client{},
+		baseURL:   "http://localhost:99999", // Invalid port
+		sessionID: "test",
+		logger:    createLogger(),
+	}
 }
 
 func TestStatus(t *testing.T) {
@@ -324,10 +336,8 @@ func TestGetSessionUnmarshalError(t *testing.T) {
 }
 
 func TestRequestConnectionError(t *testing.T) {
-	client := &Client{
-		http:    &http.Client{},
-		baseURL: "http://localhost:99999", // Invalid port
-	}
+	client := newErrorTestClient()
+	client.sessionID = "" // Status doesn't need session
 
 	_, err := client.Status()
 	if err == nil {
@@ -366,10 +376,8 @@ func TestDialContextInNewClient(t *testing.T) {
 }
 
 func TestCreateSessionRequestError(t *testing.T) {
-	client := &Client{
-		http:    &http.Client{},
-		baseURL: "http://localhost:99999",
-	}
+	client := newErrorTestClient()
+	client.sessionID = "" // CreateSession doesn't need session
 	err := client.CreateSession(Capabilities{})
 	if err == nil {
 		t.Error("expected error")
@@ -377,11 +385,7 @@ func TestCreateSessionRequestError(t *testing.T) {
 }
 
 func TestGetSessionRequestError(t *testing.T) {
-	client := &Client{
-		http:      &http.Client{},
-		baseURL:   "http://localhost:99999",
-		sessionID: "test",
-	}
+	client := newErrorTestClient()
 	_, err := client.GetSession()
 	if err == nil {
 		t.Error("expected error")
@@ -406,10 +410,8 @@ func TestCreateSessionAltFormatEmptySessionID(t *testing.T) {
 }
 
 func TestRequestInvalidURL(t *testing.T) {
-	client := &Client{
-		http:    &http.Client{},
-		baseURL: "://invalid-url", // Invalid URL scheme
-	}
+	client := newErrorTestClient()
+	client.baseURL = "://invalid-url" // Invalid URL scheme
 	_, err := client.request("GET", "/test", nil)
 	if err == nil {
 		t.Error("expected error for invalid URL")

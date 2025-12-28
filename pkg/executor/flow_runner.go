@@ -88,14 +88,22 @@ func (fr *FlowRunner) Run() FlowResult {
 			fr.config.OnStepComplete(i, step.Describe(), stepStatus == report.StatusPassed, stepDuration, stepError)
 		}
 
-		// Track step counts
-		switch stepStatus {
-		case report.StatusPassed:
-			fr.stepsPassed++
-		case report.StatusFailed:
-			fr.stepsFailed++
-		case report.StatusSkipped:
-			fr.stepsSkipped++
+		// Track step counts (compound steps like runFlow/repeat/retry don't count themselves,
+		// their sub-steps are counted individually in executeNestedStep)
+		isCompoundStep := false
+		switch step.(type) {
+		case *flow.RepeatStep, *flow.RetryStep, *flow.RunFlowStep:
+			isCompoundStep = true
+		}
+		if !isCompoundStep {
+			switch stepStatus {
+			case report.StatusPassed:
+				fr.stepsPassed++
+			case report.StatusFailed:
+				fr.stepsFailed++
+			case report.StatusSkipped:
+				fr.stepsSkipped++
+			}
 		}
 
 		// Handle step result
@@ -106,8 +114,15 @@ func (fr *FlowRunner) Run() FlowResult {
 			}
 			// Required step failed - skip remaining and fail flow
 			fr.flowWriter.SkipRemainingCommands(i + 1)
-			// Count remaining steps as skipped
-			fr.stepsSkipped += len(fr.flow.Steps) - i - 1
+			// Count remaining non-compound steps as skipped
+			for j := i + 1; j < len(fr.flow.Steps); j++ {
+				switch fr.flow.Steps[j].(type) {
+				case *flow.RepeatStep, *flow.RetryStep, *flow.RunFlowStep:
+					// Compound steps don't count themselves
+				default:
+					fr.stepsSkipped++
+				}
+			}
 			flowStatus = report.StatusFailed
 			flowError = stepError
 			break
@@ -131,7 +146,7 @@ func (fr *FlowRunner) Run() FlowResult {
 		Status:       flowStatus,
 		Duration:     flowDuration,
 		Error:        flowError,
-		StepsTotal:   len(fr.flow.Steps),
+		StepsTotal:   fr.stepsPassed + fr.stepsFailed + fr.stepsSkipped,
 		StepsPassed:  fr.stepsPassed,
 		StepsFailed:  fr.stepsFailed,
 		StepsSkipped: fr.stepsSkipped,
@@ -431,6 +446,20 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 		// Expand variables before driver execution
 		fr.script.ExpandStep(step)
 		result = fr.driver.Execute(step)
+	}
+
+	// Track nested step counts (compound steps like runFlow/repeat/retry don't count themselves)
+	isCompoundStep := false
+	switch step.(type) {
+	case *flow.RepeatStep, *flow.RetryStep, *flow.RunFlowStep:
+		isCompoundStep = true
+	}
+	if !isCompoundStep {
+		if result.Success {
+			fr.stepsPassed++
+		} else {
+			fr.stepsFailed++
+		}
 	}
 
 	// Report nested step progress

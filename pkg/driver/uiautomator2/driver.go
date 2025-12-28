@@ -54,6 +54,10 @@ type Driver struct {
 	client UIA2Client
 	info   *core.PlatformInfo
 	device ShellExecutor // for ADB commands (launchApp, stopApp, clearState)
+
+	// Timeouts (0 = use defaults)
+	findTimeout         int // ms, for required elements
+	optionalFindTimeout int // ms, for optional elements
 }
 
 // New creates a new UIAutomator2 driver.
@@ -63,6 +67,17 @@ func New(client UIA2Client, info *core.PlatformInfo, device ShellExecutor) *Driv
 		info:   info,
 		device: device,
 	}
+}
+
+// SetFindTimeout sets the timeout for finding required elements.
+// Useful for testing with shorter timeouts.
+func (d *Driver) SetFindTimeout(ms int) {
+	d.findTimeout = ms
+}
+
+// SetOptionalFindTimeout sets the timeout for finding optional elements.
+func (d *Driver) SetOptionalFindTimeout(ms int) {
+	d.optionalFindTimeout = ms
 }
 
 // Execute runs a single step and returns the result.
@@ -208,12 +223,19 @@ func (d *Driver) GetPlatformInfo() *core.PlatformInfo {
 // findElement finds an element using a selector with client-side polling.
 // Tries multiple locator strategies in order until one succeeds.
 // For relative selectors, uses page source parsing.
-// Uses 17s timeout for required elements, 7s for optional.
+// Uses 17s timeout for required elements, 7s for optional (configurable via SetFindTimeout).
 func (d *Driver) findElement(sel flow.Selector, optional bool) (*uiautomator2.Element, *core.ElementInfo, error) {
-	timeout := time.Duration(DefaultFindTimeout) * time.Millisecond
-	if optional {
-		timeout = time.Duration(OptionalFindTimeout) * time.Millisecond
+	timeoutMs := DefaultFindTimeout
+	if d.findTimeout > 0 {
+		timeoutMs = d.findTimeout
 	}
+	if optional {
+		timeoutMs = OptionalFindTimeout
+		if d.optionalFindTimeout > 0 {
+			timeoutMs = d.optionalFindTimeout
+		}
+	}
+	timeout := time.Duration(timeoutMs) * time.Millisecond
 
 	// Handle relative selectors via page source
 	if sel.HasRelativeSelector() {

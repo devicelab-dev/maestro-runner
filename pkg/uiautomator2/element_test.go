@@ -516,11 +516,7 @@ func TestIsSelectedError(t *testing.T) {
 }
 
 func TestFindElementRequestError(t *testing.T) {
-	client := &Client{
-		http:      &http.Client{},
-		baseURL:   "http://localhost:99999",
-		sessionID: "test",
-	}
+	client := newErrorTestClient()
 	_, err := client.FindElement("id", "test")
 	if err == nil {
 		t.Error("expected error")
@@ -528,11 +524,7 @@ func TestFindElementRequestError(t *testing.T) {
 }
 
 func TestFindElementsRequestError(t *testing.T) {
-	client := &Client{
-		http:      &http.Client{},
-		baseURL:   "http://localhost:99999",
-		sessionID: "test",
-	}
+	client := newErrorTestClient()
 	_, err := client.FindElements("id", "test")
 	if err == nil {
 		t.Error("expected error")
@@ -540,11 +532,7 @@ func TestFindElementsRequestError(t *testing.T) {
 }
 
 func TestActiveElementRequestError(t *testing.T) {
-	client := &Client{
-		http:      &http.Client{},
-		baseURL:   "http://localhost:99999",
-		sessionID: "test",
-	}
+	client := newErrorTestClient()
 	_, err := client.ActiveElement()
 	if err == nil {
 		t.Error("expected error")
@@ -552,11 +540,7 @@ func TestActiveElementRequestError(t *testing.T) {
 }
 
 func TestElementTextRequestError(t *testing.T) {
-	client := &Client{
-		http:      &http.Client{},
-		baseURL:   "http://localhost:99999",
-		sessionID: "test",
-	}
+	client := newErrorTestClient()
 	elem := &Element{id: "elem-123", client: client}
 	_, err := elem.Text()
 	if err == nil {
@@ -565,11 +549,7 @@ func TestElementTextRequestError(t *testing.T) {
 }
 
 func TestElementRectRequestError(t *testing.T) {
-	client := &Client{
-		http:      &http.Client{},
-		baseURL:   "http://localhost:99999",
-		sessionID: "test",
-	}
+	client := newErrorTestClient()
 	elem := &Element{id: "elem-123", client: client}
 	_, err := elem.Rect()
 	if err == nil {
@@ -578,11 +558,7 @@ func TestElementRectRequestError(t *testing.T) {
 }
 
 func TestElementScreenshotRequestError(t *testing.T) {
-	client := &Client{
-		http:      &http.Client{},
-		baseURL:   "http://localhost:99999",
-		sessionID: "test",
-	}
+	client := newErrorTestClient()
 	elem := &Element{id: "elem-123", client: client}
 	_, err := elem.Screenshot()
 	if err == nil {
