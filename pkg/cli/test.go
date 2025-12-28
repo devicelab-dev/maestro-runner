@@ -293,9 +293,9 @@ func executeTest(cfg *RunConfig) error {
 	// 5. Print summary
 	printSummary(result)
 
-	// Return error if any flows failed
+	// Exit with code 1 if any flows failed (summary already printed)
 	if result.Status != report.StatusPassed {
-		return fmt.Errorf("test run failed: %d/%d flows failed", result.FailedFlows, result.TotalFlows)
+		return cli.Exit("", 1)
 	}
 
 	return nil
@@ -654,9 +654,8 @@ func createUIAutomator2Driver(cfg *RunConfig, dev *device.AndroidDevice, info de
 	}
 	driver := uia2driver.New(client, platformInfo, dev)
 
-	// Cleanup function
+	// Cleanup function (silent)
 	cleanup := func() {
-		printSetupStep("Cleaning up...")
 		client.Close()
 		dev.StopUIAutomator2()
 	}
@@ -702,9 +701,8 @@ func createAppiumDriver(cfg *RunConfig, dev *device.AndroidDevice, info device.D
 	}
 	driver := uia2driver.New(client, platformInfo, dev)
 
-	// Cleanup function
+	// Cleanup function (silent)
 	cleanup := func() {
-		printSetupStep("Cleaning up Appium session...")
 		client.Close()
 	}
 

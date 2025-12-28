@@ -764,6 +764,8 @@ func TestExecuteAllStepTypes(t *testing.T) {
 	// Most will fail because they need findElement, but this covers the switch paths
 	client := &MockUIA2Client{}
 	driver := New(client, nil, nil)
+	driver.SetFindTimeout(100)         // 100ms for fast test failure
+	driver.SetOptionalFindTimeout(50)  // 50ms for optional elements
 
 	tests := []struct {
 		name    string

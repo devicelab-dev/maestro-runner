@@ -538,11 +538,7 @@ func TestGetSettingsUnmarshalError(t *testing.T) {
 }
 
 func TestGetDeviceInfoRequestError(t *testing.T) {
-	client := &Client{
-		http:      &http.Client{},
-		baseURL:   "http://localhost:99999",
-		sessionID: "test",
-	}
+	client := newErrorTestClient()
 	_, err := client.GetDeviceInfo()
 	if err == nil {
 		t.Error("expected error")
@@ -550,11 +546,7 @@ func TestGetDeviceInfoRequestError(t *testing.T) {
 }
 
 func TestGetBatteryInfoRequestError(t *testing.T) {
-	client := &Client{
-		http:      &http.Client{},
-		baseURL:   "http://localhost:99999",
-		sessionID: "test",
-	}
+	client := newErrorTestClient()
 	_, err := client.GetBatteryInfo()
 	if err == nil {
 		t.Error("expected error")
@@ -562,11 +554,7 @@ func TestGetBatteryInfoRequestError(t *testing.T) {
 }
 
 func TestScreenshotRequestError(t *testing.T) {
-	client := &Client{
-		http:      &http.Client{},
-		baseURL:   "http://localhost:99999",
-		sessionID: "test",
-	}
+	client := newErrorTestClient()
 	_, err := client.Screenshot()
 	if err == nil {
 		t.Error("expected error")
@@ -574,11 +562,7 @@ func TestScreenshotRequestError(t *testing.T) {
 }
 
 func TestSourceRequestError(t *testing.T) {
-	client := &Client{
-		http:      &http.Client{},
-		baseURL:   "http://localhost:99999",
-		sessionID: "test",
-	}
+	client := newErrorTestClient()
 	_, err := client.Source()
 	if err == nil {
 		t.Error("expected error")
@@ -586,11 +570,7 @@ func TestSourceRequestError(t *testing.T) {
 }
 
 func TestGetOrientationRequestError(t *testing.T) {
-	client := &Client{
-		http:      &http.Client{},
-		baseURL:   "http://localhost:99999",
-		sessionID: "test",
-	}
+	client := newErrorTestClient()
 	_, err := client.GetOrientation()
 	if err == nil {
 		t.Error("expected error")
@@ -598,11 +578,7 @@ func TestGetOrientationRequestError(t *testing.T) {
 }
 
 func TestGetAlertTextRequestError(t *testing.T) {
-	client := &Client{
-		http:      &http.Client{},
-		baseURL:   "http://localhost:99999",
-		sessionID: "test",
-	}
+	client := newErrorTestClient()
 	_, err := client.GetAlertText()
 	if err == nil {
 		t.Error("expected error")
@@ -610,11 +586,7 @@ func TestGetAlertTextRequestError(t *testing.T) {
 }
 
 func TestGetSettingsRequestError(t *testing.T) {
-	client := &Client{
-		http:      &http.Client{},
-		baseURL:   "http://localhost:99999",
-		sessionID: "test",
-	}
+	client := newErrorTestClient()
 	_, err := client.GetSettings()
 	if err == nil {
 		t.Error("expected error")
@@ -622,11 +594,7 @@ func TestGetSettingsRequestError(t *testing.T) {
 }
 
 func TestGetClipboardRequestError(t *testing.T) {
-	client := &Client{
-		http:      &http.Client{},
-		baseURL:   "http://localhost:99999",
-		sessionID: "test",
-	}
+	client := newErrorTestClient()
 	_, err := client.GetClipboard()
 	if err == nil {
 		t.Error("expected error")
