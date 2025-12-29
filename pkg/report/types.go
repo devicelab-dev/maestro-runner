@@ -145,6 +145,7 @@ type FlowDetail struct {
 	Name       string        `json:"name"`
 	SourceFile string        `json:"sourceFile"`
 	Tags       []string      `json:"tags,omitempty"`
+	Device     *Device       `json:"device,omitempty"` // Device that ran this flow (for multi-device runs)
 	StartTime  time.Time     `json:"startTime"`
 	EndTime    *time.Time    `json:"endTime,omitempty"`
 	Duration   *int64        `json:"duration,omitempty"` // milliseconds
@@ -157,6 +158,7 @@ type Command struct {
 	ID        string           `json:"id"`
 	Index     int              `json:"index"`
 	Type      string           `json:"type"`
+	Label     string           `json:"label,omitempty"` // Human-readable description from YAML label field
 	YAML      string           `json:"yaml,omitempty"`
 	Status    Status           `json:"status"`
 	StartTime *time.Time       `json:"startTime,omitempty"`

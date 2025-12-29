@@ -78,6 +78,7 @@ func BuildSkeleton(flows []flow.Flow, cfg BuilderConfig) (*Index, []FlowDetail, 
 			Name:       flowName,
 			SourceFile: f.SourcePath,
 			Tags:       f.Config.Tags,
+			Device:     &cfg.Device, // Device that runs this flow (for multi-device support)
 			Commands:   commands,
 			Artifacts:  FlowArtifacts{},
 		}
@@ -105,6 +106,7 @@ func buildCommands(steps []flow.Step) []Command {
 			ID:        fmt.Sprintf("cmd-%03d", i),
 			Index:     i,
 			Type:      string(step.Type()),
+			Label:     step.Label(),
 			YAML:      step.Describe(),
 			Status:    StatusPending,
 			Params:    extractParams(step),
