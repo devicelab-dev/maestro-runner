@@ -197,19 +197,19 @@ const htmlTemplate = `<!DOCTYPE html>
     <title>{{.Title}}</title>
     <style>
         :root {
-            --bg-primary: #1a1a2e;
-            --bg-secondary: #16213e;
-            --bg-tertiary: #0f3460;
-            --text-primary: #eee;
-            --text-secondary: #aaa;
-            --text-muted: #666;
-            --border-color: #333;
+            --bg-primary: #ffffff;
+            --bg-secondary: #f9fafb;
+            --bg-tertiary: #f3f4f6;
+            --text-primary: #000000;
+            --text-secondary: rgb(75, 85, 99);
+            --text-muted: rgb(75, 85, 99);
+            --border-color: #e5e7eb;
             --passed: #22c55e;
             --failed: #ef4444;
             --skipped: #eab308;
-            --running: #3b82f6;
+            --running: #06b6d4;
             --pending: #6b7280;
-            --accent: #8b5cf6;
+            --accent: #06b6d4;
         }
 
         * {
