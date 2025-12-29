@@ -58,6 +58,11 @@ func (w *FlowWriter) CommandStart(cmdIndex int) {
 
 // CommandEnd marks a command as complete.
 func (w *FlowWriter) CommandEnd(cmdIndex int, status Status, element *Element, err *Error, artifacts CommandArtifacts) {
+	w.CommandEndWithSubs(cmdIndex, status, element, err, artifacts, nil)
+}
+
+// CommandEndWithSubs marks a command as complete with optional sub-commands.
+func (w *FlowWriter) CommandEndWithSubs(cmdIndex int, status Status, element *Element, err *Error, artifacts CommandArtifacts, subCommands []Command) {
 	if cmdIndex < 0 || cmdIndex >= len(w.flow.Commands) {
 		return
 	}
@@ -75,6 +80,7 @@ func (w *FlowWriter) CommandEnd(cmdIndex int, status Status, element *Element, e
 	cmd.Element = element
 	cmd.Error = err
 	cmd.Artifacts = artifacts
+	cmd.SubCommands = subCommands
 
 	w.flush()
 	w.updateIndexProgress()

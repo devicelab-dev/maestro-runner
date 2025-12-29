@@ -10,6 +10,7 @@ import (
 // Multiple flow goroutines can update the index concurrently.
 type IndexWriter struct {
 	mu        sync.Mutex
+	outputDir string
 	path      string
 	index     *Index
 
@@ -23,6 +24,7 @@ type IndexWriter struct {
 // NewIndexWriter creates a new IndexWriter.
 func NewIndexWriter(outputDir string, index *Index) *IndexWriter {
 	w := &IndexWriter{
+		outputDir: outputDir,
 		path:      filepath.Join(outputDir, "report.json"),
 		index:     index,
 		pending:   make(map[string]*FlowUpdate),
@@ -135,8 +137,14 @@ func (w *IndexWriter) flushLocked() {
 		w.timer = nil
 	}
 
-	// Atomic write
+	// Atomic write JSON
 	atomicWriteJSON(w.path, w.index)
+
+	// Regenerate HTML for live file:// viewing
+	GenerateHTML(w.outputDir, HTMLConfig{
+		Title:     "Test Report",
+		ReportDir: w.outputDir,
+	})
 }
 
 // applyUpdate applies a FlowUpdate to the index.

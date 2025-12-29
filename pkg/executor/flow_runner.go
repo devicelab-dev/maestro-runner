@@ -28,6 +28,8 @@ type FlowRunner struct {
 	stepsPassed  int
 	stepsFailed  int
 	stepsSkipped int
+	// Sub-command tracking for compound steps (runFlow, repeat, retry)
+	subCommands []report.Command
 }
 
 // Run executes the flow and returns the result.
@@ -191,11 +193,15 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 		result = fr.script.ExecuteAssertCondition(fr.ctx, s, fr.driver)
 
 	// Flow control steps - handled by FlowRunner
+	// Clear sub-commands before compound step execution
 	case *flow.RepeatStep:
+		fr.subCommands = nil
 		result = fr.executeRepeat(s)
 	case *flow.RetryStep:
+		fr.subCommands = nil
 		result = fr.executeRetry(s)
 	case *flow.RunFlowStep:
+		fr.subCommands = nil
 		result = fr.executeRunFlow(s)
 
 	// App lifecycle steps - inject flow's appId if not specified
@@ -256,8 +262,14 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 		element = commandResultToElement(result)
 	}
 
-	// Update report
-	fr.flowWriter.CommandEnd(idx, status, element, errorInfo, artifacts)
+	// Update report - use CommandEndWithSubs for compound steps
+	switch step.(type) {
+	case *flow.RepeatStep, *flow.RetryStep, *flow.RunFlowStep:
+		fr.flowWriter.CommandEndWithSubs(idx, status, element, errorInfo, artifacts, fr.subCommands)
+		fr.subCommands = nil // Clear after use
+	default:
+		fr.flowWriter.CommandEnd(idx, status, element, errorInfo, artifacts)
+	}
 
 	return status, errorMsg, stepDuration
 }
@@ -425,6 +437,21 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 	start := time.Now()
 	var result *core.CommandResult
 
+	// For nested compound steps, we need to track their sub-commands separately
+	var nestedSubCommands []report.Command
+	isCompoundStep := false
+	switch step.(type) {
+	case *flow.RepeatStep, *flow.RetryStep, *flow.RunFlowStep:
+		isCompoundStep = true
+		// Save parent's subCommands and start fresh for this nested compound step
+		parentSubCommands := fr.subCommands
+		fr.subCommands = nil
+		defer func() {
+			nestedSubCommands = fr.subCommands
+			fr.subCommands = parentSubCommands
+		}()
+	}
+
 	switch s := step.(type) {
 	case *flow.DefineVariablesStep:
 		result = fr.script.ExecuteDefineVariables(s)
@@ -448,12 +475,9 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 		result = fr.driver.Execute(step)
 	}
 
+	duration := time.Since(start).Milliseconds()
+
 	// Track nested step counts (compound steps like runFlow/repeat/retry don't count themselves)
-	isCompoundStep := false
-	switch step.(type) {
-	case *flow.RepeatStep, *flow.RetryStep, *flow.RunFlowStep:
-		isCompoundStep = true
-	}
 	if !isCompoundStep {
 		if result.Success {
 			fr.stepsPassed++
@@ -464,13 +488,46 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 
 	// Report nested step progress
 	if fr.config.OnNestedStep != nil && fr.depth > 0 {
-		duration := time.Since(start).Milliseconds()
 		errMsg := ""
 		if !result.Success && result.Error != nil {
 			errMsg = result.Error.Error()
 		}
 		fr.config.OnNestedStep(fr.depth, step.Describe(), result.Success, duration, errMsg)
 	}
+
+	// Add to parent's sub-commands for report
+	status := report.StatusPassed
+	if !result.Success {
+		status = report.StatusFailed
+	}
+
+	now := time.Now()
+	cmd := report.Command{
+		ID:        fmt.Sprintf("sub-%d", len(fr.subCommands)),
+		Index:     len(fr.subCommands),
+		Type:      string(step.Type()),
+		Label:     step.Label(),
+		YAML:      step.Describe(),
+		Status:    status,
+		StartTime: &start,
+		EndTime:   &now,
+		Duration:  &duration,
+	}
+
+	// Add error info if failed
+	if !result.Success && result.Error != nil {
+		cmd.Error = &report.Error{
+			Type:    "execution",
+			Message: result.Error.Error(),
+		}
+	}
+
+	// Add nested sub-commands for compound steps
+	if isCompoundStep {
+		cmd.SubCommands = nestedSubCommands
+	}
+
+	fr.subCommands = append(fr.subCommands, cmd)
 
 	return result
 }

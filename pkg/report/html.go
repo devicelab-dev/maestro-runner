@@ -72,11 +72,11 @@ type HTMLData struct {
 // FlowHTMLData contains flow data formatted for HTML.
 type FlowHTMLData struct {
 	FlowDetail
-	StatusClass  string
-	DurationStr  string
-	DurationMs   int64
-	DurationPct  float64
-	Commands     []CommandHTMLData
+	StatusClass string
+	DurationStr string
+	DurationMs  int64
+	DurationPct float64
+	Commands    []CommandHTMLData
 }
 
 // CommandHTMLData contains command data formatted for HTML.
@@ -296,8 +296,6 @@ const htmlTemplate = `<!DOCTYPE html>
         .brand-icon {
             width: 36px;
             height: 36px;
-            background: var(--accent);
-            border-radius: 8px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -320,13 +318,17 @@ const htmlTemplate = `<!DOCTYPE html>
             color: var(--text-primary);
         }
 
-        .brand-sub {
+        .brand-by {
             font-size: 11px;
+            color: var(--text-primary);
+        }
+
+        .brand-link {
             color: var(--accent);
             text-decoration: none;
         }
 
-        .brand-sub:hover {
+        .brand-link:hover {
             text-decoration: underline;
         }
 
@@ -617,17 +619,27 @@ const htmlTemplate = `<!DOCTYPE html>
         }
 
         .status-dot {
-            width: 8px;
-            height: 8px;
+            width: 10px;
+            height: 10px;
             border-radius: 50%;
             flex-shrink: 0;
+            margin-top: 2px;
         }
 
         .status-dot.passed { background: var(--passed); }
         .status-dot.failed { background: var(--failed); }
         .status-dot.skipped { background: var(--skipped); }
-        .status-dot.running { background: var(--running); }
+        .status-dot.running {
+            background: transparent;
+            border: 2.5px solid var(--running);
+            border-top-color: transparent;
+            animation: spin 0.8s linear infinite;
+        }
         .status-dot.pending { background: var(--pending); }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
 
         .flow-name {
             font-size: 14px;
@@ -739,8 +751,8 @@ const htmlTemplate = `<!DOCTYPE html>
         }
 
         .command-status {
-            width: 6px;
-            height: 6px;
+            width: 8px;
+            height: 8px;
             border-radius: 50%;
             flex-shrink: 0;
         }
@@ -748,7 +760,12 @@ const htmlTemplate = `<!DOCTYPE html>
         .command-status.passed { background: var(--passed); }
         .command-status.failed { background: var(--failed); }
         .command-status.skipped { background: var(--skipped); }
-        .command-status.running { background: var(--running); }
+        .command-status.running {
+            background: transparent;
+            border: 2px solid var(--running);
+            border-top-color: transparent;
+            animation: spin 0.8s linear infinite;
+        }
         .command-status.pending { background: var(--pending); }
 
         .command-type {
@@ -790,13 +807,28 @@ const htmlTemplate = `<!DOCTYPE html>
 
         .command-details {
             display: none;
-            padding: 0 12px 12px 26px;
+            padding: 0 12px 12px 28px;
             border-top: 1px solid var(--border-color);
             background: var(--bg-secondary);
         }
 
-        .command-item.expanded .command-details {
+        .command-item.expanded > .command-details {
             display: block;
+        }
+
+        /* When command-details only contains sub-commands, remove padding */
+        .command-details:has(> .sub-commands:only-child) {
+            padding: 0;
+            border-top: none;
+            background: transparent;
+        }
+
+        .sub-commands {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+            background: var(--border-color);
+            margin-left: 24px;
         }
 
         .command-yaml {
@@ -915,11 +947,11 @@ const htmlTemplate = `<!DOCTYPE html>
             <div class="header-left">
                 <div class="brand">
                     <div class="brand-icon">
-                        <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                        <img src="data:image/jpeg;base64,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" alt="DeviceLab" style="width:32px;height:32px;" />
                     </div>
                     <div class="brand-text">
                         <span class="brand-name">maestro-runner</span>
-                        <a href="https://devicelab.dev/" target="_blank" class="brand-sub">by DeviceLab</a>
+                        <span class="brand-by">by <a href="https://devicelab.dev/" target="_blank" class="brand-link">DeviceLab</a></span>
                     </div>
                 </div>
                 <div class="header-divider"></div>
@@ -948,21 +980,23 @@ const htmlTemplate = `<!DOCTYPE html>
             <!-- Pie Chart -->
             <div class="chart-container">
                 <div class="pie-chart" id="pie-chart"></div>
-                <div class="chart-legend">
-                    <div class="legend-item">
+                <div class="chart-legend" id="chart-legend">
+                    <div class="legend-item" id="legend-running" style="display: none;">
+                        <span class="legend-dot" style="background: var(--running);"></span>
+                        <span>0 running</span>
+                    </div>
+                    <div class="legend-item" id="legend-passed">
                         <span class="legend-dot passed"></span>
                         <span>{{.Index.Summary.Passed}} passed</span>
                     </div>
-                    <div class="legend-item">
+                    <div class="legend-item" id="legend-failed">
                         <span class="legend-dot failed"></span>
                         <span>{{.Index.Summary.Failed}} failed</span>
                     </div>
-                    {{if gt .Index.Summary.Skipped 0}}
-                    <div class="legend-item">
+                    <div class="legend-item" id="legend-skipped" style="{{if eq .Index.Summary.Skipped 0}}display: none;{{end}}">
                         <span class="legend-dot skipped"></span>
                         <span>{{.Index.Summary.Skipped}} skipped</span>
                     </div>
-                    {{end}}
                 </div>
             </div>
 
@@ -1045,28 +1079,187 @@ const htmlTemplate = `<!DOCTYPE html>
 
 
     <script>
-        const reportData = {{.JSONData}};
+        // Initial data from generation time
+        let reportData = {{.JSONData}};
         let selectedFlowIndex = -1;
 
-        // Initialize pie chart
-        (function() {
+        // Live update tracking
+        let lastUpdateSeq = reportData.index.updateSeq || 0;
+        let lastFlowSeq = {};
+        reportData.index.flows.forEach(f => { lastFlowSeq[f.id] = f.updateSeq || 0; });
+        let isPolling = true;
+        const POLL_INTERVAL = 500; // ms
+
+        // Update pie chart and legend
+        function updatePieChart() {
             const total = reportData.index.summary.total || 1;
             const passed = reportData.index.summary.passed || 0;
             const failed = reportData.index.summary.failed || 0;
             const skipped = reportData.index.summary.skipped || 0;
+            const running = reportData.index.summary.running || 0;
 
             const passedPct = (passed / total) * 100;
             const failedPct = (failed / total) * 100;
             const skippedPct = (skipped / total) * 100;
+            const runningPct = (running / total) * 100;
 
             const pieChart = document.getElementById('pie-chart');
             pieChart.style.background = 'conic-gradient(' +
                 'var(--passed) 0% ' + passedPct + '%, ' +
                 'var(--failed) ' + passedPct + '% ' + (passedPct + failedPct) + '%, ' +
-                'var(--skipped) ' + (passedPct + failedPct) + '% 100%)';
+                'var(--running) ' + (passedPct + failedPct) + '% ' + (passedPct + failedPct + runningPct) + '%, ' +
+                'var(--skipped) ' + (passedPct + failedPct + runningPct) + '% ' + (passedPct + failedPct + runningPct + skippedPct) + '%, ' +
+                'var(--pending) ' + (passedPct + failedPct + runningPct + skippedPct) + '% 100%)';
 
             pieChart.innerHTML = '<div class="pie-center">' + Math.round(passedPct) + '%</div>';
-        })();
+
+            // Update legend
+            document.getElementById('legend-passed').querySelector('span:last-child').textContent = passed + ' passed';
+            document.getElementById('legend-failed').querySelector('span:last-child').textContent = failed + ' failed';
+
+            const runningEl = document.getElementById('legend-running');
+            if (running > 0) {
+                runningEl.style.display = '';
+                runningEl.querySelector('span:last-child').textContent = running + ' running';
+            } else {
+                runningEl.style.display = 'none';
+            }
+
+            const skippedEl = document.getElementById('legend-skipped');
+            if (skipped > 0) {
+                skippedEl.style.display = '';
+                skippedEl.querySelector('span:last-child').textContent = skipped + ' skipped';
+            } else {
+                skippedEl.style.display = 'none';
+            }
+        }
+        updatePieChart();
+
+        // Update flow list items from index data
+        function updateFlowList() {
+            const flowItems = document.querySelectorAll('.flow-item');
+            flowItems.forEach((item, i) => {
+                const entry = reportData.index.flows[i];
+                if (!entry) return;
+
+                // Update status classes
+                const oldStatus = item.dataset.status;
+                const newStatus = entry.status;
+                if (oldStatus !== newStatus) {
+                    item.classList.remove(oldStatus);
+                    item.classList.add(newStatus);
+                    item.dataset.status = newStatus;
+
+                    // Update status dot
+                    const dot = item.querySelector('.status-dot');
+                    if (dot) {
+                        dot.classList.remove(oldStatus);
+                        dot.classList.add(newStatus);
+                    }
+                }
+
+                // Update duration
+                const durationSpan = item.querySelector('.flow-meta span:last-child');
+                if (durationSpan && entry.duration) {
+                    durationSpan.textContent = formatDuration(entry.duration);
+                }
+            });
+
+            // Update filter button counts
+            const allBtn = document.querySelector('.filter-btn[data-filter="all"]');
+            const failedBtn = document.querySelector('.filter-btn[data-filter="failed"]');
+            const passedBtn = document.querySelector('.filter-btn[data-filter="passed"]');
+            if (allBtn) allBtn.textContent = 'All (' + reportData.index.summary.total + ')';
+            if (failedBtn) failedBtn.textContent = 'Failed (' + reportData.index.summary.failed + ')';
+            if (passedBtn) passedBtn.textContent = 'Passed (' + reportData.index.summary.passed + ')';
+        }
+
+        // Update detail panel if a flow changed
+        function updateDetailIfNeeded(changedFlowIds) {
+            if (selectedFlowIndex < 0) return;
+            const selectedFlow = reportData.index.flows[selectedFlowIndex];
+            if (selectedFlow && changedFlowIds.includes(selectedFlow.id)) {
+                renderDetail(selectedFlowIndex);
+            }
+        }
+
+        // Fetch updated report.json and flow details
+        async function poll() {
+            if (!isPolling) return;
+
+            try {
+                // Fetch index
+                const indexResp = await fetch('report.json?t=' + Date.now());
+                if (!indexResp.ok) {
+                    schedulePoll();
+                    return;
+                }
+                const newIndex = await indexResp.json();
+
+                // Check if anything changed
+                if (newIndex.updateSeq === lastUpdateSeq) {
+                    schedulePoll();
+                    return;
+                }
+
+                // Find changed flows
+                const changedFlowIds = [];
+                for (const entry of newIndex.flows) {
+                    const oldSeq = lastFlowSeq[entry.id] || 0;
+                    if (entry.updateSeq > oldSeq) {
+                        changedFlowIds.push(entry.id);
+                        lastFlowSeq[entry.id] = entry.updateSeq;
+                    }
+                }
+
+                // Fetch changed flow details
+                for (const flowId of changedFlowIds) {
+                    const flowIdx = newIndex.flows.findIndex(f => f.id === flowId);
+                    if (flowIdx >= 0) {
+                        const flowResp = await fetch(newIndex.flows[flowIdx].dataFile + '?t=' + Date.now());
+                        if (flowResp.ok) {
+                            reportData.flows[flowIdx] = await flowResp.json();
+                        }
+                    }
+                }
+
+                // Update local data
+                reportData.index = newIndex;
+                lastUpdateSeq = newIndex.updateSeq;
+
+                // Update UI
+                updatePieChart();
+                updateFlowList();
+                updateDetailIfNeeded(changedFlowIds);
+
+                // Stop polling if terminal
+                if (isTerminalStatus(newIndex.status)) {
+                    isPolling = false;
+                    return;
+                }
+            } catch (e) {
+                // Ignore fetch errors, will retry
+            }
+
+            schedulePoll();
+        }
+
+        function isTerminalStatus(status) {
+            return status === 'passed' || status === 'failed' || status === 'skipped';
+        }
+
+        function schedulePoll() {
+            if (isPolling) {
+                setTimeout(poll, POLL_INTERVAL);
+            }
+        }
+
+        // Start polling if served via HTTP (file:// users can refresh manually)
+        if (window.location.protocol !== 'file:' && !isTerminalStatus(reportData.index.status)) {
+            schedulePoll();
+        } else {
+            isPolling = false;
+        }
 
         // Flow item click handlers
         document.querySelectorAll('.flow-item').forEach(item => {
@@ -1174,61 +1367,79 @@ const htmlTemplate = `<!DOCTYPE html>
                 '<div class="info-item"><span class="info-label">Source</span><span class="info-value">' + flow.sourceFile + '</span></div>';
             document.getElementById('detail-info').innerHTML = infoHtml;
 
-            // Commands - compact format
-            let commandsHtml = '';
-            flow.commands.forEach((cmd, i) => {
-                const status = cmd.status || 'pending';
-                const keyValue = extractKeyValue(cmd);
-                const hasDetails = cmd.yaml || cmd.error || (cmd.artifacts && (cmd.artifacts.screenshotBefore || cmd.artifacts.screenshotAfter));
+            // Commands - compact format with sub-commands support
+            document.getElementById('command-list').innerHTML = renderCommands(flow.commands, flowIndex, 0);
+        }
 
-                commandsHtml += '<div class="command-item ' + status + '" id="flow-' + flowIndex + '-cmd-' + i + '" onclick="toggleCommand(this)">';
-
-                // Summary line (always visible)
-                commandsHtml += '<div class="command-summary">' +
-                    '<span class="command-status ' + status + '"></span>' +
-                    '<span class="command-type">' + escapeHtml(cmd.type) + '</span>' +
-                    '<span class="command-value">' + escapeHtml(keyValue) + '</span>' +
-                    '<span class="command-duration">' + formatDuration(cmd.duration) + '</span>';
-                if (hasDetails) {
-                    commandsHtml += '<span class="command-expand-icon">▶</span>';
-                }
-                commandsHtml += '</div>';
-
-                // Details (hidden by default)
-                if (hasDetails) {
-                    commandsHtml += '<div class="command-details">';
-
-                    if (cmd.yaml) {
-                        commandsHtml += '<div class="command-yaml">' + escapeHtml(cmd.yaml) + '</div>';
-                    }
-
-                    if (cmd.error) {
-                        commandsHtml += '<div class="command-error">' +
-                            '<div class="error-type">' + escapeHtml(cmd.error.type) + '</div>' +
-                            '<div class="error-message">' + escapeHtml(cmd.error.message) + '</div>';
-                        if (cmd.error.suggestion) {
-                            commandsHtml += '<div class="error-suggestion">💡 ' + escapeHtml(cmd.error.suggestion) + '</div>';
-                        }
-                        commandsHtml += '</div>';
-                    }
-
-                    if (cmd.artifacts && (cmd.artifacts.screenshotBefore || cmd.artifacts.screenshotAfter)) {
-                        commandsHtml += '<div class="command-screenshots">';
-                        if (cmd.artifacts.screenshotBefore) {
-                            commandsHtml += '<img class="screenshot" src="' + cmd.artifacts.screenshotBefore + '" onclick="event.stopPropagation(); openModal(this.src)" title="Before">';
-                        }
-                        if (cmd.artifacts.screenshotAfter) {
-                            commandsHtml += '<img class="screenshot" src="' + cmd.artifacts.screenshotAfter + '" onclick="event.stopPropagation(); openModal(this.src)" title="After">';
-                        }
-                        commandsHtml += '</div>';
-                    }
-
-                    commandsHtml += '</div>';
-                }
-
-                commandsHtml += '</div>';
+        function renderCommands(commands, flowIndex, depth) {
+            let html = '';
+            commands.forEach((cmd, i) => {
+                html += renderCommand(cmd, flowIndex, i, depth);
             });
-            document.getElementById('command-list').innerHTML = commandsHtml;
+            return html;
+        }
+
+        function renderCommand(cmd, flowIndex, index, depth) {
+            const status = cmd.status || 'pending';
+            const keyValue = extractKeyValue(cmd);
+            const hasSubCommands = cmd.subCommands && cmd.subCommands.length > 0;
+            const hasDetails = cmd.yaml || cmd.error || (cmd.artifacts && (cmd.artifacts.screenshotBefore || cmd.artifacts.screenshotAfter));
+            const isExpandable = hasDetails || hasSubCommands;
+
+            let html = '<div class="command-item ' + status + (hasSubCommands ? ' has-subcommands' : '') + '" id="flow-' + flowIndex + '-cmd-' + index + '-d' + depth + '" onclick="toggleCommand(this, event)">';
+
+            // Summary line (always visible)
+            html += '<div class="command-summary">' +
+                '<span class="command-status ' + status + '"></span>' +
+                '<span class="command-type">' + escapeHtml(cmd.type) + '</span>' +
+                '<span class="command-value">' + escapeHtml(keyValue) + '</span>' +
+                '<span class="command-duration">' + formatDuration(cmd.duration) + '</span>';
+            if (isExpandable) {
+                html += '<span class="command-expand-icon">▶</span>';
+            }
+            html += '</div>';
+
+            // Details and sub-commands (hidden by default)
+            if (isExpandable) {
+                html += '<div class="command-details">';
+
+                if (cmd.yaml && !hasSubCommands) {
+                    html += '<div class="command-yaml">' + escapeHtml(cmd.yaml) + '</div>';
+                }
+
+                if (cmd.error) {
+                    html += '<div class="command-error">' +
+                        '<div class="error-type">' + escapeHtml(cmd.error.type) + '</div>' +
+                        '<div class="error-message">' + escapeHtml(cmd.error.message) + '</div>';
+                    if (cmd.error.suggestion) {
+                        html += '<div class="error-suggestion">💡 ' + escapeHtml(cmd.error.suggestion) + '</div>';
+                    }
+                    html += '</div>';
+                }
+
+                if (cmd.artifacts && (cmd.artifacts.screenshotBefore || cmd.artifacts.screenshotAfter)) {
+                    html += '<div class="command-screenshots">';
+                    if (cmd.artifacts.screenshotBefore) {
+                        html += '<img class="screenshot" src="' + cmd.artifacts.screenshotBefore + '" onclick="event.stopPropagation(); openModal(this.src)" title="Before">';
+                    }
+                    if (cmd.artifacts.screenshotAfter) {
+                        html += '<img class="screenshot" src="' + cmd.artifacts.screenshotAfter + '" onclick="event.stopPropagation(); openModal(this.src)" title="After">';
+                    }
+                    html += '</div>';
+                }
+
+                // Render sub-commands recursively
+                if (hasSubCommands) {
+                    html += '<div class="sub-commands">';
+                    html += renderCommands(cmd.subCommands, flowIndex, depth + 1);
+                    html += '</div>';
+                }
+
+                html += '</div>';
+            }
+
+            html += '</div>';
+            return html;
         }
 
         function extractKeyValue(cmd) {
@@ -1251,7 +1462,8 @@ const htmlTemplate = `<!DOCTYPE html>
             return '';
         }
 
-        function toggleCommand(element) {
+        function toggleCommand(element, event) {
+            if (event) event.stopPropagation();
             element.classList.toggle('expanded');
         }
 
