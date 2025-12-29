@@ -14,10 +14,10 @@ import (
 
 // HTMLConfig contains configuration for HTML report generation.
 type HTMLConfig struct {
-	OutputPath    string // Path to write the HTML file
-	EmbedAssets   bool   // Embed screenshots as base64 (makes file larger but portable)
-	Title         string // Report title (default: "Test Report")
-	ReportDir     string // Directory containing report.json (needed for asset paths)
+	OutputPath  string // Path to write the HTML file
+	EmbedAssets bool   // Embed screenshots as base64 (makes file larger but portable)
+	Title       string // Report title (default: "Test Report")
+	ReportDir   string // Directory containing report.json (needed for asset paths)
 }
 
 // GenerateHTML generates an HTML report from the report directory.
@@ -58,30 +58,35 @@ func GenerateHTML(reportDir string, cfg HTMLConfig) error {
 
 // HTMLData contains all data needed for the HTML template.
 type HTMLData struct {
-	Title       string
-	GeneratedAt string
-	Index       *Index
-	Flows       []FlowHTMLData
-	StatusClass map[Status]string
-	JSONData    template.JS // JSON data for JavaScript
+	Title         string
+	GeneratedAt   string
+	Index         *Index
+	Flows         []FlowHTMLData
+	TotalDuration string
+	PassRate      float64
+	MaxDuration   int64
+	StatusClass   map[Status]string
+	JSONData      template.JS // JSON data for JavaScript
 }
 
 // FlowHTMLData contains flow data formatted for HTML.
 type FlowHTMLData struct {
 	FlowDetail
-	StatusClass string
-	DurationStr string
-	Commands    []CommandHTMLData
+	StatusClass  string
+	DurationStr  string
+	DurationMs   int64
+	DurationPct  float64
+	Commands     []CommandHTMLData
 }
 
 // CommandHTMLData contains command data formatted for HTML.
 type CommandHTMLData struct {
 	Command
-	StatusClass       string
-	DurationStr       string
-	ScreenshotBefore  string // base64 or path
-	ScreenshotAfter   string // base64 or path
-	HasScreenshots    bool
+	StatusClass      string
+	DurationStr      string
+	ScreenshotBefore string // base64 or path
+	ScreenshotAfter  string // base64 or path
+	HasScreenshots   bool
 }
 
 func buildHTMLData(index *Index, flows []FlowDetail, cfg HTMLConfig) HTMLData {
@@ -91,6 +96,14 @@ func buildHTMLData(index *Index, flows []FlowDetail, cfg HTMLConfig) HTMLData {
 		StatusSkipped: "skipped",
 		StatusRunning: "running",
 		StatusPending: "pending",
+	}
+
+	// Find max duration for percentage bars
+	var maxDuration int64
+	for _, entry := range index.Flows {
+		if entry.Duration != nil && *entry.Duration > maxDuration {
+			maxDuration = *entry.Duration
+		}
 	}
 
 	flowsData := make([]FlowHTMLData, len(flows))
@@ -124,12 +137,35 @@ func buildHTMLData(index *Index, flows []FlowDetail, cfg HTMLConfig) HTMLData {
 			cmds[j] = cmd
 		}
 
+		var durationMs int64
+		var durationPct float64
+		if index.Flows[i].Duration != nil {
+			durationMs = *index.Flows[i].Duration
+			if maxDuration > 0 {
+				durationPct = float64(durationMs) / float64(maxDuration) * 100
+			}
+		}
+
 		flowsData[i] = FlowHTMLData{
 			FlowDetail:  f,
 			StatusClass: statusClass[index.Flows[i].Status],
-			DurationStr: formatDuration(f.Duration),
+			DurationStr: formatDuration(index.Flows[i].Duration),
+			DurationMs:  durationMs,
+			DurationPct: durationPct,
 			Commands:    cmds,
 		}
+	}
+
+	// Calculate pass rate
+	var passRate float64
+	if index.Summary.Total > 0 {
+		passRate = float64(index.Summary.Passed) / float64(index.Summary.Total) * 100
+	}
+
+	// Calculate total duration
+	var totalDurationMs int64
+	if index.EndTime != nil {
+		totalDurationMs = index.EndTime.Sub(index.StartTime).Milliseconds()
 	}
 
 	// Serialize index and flows to JSON for JavaScript
@@ -139,12 +175,15 @@ func buildHTMLData(index *Index, flows []FlowDetail, cfg HTMLConfig) HTMLData {
 	})
 
 	return HTMLData{
-		Title:       cfg.Title,
-		GeneratedAt: time.Now().Format("2006-01-02 15:04:05"),
-		Index:       index,
-		Flows:       flowsData,
-		StatusClass: statusClass,
-		JSONData:    template.JS(jsonBytes),
+		Title:         cfg.Title,
+		GeneratedAt:   time.Now().Format("2006-01-02 15:04:05"),
+		Index:         index,
+		Flows:         flowsData,
+		TotalDuration: formatDuration(&totalDurationMs),
+		PassRate:      passRate,
+		MaxDuration:   maxDuration,
+		StatusClass:   statusClass,
+		JSONData:      template.JS(jsonBytes),
 	}
 }
 
@@ -202,11 +241,14 @@ const htmlTemplate = `<!DOCTYPE html>
             --bg-tertiary: #f3f4f6;
             --text-primary: #000000;
             --text-secondary: rgb(75, 85, 99);
-            --text-muted: rgb(75, 85, 99);
+            --text-muted: rgb(107, 114, 128);
             --border-color: #e5e7eb;
             --passed: #22c55e;
+            --passed-bg: rgba(34, 197, 94, 0.1);
             --failed: #ef4444;
+            --failed-bg: rgba(239, 68, 68, 0.08);
             --skipped: #eab308;
+            --skipped-bg: rgba(234, 179, 8, 0.1);
             --running: #06b6d4;
             --pending: #6b7280;
             --accent: #06b6d4;
@@ -225,151 +267,455 @@ const htmlTemplate = `<!DOCTYPE html>
             line-height: 1.5;
         }
 
-        /* Summary Bar */
-        .summary-bar {
+        /* Header */
+        .header {
             background: var(--bg-secondary);
-            padding: 16px 24px;
-            display: flex;
-            align-items: center;
-            gap: 24px;
             border-bottom: 1px solid var(--border-color);
-            position: sticky;
-            top: 0;
-            z-index: 100;
+            padding: 16px 24px;
         }
 
-        .summary-title {
-            font-size: 18px;
-            font-weight: 600;
-            flex-shrink: 0;
-        }
-
-        .summary-stats {
-            display: flex;
-            gap: 16px;
-            flex-wrap: wrap;
-        }
-
-        .stat {
+        .header-top {
             display: flex;
             align-items: center;
-            gap: 6px;
-            padding: 4px 12px;
-            background: var(--bg-tertiary);
-            border-radius: 4px;
-            font-size: 14px;
+            justify-content: space-between;
+            margin-bottom: 16px;
         }
 
-        .stat-icon {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 20px;
         }
 
-        .stat-icon.passed { background: var(--passed); }
-        .stat-icon.failed { background: var(--failed); }
-        .stat-icon.skipped { background: var(--skipped); }
-        .stat-icon.pending { background: var(--pending); }
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
 
-        .summary-meta {
-            margin-left: auto;
+        .brand-icon {
+            width: 36px;
+            height: 36px;
+            background: var(--accent);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .brand-icon svg {
+            width: 20px;
+            height: 20px;
+            fill: white;
+        }
+
+        .brand-text {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .brand-name {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .brand-sub {
+            font-size: 11px;
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        .brand-sub:hover {
+            text-decoration: underline;
+        }
+
+        .header-divider {
+            width: 1px;
+            height: 28px;
+            background: var(--border-color);
+        }
+
+        .header-title {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .header-title-main {
+            font-size: 16px;
+            font-weight: 500;
+        }
+
+        .header-title-sub {
             font-size: 12px;
             color: var(--text-secondary);
         }
 
-        /* Main Layout */
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .platform-badge {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            background: var(--accent);
+            color: white;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .platform-badge svg {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
+        }
+
+        .github-star {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            text-decoration: none;
+            transition: border-color 0.2s;
+        }
+
+        .github-star:hover {
+            border-color: var(--accent);
+        }
+
+        .github-star svg {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
+        }
+
+        .github-star .star-icon {
+            fill: #f59e0b;
+        }
+
+        /* Dashboard */
+        .dashboard {
+            display: flex;
+            gap: 24px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        /* Pie Chart */
+        .chart-container {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .pie-chart {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            position: relative;
+        }
+
+        .pie-center {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: var(--bg-secondary);
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .chart-legend {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+        }
+
+        .legend-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        .legend-dot.passed { background: var(--passed); }
+        .legend-dot.failed { background: var(--failed); }
+        .legend-dot.skipped { background: var(--skipped); }
+
+        /* Environment Card */
+        .env-card {
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 12px 16px;
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px 24px;
+            font-size: 13px;
+        }
+
+        .env-item {
+            display: flex;
+            gap: 8px;
+        }
+
+        .env-label {
+            color: var(--text-muted);
+            min-width: 60px;
+        }
+
+        .env-value {
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+
+        /* Main Container */
         .main-container {
             display: flex;
-            height: calc(100vh - 60px);
+            height: calc(100vh - 160px);
         }
 
-        /* Flow List (Left Panel) */
+        /* Flow List */
         .flow-list {
-            width: 320px;
-            min-width: 280px;
-            background: var(--bg-secondary);
+            width: 400px;
             border-right: 1px solid var(--border-color);
             overflow-y: auto;
-            flex-shrink: 0;
+            background: var(--bg-secondary);
         }
 
-        .flow-item {
+        .search-box {
+            padding: 12px;
+            border-bottom: 1px solid var(--border-color);
+            position: sticky;
+            top: 0;
+            background: var(--bg-secondary);
+            z-index: 10;
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 13px;
+            background: var(--bg-primary);
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .filters {
+            padding: 8px 12px;
+            display: flex;
+            gap: 8px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--bg-secondary);
+            position: sticky;
+            top: 49px;
+            z-index: 10;
+        }
+
+        .filter-btn {
+            padding: 4px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            background: var(--bg-primary);
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .filter-btn:hover {
+            border-color: var(--accent);
+        }
+
+        .filter-btn.active {
+            background: var(--accent);
+            color: white;
+            border-color: var(--accent);
+        }
+
+        .filter-btn.failed.active {
+            background: var(--failed);
+            border-color: var(--failed);
+        }
+
+        .keyboard-hint {
+            padding: 6px 12px;
+            font-size: 11px;
+            color: var(--text-muted);
+            background: var(--bg-tertiary);
             border-bottom: 1px solid var(--border-color);
         }
 
-        .flow-header {
-            padding: 12px 16px;
+        .keyboard-hint kbd {
+            background: var(--bg-primary);
+            padding: 2px 6px;
+            border-radius: 4px;
+            border: 1px solid var(--border-color);
+            font-family: inherit;
+            font-size: 10px;
+        }
+
+        .flow-items {
+            padding: 8px;
+        }
+
+        .flow-item {
+            padding: 12px;
+            margin-bottom: 8px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
             cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .flow-item:hover {
+            border-color: var(--accent);
+        }
+
+        .flow-item.selected {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px rgba(6, 182, 212, 0.2);
+        }
+
+        .flow-item.failed {
+            background: linear-gradient(90deg, var(--failed-bg) 0%, var(--bg-primary) 50%);
+        }
+
+        .flow-item-header {
             display: flex;
             align-items: center;
-            gap: 10px;
-            transition: background 0.15s;
+            gap: 8px;
+            margin-bottom: 6px;
         }
 
-        .flow-header:hover {
-            background: var(--bg-tertiary);
-        }
-
-        .flow-header.selected {
-            background: var(--bg-tertiary);
-            border-left: 3px solid var(--accent);
-        }
-
-        .flow-status {
-            width: 10px;
-            height: 10px;
+        .status-dot {
+            width: 8px;
+            height: 8px;
             border-radius: 50%;
             flex-shrink: 0;
         }
 
-        .flow-status.passed { background: var(--passed); }
-        .flow-status.failed { background: var(--failed); }
-        .flow-status.skipped { background: var(--skipped); }
-        .flow-status.running { background: var(--running); }
-        .flow-status.pending { background: var(--pending); }
+        .status-dot.passed { background: var(--passed); }
+        .status-dot.failed { background: var(--failed); }
+        .status-dot.skipped { background: var(--skipped); }
+        .status-dot.running { background: var(--running); }
+        .status-dot.pending { background: var(--pending); }
 
         .flow-name {
-            flex: 1;
             font-size: 14px;
+            font-weight: 500;
+            flex: 1;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
         }
 
-        .flow-duration {
+        .flow-meta {
+            display: flex;
+            align-items: center;
+            gap: 12px;
             font-size: 12px;
-            color: var(--text-secondary);
-            flex-shrink: 0;
-        }
-
-        .flow-toggle {
             color: var(--text-muted);
-            font-size: 12px;
-            transition: transform 0.2s;
         }
 
-        .flow-toggle.expanded {
-            transform: rotate(90deg);
+        .duration-bar {
+            flex: 1;
+            height: 4px;
+            background: var(--bg-tertiary);
+            border-radius: 2px;
+            overflow: hidden;
         }
 
-        /* Commands (Nested under flow) */
+        .duration-fill {
+            height: 100%;
+            background: var(--accent);
+            border-radius: 2px;
+        }
+
+        /* Detail Panel */
+        .detail-panel {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+        }
+
+        .detail-header {
+            margin-bottom: 24px;
+        }
+
+        .detail-title {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .detail-info {
+            display: flex;
+            gap: 24px;
+            margin-bottom: 24px;
+            padding: 16px;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+        }
+
+        .info-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .info-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+
+        .info-value {
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        /* Command List - Compact with expand */
         .command-list {
-            display: none;
-            background: var(--bg-primary);
-        }
-
-        .command-list.expanded {
-            display: block;
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+            background: var(--border-color);
+            border-radius: 8px;
+            overflow: hidden;
         }
 
         .command-item {
-            padding: 8px 16px 8px 40px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 13px;
+            background: var(--bg-primary);
             cursor: pointer;
-            border-bottom: 1px solid var(--border-color);
             transition: background 0.15s;
         }
 
@@ -377,8 +723,19 @@ const htmlTemplate = `<!DOCTYPE html>
             background: var(--bg-secondary);
         }
 
-        .command-item.selected {
-            background: var(--bg-secondary);
+        .command-item.failed {
+            background: var(--failed-bg);
+        }
+
+        .command-item.failed:hover {
+            background: rgba(239, 68, 68, 0.12);
+        }
+
+        .command-summary {
+            display: flex;
+            align-items: center;
+            padding: 8px 12px;
+            gap: 8px;
         }
 
         .command-status {
@@ -395,13 +752,19 @@ const htmlTemplate = `<!DOCTYPE html>
         .command-status.pending { background: var(--pending); }
 
         .command-type {
-            color: var(--accent);
-            font-family: monospace;
-            flex-shrink: 0;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--passed);
+            min-width: 100px;
         }
 
-        .command-desc {
+        .command-item.failed .command-type {
+            color: var(--failed);
+        }
+
+        .command-value {
             flex: 1;
+            font-size: 13px;
             color: var(--text-secondary);
             white-space: nowrap;
             overflow: hidden;
@@ -409,243 +772,219 @@ const htmlTemplate = `<!DOCTYPE html>
         }
 
         .command-duration {
-            font-size: 11px;
+            font-size: 12px;
             color: var(--text-muted);
-            flex-shrink: 0;
+            min-width: 50px;
+            text-align: right;
         }
 
-        /* Detail Panel (Right) */
-        .detail-panel {
-            flex: 1;
-            overflow-y: auto;
-            padding: 24px;
+        .command-expand-icon {
+            color: var(--text-muted);
+            font-size: 10px;
+            transition: transform 0.2s;
         }
 
-        .detail-empty {
+        .command-item.expanded .command-expand-icon {
+            transform: rotate(90deg);
+        }
+
+        .command-details {
+            display: none;
+            padding: 0 12px 12px 26px;
+            border-top: 1px solid var(--border-color);
+            background: var(--bg-secondary);
+        }
+
+        .command-item.expanded .command-details {
+            display: block;
+        }
+
+        .command-yaml {
+            font-family: 'SF Mono', Monaco, Consolas, monospace;
+            font-size: 12px;
+            color: var(--text-secondary);
+            white-space: pre-wrap;
+            word-break: break-all;
+            background: var(--bg-tertiary);
+            padding: 8px;
+            border-radius: 4px;
+            margin-top: 8px;
+        }
+
+        .command-error {
+            margin-top: 8px;
+            padding: 10px;
+            background: var(--failed-bg);
+            border: 1px solid var(--failed);
+            border-radius: 6px;
+        }
+
+        .error-type {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--failed);
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+
+        .error-message {
+            font-size: 13px;
+            color: var(--text-primary);
+            margin-bottom: 6px;
+        }
+
+        .error-suggestion {
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-style: italic;
+        }
+
+        .command-screenshots {
             display: flex;
+            gap: 12px;
+            margin-top: 8px;
+        }
+
+        .screenshot {
+            max-width: 150px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            cursor: pointer;
+        }
+
+        .screenshot:hover {
+            border-color: var(--accent);
+        }
+
+        .command-element {
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .command-element span {
+            color: var(--text-secondary);
+        }
+
+        /* Empty State */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
             align-items: center;
             justify-content: center;
             height: 100%;
             color: var(--text-muted);
-            font-size: 14px;
         }
 
-        .detail-header {
-            margin-bottom: 24px;
-        }
-
-        .detail-title {
-            font-size: 20px;
-            font-weight: 600;
-            margin-bottom: 8px;
-        }
-
-        .detail-meta {
-            display: flex;
-            gap: 16px;
-            font-size: 13px;
-            color: var(--text-secondary);
-        }
-
-        .detail-meta-item {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        /* Error Box */
-        .error-box {
-            background: rgba(239, 68, 68, 0.1);
-            border: 1px solid var(--failed);
-            border-radius: 8px;
-            padding: 16px;
-            margin-bottom: 24px;
-        }
-
-        .error-type {
-            color: var(--failed);
-            font-weight: 600;
-            font-size: 14px;
-            margin-bottom: 8px;
-        }
-
-        .error-message {
-            font-family: monospace;
-            font-size: 13px;
-            white-space: pre-wrap;
-            word-break: break-word;
-        }
-
-        .error-suggestion {
-            margin-top: 12px;
-            padding-top: 12px;
-            border-top: 1px solid rgba(239, 68, 68, 0.3);
-            font-size: 13px;
-            color: var(--text-secondary);
-        }
-
-        /* Screenshots */
-        .screenshots {
-            display: flex;
-            gap: 16px;
-            margin-bottom: 24px;
-        }
-
-        .screenshot {
-            flex: 1;
-            max-width: 400px;
-        }
-
-        .screenshot-label {
-            font-size: 12px;
-            color: var(--text-secondary);
-            margin-bottom: 8px;
-        }
-
-        .screenshot img {
-            width: 100%;
-            border-radius: 8px;
-            border: 1px solid var(--border-color);
-        }
-
-        /* Command Detail */
-        .command-detail {
-            background: var(--bg-secondary);
-            border-radius: 8px;
-            padding: 16px;
+        .empty-state-icon {
+            font-size: 48px;
             margin-bottom: 16px;
         }
 
-        .command-detail-header {
-            display: flex;
+        /* Image Modal */
+        .image-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 1000;
             align-items: center;
-            gap: 12px;
-            margin-bottom: 12px;
-        }
-
-        .command-detail-type {
-            font-family: monospace;
-            font-size: 16px;
-            color: var(--accent);
-        }
-
-        .command-detail-status {
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-weight: 500;
-        }
-
-        .command-detail-status.passed { background: rgba(34, 197, 94, 0.2); color: var(--passed); }
-        .command-detail-status.failed { background: rgba(239, 68, 68, 0.2); color: var(--failed); }
-        .command-detail-status.skipped { background: rgba(234, 179, 8, 0.2); color: var(--skipped); }
-
-        .yaml-block {
-            background: var(--bg-primary);
-            border-radius: 4px;
-            padding: 12px;
-            font-family: monospace;
-            font-size: 13px;
-            white-space: pre-wrap;
-            overflow-x: auto;
-        }
-
-        /* Device Info Footer */
-        .device-info {
-            background: var(--bg-secondary);
-            border-top: 1px solid var(--border-color);
-            padding: 12px 24px;
-            display: flex;
-            gap: 24px;
-            font-size: 12px;
-            color: var(--text-secondary);
-        }
-
-        .device-info-item {
-            display: flex;
-            gap: 6px;
-        }
-
-        .device-info-label {
-            color: var(--text-muted);
-        }
-
-        /* Filters */
-        .filters {
-            padding: 12px 16px;
-            border-bottom: 1px solid var(--border-color);
-            display: flex;
-            gap: 8px;
-        }
-
-        .filter-btn {
-            padding: 4px 10px;
-            border: 1px solid var(--border-color);
-            border-radius: 4px;
-            background: transparent;
-            color: var(--text-secondary);
-            font-size: 12px;
+            justify-content: center;
             cursor: pointer;
-            transition: all 0.15s;
         }
 
-        .filter-btn:hover {
-            background: var(--bg-tertiary);
+        .image-modal.active {
+            display: flex;
         }
 
-        .filter-btn.active {
-            background: var(--accent);
-            border-color: var(--accent);
-            color: white;
+        .image-modal img {
+            max-width: 90%;
+            max-height: 90%;
+            border-radius: 8px;
         }
 
-        /* Responsive */
-        @media (max-width: 768px) {
-            .main-container {
-                flex-direction: column;
-                height: auto;
-            }
-
-            .flow-list {
-                width: 100%;
-                max-height: 50vh;
-            }
-
-            .screenshots {
-                flex-direction: column;
-            }
-
-            .screenshot {
-                max-width: 100%;
-            }
-        }
     </style>
 </head>
 <body>
-    <!-- Summary Bar -->
-    <div class="summary-bar">
-        <div class="summary-title">{{.Title}}</div>
-        <div class="summary-stats">
-            <div class="stat">
-                <span>Total: {{.Index.Summary.Total}}</span>
+    <!-- Header with Dashboard -->
+    <div class="header">
+        <div class="header-top">
+            <div class="header-left">
+                <div class="brand">
+                    <div class="brand-icon">
+                        <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                    </div>
+                    <div class="brand-text">
+                        <span class="brand-name">maestro-runner</span>
+                        <a href="https://devicelab.dev/" target="_blank" class="brand-sub">by DeviceLab</a>
+                    </div>
+                </div>
+                <div class="header-divider"></div>
+                <div class="header-title">
+                    <span class="header-title-main">{{.Title}}</span>
+                    <span class="header-title-sub">{{.GeneratedAt}}</span>
+                </div>
             </div>
-            <div class="stat">
-                <span class="stat-icon passed"></span>
-                <span>{{.Index.Summary.Passed}} passed</span>
+            <div class="header-right">
+                <div class="platform-badge">
+                    {{if eq .Index.Device.Platform "android"}}
+                    <svg viewBox="0 0 24 24"><path d="M17.6 9.48l1.84-3.18c.16-.31.04-.69-.26-.85-.29-.15-.65-.06-.83.22l-1.88 3.24c-1.4-.59-2.95-.92-4.62-.92-1.67 0-3.22.33-4.62.92L5.26 5.67c-.18-.28-.54-.37-.83-.22-.3.16-.42.54-.26.85L6.4 9.48C3.3 11.25 1.28 14.44 1 18h22c-.28-3.56-2.3-6.75-5.4-8.52zM7 15.25c-.69 0-1.25-.56-1.25-1.25s.56-1.25 1.25-1.25 1.25.56 1.25 1.25-.56 1.25-1.25 1.25zm10 0c-.69 0-1.25-.56-1.25-1.25s.56-1.25 1.25-1.25 1.25.56 1.25 1.25-.56 1.25-1.25 1.25z"/></svg>
+                    {{else}}
+                    <svg viewBox="0 0 24 24"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+                    {{end}}
+                    <span>{{if eq .Index.Device.Platform "android"}}Android{{else}}iOS{{end}}</span>
+                </div>
+                <a href="https://github.com/AlessandroOddworx/maestro-runner" target="_blank" class="github-star">
+                    <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+                    <svg class="star-icon" viewBox="0 0 16 16"><path d="M8 .25a.75.75 0 01.673.418l1.882 3.815 4.21.612a.75.75 0 01.416 1.279l-3.046 2.97.719 4.192a.75.75 0 01-1.088.791L8 12.347l-3.766 1.98a.75.75 0 01-1.088-.79l.72-4.194L.818 6.374a.75.75 0 01.416-1.28l4.21-.611L7.327.668A.75.75 0 018 .25z"/></svg>
+                    <span>Star</span>
+                </a>
             </div>
-            <div class="stat">
-                <span class="stat-icon failed"></span>
-                <span>{{.Index.Summary.Failed}} failed</span>
-            </div>
-            {{if gt .Index.Summary.Skipped 0}}
-            <div class="stat">
-                <span class="stat-icon skipped"></span>
-                <span>{{.Index.Summary.Skipped}} skipped</span>
-            </div>
-            {{end}}
         </div>
-        <div class="summary-meta">
-            Generated: {{.GeneratedAt}}
+        <div class="dashboard">
+            <!-- Pie Chart -->
+            <div class="chart-container">
+                <div class="pie-chart" id="pie-chart"></div>
+                <div class="chart-legend">
+                    <div class="legend-item">
+                        <span class="legend-dot passed"></span>
+                        <span>{{.Index.Summary.Passed}} passed</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-dot failed"></span>
+                        <span>{{.Index.Summary.Failed}} failed</span>
+                    </div>
+                    {{if gt .Index.Summary.Skipped 0}}
+                    <div class="legend-item">
+                        <span class="legend-dot skipped"></span>
+                        <span>{{.Index.Summary.Skipped}} skipped</span>
+                    </div>
+                    {{end}}
+                </div>
+            </div>
+
+            <!-- Environment Card -->
+            <div class="env-card">
+                <div class="env-item">
+                    <span class="env-label">Device</span>
+                    <span class="env-value">{{.Index.Device.Name}}</span>
+                </div>
+                <div class="env-item">
+                    <span class="env-label">Platform</span>
+                    <span class="env-value">{{.Index.Device.Platform}} {{.Index.Device.OSVersion}}</span>
+                </div>
+                <div class="env-item">
+                    <span class="env-label">App</span>
+                    <span class="env-value">{{if .Index.App.Name}}{{.Index.App.Name}}{{else}}{{.Index.App.ID}}{{end}}</span>
+                </div>
+                <div class="env-item">
+                    <span class="env-label">Driver</span>
+                    <span class="env-value">{{.Index.MaestroRunner.Driver}}</span>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -653,235 +992,269 @@ const htmlTemplate = `<!DOCTYPE html>
     <div class="main-container">
         <!-- Flow List -->
         <div class="flow-list">
+            <div class="search-box">
+                <input type="text" class="search-input" id="search-input" placeholder="Search tests... (Press /)" />
+            </div>
             <div class="filters">
-                <button class="filter-btn active" data-filter="all">All</button>
-                <button class="filter-btn" data-filter="failed">Failed</button>
-                <button class="filter-btn" data-filter="passed">Passed</button>
+                <button class="filter-btn active" data-filter="all">All ({{.Index.Summary.Total}})</button>
+                <button class="filter-btn failed" data-filter="failed">Failed ({{.Index.Summary.Failed}})</button>
+                <button class="filter-btn" data-filter="passed">Passed ({{.Index.Summary.Passed}})</button>
             </div>
-
-            {{range $fi, $flow := .Flows}}
-            <div class="flow-item" data-flow-index="{{$fi}}" data-status="{{$flow.StatusClass}}">
-                <div class="flow-header" onclick="toggleFlow({{$fi}})">
-                    <span class="flow-toggle">▶</span>
-                    <span class="flow-status {{$flow.StatusClass}}"></span>
-                    <span class="flow-name">{{$flow.Name}}</span>
-                    <span class="flow-duration">{{$flow.DurationStr}}</span>
-                </div>
-                <div class="command-list" id="commands-{{$fi}}">
-                    {{range $ci, $cmd := $flow.Commands}}
-                    <div class="command-item" onclick="selectCommand({{$fi}}, {{$ci}})" data-flow="{{$fi}}" data-cmd="{{$ci}}">
-                        <span class="command-status {{$cmd.StatusClass}}"></span>
-                        <span class="command-type">{{$cmd.Type}}</span>
-                        <span class="command-desc">{{if $cmd.Params}}{{if $cmd.Params.Selector}}{{$cmd.Params.Selector.Value}}{{else if $cmd.Params.Text}}{{$cmd.Params.Text}}{{end}}{{end}}</span>
-                        <span class="command-duration">{{$cmd.DurationStr}}</span>
+            <div class="keyboard-hint">
+                <kbd>j</kbd>/<kbd>k</kbd> navigate &nbsp; <kbd>n</kbd> next failure &nbsp; <kbd>Enter</kbd> expand
+            </div>
+            <div class="flow-items" id="flow-items">
+                {{range $fi, $flow := .Flows}}
+                <div class="flow-item {{$flow.StatusClass}}" data-flow-index="{{$fi}}" data-status="{{$flow.StatusClass}}" data-name="{{$flow.Name}}">
+                    <div class="flow-item-header">
+                        <span class="status-dot {{$flow.StatusClass}}"></span>
+                        <span class="flow-name">{{$flow.Name}}</span>
                     </div>
-                    {{end}}
+                    <div class="flow-meta">
+                        <span>{{len $flow.Commands}} steps</span>
+                        <div class="duration-bar">
+                            <div class="duration-fill" style="width: {{printf "%.1f" $flow.DurationPct}}%"></div>
+                        </div>
+                        <span>{{$flow.DurationStr}}</span>
+                    </div>
                 </div>
+                {{end}}
             </div>
-            {{end}}
         </div>
 
         <!-- Detail Panel -->
         <div class="detail-panel" id="detail-panel">
-            <div class="detail-empty">
-                Select a flow or command to view details
+            <div class="empty-state" id="empty-state">
+                <div class="empty-state-icon">📋</div>
+                <div>Select a test to view details</div>
+            </div>
+            <div id="detail-content" style="display: none;">
+                <div class="detail-header">
+                    <div class="detail-title" id="detail-title"></div>
+                </div>
+                <div class="detail-info" id="detail-info"></div>
+                <div class="command-list" id="command-list"></div>
             </div>
         </div>
     </div>
 
-    <!-- Device Info -->
-    <div class="device-info">
-        <div class="device-info-item">
-            <span class="device-info-label">Device:</span>
-            <span>{{.Index.Device.Name}}</span>
-        </div>
-        <div class="device-info-item">
-            <span class="device-info-label">Platform:</span>
-            <span>{{.Index.Device.Platform}} {{.Index.Device.OSVersion}}</span>
-        </div>
-        <div class="device-info-item">
-            <span class="device-info-label">App:</span>
-            <span>{{.Index.App.ID}}</span>
-        </div>
-        <div class="device-info-item">
-            <span class="device-info-label">Driver:</span>
-            <span>{{.Index.MaestroRunner.Driver}}</span>
-        </div>
+    <!-- Image Modal -->
+    <div class="image-modal" id="image-modal" onclick="closeModal()">
+        <img id="modal-image" src="" alt="Screenshot">
     </div>
 
+
     <script>
-        // Report data
         const reportData = {{.JSONData}};
-        const index = reportData.index;
-        const flows = reportData.flows;
+        let selectedFlowIndex = -1;
 
-        let selectedFlow = null;
-        let selectedCommand = null;
+        // Initialize pie chart
+        (function() {
+            const total = reportData.index.summary.total || 1;
+            const passed = reportData.index.summary.passed || 0;
+            const failed = reportData.index.summary.failed || 0;
+            const skipped = reportData.index.summary.skipped || 0;
 
-        // Toggle flow expansion
-        function toggleFlow(flowIndex) {
-            const cmdList = document.getElementById('commands-' + flowIndex);
-            const flowItem = document.querySelector('[data-flow-index="' + flowIndex + '"]');
-            const toggle = flowItem.querySelector('.flow-toggle');
+            const passedPct = (passed / total) * 100;
+            const failedPct = (failed / total) * 100;
+            const skippedPct = (skipped / total) * 100;
 
-            cmdList.classList.toggle('expanded');
-            toggle.classList.toggle('expanded');
+            const pieChart = document.getElementById('pie-chart');
+            pieChart.style.background = 'conic-gradient(' +
+                'var(--passed) 0% ' + passedPct + '%, ' +
+                'var(--failed) ' + passedPct + '% ' + (passedPct + failedPct) + '%, ' +
+                'var(--skipped) ' + (passedPct + failedPct) + '% 100%)';
 
-            // Select flow when expanding
-            if (cmdList.classList.contains('expanded')) {
-                selectFlow(flowIndex);
+            pieChart.innerHTML = '<div class="pie-center">' + Math.round(passedPct) + '%</div>';
+        })();
+
+        // Flow item click handlers
+        document.querySelectorAll('.flow-item').forEach(item => {
+            item.addEventListener('click', () => selectFlow(parseInt(item.dataset.flowIndex)));
+        });
+
+        // Filter buttons
+        document.querySelectorAll('.filter-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                filterFlows(btn.dataset.filter);
+            });
+        });
+
+        // Search
+        document.getElementById('search-input').addEventListener('input', (e) => {
+            const query = e.target.value.toLowerCase();
+            document.querySelectorAll('.flow-item').forEach(item => {
+                const name = item.dataset.name.toLowerCase();
+                item.style.display = name.includes(query) ? '' : 'none';
+            });
+        });
+
+        // Keyboard navigation
+        document.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT') {
+                if (e.key === 'Escape') e.target.blur();
+                return;
             }
-        }
 
-        // Select a flow
-        function selectFlow(flowIndex) {
-            // Remove previous selection
-            document.querySelectorAll('.flow-header.selected').forEach(el => el.classList.remove('selected'));
-            document.querySelectorAll('.command-item.selected').forEach(el => el.classList.remove('selected'));
+            const visibleFlows = Array.from(document.querySelectorAll('.flow-item')).filter(f => f.style.display !== 'none');
+            const currentIdx = visibleFlows.findIndex(f => f.classList.contains('selected'));
 
-            // Add selection
-            const flowItem = document.querySelector('[data-flow-index="' + flowIndex + '"]');
-            flowItem.querySelector('.flow-header').classList.add('selected');
-
-            selectedFlow = flowIndex;
-            selectedCommand = null;
-
-            showFlowDetail(flowIndex);
-        }
-
-        // Select a command
-        function selectCommand(flowIndex, cmdIndex) {
-            event.stopPropagation();
-
-            // Remove previous selection
-            document.querySelectorAll('.flow-header.selected').forEach(el => el.classList.remove('selected'));
-            document.querySelectorAll('.command-item.selected').forEach(el => el.classList.remove('selected'));
-
-            // Add selection
-            const cmdItem = document.querySelector('[data-flow="' + flowIndex + '"][data-cmd="' + cmdIndex + '"]');
-            cmdItem.classList.add('selected');
-
-            selectedFlow = flowIndex;
-            selectedCommand = cmdIndex;
-
-            showCommandDetail(flowIndex, cmdIndex);
-        }
-
-        // Show flow detail
-        function showFlowDetail(flowIndex) {
-            const flow = flows[flowIndex];
-            const entry = index.flows[flowIndex];
-            const panel = document.getElementById('detail-panel');
-
-            let html = '<div class="detail-header">';
-            html += '<div class="detail-title">' + escapeHtml(flow.name) + '</div>';
-            html += '<div class="detail-meta">';
-            html += '<div class="detail-meta-item">Status: <span class="command-detail-status ' + entry.status + '">' + entry.status + '</span></div>';
-            html += '<div class="detail-meta-item">Duration: ' + formatDuration(flow.duration) + '</div>';
-            html += '<div class="detail-meta-item">Commands: ' + flow.commands.length + '</div>';
-            html += '</div></div>';
-
-            // Show error if failed
-            if (entry.status === 'failed') {
-                const failedCmd = flow.commands.find(c => c.status === 'failed');
-                if (failedCmd && failedCmd.error) {
-                    html += '<div class="error-box">';
-                    html += '<div class="error-type">' + escapeHtml(failedCmd.error.type || 'Error') + '</div>';
-                    html += '<div class="error-message">' + escapeHtml(failedCmd.error.message) + '</div>';
-                    if (failedCmd.error.suggestion) {
-                        html += '<div class="error-suggestion">💡 ' + escapeHtml(failedCmd.error.suggestion) + '</div>';
+            switch (e.key) {
+                case '/':
+                    e.preventDefault();
+                    document.getElementById('search-input').focus();
+                    break;
+                case 'j':
+                    if (currentIdx < visibleFlows.length - 1) {
+                        selectFlow(parseInt(visibleFlows[currentIdx + 1].dataset.flowIndex));
+                    } else if (currentIdx === -1 && visibleFlows.length > 0) {
+                        selectFlow(parseInt(visibleFlows[0].dataset.flowIndex));
                     }
-                    html += '</div>';
-                }
+                    break;
+                case 'k':
+                    if (currentIdx > 0) {
+                        selectFlow(parseInt(visibleFlows[currentIdx - 1].dataset.flowIndex));
+                    }
+                    break;
+                case 'n':
+                    const failedFlows = visibleFlows.filter(f => f.dataset.status === 'failed');
+                    if (failedFlows.length > 0) {
+                        const currentFailedIdx = failedFlows.findIndex(f => f.classList.contains('selected'));
+                        const nextIdx = (currentFailedIdx + 1) % failedFlows.length;
+                        selectFlow(parseInt(failedFlows[nextIdx].dataset.flowIndex));
+                    }
+                    break;
+                case 'Escape':
+                    closeModal();
+                    break;
             }
+        });
 
-            // Show source file
-            html += '<div class="command-detail">';
-            html += '<div class="command-detail-header">';
-            html += '<div class="command-detail-type">Source File</div>';
-            html += '</div>';
-            html += '<div class="yaml-block">' + escapeHtml(flow.sourceFile) + '</div>';
-            html += '</div>';
-
-            panel.innerHTML = html;
+        function filterFlows(filter) {
+            document.querySelectorAll('.flow-item').forEach(item => {
+                if (filter === 'all') {
+                    item.style.display = '';
+                } else {
+                    item.style.display = item.dataset.status === filter ? '' : 'none';
+                }
+            });
         }
 
-        // Show command detail
-        function showCommandDetail(flowIndex, cmdIndex) {
-            const flow = flows[flowIndex];
-            const cmd = flow.commands[cmdIndex];
-            const panel = document.getElementById('detail-panel');
-
-            let html = '<div class="detail-header">';
-            html += '<div class="detail-title">' + escapeHtml(cmd.type) + '</div>';
-            html += '<div class="detail-meta">';
-            html += '<div class="detail-meta-item">Status: <span class="command-detail-status ' + cmd.status + '">' + cmd.status + '</span></div>';
-            html += '<div class="detail-meta-item">Duration: ' + formatDuration(cmd.duration) + '</div>';
-            html += '</div></div>';
-
-            // Show error if failed
-            if (cmd.error) {
-                html += '<div class="error-box">';
-                html += '<div class="error-type">' + escapeHtml(cmd.error.type || 'Error') + '</div>';
-                html += '<div class="error-message">' + escapeHtml(cmd.error.message) + '</div>';
-                if (cmd.error.details) {
-                    html += '<div class="error-message" style="margin-top: 8px; color: var(--text-secondary);">' + escapeHtml(cmd.error.details) + '</div>';
-                }
-                if (cmd.error.suggestion) {
-                    html += '<div class="error-suggestion">💡 ' + escapeHtml(cmd.error.suggestion) + '</div>';
-                }
-                html += '</div>';
+        function selectFlow(index) {
+            selectedFlowIndex = index;
+            document.querySelectorAll('.flow-item').forEach(f => f.classList.remove('selected'));
+            const item = document.querySelector('.flow-item[data-flow-index="' + index + '"]');
+            if (item) {
+                item.classList.add('selected');
+                item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
             }
 
-            // Show screenshots
-            if (cmd.artifacts && (cmd.artifacts.screenshotBefore || cmd.artifacts.screenshotAfter)) {
-                html += '<div class="screenshots">';
-                if (cmd.artifacts.screenshotBefore) {
-                    html += '<div class="screenshot">';
-                    html += '<div class="screenshot-label">Before</div>';
-                    html += '<img src="' + cmd.artifacts.screenshotBefore + '" alt="Before">';
-                    html += '</div>';
-                }
-                if (cmd.artifacts.screenshotAfter) {
-                    html += '<div class="screenshot">';
-                    html += '<div class="screenshot-label">After</div>';
-                    html += '<img src="' + cmd.artifacts.screenshotAfter + '" alt="After">';
-                    html += '</div>';
-                }
-                html += '</div>';
-            }
+            // Update URL hash
+            window.location.hash = 'flow-' + index;
 
-            // Show YAML
-            if (cmd.yaml) {
-                html += '<div class="command-detail">';
-                html += '<div class="command-detail-header">';
-                html += '<div class="command-detail-type">YAML</div>';
-                html += '</div>';
-                html += '<div class="yaml-block">' + escapeHtml(cmd.yaml) + '</div>';
-                html += '</div>';
-            }
-
-            // Show element info
-            if (cmd.element && cmd.element.found) {
-                html += '<div class="command-detail">';
-                html += '<div class="command-detail-header">';
-                html += '<div class="command-detail-type">Element Found</div>';
-                html += '</div>';
-                html += '<div class="yaml-block">';
-                if (cmd.element.id) html += 'ID: ' + escapeHtml(cmd.element.id) + '\n';
-                if (cmd.element.text) html += 'Text: ' + escapeHtml(cmd.element.text) + '\n';
-                if (cmd.element.class) html += 'Class: ' + escapeHtml(cmd.element.class) + '\n';
-                if (cmd.element.bounds) {
-                    html += 'Bounds: ' + cmd.element.bounds.x + ',' + cmd.element.bounds.y + ' ' + cmd.element.bounds.width + 'x' + cmd.element.bounds.height;
-                }
-                html += '</div>';
-                html += '</div>';
-            }
-
-            panel.innerHTML = html;
+            renderDetail(index);
         }
 
-        // Format duration
+        function renderDetail(flowIndex) {
+            const flow = reportData.flows[flowIndex];
+            const indexEntry = reportData.index.flows[flowIndex];
+            if (!flow) return;
+
+            document.getElementById('empty-state').style.display = 'none';
+            document.getElementById('detail-content').style.display = '';
+
+            document.getElementById('detail-title').textContent = flow.name;
+
+            // Info section
+            const infoHtml = '<div class="info-item"><span class="info-label">Status</span><span class="info-value">' + indexEntry.status + '</span></div>' +
+                '<div class="info-item"><span class="info-label">Duration</span><span class="info-value">' + formatDuration(indexEntry.duration) + '</span></div>' +
+                '<div class="info-item"><span class="info-label">Steps</span><span class="info-value">' + flow.commands.length + '</span></div>' +
+                '<div class="info-item"><span class="info-label">Source</span><span class="info-value">' + flow.sourceFile + '</span></div>';
+            document.getElementById('detail-info').innerHTML = infoHtml;
+
+            // Commands - compact format
+            let commandsHtml = '';
+            flow.commands.forEach((cmd, i) => {
+                const status = cmd.status || 'pending';
+                const keyValue = extractKeyValue(cmd);
+                const hasDetails = cmd.yaml || cmd.error || (cmd.artifacts && (cmd.artifacts.screenshotBefore || cmd.artifacts.screenshotAfter));
+
+                commandsHtml += '<div class="command-item ' + status + '" id="flow-' + flowIndex + '-cmd-' + i + '" onclick="toggleCommand(this)">';
+
+                // Summary line (always visible)
+                commandsHtml += '<div class="command-summary">' +
+                    '<span class="command-status ' + status + '"></span>' +
+                    '<span class="command-type">' + escapeHtml(cmd.type) + '</span>' +
+                    '<span class="command-value">' + escapeHtml(keyValue) + '</span>' +
+                    '<span class="command-duration">' + formatDuration(cmd.duration) + '</span>';
+                if (hasDetails) {
+                    commandsHtml += '<span class="command-expand-icon">▶</span>';
+                }
+                commandsHtml += '</div>';
+
+                // Details (hidden by default)
+                if (hasDetails) {
+                    commandsHtml += '<div class="command-details">';
+
+                    if (cmd.yaml) {
+                        commandsHtml += '<div class="command-yaml">' + escapeHtml(cmd.yaml) + '</div>';
+                    }
+
+                    if (cmd.error) {
+                        commandsHtml += '<div class="command-error">' +
+                            '<div class="error-type">' + escapeHtml(cmd.error.type) + '</div>' +
+                            '<div class="error-message">' + escapeHtml(cmd.error.message) + '</div>';
+                        if (cmd.error.suggestion) {
+                            commandsHtml += '<div class="error-suggestion">💡 ' + escapeHtml(cmd.error.suggestion) + '</div>';
+                        }
+                        commandsHtml += '</div>';
+                    }
+
+                    if (cmd.artifacts && (cmd.artifacts.screenshotBefore || cmd.artifacts.screenshotAfter)) {
+                        commandsHtml += '<div class="command-screenshots">';
+                        if (cmd.artifacts.screenshotBefore) {
+                            commandsHtml += '<img class="screenshot" src="' + cmd.artifacts.screenshotBefore + '" onclick="event.stopPropagation(); openModal(this.src)" title="Before">';
+                        }
+                        if (cmd.artifacts.screenshotAfter) {
+                            commandsHtml += '<img class="screenshot" src="' + cmd.artifacts.screenshotAfter + '" onclick="event.stopPropagation(); openModal(this.src)" title="After">';
+                        }
+                        commandsHtml += '</div>';
+                    }
+
+                    commandsHtml += '</div>';
+                }
+
+                commandsHtml += '</div>';
+            });
+            document.getElementById('command-list').innerHTML = commandsHtml;
+        }
+
+        function extractKeyValue(cmd) {
+            // Extract the most meaningful value to show in the summary
+            if (cmd.params) {
+                if (cmd.params.selector && cmd.params.selector.value) {
+                    return cmd.params.selector.value;
+                }
+                if (cmd.params.text) {
+                    return cmd.params.text;
+                }
+                if (cmd.params.direction) {
+                    return cmd.params.direction;
+                }
+            }
+            // Fallback: try to extract from label or return empty
+            if (cmd.label && cmd.label !== cmd.type) {
+                return cmd.label;
+            }
+            return '';
+        }
+
+        function toggleCommand(element) {
+            element.classList.toggle('expanded');
+        }
+
         function formatDuration(ms) {
             if (!ms) return '-';
             if (ms < 1000) return ms + 'ms';
@@ -889,7 +1262,6 @@ const htmlTemplate = `<!DOCTYPE html>
             return Math.floor(ms / 60000) + 'm ' + Math.floor((ms % 60000) / 1000) + 's';
         }
 
-        // Escape HTML
         function escapeHtml(text) {
             if (!text) return '';
             const div = document.createElement('div');
@@ -897,40 +1269,46 @@ const htmlTemplate = `<!DOCTYPE html>
             return div.innerHTML;
         }
 
-        // Filter flows
-        document.querySelectorAll('.filter-btn').forEach(btn => {
-            btn.addEventListener('click', function() {
-                const filter = this.dataset.filter;
+        function openModal(src) {
+            document.getElementById('modal-image').src = src;
+            document.getElementById('image-modal').classList.add('active');
+        }
 
-                // Update button states
-                document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-                this.classList.add('active');
+        function closeModal() {
+            document.getElementById('image-modal').classList.remove('active');
+        }
 
-                // Filter flows
-                document.querySelectorAll('.flow-item').forEach(item => {
-                    const status = item.dataset.status;
-                    if (filter === 'all' || status === filter) {
-                        item.style.display = 'block';
-                    } else {
-                        item.style.display = 'none';
+        // Handle URL hash for deep links
+        function handleHash() {
+            const hash = window.location.hash;
+            if (hash.startsWith('#flow-')) {
+                const parts = hash.substring(1).split('-');
+                if (parts.length >= 2) {
+                    const flowIndex = parseInt(parts[1]);
+                    selectFlow(flowIndex);
+
+                    if (parts.length >= 4 && parts[2] === 'cmd') {
+                        const cmdIndex = parseInt(parts[3]);
+                        setTimeout(() => {
+                            const cmdEl = document.getElementById('flow-' + flowIndex + '-cmd-' + cmdIndex);
+                            if (cmdEl) {
+                                cmdEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                cmdEl.style.boxShadow = '0 0 0 2px var(--accent)';
+                            }
+                        }, 100);
                     }
-                });
-            });
-        });
-
-        // Auto-expand first failed flow, or first flow if all passed
-        (function() {
-            const failedFlow = document.querySelector('.flow-item[data-status="failed"]');
-            if (failedFlow) {
-                const flowIndex = failedFlow.dataset.flowIndex;
-                toggleFlow(parseInt(flowIndex));
-            } else {
-                const firstFlow = document.querySelector('.flow-item');
-                if (firstFlow) {
-                    toggleFlow(0);
                 }
             }
-        })();
+        }
+
+        window.addEventListener('hashchange', handleHash);
+
+        // Select first flow by default if no hash
+        if (!window.location.hash && reportData.flows.length > 0) {
+            selectFlow(0);
+        } else {
+            handleHash();
+        }
     </script>
 </body>
 </html>
