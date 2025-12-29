@@ -290,7 +290,19 @@ func executeTest(cfg *RunConfig) error {
 		return fmt.Errorf("execution failed: %w", err)
 	}
 
-	// 5. Print summary
+	// 5. Generate HTML report
+	htmlPath := filepath.Join(cfg.OutputDir, "report.html")
+	if err := report.GenerateHTML(cfg.OutputDir, report.HTMLConfig{
+		OutputPath: htmlPath,
+		Title:      "Test Report",
+	}); err != nil {
+		// Non-fatal: print warning but continue
+		fmt.Printf("  %s⚠%s Warning: failed to generate HTML report: %v\n", color(colorYellow), color(colorReset), err)
+	} else {
+		printSetupSuccess(fmt.Sprintf("Report: %s", htmlPath))
+	}
+
+	// 6. Print summary
 	printSummary(result)
 
 	// Exit with code 1 if any flows failed (summary already printed)
