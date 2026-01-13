@@ -237,16 +237,18 @@ func (d *Driver) findElement(sel flow.Selector, optional bool) (*uiautomator2.El
 	}
 	timeout := time.Duration(timeoutMs) * time.Millisecond
 
-	// Handle relative selectors via page source
+	// Handle relative selectors via page source (position calculation required)
 	if sel.HasRelativeSelector() {
 		return d.findElementRelative(sel, int(timeout.Milliseconds()))
 	}
 
-	// Handle regex patterns via page source (like Maestro does)
-	if sel.Text != "" && looksLikeRegex(sel.Text) {
+	// Handle size selectors via page source (bounds calculation required)
+	if sel.Width > 0 || sel.Height > 0 {
 		return d.findElementByPageSource(sel, int(timeout.Milliseconds()))
 	}
 
+	// All other selectors (text, id, state filters) use UiAutomator directly
+	// including regex patterns via textMatches()/descriptionMatches()
 	strategies, err := buildSelectors(sel, int(timeout.Milliseconds()))
 	if err != nil {
 		return nil, nil, err
@@ -279,10 +281,14 @@ func (d *Driver) findElement(sel flow.Selector, optional bool) (*uiautomator2.El
 }
 
 // findElementQuick finds an element without polling (single attempt).
-// Used by waitUntil which has its own polling loop.
+// Used by waitUntil which has its own polling loop, and assertNotVisible.
 func (d *Driver) findElementQuick(sel flow.Selector) (*uiautomator2.Element, *core.ElementInfo, error) {
 	if sel.HasRelativeSelector() {
 		return d.findElementRelative(sel, 1000) // Short timeout for relative
+	}
+
+	if sel.Width > 0 || sel.Height > 0 {
+		return d.findElementByPageSource(sel, 1000) // Size requires page source
 	}
 
 	strategies, err := buildSelectors(sel, 1000)

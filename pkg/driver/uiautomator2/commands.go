@@ -120,7 +120,9 @@ func (d *Driver) assertVisible(step *flow.AssertVisibleStep) *core.CommandResult
 }
 
 func (d *Driver) assertNotVisible(step *flow.AssertNotVisibleStep) *core.CommandResult {
-	_, _, err := d.findElement(step.Selector, step.IsOptional())
+	// For negative assertions, use quick check - don't wait for timeout
+	// Element not existing = success, so we should fail fast
+	_, _, err := d.findElementQuick(step.Selector)
 	if err != nil {
 		// Element not found = not visible = success
 		return successResult("Element is not visible", nil)
@@ -416,9 +418,15 @@ func (d *Driver) copyTextFrom(step *flow.CopyTextFromStep) *core.CommandResult {
 		return errorResult(err, fmt.Sprintf("Element not found: %v", err))
 	}
 
-	text, err := elem.Text()
-	if err != nil {
-		return errorResult(err, fmt.Sprintf("Failed to get text: %v", err))
+	var text string
+	if elem != nil {
+		text, err = elem.Text()
+		if err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to get text: %v", err))
+		}
+	} else if info != nil {
+		// Element found via page source - use text from info
+		text = info.Text
 	}
 
 	if err := d.client.SetClipboard(text); err != nil {
