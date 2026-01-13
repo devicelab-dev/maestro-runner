@@ -3,6 +3,7 @@ package uiautomator2
 import (
 	"encoding/xml"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -27,67 +28,116 @@ type ParsedElement struct {
 }
 
 // ParsePageSource parses Android UI hierarchy XML into elements.
+// Supports both formats:
+// - UIAutomator dump: uses class name as element tag (e.g., <android.widget.FrameLayout>)
+// - Appium format: uses <node> elements
 func ParsePageSource(xmlData string) ([]*ParsedElement, error) {
-	var hierarchy struct {
-		XMLName xml.Name `xml:"hierarchy"`
-		Nodes   []xmlNode `xml:"node"`
-	}
-
-	if err := xml.Unmarshal([]byte(xmlData), &hierarchy); err != nil {
-		return nil, fmt.Errorf("parse XML: %w", err)
-	}
+	// Use a flexible decoder that handles any element names
+	decoder := xml.NewDecoder(strings.NewReader(xmlData))
 
 	var elements []*ParsedElement
-	for _, node := range hierarchy.Nodes {
-		elements = append(elements, parseNode(node)...)
+	foundHierarchy := false
+	var parseElement func() (*ParsedElement, error)
+
+	parseElement = func() (*ParsedElement, error) {
+		for {
+			token, err := decoder.Token()
+			if err != nil {
+				return nil, err
+			}
+
+			switch t := token.(type) {
+			case xml.StartElement:
+				// Skip the hierarchy element
+				if t.Name.Local == "hierarchy" {
+					foundHierarchy = true
+					continue
+				}
+
+				// Parse attributes
+				elem := &ParsedElement{
+					ClassName: t.Name.Local, // Class name is the element tag
+				}
+
+				for _, attr := range t.Attr {
+					switch attr.Name.Local {
+					case "text":
+						elem.Text = attr.Value
+					case "resource-id":
+						elem.ResourceID = attr.Value
+					case "content-desc":
+						elem.ContentDesc = attr.Value
+					case "class":
+						elem.ClassName = attr.Value // Override if class attr exists
+					case "bounds":
+						elem.Bounds = parseBounds(attr.Value)
+					case "enabled":
+						elem.Enabled = attr.Value == "true"
+					case "selected":
+						elem.Selected = attr.Value == "true"
+					case "focused":
+						elem.Focused = attr.Value == "true"
+					case "displayed":
+						elem.Displayed = attr.Value != "false"
+					case "clickable":
+						elem.Clickable = attr.Value == "true"
+					}
+				}
+
+				// Parse children recursively
+				for {
+					child, err := parseElement()
+					if err != nil || child == nil {
+						break
+					}
+					elem.Children = append(elem.Children, child)
+				}
+
+				return elem, nil
+
+			case xml.EndElement:
+				return nil, nil // End of current element
+			}
+		}
 	}
+
+	// Parse all root-level elements under hierarchy
+	var parseErr error
+	for {
+		elem, err := parseElement()
+		if err != nil {
+			// io.EOF is expected at end of document
+			if err.Error() != "EOF" {
+				parseErr = err
+			}
+			break
+		}
+		if elem != nil {
+			elements = append(elements, flattenElement(elem, 0)...)
+		}
+	}
+
+	// Return error for invalid XML
+	if parseErr != nil && len(elements) == 0 {
+		return nil, parseErr
+	}
+
+	// Return error if no valid hierarchy found
+	if !foundHierarchy {
+		return nil, fmt.Errorf("invalid page source: no hierarchy element found")
+	}
+
 	return elements, nil
 }
 
-type xmlNode struct {
-	Text        string    `xml:"text,attr"`
-	ResourceID  string    `xml:"resource-id,attr"`
-	ContentDesc string    `xml:"content-desc,attr"`
-	Class       string    `xml:"class,attr"`
-	Bounds      string    `xml:"bounds,attr"`
-	Enabled     string    `xml:"enabled,attr"`
-	Selected    string    `xml:"selected,attr"`
-	Focused     string    `xml:"focused,attr"`
-	Displayed   string    `xml:"displayed,attr"`
-	Clickable   string    `xml:"clickable,attr"`
-	Children    []xmlNode `xml:"node"`
-}
-
-func parseNode(node xmlNode) []*ParsedElement {
-	return parseNodeWithDepth(node, 0)
-}
-
-func parseNodeWithDepth(node xmlNode, depth int) []*ParsedElement {
-	elem := &ParsedElement{
-		Text:        node.Text,
-		ResourceID:  node.ResourceID,
-		ContentDesc: node.ContentDesc,
-		ClassName:   node.Class,
-		Bounds:      parseBounds(node.Bounds),
-		Enabled:     node.Enabled == "true",
-		Selected:    node.Selected == "true",
-		Focused:     node.Focused == "true",
-		Displayed:   node.Displayed != "false", // default true
-		Clickable:   node.Clickable == "true",
-		Depth:       depth,
+// flattenElement flattens a tree of elements into a list, setting depth.
+func flattenElement(elem *ParsedElement, depth int) []*ParsedElement {
+	elem.Depth = depth
+	result := []*ParsedElement{elem}
+	for _, child := range elem.Children {
+		result = append(result, flattenElement(child, depth+1)...)
 	}
-
-	var all []*ParsedElement
-	all = append(all, elem)
-
-	// Recursively parse children
-	for _, child := range node.Children {
-		childElements := parseNodeWithDepth(child, depth+1)
-		elem.Children = append(elem.Children, childElements[0]) // first is direct child
-		all = append(all, childElements...)
-	}
-
-	return all
+	return result
 }
 
 // parseBounds parses Android bounds string "[x1,y1][x2,y2]" to Bounds.
@@ -128,11 +178,9 @@ func FilterBySelector(elements []*ParsedElement, sel flow.Selector) []*ParsedEle
 }
 
 func matchesSelector(elem *ParsedElement, sel flow.Selector) bool {
-	// Text matching (case-insensitive contains)
+	// Text matching - supports regex patterns and literal contains
 	if sel.Text != "" {
-		textLower := strings.ToLower(sel.Text)
-		if !strings.Contains(strings.ToLower(elem.Text), textLower) &&
-			!strings.Contains(strings.ToLower(elem.ContentDesc), textLower) {
+		if !matchesText(sel.Text, elem.Text, elem.ContentDesc) {
 			return false
 		}
 	}
@@ -183,6 +231,47 @@ func withinTolerance(actual, expected, tolerance int) bool {
 		diff = -diff
 	}
 	return diff <= tolerance
+}
+
+// matchesText checks if pattern matches the element's text or content-desc.
+// If pattern looks like a regex (contains metacharacters), use regex matching.
+// Otherwise, use case-insensitive contains matching.
+// This matches Maestro's behavior: it checks text, hintText, and accessibilityText.
+func matchesText(pattern, text, contentDesc string) bool {
+	// Check if pattern looks like a regex
+	if looksLikeRegex(pattern) {
+		re, err := regexp.Compile("(?i)" + pattern)
+		if err != nil {
+			// Invalid regex - fall back to literal matching
+			return containsIgnoreCase(text, pattern) || containsIgnoreCase(contentDesc, pattern)
+		}
+
+		// Match against text (with newline stripping like Maestro)
+		if text != "" {
+			strippedText := strings.ReplaceAll(text, "\n", " ")
+			if re.MatchString(text) || re.MatchString(strippedText) || pattern == text || pattern == strippedText {
+				return true
+			}
+		}
+
+		// Match against content-desc (accessibility text)
+		if contentDesc != "" {
+			strippedDesc := strings.ReplaceAll(contentDesc, "\n", " ")
+			if re.MatchString(contentDesc) || re.MatchString(strippedDesc) || pattern == contentDesc || pattern == strippedDesc {
+				return true
+			}
+		}
+
+		return false
+	}
+
+	// Literal text - case-insensitive contains
+	return containsIgnoreCase(text, pattern) || containsIgnoreCase(contentDesc, pattern)
+}
+
+// containsIgnoreCase checks if s contains substr (case-insensitive).
+func containsIgnoreCase(s, substr string) bool {
+	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }
 
 // Position filter functions

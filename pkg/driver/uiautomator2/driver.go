@@ -222,7 +222,7 @@ func (d *Driver) GetPlatformInfo() *core.PlatformInfo {
 
 // findElement finds an element using a selector with client-side polling.
 // Tries multiple locator strategies in order until one succeeds.
-// For relative selectors, uses page source parsing.
+// For relative selectors or regex patterns, uses page source parsing.
 // Uses 17s timeout for required elements, 7s for optional (configurable via SetFindTimeout).
 func (d *Driver) findElement(sel flow.Selector, optional bool) (*uiautomator2.Element, *core.ElementInfo, error) {
 	timeoutMs := DefaultFindTimeout
@@ -240,6 +240,11 @@ func (d *Driver) findElement(sel flow.Selector, optional bool) (*uiautomator2.El
 	// Handle relative selectors via page source
 	if sel.HasRelativeSelector() {
 		return d.findElementRelative(sel, int(timeout.Milliseconds()))
+	}
+
+	// Handle regex patterns via page source (like Maestro does)
+	if sel.Text != "" && looksLikeRegex(sel.Text) {
+		return d.findElementByPageSource(sel, int(timeout.Milliseconds()))
 	}
 
 	strategies, err := buildSelectors(sel, int(timeout.Milliseconds()))
@@ -456,6 +461,68 @@ func (d *Driver) findElementRelative(sel flow.Selector, timeoutMs int) (*uiautom
 	return nil, info, nil
 }
 
+// findElementByPageSource finds an element using page source parsing.
+// This is used for regex pattern matching (like Maestro does) when UiAutomator's
+// textMatches is not reliable. Uses client-side regex matching on the page source.
+func (d *Driver) findElementByPageSource(sel flow.Selector, timeoutMs int) (*uiautomator2.Element, *core.ElementInfo, error) {
+	timeout := time.Duration(timeoutMs) * time.Millisecond
+	deadline := time.Now().Add(timeout)
+
+	for {
+		// Get page source
+		pageSource, err := d.client.Source()
+		if err != nil {
+			if time.Now().After(deadline) {
+				return nil, nil, fmt.Errorf("failed to get page source: %w", err)
+			}
+			continue
+		}
+
+		// Parse all elements
+		allElements, err := ParsePageSource(pageSource)
+		if err != nil {
+			if time.Now().After(deadline) {
+				return nil, nil, fmt.Errorf("failed to parse page source: %w", err)
+			}
+			continue
+		}
+
+		// Filter by selector (this now supports regex patterns)
+		candidates := FilterBySelector(allElements, sel)
+
+		// Prioritize clickable elements
+		candidates = SortClickableFirst(candidates)
+
+		if len(candidates) > 0 {
+			selected := DeepestMatchingElement(candidates)
+			if selected == nil {
+				selected = candidates[0]
+			}
+
+			info := &core.ElementInfo{
+				Text: selected.Text,
+				Bounds: core.Bounds{
+					X:      selected.Bounds.X,
+					Y:      selected.Bounds.Y,
+					Width:  selected.Bounds.Width,
+					Height: selected.Bounds.Height,
+				},
+				Enabled: selected.Enabled,
+				Visible: selected.Displayed,
+			}
+
+			// For page source finds, we don't have WebDriver element - return nil element
+			// Caller should use bounds for tap
+			return nil, info, nil
+		}
+
+		// Check if we've exceeded timeout
+		if time.Now().After(deadline) {
+			return nil, nil, fmt.Errorf("no elements match regex pattern: %s", sel.Text)
+		}
+	}
+}
+
 // LocatorStrategy represents a single locator strategy with its value.
 type LocatorStrategy struct {
 	Strategy string
@@ -487,18 +554,18 @@ func buildSelectors(sel flow.Selector, timeoutMs int) ([]LocatorStrategy, error)
 		})
 	}
 
-	// Text-based selector - case-insensitive contains matching (like Maestro)
+	// Text-based selector - supports both regex patterns and literal text
 	if sel.Text != "" {
-		escaped := escapeUiAutomator(sel.Text)
+		pattern := textToRegexPattern(sel.Text)
 		// Try text first
 		strategies = append(strategies, LocatorStrategy{
 			Strategy: uiautomator2.StrategyUiAutomator,
-			Value:    `new UiSelector().textMatches("(?is).*` + escaped + `.*")` + stateFilters,
+			Value:    `new UiSelector().textMatches("` + pattern + `")` + stateFilters,
 		})
 		// Also try description (content-desc) for Flutter apps
 		strategies = append(strategies, LocatorStrategy{
 			Strategy: uiautomator2.StrategyUiAutomator,
-			Value:    `new UiSelector().descriptionMatches("(?is).*` + escaped + `.*")` + stateFilters,
+			Value:    `new UiSelector().descriptionMatches("` + pattern + `")` + stateFilters,
 		})
 	}
 
@@ -515,6 +582,44 @@ func buildSelectors(sel flow.Selector, timeoutMs int) ([]LocatorStrategy, error)
 	}
 
 	return strategies, nil
+}
+
+// textToRegexPattern converts text to a regex pattern for UiSelector.
+// If the text is a valid regex (contains regex metacharacters), use it as-is.
+// Otherwise, escape it for literal matching with case-insensitive contains.
+func textToRegexPattern(text string) string {
+	// Check if text looks like a regex pattern (contains unescaped metacharacters)
+	if looksLikeRegex(text) {
+		// Use as regex - add case-insensitive flag
+		return "(?is)" + escapeUiAutomatorString(text)
+	}
+	// Literal text - escape and wrap for contains matching
+	escaped := escapeUiAutomator(text)
+	return "(?is).*" + escaped + ".*"
+}
+
+// looksLikeRegex checks if text contains regex metacharacters that suggest it's a pattern.
+// Common patterns: .+, .*, [a-z], ^, $, etc.
+func looksLikeRegex(text string) bool {
+	// Check for common regex patterns
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		switch c {
+		case '.', '*', '+', '?', '^', '$', '[', ']', '(', ')', '{', '}', '|':
+			// Check if it's escaped
+			if i > 0 && text[i-1] == '\\' {
+				continue
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// escapeUiAutomatorString escapes only the double quotes for UiAutomator string.
+// Used when the text is already a regex pattern.
+func escapeUiAutomatorString(s string) string {
+	return strings.ReplaceAll(s, `"`, `\"`)
 }
 
 // buildStateFilters returns UiSelector chain for state filters.

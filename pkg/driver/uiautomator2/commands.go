@@ -98,6 +98,15 @@ func (d *Driver) assertVisible(step *flow.AssertVisibleStep) *core.CommandResult
 		return errorResult(err, fmt.Sprintf("Element not visible: %v", err))
 	}
 
+	// For page source results, elem is nil but info.Visible is set
+	if elem == nil {
+		if info != nil && info.Visible {
+			return successResult("Element is visible", info)
+		}
+		return errorResult(fmt.Errorf("element not visible"), "Element exists but is not visible")
+	}
+
+	// For WebDriver element results, check via API
 	displayed, err := elem.IsDisplayed()
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to check visibility: %v", err))
@@ -184,7 +193,19 @@ func (d *Driver) inputRandom(step *flow.InputRandomStep) *core.CommandResult {
 		length = 10 // default
 	}
 
-	text := randomString(length)
+	// Generate random data based on DataType
+	var text string
+	dataType := strings.ToUpper(step.DataType)
+	switch dataType {
+	case "EMAIL":
+		text = randomEmail()
+	case "NUMBER":
+		text = randomNumber(length)
+	case "PERSON_NAME":
+		text = randomPersonName()
+	default: // "TEXT" or empty
+		text = randomString(length)
+	}
 
 	// Type into focused element
 	active, err := d.client.ActiveElement()
@@ -197,7 +218,7 @@ func (d *Driver) inputRandom(step *flow.InputRandomStep) *core.CommandResult {
 
 	return &core.CommandResult{
 		Success: true,
-		Message: fmt.Sprintf("Entered random text: %s", text),
+		Message: fmt.Sprintf("Entered random %s: %s", dataType, text),
 		Data:    text,
 	}
 }
@@ -435,17 +456,46 @@ func (d *Driver) pasteText(_ *flow.PasteTextStep) *core.CommandResult {
 // ============================================================================
 
 func (d *Driver) setOrientation(step *flow.SetOrientationStep) *core.CommandResult {
-	orientation := strings.ToUpper(step.Orientation)
-	if orientation != "PORTRAIT" && orientation != "LANDSCAPE" {
-		return errorResult(fmt.Errorf("invalid orientation: %s", step.Orientation),
-			fmt.Sprintf("Orientation must be PORTRAIT or LANDSCAPE, got: %s", step.Orientation))
+	orientation := strings.ToUpper(strings.ReplaceAll(step.Orientation, "_", ""))
+
+	// PORTRAIT and LANDSCAPE: use UIAutomator2 API
+	if orientation == "PORTRAIT" || orientation == "LANDSCAPE" {
+		if err := d.client.SetOrientation(orientation); err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to set orientation: %v", err))
+		}
+		return successResult(fmt.Sprintf("Set orientation to %s", orientation), nil)
 	}
 
-	if err := d.client.SetOrientation(orientation); err != nil {
+	// Extended orientations (LANDSCAPE_LEFT, LANDSCAPE_RIGHT, UPSIDE_DOWN): use shell commands
+	var rotation string
+	switch orientation {
+	case "LANDSCAPELEFT":
+		rotation = "1"
+	case "UPSIDEDOWN":
+		rotation = "2"
+	case "LANDSCAPERIGHT":
+		rotation = "3"
+	default:
+		return errorResult(fmt.Errorf("invalid orientation: %s", step.Orientation),
+			fmt.Sprintf("Orientation must be PORTRAIT, LANDSCAPE, LANDSCAPE_LEFT, LANDSCAPE_RIGHT, or UPSIDE_DOWN, got: %s", step.Orientation))
+	}
+
+	if d.device == nil {
+		return errorResult(fmt.Errorf("device not configured"), "Extended orientations require device access")
+	}
+
+	// Disable accelerometer-based rotation before setting orientation
+	if _, err := d.device.Shell("settings put system accelerometer_rotation 0"); err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to disable accelerometer rotation: %v", err))
+	}
+
+	// Set the user rotation
+	cmd := fmt.Sprintf("settings put system user_rotation %s", rotation)
+	if _, err := d.device.Shell(cmd); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to set orientation: %v", err))
 	}
 
-	return successResult(fmt.Sprintf("Set orientation to %s", orientation), nil)
+	return successResult(fmt.Sprintf("Set orientation to %s", step.Orientation), nil)
 }
 
 func (d *Driver) openLink(step *flow.OpenLinkStep) *core.CommandResult {
@@ -805,4 +855,26 @@ func randomString(length int) string {
 		b[i] = chars[rand.Intn(len(chars))]
 	}
 	return string(b)
+}
+
+func randomEmail() string {
+	user := randomString(8)
+	domains := []string{"example.com", "test.com", "mail.com"}
+	domain := domains[rand.Intn(len(domains))]
+	return user + "@" + domain
+}
+
+func randomNumber(length int) string {
+	const digits = "0123456789"
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = digits[rand.Intn(len(digits))]
+	}
+	return string(b)
+}
+
+func randomPersonName() string {
+	firstNames := []string{"John", "Jane", "Michael", "Emily", "David", "Sarah", "James", "Emma", "Robert", "Olivia"}
+	lastNames := []string{"Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez"}
+	return firstNames[rand.Intn(len(firstNames))] + " " + lastNames[rand.Intn(len(lastNames))]
 }

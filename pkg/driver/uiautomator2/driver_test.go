@@ -26,34 +26,34 @@ type MockUIA2Client struct {
 	sourceFunc        func() (string, error)
 
 	// Tracking
-	clickCalls        []struct{ X, Y int }
-	doubleClickCalls  []struct{ X, Y int }
-	longClickCalls    []struct{ X, Y, Duration int }
-	scrollCalls       []uiautomator2.RectModel
-	swipeCalls        []uiautomator2.RectModel
-	pressKeyCalls     []int
-	backCalls         int
+	clickCalls          []struct{ X, Y int }
+	doubleClickCalls    []struct{ X, Y int }
+	longClickCalls      []struct{ X, Y, Duration int }
+	scrollCalls         []uiautomator2.RectModel
+	swipeCalls          []uiautomator2.RectModel
+	pressKeyCalls       []int
+	backCalls           int
 	setClipboardCalls   []string
 	setOrientationCalls []string
 
 	// Return values
-	screenshotData     []byte
-	screenshotErr      error
-	sourceData         string
-	sourceErr          error
-	orientationData    string
-	orientationErr     error
-	setOrientationErr  error
-	clipboardData      string
-	clipboardErr       error
-	clickErr           error
-	doubleClickErr     error
-	longClickErr       error
-	scrollErr          error
-	swipeErr           error
-	pressKeyErr        error
-	backErr            error
-	setClipboardErr    error
+	screenshotData    []byte
+	screenshotErr     error
+	sourceData        string
+	sourceErr         error
+	orientationData   string
+	orientationErr    error
+	setOrientationErr error
+	clipboardData     string
+	clipboardErr      error
+	clickErr          error
+	doubleClickErr    error
+	longClickErr      error
+	scrollErr         error
+	swipeErr          error
+	pressKeyErr       error
+	backErr           error
+	setClipboardErr   error
 }
 
 func (m *MockUIA2Client) FindElement(strategy, selector string) (*uiautomator2.Element, error) {
@@ -181,6 +181,82 @@ func TestBuildSelectorsText(t *testing.T) {
 	s := strategies[0]
 	if !strings.Contains(s.Value, "textMatches") {
 		t.Error("expected textMatches in selector")
+	}
+	if !strings.Contains(s.Value, "(?is)") {
+		t.Error("expected case-insensitive flag in selector")
+	}
+}
+
+func TestLooksLikeRegex(t *testing.T) {
+	tests := []struct {
+		text     string
+		expected bool
+	}{
+		{".+@.+", true},        // Email pattern
+		{".*hello.*", true},    // Contains pattern
+		{"[a-z]+", true},       // Character class
+		{"^start", true},       // Anchor
+		{"end$", true},         // Anchor
+		{"a|b", true},          // Alternation
+		{"a?b", true},          // Optional
+		{"a{2,3}", true},       // Quantifier
+		{"(group)", true},      // Group
+		{"Hello", false},       // Plain text
+		{"Hello World", false}, // Plain text with space
+		{"Login123", false},    // Alphanumeric
+		{`\.escaped`, false},   // Escaped dot
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.text, func(t *testing.T) {
+			result := looksLikeRegex(tc.text)
+			if result != tc.expected {
+				t.Errorf("looksLikeRegex(%q) = %v, expected %v", tc.text, result, tc.expected)
+			}
+		})
+	}
+}
+
+func TestTextToRegexPattern(t *testing.T) {
+	tests := []struct {
+		text     string
+		expected string
+	}{
+		{".+@.+", "(?is).+@.+"},                 // Regex pattern - kept as-is with flag
+		{"Login", "(?is).*Login.*"},             // Literal - wrapped for contains
+		{"Hello World", "(?is).*Hello World.*"}, // Literal with space
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.text, func(t *testing.T) {
+			result := textToRegexPattern(tc.text)
+			if result != tc.expected {
+				t.Errorf("textToRegexPattern(%q) = %q, expected %q", tc.text, result, tc.expected)
+			}
+		})
+	}
+}
+
+func TestBuildSelectorsRegexPattern(t *testing.T) {
+	// Email regex pattern
+	sel := flow.Selector{Text: ".+@.+"}
+	strategies, err := buildSelectors(sel, 5000)
+	if err != nil {
+		t.Fatalf("buildSelectors failed: %v", err)
+	}
+
+	// Should have 2 strategies: text and description
+	if len(strategies) != 2 {
+		t.Errorf("expected 2 strategies, got %d", len(strategies))
+	}
+
+	// First should be text-based with regex pattern preserved
+	s := strategies[0]
+	if !strings.Contains(s.Value, "textMatches") {
+		t.Error("expected textMatches in selector")
+	}
+	if !strings.Contains(s.Value, ".+@.+") {
+		t.Errorf("expected regex pattern '.+@.+' to be preserved, got: %s", s.Value)
 	}
 	if !strings.Contains(s.Value, "(?is)") {
 		t.Error("expected case-insensitive flag in selector")
@@ -764,8 +840,8 @@ func TestExecuteAllStepTypes(t *testing.T) {
 	// Most will fail because they need findElement, but this covers the switch paths
 	client := &MockUIA2Client{}
 	driver := New(client, nil, nil)
-	driver.SetFindTimeout(100)         // 100ms for fast test failure
-	driver.SetOptionalFindTimeout(50)  // 50ms for optional elements
+	driver.SetFindTimeout(100)        // 100ms for fast test failure
+	driver.SetOptionalFindTimeout(50) // 50ms for optional elements
 
 	tests := []struct {
 		name    string

@@ -10,8 +10,8 @@ func setupTestReport(t *testing.T) string {
 	tmpDir := t.TempDir()
 
 	// Create directory structure
-	os.MkdirAll(filepath.Join(tmpDir, "flows"), 0755)
-	os.MkdirAll(filepath.Join(tmpDir, "assets", "flow-000"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "flows"), 0o755)
+	os.MkdirAll(filepath.Join(tmpDir, "assets", "flow-000"), 0o755)
 
 	// Create index
 	index := &Index{
@@ -198,7 +198,7 @@ func TestReadReport(t *testing.T) {
 
 func TestRecover_RunningFlow(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tmpDir, "flows"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "flows"), 0o755)
 
 	// Create index with running flow
 	index := &Index{
@@ -244,7 +244,7 @@ func TestRecover_RunningFlow(t *testing.T) {
 
 func TestRecover_InterruptedFlow(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tmpDir, "flows"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "flows"), 0o755)
 
 	// Create index with running flow
 	index := &Index{
@@ -290,7 +290,7 @@ func TestRecover_InterruptedFlow(t *testing.T) {
 
 func TestRecover_MissingFlowFile(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tmpDir, "flows"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "flows"), 0o755)
 
 	// Create index with running flow but no flow file
 	index := &Index{
@@ -322,7 +322,7 @@ func TestRecover_MissingFlowFile(t *testing.T) {
 
 func TestRecover_NoChangesNeeded(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tmpDir, "flows"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "flows"), 0o755)
 
 	// Create index with completed flow
 	index := &Index{

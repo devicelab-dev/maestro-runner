@@ -10,12 +10,12 @@ import (
 
 // BuilderConfig contains configuration for building the report skeleton.
 type BuilderConfig struct {
-	OutputDir     string     // Base output directory for reports
-	Device        Device     // Device information
-	App           App        // Application information
-	CI            *CI        // CI/CD information (optional)
-	RunnerVersion string     // Maestro runner version
-	DriverName    string     // Driver name (appium, native, detox)
+	OutputDir     string // Base output directory for reports
+	Device        Device // Device information
+	App           App    // Application information
+	CI            *CI    // CI/CD information (optional)
+	RunnerVersion string // Maestro runner version
+	DriverName    string // Driver name (appium, native, detox)
 }
 
 // BuildSkeleton creates the initial report structure from parsed flows.

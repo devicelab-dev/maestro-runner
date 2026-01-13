@@ -110,6 +110,10 @@ func TestParse_AllStepTypes(t *testing.T) {
 		{"inputText scalar", `- inputText: "hello"`, StepInputText},
 		{"inputText mapping", `- inputText: {text: hello}`, StepInputText},
 		{"inputRandom", `- inputRandom: EMAIL`, StepInputRandom},
+		{"inputRandomEmail", `- inputRandomEmail`, StepInputRandom},
+		{"inputRandomNumber", `- inputRandomNumber`, StepInputRandom},
+		{"inputRandomPersonName", `- inputRandomPersonName`, StepInputRandom},
+		{"inputRandomText", `- inputRandomText`, StepInputRandom},
 		{"eraseText scalar", `- eraseText: 5`, StepEraseText},
 		{"eraseText mapping", `- eraseText: {characters: 10}`, StepEraseText},
 		{"copyTextFrom", `- copyTextFrom: "Label"`, StepCopyTextFrom},
@@ -264,6 +268,38 @@ func TestParse_RetryWithFile(t *testing.T) {
 	}
 	if retry.Env["MODE"] != "test" {
 		t.Errorf("expected env.MODE=test, got %q", retry.Env["MODE"])
+	}
+}
+
+func TestParse_InputRandomShorthands(t *testing.T) {
+	tests := []struct {
+		name         string
+		yaml         string
+		expectedType string
+	}{
+		{"inputRandomEmail", "- inputRandomEmail", "EMAIL"},
+		{"inputRandomNumber", "- inputRandomNumber", "NUMBER"},
+		{"inputRandomPersonName", "- inputRandomPersonName", "PERSON_NAME"},
+		{"inputRandomText", "- inputRandomText", "TEXT"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			flow, err := Parse([]byte(tc.yaml), "test.yaml")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(flow.Steps) != 1 {
+				t.Fatalf("expected 1 step, got %d", len(flow.Steps))
+			}
+			step, ok := flow.Steps[0].(*InputRandomStep)
+			if !ok {
+				t.Fatalf("expected InputRandomStep, got %T", flow.Steps[0])
+			}
+			if step.DataType != tc.expectedType {
+				t.Errorf("expected DataType=%s, got %s", tc.expectedType, step.DataType)
+			}
+		})
 	}
 }
 

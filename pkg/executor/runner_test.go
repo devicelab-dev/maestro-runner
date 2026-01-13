@@ -1183,7 +1183,7 @@ name: Sub Flow
     text: "Login"
 `
 	subFlowPath := filepath.Join(tmpDir, "subflow.yaml")
-	if err := os.WriteFile(subFlowPath, []byte(subFlowContent), 0644); err != nil {
+	if err := os.WriteFile(subFlowPath, []byte(subFlowContent), 0o644); err != nil {
 		t.Fatalf("Failed to write subflow: %v", err)
 	}
 
@@ -1275,7 +1275,7 @@ name: Sub Flow
     text: OK
 `
 	subFlowPath := filepath.Join(tmpDir, "retry_flow.yaml")
-	if err := os.WriteFile(subFlowPath, []byte(subFlowContent), 0644); err != nil {
+	if err := os.WriteFile(subFlowPath, []byte(subFlowContent), 0o644); err != nil {
 		t.Fatalf("Failed to write subflow: %v", err)
 	}
 
@@ -1793,7 +1793,7 @@ name: Sub Flow
     text: OK
 `
 	subFlowPath := filepath.Join(tmpDir, "retry_flow.yaml")
-	if err := os.WriteFile(subFlowPath, []byte(subFlowContent), 0644); err != nil {
+	if err := os.WriteFile(subFlowPath, []byte(subFlowContent), 0o644); err != nil {
 		t.Fatalf("Failed to write subflow: %v", err)
 	}
 
@@ -1846,7 +1846,7 @@ name: Sub Flow
     text: OK
 `
 	subFlowPath := filepath.Join(tmpDir, "retry_flow.yaml")
-	if err := os.WriteFile(subFlowPath, []byte(subFlowContent), 0644); err != nil {
+	if err := os.WriteFile(subFlowPath, []byte(subFlowContent), 0o644); err != nil {
 		t.Fatalf("Failed to write subflow: %v", err)
 	}
 

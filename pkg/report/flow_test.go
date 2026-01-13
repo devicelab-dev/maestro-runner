@@ -31,7 +31,7 @@ func createTestFlowWriter(t *testing.T) (*FlowWriter, *IndexWriter, string) {
 	}
 
 	// Create flows directory
-	os.MkdirAll(filepath.Join(tmpDir, "flows"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "flows"), 0o755)
 
 	flowWriter := NewFlowWriter(flowDetail, tmpDir, indexWriter)
 

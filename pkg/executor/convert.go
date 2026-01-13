@@ -49,4 +49,3 @@ func commandResultToError(r *core.CommandResult) *report.Error {
 		Message: message,
 	}
 }
-
