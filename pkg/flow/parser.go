@@ -223,7 +223,9 @@ func isStepType(key string) bool {
 	switch StepType(key) {
 	case StepTapOn, StepDoubleTapOn, StepLongPressOn, StepTapOnPoint,
 		StepSwipe, StepScroll, StepScrollUntilVisible, StepBack, StepHideKeyboard,
-		StepInputText, StepInputRandom, StepEraseText, StepCopyTextFrom, StepPasteText,
+		StepInputText, StepInputRandom, StepInputRandomEmail, StepInputRandomNumber,
+		StepInputRandomPersonName, StepInputRandomText,
+		StepEraseText, StepCopyTextFrom, StepPasteText,
 		StepAssertVisible, StepAssertNotVisible, StepAssertTrue, StepAssertCondition,
 		StepAssertNoDefectsWithAI, StepAssertWithAI, StepExtractTextWithAI, StepWaitUntil,
 		StepLaunchApp, StepStopApp, StepKillApp, StepClearState, StepClearKeychain,
@@ -333,6 +335,30 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 		}
 		s.StepType = stepType
 		return &s, nil
+
+	case StepInputRandomEmail:
+		return &InputRandomStep{
+			BaseStep: BaseStep{StepType: StepInputRandom},
+			DataType: "EMAIL",
+		}, nil
+
+	case StepInputRandomNumber:
+		return &InputRandomStep{
+			BaseStep: BaseStep{StepType: StepInputRandom},
+			DataType: "NUMBER",
+		}, nil
+
+	case StepInputRandomPersonName:
+		return &InputRandomStep{
+			BaseStep: BaseStep{StepType: StepInputRandom},
+			DataType: "PERSON_NAME",
+		}, nil
+
+	case StepInputRandomText:
+		return &InputRandomStep{
+			BaseStep: BaseStep{StepType: StepInputRandom},
+			DataType: "TEXT",
+		}, nil
 
 	case StepEraseText:
 		var s EraseTextStep

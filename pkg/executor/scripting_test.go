@@ -140,7 +140,7 @@ func TestExpandDollarVar(t *testing.T) {
 		{"Hello $USER", "USER", "admin", "Hello admin"},
 		{"$USER", "USER", "admin", "admin"},
 		{"$USER!", "USER", "admin", "admin!"},
-		{"$USERNAME", "USER", "admin", "$USERNAME"}, // Should NOT match
+		{"$USERNAME", "USER", "admin", "$USERNAME"},   // Should NOT match
 		{"$USER_NAME", "USER", "admin", "$USER_NAME"}, // Should NOT match
 	}
 
@@ -376,7 +376,7 @@ func TestScriptEngine_ExecuteRunScript_File(t *testing.T) {
 	// Create temp script file
 	tmpDir := t.TempDir()
 	scriptPath := filepath.Join(tmpDir, "test.js")
-	err := os.WriteFile(scriptPath, []byte("output.fromFile = 'yes'"), 0644)
+	err := os.WriteFile(scriptPath, []byte("output.fromFile = 'yes'"), 0o644)
 	if err != nil {
 		t.Fatalf("Failed to create test script: %v", err)
 	}

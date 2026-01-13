@@ -19,11 +19,11 @@ type AndroidDevice struct {
 
 // DeviceInfo contains basic device information.
 type DeviceInfo struct {
-	Serial      string
-	Model       string
-	SDK         string
-	Brand       string
-	IsEmulator  bool
+	Serial     string
+	Model      string
+	SDK        string
+	Brand      string
+	IsEmulator bool
 }
 
 // New creates an AndroidDevice for the given serial.

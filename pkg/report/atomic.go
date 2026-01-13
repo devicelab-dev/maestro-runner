@@ -16,14 +16,14 @@ func atomicWriteJSON(path string, v interface{}) error {
 		return err
 	}
 
-	return atomicWriteFile(path, data, 0644)
+	return atomicWriteFile(path, data, 0o644)
 }
 
 // atomicWriteFile writes data to a file atomically.
 func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	// Ensure directory exists
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 
@@ -44,5 +44,5 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 
 // ensureDir creates a directory if it doesn't exist.
 func ensureDir(path string) error {
-	return os.MkdirAll(path, 0755)
+	return os.MkdirAll(path, 0o755)
 }

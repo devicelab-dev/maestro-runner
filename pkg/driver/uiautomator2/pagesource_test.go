@@ -575,8 +575,8 @@ func TestSortByDistanceY(t *testing.T) {
 
 func TestSortByDistanceYReverse(t *testing.T) {
 	elements := []*ParsedElement{
-		{Text: "Far", Bounds: core.Bounds{Y: 0, Height: 50}},   // bottom at 50
-		{Text: "Near", Bounds: core.Bounds{Y: 80, Height: 50}}, // bottom at 130
+		{Text: "Far", Bounds: core.Bounds{Y: 0, Height: 50}},     // bottom at 50
+		{Text: "Near", Bounds: core.Bounds{Y: 80, Height: 50}},   // bottom at 130
 		{Text: "Middle", Bounds: core.Bounds{Y: 40, Height: 50}}, // bottom at 90
 	}
 

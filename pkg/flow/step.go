@@ -18,11 +18,15 @@ const (
 	StepHideKeyboard       StepType = "hideKeyboard"
 
 	// Text
-	StepInputText    StepType = "inputText"
-	StepInputRandom  StepType = "inputRandom"
-	StepEraseText    StepType = "eraseText"
-	StepCopyTextFrom StepType = "copyTextFrom"
-	StepPasteText    StepType = "pasteText"
+	StepInputText             StepType = "inputText"
+	StepInputRandom           StepType = "inputRandom"
+	StepInputRandomEmail      StepType = "inputRandomEmail"      // Shorthand for inputRandom: EMAIL
+	StepInputRandomNumber     StepType = "inputRandomNumber"     // Shorthand for inputRandom: NUMBER
+	StepInputRandomPersonName StepType = "inputRandomPersonName" // Shorthand for inputRandom: PERSON_NAME
+	StepInputRandomText       StepType = "inputRandomText"       // Shorthand for inputRandom: TEXT
+	StepEraseText             StepType = "eraseText"
+	StepCopyTextFrom          StepType = "copyTextFrom"
+	StepPasteText             StepType = "pasteText"
 
 	// Assertions
 	StepAssertVisible         StepType = "assertVisible"

@@ -16,9 +16,9 @@ func TestMapDirection(t *testing.T) {
 		{"down", "down"},
 		{"left", "left"},
 		{"right", "right"},
-		{"UP", "down"},   // unknown, defaults to down
+		{"UP", "down"},      // unknown, defaults to down
 		{"invalid", "down"}, // unknown, defaults to down
-		{"", "down"},     // empty, defaults to down
+		{"", "down"},        // empty, defaults to down
 	}
 
 	for _, tt := range tests {
@@ -391,6 +391,66 @@ func TestSetOrientationError(t *testing.T) {
 
 	if result.Success {
 		t.Error("expected failure when orientation fails")
+	}
+}
+
+func TestSetOrientationLandscapeLeft(t *testing.T) {
+	shell := &MockShellExecutor{}
+	driver := &Driver{device: shell}
+	step := &flow.SetOrientationStep{Orientation: "LANDSCAPE_LEFT"}
+
+	result := driver.setOrientation(step)
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	// Should have 2 shell commands: disable accelerometer, set rotation
+	if len(shell.commands) != 2 {
+		t.Errorf("expected 2 shell commands, got %d", len(shell.commands))
+	}
+	if shell.commands[1] != "settings put system user_rotation 1" {
+		t.Errorf("expected user_rotation 1, got %s", shell.commands[1])
+	}
+}
+
+func TestSetOrientationLandscapeRight(t *testing.T) {
+	shell := &MockShellExecutor{}
+	driver := &Driver{device: shell}
+	step := &flow.SetOrientationStep{Orientation: "LANDSCAPE_RIGHT"}
+
+	result := driver.setOrientation(step)
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	if shell.commands[1] != "settings put system user_rotation 3" {
+		t.Errorf("expected user_rotation 3, got %s", shell.commands[1])
+	}
+}
+
+func TestSetOrientationUpsideDown(t *testing.T) {
+	shell := &MockShellExecutor{}
+	driver := &Driver{device: shell}
+	step := &flow.SetOrientationStep{Orientation: "UPSIDE_DOWN"}
+
+	result := driver.setOrientation(step)
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	if shell.commands[1] != "settings put system user_rotation 2" {
+		t.Errorf("expected user_rotation 2, got %s", shell.commands[1])
+	}
+}
+
+func TestSetOrientationExtendedNoDevice(t *testing.T) {
+	driver := &Driver{client: &MockUIA2Client{}}
+	step := &flow.SetOrientationStep{Orientation: "LANDSCAPE_LEFT"}
+
+	result := driver.setOrientation(step)
+
+	if result.Success {
+		t.Error("expected failure when device is nil for extended orientation")
 	}
 }
 

@@ -49,7 +49,7 @@ func GenerateHTML(reportDir string, cfg HTMLConfig) error {
 	}
 
 	// Write file
-	if err := os.WriteFile(cfg.OutputPath, []byte(html), 0644); err != nil {
+	if err := os.WriteFile(cfg.OutputPath, []byte(html), 0o644); err != nil {
 		return fmt.Errorf("write html: %w", err)
 	}
 

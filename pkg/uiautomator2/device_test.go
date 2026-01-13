@@ -399,7 +399,7 @@ func TestGetSettings(t *testing.T) {
 		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"value": map[string]interface{}{
-				"waitForIdleTimeout": 10000,
+				"waitForIdleTimeout":     10000,
 				"waitForSelectorTimeout": 5000,
 			},
 		})

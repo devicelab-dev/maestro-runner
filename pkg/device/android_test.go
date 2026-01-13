@@ -416,7 +416,7 @@ func TestAndroidDevice_adb_Error(t *testing.T) {
 	}
 
 	// Run invalid shell command
-	_, err = device.Shell("exit 1")
+	_, _ = device.Shell("exit 1")
 	// This might or might not error depending on shell behavior
 	// Just ensure it doesn't panic
 }

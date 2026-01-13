@@ -38,17 +38,17 @@ func (s Status) IsTerminal() bool {
 // Index is the main report file that binds everything together.
 // It contains minimal info for efficient polling and change detection.
 type Index struct {
-	Version       string     `json:"version"`
-	UpdateSeq     uint64     `json:"updateSeq"`
-	Status        Status     `json:"status"`
-	StartTime     time.Time  `json:"startTime"`
-	EndTime       *time.Time `json:"endTime,omitempty"`
-	LastUpdated   time.Time  `json:"lastUpdated"`
-	Device        Device     `json:"device"`
-	App           App        `json:"app"`
-	CI            *CI        `json:"ci,omitempty"`
-	MaestroRunner RunnerInfo `json:"maestroRunner"`
-	Summary       Summary    `json:"summary"`
+	Version       string      `json:"version"`
+	UpdateSeq     uint64      `json:"updateSeq"`
+	Status        Status      `json:"status"`
+	StartTime     time.Time   `json:"startTime"`
+	EndTime       *time.Time  `json:"endTime,omitempty"`
+	LastUpdated   time.Time   `json:"lastUpdated"`
+	Device        Device      `json:"device"`
+	App           App         `json:"app"`
+	CI            *CI         `json:"ci,omitempty"`
+	MaestroRunner RunnerInfo  `json:"maestroRunner"`
+	Summary       Summary     `json:"summary"`
 	Flows         []FlowEntry `json:"flows"`
 }
 
@@ -97,22 +97,22 @@ type Summary struct {
 
 // FlowEntry is the index entry for a flow (minimal info).
 type FlowEntry struct {
-	Index          int             `json:"index"`     // Original position
-	ID             string          `json:"id"`        // Unique flow ID
-	Name           string          `json:"name"`      // Display name
-	SourceFile     string          `json:"sourceFile"` // Path to YAML file
-	DataFile       string          `json:"dataFile"`   // Path to flow detail JSON
-	AssetsDir      string          `json:"assetsDir"`  // Path to assets directory
-	Status         Status          `json:"status"`
-	UpdateSeq      uint64          `json:"updateSeq"`
-	StartTime      *time.Time      `json:"startTime,omitempty"`
-	EndTime        *time.Time      `json:"endTime,omitempty"`
-	Duration       *int64          `json:"duration,omitempty"` // milliseconds
-	LastUpdated    *time.Time      `json:"lastUpdated,omitempty"`
-	Commands       CommandSummary  `json:"commands"`
-	Attempts       int             `json:"attempts"`
-	AttemptHistory []AttemptEntry  `json:"attemptHistory,omitempty"`
-	Error          *string         `json:"error,omitempty"`
+	Index          int            `json:"index"`      // Original position
+	ID             string         `json:"id"`         // Unique flow ID
+	Name           string         `json:"name"`       // Display name
+	SourceFile     string         `json:"sourceFile"` // Path to YAML file
+	DataFile       string         `json:"dataFile"`   // Path to flow detail JSON
+	AssetsDir      string         `json:"assetsDir"`  // Path to assets directory
+	Status         Status         `json:"status"`
+	UpdateSeq      uint64         `json:"updateSeq"`
+	StartTime      *time.Time     `json:"startTime,omitempty"`
+	EndTime        *time.Time     `json:"endTime,omitempty"`
+	Duration       *int64         `json:"duration,omitempty"` // milliseconds
+	LastUpdated    *time.Time     `json:"lastUpdated,omitempty"`
+	Commands       CommandSummary `json:"commands"`
+	Attempts       int            `json:"attempts"`
+	AttemptHistory []AttemptEntry `json:"attemptHistory,omitempty"`
+	Error          *string        `json:"error,omitempty"`
 }
 
 // CommandSummary contains command counts for a flow.
