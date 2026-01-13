@@ -158,7 +158,10 @@ func (se *ScriptEngine) RunScript(script string, env map[string]string) error {
 
 // EvalCondition evaluates a script condition and returns true/false.
 func (se *ScriptEngine) EvalCondition(script string) (bool, error) {
-	script = se.ExpandVariables(script)
+	// Extract JS from ${...} wrapper if present
+	script = extractJS(script)
+	// Expand any remaining $VAR style variables
+	script = se.expandDollarVars(script)
 	result, err := se.js.Eval(script)
 	if err != nil {
 		return false, err
@@ -236,7 +239,8 @@ func (se *ScriptEngine) ExecuteRunScript(step *flow.RunScriptStep) *core.Command
 
 // ExecuteEvalScript handles evalScript step.
 func (se *ScriptEngine) ExecuteEvalScript(step *flow.EvalScriptStep) *core.CommandResult {
-	if err := se.RunScript(step.Script, nil); err != nil {
+	script := extractJS(step.Script)
+	if err := se.js.RunScript(script); err != nil {
 		return &core.CommandResult{
 			Success: false,
 			Error:   err,
@@ -244,10 +248,42 @@ func (se *ScriptEngine) ExecuteEvalScript(step *flow.EvalScriptStep) *core.Comma
 		}
 	}
 
+	// Sync output back to variables
+	se.SyncOutputToVariables()
+
 	return &core.CommandResult{
 		Success: true,
 		Message: "Eval completed",
 	}
+}
+
+// extractJS extracts JavaScript from ${...} wrapper if present.
+// Maestro uses ${...} syntax to indicate JavaScript expressions.
+func extractJS(script string) string {
+	script = strings.TrimSpace(script)
+	if strings.HasPrefix(script, "${") && strings.HasSuffix(script, "}") {
+		return script[2 : len(script)-1]
+	}
+	return script
+}
+
+// expandDollarVars expands $VAR syntax (without braces) using stored variables.
+func (se *ScriptEngine) expandDollarVars(text string) string {
+	// Sort by length (longest first) to avoid partial matches
+	names := make([]string, 0, len(se.variables))
+	for name := range se.variables {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		return len(names[i]) > len(names[j])
+	})
+
+	for _, name := range names {
+		value := se.variables[name]
+		text = expandDollarVar(text, name, value)
+	}
+
+	return text
 }
 
 // ExecuteAssertTrue handles assertTrue step.
