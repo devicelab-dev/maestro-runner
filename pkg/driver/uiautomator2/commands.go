@@ -16,7 +16,7 @@ import (
 // ============================================================================
 
 func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
-	elem, info, err := d.findElement(step.Selector, step.IsOptional())
+	elem, info, err := d.findElement(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Element not found: %v", err))
 	}
@@ -37,7 +37,7 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 }
 
 func (d *Driver) doubleTapOn(step *flow.DoubleTapOnStep) *core.CommandResult {
-	elem, info, err := d.findElement(step.Selector, step.IsOptional())
+	elem, info, err := d.findElement(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Element not found: %v", err))
 	}
@@ -58,7 +58,7 @@ func (d *Driver) doubleTapOn(step *flow.DoubleTapOnStep) *core.CommandResult {
 }
 
 func (d *Driver) longPressOn(step *flow.LongPressOnStep) *core.CommandResult {
-	elem, info, err := d.findElement(step.Selector, step.IsOptional())
+	elem, info, err := d.findElement(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Element not found: %v", err))
 	}
@@ -93,7 +93,7 @@ func (d *Driver) tapOnPoint(step *flow.TapOnPointStep) *core.CommandResult {
 // ============================================================================
 
 func (d *Driver) assertVisible(step *flow.AssertVisibleStep) *core.CommandResult {
-	elem, info, err := d.findElement(step.Selector, step.IsOptional())
+	elem, info, err := d.findElement(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Element not visible: %v", err))
 	}
@@ -144,7 +144,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 
 	// If selector provided, find element and type into it
 	if !step.Selector.IsEmpty() {
-		elem, _, err := d.findElement(step.Selector, step.IsOptional())
+		elem, _, err := d.findElement(step.Selector, step.IsOptional(), step.TimeoutMs)
 		if err != nil {
 			return errorResult(err, fmt.Sprintf("Element not found: %v", err))
 		}
@@ -258,7 +258,7 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 
 	for i := 0; i < maxScrolls; i++ {
 		// Try to find element (use short timeout since we're polling)
-		elem, info, err := d.findElement(step.Selector, true)
+		elem, info, err := d.findElement(step.Selector, true, 0)
 		if err == nil {
 			displayed, _ := elem.IsDisplayed()
 			if displayed {
@@ -414,7 +414,7 @@ func (d *Driver) killApp(step *flow.KillAppStep) *core.CommandResult {
 // ============================================================================
 
 func (d *Driver) copyTextFrom(step *flow.CopyTextFromStep) *core.CommandResult {
-	elem, info, err := d.findElement(step.Selector, step.IsOptional())
+	elem, info, err := d.findElement(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Element not found: %v", err))
 	}

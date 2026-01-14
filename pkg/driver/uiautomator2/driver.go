@@ -223,16 +223,20 @@ func (d *Driver) GetPlatformInfo() *core.PlatformInfo {
 // findElement finds an element using a selector with client-side polling.
 // Tries multiple locator strategies in order until one succeeds.
 // For relative selectors or regex patterns, uses page source parsing.
-// Uses 17s timeout for required elements, 7s for optional (configurable via SetFindTimeout).
-func (d *Driver) findElement(sel flow.Selector, optional bool) (*uiautomator2.Element, *core.ElementInfo, error) {
-	timeoutMs := DefaultFindTimeout
-	if d.findTimeout > 0 {
-		timeoutMs = d.findTimeout
-	}
-	if optional {
+// If stepTimeoutMs > 0, uses that; otherwise uses 17s for required, 7s for optional.
+func (d *Driver) findElement(sel flow.Selector, optional bool, stepTimeoutMs int) (*uiautomator2.Element, *core.ElementInfo, error) {
+	var timeoutMs int
+	if stepTimeoutMs > 0 {
+		timeoutMs = stepTimeoutMs
+	} else if optional {
 		timeoutMs = OptionalFindTimeout
 		if d.optionalFindTimeout > 0 {
 			timeoutMs = d.optionalFindTimeout
+		}
+	} else {
+		timeoutMs = DefaultFindTimeout
+		if d.findTimeout > 0 {
+			timeoutMs = d.findTimeout
 		}
 	}
 	timeout := time.Duration(timeoutMs) * time.Millisecond
@@ -372,7 +376,7 @@ func (d *Driver) findElementRelative(sel flow.Selector, timeoutMs int) (*uiautom
 
 	// Find anchor if needed (not needed for containsDescendants)
 	if anchorSelector != nil {
-		_, anchorInfo, err := d.findElement(*anchorSelector, false)
+		_, anchorInfo, err := d.findElement(*anchorSelector, false, 0)
 		if err != nil {
 			return nil, nil, fmt.Errorf("anchor element not found: %w", err)
 		}
