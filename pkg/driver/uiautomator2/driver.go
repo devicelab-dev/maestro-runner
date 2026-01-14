@@ -282,16 +282,21 @@ func (d *Driver) findElement(sel flow.Selector, optional bool) (*uiautomator2.El
 
 // findElementQuick finds an element without polling (single attempt).
 // Used by waitUntil which has its own polling loop, and assertNotVisible.
-func (d *Driver) findElementQuick(sel flow.Selector) (*uiautomator2.Element, *core.ElementInfo, error) {
+// If timeoutMs is 0, uses QuickFindTimeout (1s) as default.
+func (d *Driver) findElementQuick(sel flow.Selector, timeoutMs int) (*uiautomator2.Element, *core.ElementInfo, error) {
+	if timeoutMs <= 0 {
+		timeoutMs = QuickFindTimeout
+	}
+
 	if sel.HasRelativeSelector() {
-		return d.findElementRelative(sel, 1000) // Short timeout for relative
+		return d.findElementRelative(sel, timeoutMs)
 	}
 
 	if sel.Width > 0 || sel.Height > 0 {
-		return d.findElementByPageSource(sel, 1000) // Size requires page source
+		return d.findElementByPageSource(sel, timeoutMs)
 	}
 
-	strategies, err := buildSelectors(sel, 1000)
+	strategies, err := buildSelectors(sel, timeoutMs)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -540,6 +545,7 @@ type LocatorStrategy struct {
 const (
 	DefaultFindTimeout  = 17000 // 17 seconds for required elements
 	OptionalFindTimeout = 7000  // 7 seconds for optional elements
+	QuickFindTimeout    = 1000  // 1 second for quick checks (assertNotVisible, waitUntil)
 )
 
 // buildSelectors converts a Maestro Selector to UIAutomator2 locator strategies.

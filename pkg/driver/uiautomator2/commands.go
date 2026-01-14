@@ -120,9 +120,10 @@ func (d *Driver) assertVisible(step *flow.AssertVisibleStep) *core.CommandResult
 }
 
 func (d *Driver) assertNotVisible(step *flow.AssertNotVisibleStep) *core.CommandResult {
-	// For negative assertions, use quick check - don't wait for timeout
+	// For negative assertions, use quick check - don't wait for full timeout
 	// Element not existing = success, so we should fail fast
-	_, _, err := d.findElementQuick(step.Selector)
+	// Respects step timeout if configured, otherwise uses QuickFindTimeout (1s)
+	_, _, err := d.findElementQuick(step.Selector, step.TimeoutMs)
 	if err != nil {
 		// Element not found = not visible = success
 		return successResult("Element is not visible", nil)
@@ -637,16 +638,16 @@ func (d *Driver) waitUntil(step *flow.WaitUntilStep) *core.CommandResult {
 
 	for time.Since(start) < timeout {
 		if step.Visible != nil {
-			// Wait until element is visible - use quick find (no polling)
-			elem, info, err := d.findElementQuick(*step.Visible)
+			// Wait until element is visible - use quick find (no polling, default 1s timeout)
+			elem, info, err := d.findElementQuick(*step.Visible, 0)
 			if err == nil && elem != nil {
 				if displayed, _ := elem.IsDisplayed(); displayed {
 					return successResult("Element is now visible", info)
 				}
 			}
 		} else if step.NotVisible != nil {
-			// Wait until element is not visible - use quick find (no polling)
-			_, _, err := d.findElementQuick(*step.NotVisible)
+			// Wait until element is not visible - use quick find (no polling, default 1s timeout)
+			_, _, err := d.findElementQuick(*step.NotVisible, 0)
 			if err != nil {
 				// Element not found = not visible
 				return successResult("Element is no longer visible", nil)
