@@ -43,6 +43,9 @@ func (fr *FlowRunner) Run() FlowResult {
 	fr.script = NewScriptEngine()
 	defer fr.script.Close()
 
+	// Import system environment variables
+	fr.script.ImportSystemEnv()
+
 	// Set flow directory for relative path resolution
 	if fr.flow.SourcePath != "" {
 		fr.script.SetFlowDir(filepath.Dir(fr.flow.SourcePath))
@@ -225,6 +228,30 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 			s.AppID = fr.flow.Config.AppID
 		}
 		result = fr.driver.Execute(step)
+
+	// CopyTextFrom - delegate to driver and sync copied text to script engine
+	case *flow.CopyTextFromStep:
+		result = fr.driver.Execute(step)
+		if result.Success && result.Data != nil {
+			if text, ok := result.Data.(string); ok {
+				fr.script.SetCopiedText(text)
+			}
+		}
+
+	// PasteText - use in-memory copiedText first, clipboard as fallback
+	case *flow.PasteTextStep:
+		text := fr.script.GetCopiedText()
+		if text != "" {
+			// Use stored copiedText (like Maestro does)
+			inputStep := &flow.InputTextStep{Text: text}
+			result = fr.driver.Execute(inputStep)
+			if result.Success {
+				result.Message = fmt.Sprintf("Pasted text: %s", text)
+			}
+		} else {
+			// Fallback to clipboard
+			result = fr.driver.Execute(step)
+		}
 
 	// All other steps - delegate to driver
 	default:
@@ -469,6 +496,16 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 		result = fr.executeRetry(s)
 	case *flow.RunFlowStep:
 		result = fr.executeRunFlow(s)
+	case *flow.CopyTextFromStep:
+		// Expand variables before driver execution
+		fr.script.ExpandStep(step)
+		result = fr.driver.Execute(step)
+		// Sync copied text to script engine
+		if result.Success && result.Data != nil {
+			if text, ok := result.Data.(string); ok {
+				fr.script.SetCopiedText(text)
+			}
+		}
 	default:
 		// Expand variables before driver execution
 		fr.script.ExpandStep(step)
