@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +14,9 @@ import (
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
 	"github.com/devicelab-dev/maestro-runner/pkg/jsengine"
 )
+
+// envVarPattern matches ALL_CAPS identifiers that look like env variables
+var envVarPattern = regexp.MustCompile(`\b([A-Z][A-Z0-9_]{2,})\b`)
 
 // ScriptEngine handles JavaScript execution and variable management.
 type ScriptEngine struct {
@@ -54,6 +58,22 @@ func (se *ScriptEngine) SetVariables(vars map[string]string) {
 	}
 }
 
+// ImportSystemEnv imports system environment variables into the script engine.
+// Only imports variables matching the pattern (uppercase with underscores).
+func (se *ScriptEngine) ImportSystemEnv() {
+	for _, env := range os.Environ() {
+		parts := strings.SplitN(env, "=", 2)
+		if len(parts) == 2 {
+			name := parts[0]
+			value := parts[1]
+			// Import if it matches env var pattern (uppercase like THING, MY_VAR)
+			if envVarPattern.MatchString(name) {
+				se.SetVariable(name, value)
+			}
+		}
+	}
+}
+
 // GetVariable returns a variable value.
 func (se *ScriptEngine) GetVariable(name string) string {
 	return se.variables[name]
@@ -67,6 +87,11 @@ func (se *ScriptEngine) SetPlatform(platform string) {
 // SetCopiedText sets the copied text in the JS engine.
 func (se *ScriptEngine) SetCopiedText(text string) {
 	se.js.SetCopiedText(text)
+}
+
+// GetCopiedText returns the stored copied text.
+func (se *ScriptEngine) GetCopiedText() string {
+	return se.js.GetCopiedText()
 }
 
 // GetOutput returns the JS output variables.
@@ -146,6 +171,13 @@ func (se *ScriptEngine) RunScript(script string, env map[string]string) error {
 		se.SetVariable(k, v)
 	}
 
+	// Pre-define potential env variables as undefined to avoid ReferenceError.
+	// This matches Maestro's behavior where undefined variables are falsy rather than errors.
+	matches := envVarPattern.FindAllString(script, -1)
+	for _, name := range matches {
+		se.js.DefineUndefinedIfMissing(name)
+	}
+
 	// Execute script
 	if err := se.js.RunScript(script); err != nil {
 		return err
@@ -162,6 +194,13 @@ func (se *ScriptEngine) EvalCondition(script string) (bool, error) {
 	script = extractJS(script)
 	// Expand any remaining $VAR style variables
 	script = se.expandDollarVars(script)
+
+	// Pre-define potential env variables as undefined to avoid ReferenceError
+	matches := envVarPattern.FindAllString(script, -1)
+	for _, name := range matches {
+		se.js.DefineUndefinedIfMissing(name)
+	}
+
 	result, err := se.js.Eval(script)
 	if err != nil {
 		return false, err
@@ -207,7 +246,7 @@ func (se *ScriptEngine) ExecuteDefineVariables(step *flow.DefineVariablesStep) *
 
 // ExecuteRunScript handles runScript step.
 func (se *ScriptEngine) ExecuteRunScript(step *flow.RunScriptStep) *core.CommandResult {
-	script := step.Script
+	script := step.ScriptPath()
 
 	// Check if it's a file path (ends with .js)
 	if strings.HasSuffix(script, ".js") {

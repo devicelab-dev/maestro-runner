@@ -276,6 +276,13 @@ func (e *Engine) SetCopiedText(text string) {
 	e.copiedText = text
 }
 
+// GetCopiedText returns the stored copiedText value
+func (e *Engine) GetCopiedText() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.copiedText
+}
+
 // SetPlatform sets the current platform
 func (e *Engine) SetPlatform(platform string) {
 	e.mu.Lock()
@@ -348,6 +355,22 @@ func (e *Engine) RunScript(script string) error {
 	}
 
 	return nil
+}
+
+// DefineUndefinedIfMissing defines a variable as undefined if it's not already defined.
+// This prevents ReferenceError when scripts reference variables that may not exist.
+func (e *Engine) DefineUndefinedIfMissing(name string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Check if already defined
+	val := e.runtime.Get(name)
+	if val == nil || goja.IsUndefined(val) {
+		// Only set if not already defined (nil means not set at all)
+		if _, exists := e.variables[name]; !exists {
+			e.runtime.Set(name, goja.Undefined())
+		}
+	}
 }
 
 // ExpandVariables expands ${...} expressions in a string using JS evaluation

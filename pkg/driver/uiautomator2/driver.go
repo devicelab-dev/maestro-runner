@@ -47,6 +47,7 @@ type UIA2Client interface {
 	SetOrientation(orientation string) error
 	GetClipboard() (string, error)
 	SetClipboard(text string) error
+	GetDeviceInfo() (*uiautomator2.DeviceInfo, error)
 }
 
 // Driver implements core.Driver using UIAutomator2.
@@ -264,12 +265,21 @@ func (d *Driver) findElement(sel flow.Selector, optional bool, stepTimeoutMs int
 	var lastErr error
 
 	for {
-		// Try each strategy
+		// Try UiAutomator strategies first
 		elem, info, err := d.tryFindElement(strategies)
 		if err == nil {
 			return elem, info, nil
 		}
 		lastErr = err
+
+		// For text-based selectors, also try page source matching as fallback
+		// This catches hint text and other attributes UiAutomator doesn't expose directly
+		if sel.Text != "" {
+			_, info, err := d.findElementByPageSourceOnce(sel)
+			if err == nil {
+				return nil, info, nil
+			}
+		}
 
 		// Check if we've exceeded timeout
 		if time.Now().After(deadline) {
@@ -353,52 +363,73 @@ func (d *Driver) tryFindElement(strategies []LocatorStrategy) (*uiautomator2.Ele
 	return nil, nil, fmt.Errorf("element not found")
 }
 
+// relativeFilterType identifies which relative filter to apply
+type relativeFilterType int
+
+const (
+	filterNone relativeFilterType = iota
+	filterBelow
+	filterAbove
+	filterLeftOf
+	filterRightOf
+	filterChildOf
+	filterContainsChild
+)
+
+// getRelativeFilter returns the anchor selector and filter type from a selector
+func getRelativeFilter(sel flow.Selector) (*flow.Selector, relativeFilterType) {
+	switch {
+	case sel.Below != nil:
+		return sel.Below, filterBelow
+	case sel.Above != nil:
+		return sel.Above, filterAbove
+	case sel.LeftOf != nil:
+		return sel.LeftOf, filterLeftOf
+	case sel.RightOf != nil:
+		return sel.RightOf, filterRightOf
+	case sel.ChildOf != nil:
+		return sel.ChildOf, filterChildOf
+	case sel.ContainsChild != nil:
+		return sel.ContainsChild, filterContainsChild
+	default:
+		return nil, filterNone
+	}
+}
+
+// applyRelativeFilter applies the appropriate position filter based on filter type
+func applyRelativeFilter(candidates []*ParsedElement, anchor *ParsedElement, filterType relativeFilterType) []*ParsedElement {
+	switch filterType {
+	case filterBelow:
+		return FilterBelow(candidates, anchor)
+	case filterAbove:
+		return FilterAbove(candidates, anchor)
+	case filterLeftOf:
+		return FilterLeftOf(candidates, anchor)
+	case filterRightOf:
+		return FilterRightOf(candidates, anchor)
+	case filterChildOf:
+		return FilterChildOf(candidates, anchor)
+	case filterContainsChild:
+		return FilterContainsChild(candidates, anchor)
+	default:
+		return candidates
+	}
+}
+
 // findElementRelative handles relative selectors (below, above, leftOf, rightOf, childOf, containsChild, containsDescendants).
-// Uses page source XML parsing to find elements by position.
+// Uses page source XML parsing to find elements by position with polling/retry.
+// When multiple anchor elements exist, tries each anchor to find a valid match.
 func (d *Driver) findElementRelative(sel flow.Selector, timeoutMs int) (*uiautomator2.Element, *core.ElementInfo, error) {
-	// Step 1: Find anchor element (if position-based relative selector)
-	var anchorSelector *flow.Selector
-	var anchor *ParsedElement
-
-	if sel.Below != nil {
-		anchorSelector = sel.Below
-	} else if sel.Above != nil {
-		anchorSelector = sel.Above
-	} else if sel.LeftOf != nil {
-		anchorSelector = sel.LeftOf
-	} else if sel.RightOf != nil {
-		anchorSelector = sel.RightOf
-	} else if sel.ChildOf != nil {
-		anchorSelector = sel.ChildOf
-	} else if sel.ContainsChild != nil {
-		anchorSelector = sel.ContainsChild
+	timeout := time.Duration(timeoutMs) * time.Millisecond
+	if timeout <= 0 {
+		timeout = DefaultFindTimeout
 	}
+	deadline := time.Now().Add(timeout)
 
-	// Find anchor if needed (not needed for containsDescendants)
-	if anchorSelector != nil {
-		_, anchorInfo, err := d.findElement(*anchorSelector, false, 0)
-		if err != nil {
-			return nil, nil, fmt.Errorf("anchor element not found: %w", err)
-		}
-		anchor = &ParsedElement{
-			Bounds: anchorInfo.Bounds,
-			Text:   anchorInfo.Text,
-		}
-	}
+	// Get anchor selector and filter type
+	anchorSelector, filterType := getRelativeFilter(sel)
 
-	// Step 2: Get page source
-	pageSource, err := d.client.Source()
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get page source: %w", err)
-	}
-
-	// Step 3: Parse all elements
-	allElements, err := ParsePageSource(pageSource)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse page source: %w", err)
-	}
-
-	// Step 4: Filter by base selector (text, id, size, etc. without relative parts)
+	// Build base selector for filtering
 	baseSel := flow.Selector{
 		Text:      sel.Text,
 		ID:        sel.ID,
@@ -411,31 +442,96 @@ func (d *Driver) findElementRelative(sel flow.Selector, timeoutMs int) (*uiautom
 		Checked:   sel.Checked,
 	}
 
+	var lastErr error
 	var candidates []*ParsedElement
-	if baseSel.Text != "" || baseSel.ID != "" || baseSel.Width > 0 || baseSel.Height > 0 {
-		candidates = FilterBySelector(allElements, baseSel)
-	} else {
-		candidates = allElements
-	}
 
-	// Step 5: Apply relative position filter
-	if sel.Below != nil && anchor != nil {
-		candidates = FilterBelow(candidates, anchor)
-	} else if sel.Above != nil && anchor != nil {
-		candidates = FilterAbove(candidates, anchor)
-	} else if sel.LeftOf != nil && anchor != nil {
-		candidates = FilterLeftOf(candidates, anchor)
-	} else if sel.RightOf != nil && anchor != nil {
-		candidates = FilterRightOf(candidates, anchor)
-	} else if sel.ChildOf != nil && anchor != nil {
-		candidates = FilterChildOf(candidates, anchor)
-	} else if sel.ContainsChild != nil && anchor != nil {
-		candidates = FilterContainsChild(candidates, anchor)
-	}
+	for {
+		// Get page source
+		pageSource, err := d.client.Source()
+		if err != nil {
+			lastErr = fmt.Errorf("failed to get page source: %w", err)
+			if time.Now().After(deadline) {
+				return nil, nil, lastErr
+			}
+			continue
+		}
 
-	// Step 5b: Apply containsDescendants filter
-	if len(sel.ContainsDescendants) > 0 {
-		candidates = FilterContainsDescendants(candidates, allElements, sel.ContainsDescendants)
+		// Parse all elements
+		allElements, err := ParsePageSource(pageSource)
+		if err != nil {
+			lastErr = fmt.Errorf("failed to parse page source: %w", err)
+			if time.Now().After(deadline) {
+				return nil, nil, lastErr
+			}
+			continue
+		}
+
+		// Filter by base selector to get target candidates
+		if baseSel.Text != "" || baseSel.ID != "" || baseSel.Width > 0 || baseSel.Height > 0 {
+			candidates = FilterBySelector(allElements, baseSel)
+		} else {
+			candidates = allElements
+		}
+
+		// Find all anchor candidates from page source
+		// If anchor selector itself has a relative selector, resolve it recursively
+		var anchors []*ParsedElement
+		if anchorSelector != nil {
+			_, anchorFilterType := getRelativeFilter(*anchorSelector)
+			if anchorFilterType != filterNone {
+				// Anchor has nested relative selector - resolve recursively
+				_, anchorInfo, err := d.findElementRelativeWithElements(*anchorSelector, allElements)
+				if err == nil && anchorInfo != nil {
+					// Convert ElementInfo bounds back to a ParsedElement for filtering
+					anchors = []*ParsedElement{{
+						Text:      anchorInfo.Text,
+						Bounds:    anchorInfo.Bounds,
+						Enabled:   anchorInfo.Enabled,
+						Displayed: anchorInfo.Visible,
+					}}
+				}
+			} else {
+				// Simple anchor - use FilterBySelector
+				anchors = FilterBySelector(allElements, *anchorSelector)
+			}
+		}
+
+		// Try each anchor candidate to find matches
+		// This handles cases where multiple elements have the same text (e.g., multiple "Login" elements)
+		var matchingCandidates []*ParsedElement
+		if len(anchors) > 0 {
+			for _, anchor := range anchors {
+				filtered := applyRelativeFilter(candidates, anchor, filterType)
+				if len(filtered) > 0 {
+					matchingCandidates = filtered
+					break // Found matches with this anchor
+				}
+			}
+			candidates = matchingCandidates
+		} else if anchorSelector != nil {
+			// Anchor selector specified but no anchors found
+			lastErr = fmt.Errorf("anchor element not found")
+			if time.Now().After(deadline) {
+				return nil, nil, lastErr
+			}
+			continue
+		}
+
+		// Apply containsDescendants filter
+		if len(sel.ContainsDescendants) > 0 {
+			candidates = FilterContainsDescendants(candidates, allElements, sel.ContainsDescendants)
+		}
+
+		if len(candidates) > 0 {
+			// Found matching elements
+			break
+		}
+
+		lastErr = fmt.Errorf("no elements match relative criteria")
+		if time.Now().After(deadline) {
+			return nil, nil, lastErr
+		}
+		// Continue polling
 	}
 
 	if len(candidates) == 0 {
@@ -476,9 +572,149 @@ func (d *Driver) findElementRelative(sel flow.Selector, timeoutMs int) (*uiautom
 	return nil, info, nil
 }
 
-// findElementByPageSource finds an element using page source parsing.
-// This is used for regex pattern matching (like Maestro does) when UiAutomator's
-// textMatches is not reliable. Uses client-side regex matching on the page source.
+// findElementRelativeWithElements resolves a relative selector using pre-parsed elements.
+// Used for recursive resolution of nested relative selectors without refetching page source.
+func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements []*ParsedElement) (*uiautomator2.Element, *core.ElementInfo, error) {
+	// Get anchor selector and filter type
+	anchorSelector, filterType := getRelativeFilter(sel)
+
+	// Build base selector for filtering (without the relative part)
+	baseSel := flow.Selector{
+		Text:      sel.Text,
+		ID:        sel.ID,
+		Width:     sel.Width,
+		Height:    sel.Height,
+		Tolerance: sel.Tolerance,
+		Enabled:   sel.Enabled,
+		Selected:  sel.Selected,
+		Focused:   sel.Focused,
+		Checked:   sel.Checked,
+	}
+
+	// Filter by base selector to get target candidates
+	var candidates []*ParsedElement
+	if baseSel.Text != "" || baseSel.ID != "" || baseSel.Width > 0 || baseSel.Height > 0 {
+		candidates = FilterBySelector(allElements, baseSel)
+	} else {
+		candidates = allElements
+	}
+
+	// Find anchor elements - recursively resolve if anchor has its own relative selector
+	var anchors []*ParsedElement
+	if anchorSelector != nil {
+		_, anchorFilterType := getRelativeFilter(*anchorSelector)
+		if anchorFilterType != filterNone {
+			// Anchor has nested relative selector - resolve recursively
+			_, anchorInfo, err := d.findElementRelativeWithElements(*anchorSelector, allElements)
+			if err == nil && anchorInfo != nil {
+				anchors = []*ParsedElement{{
+					Text:      anchorInfo.Text,
+					Bounds:    anchorInfo.Bounds,
+					Enabled:   anchorInfo.Enabled,
+					Displayed: anchorInfo.Visible,
+				}}
+			}
+		} else {
+			// Simple anchor - use FilterBySelector
+			anchors = FilterBySelector(allElements, *anchorSelector)
+		}
+	}
+
+	// Try each anchor candidate to find matches
+	var matchingCandidates []*ParsedElement
+	if len(anchors) > 0 {
+		for _, anchor := range anchors {
+			filtered := applyRelativeFilter(candidates, anchor, filterType)
+			if len(filtered) > 0 {
+				matchingCandidates = filtered
+				break
+			}
+		}
+		candidates = matchingCandidates
+	} else if anchorSelector != nil {
+		return nil, nil, fmt.Errorf("anchor element not found")
+	}
+
+	// Apply containsDescendants filter
+	if len(sel.ContainsDescendants) > 0 {
+		candidates = FilterContainsDescendants(candidates, allElements, sel.ContainsDescendants)
+	}
+
+	if len(candidates) == 0 {
+		return nil, nil, fmt.Errorf("no elements match relative criteria")
+	}
+
+	// Prioritize clickable elements
+	candidates = SortClickableFirst(candidates)
+
+	// Apply index if specified, otherwise use deepest matching element
+	var selected *ParsedElement
+	if sel.Index != "" {
+		idx := 0
+		if i, err := strconv.Atoi(sel.Index); err == nil {
+			if i < 0 {
+				i = len(candidates) + i
+			}
+			if i >= 0 && i < len(candidates) {
+				idx = i
+			}
+		}
+		selected = candidates[idx]
+	} else {
+		selected = DeepestMatchingElement(candidates)
+	}
+
+	info := &core.ElementInfo{
+		Text:    selected.Text,
+		Bounds:  selected.Bounds,
+		Enabled: selected.Enabled,
+		Visible: selected.Displayed,
+	}
+
+	return nil, info, nil
+}
+
+// findElementByPageSourceOnce performs a single page source search without polling.
+// Used as a fallback when UiAutomator selectors don't find the element (e.g., hint text).
+func (d *Driver) findElementByPageSourceOnce(sel flow.Selector) (*uiautomator2.Element, *core.ElementInfo, error) {
+	pageSource, err := d.client.Source()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get page source: %w", err)
+	}
+
+	allElements, err := ParsePageSource(pageSource)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse page source: %w", err)
+	}
+
+	candidates := FilterBySelector(allElements, sel)
+	candidates = SortClickableFirst(candidates)
+
+	if len(candidates) > 0 {
+		selected := DeepestMatchingElement(candidates)
+		if selected == nil {
+			selected = candidates[0]
+		}
+
+		info := &core.ElementInfo{
+			Text: selected.Text,
+			Bounds: core.Bounds{
+				X:      selected.Bounds.X,
+				Y:      selected.Bounds.Y,
+				Width:  selected.Bounds.Width,
+				Height: selected.Bounds.Height,
+			},
+			Enabled: selected.Enabled,
+			Visible: selected.Displayed,
+		}
+		return nil, info, nil
+	}
+
+	return nil, nil, fmt.Errorf("no elements match selector")
+}
+
+// findElementByPageSource finds an element using page source parsing with polling.
+// Used for regex pattern matching and selectors requiring page source analysis.
 func (d *Driver) findElementByPageSource(sel flow.Selector, timeoutMs int) (*uiautomator2.Element, *core.ElementInfo, error) {
 	timeout := time.Duration(timeoutMs) * time.Millisecond
 	deadline := time.Now().Add(timeout)

@@ -3,6 +3,7 @@ package uiautomator2
 import (
 	"fmt"
 	"math/rand"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +17,11 @@ import (
 // ============================================================================
 
 func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
+	// Check if using percentage-based Point (e.g., "85%, 50%")
+	if step.Point != "" {
+		return d.tapOnPointWithPercentage(step.Point)
+	}
+
 	elem, info, err := d.findElement(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Element not found: %v", err))
@@ -34,6 +40,34 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 	}
 
 	return successResult("Tapped on element", info)
+}
+
+// tapOnPointWithPercentage handles percentage-based tap (e.g., "85%, 50%")
+func (d *Driver) tapOnPointWithPercentage(point string) *core.CommandResult {
+	if d.device == nil {
+		return errorResult(fmt.Errorf("device not configured"), "tapOn with percentage point requires device access")
+	}
+
+	// Get screen dimensions
+	width, height, err := d.getScreenSize()
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to get screen size: %v", err))
+	}
+
+	// Parse percentage coordinates
+	xPct, yPct, err := parsePercentageCoords(point)
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("Invalid point coordinates: %v", err))
+	}
+
+	x := int(float64(width) * xPct)
+	y := int(float64(height) * yPct)
+
+	if err := d.client.Click(x, y); err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to tap at point: %v", err))
+	}
+
+	return successResult(fmt.Sprintf("Tapped at (%d, %d)", x, y), nil)
 }
 
 func (d *Driver) doubleTapOn(step *flow.DoubleTapOnStep) *core.CommandResult {
@@ -81,11 +115,39 @@ func (d *Driver) longPressOn(step *flow.LongPressOnStep) *core.CommandResult {
 }
 
 func (d *Driver) tapOnPoint(step *flow.TapOnPointStep) *core.CommandResult {
-	if err := d.client.Click(step.X, step.Y); err != nil {
+	x, y := step.X, step.Y
+
+	// Check if using percentage-based Point (e.g., "85%, 50%")
+	if step.Point != "" {
+		if d.device == nil {
+			return errorResult(fmt.Errorf("device not configured"), "tapOn with percentage point requires device access")
+		}
+
+		// Get screen dimensions
+		width, height, err := d.getScreenSize()
+		if err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to get screen size: %v", err))
+		}
+
+		// Parse percentage coordinates
+		xPct, yPct, err := parsePercentageCoords(step.Point)
+		if err != nil {
+			return errorResult(err, fmt.Sprintf("Invalid point coordinates: %v", err))
+		}
+
+		x = int(float64(width) * xPct)
+		y = int(float64(height) * yPct)
+	}
+
+	if x == 0 && y == 0 {
+		return errorResult(fmt.Errorf("no point specified"), "Either point or x/y coordinates required")
+	}
+
+	if err := d.client.Click(x, y); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to tap at point: %v", err))
 	}
 
-	return successResult(fmt.Sprintf("Tapped at (%d, %d)", step.X, step.Y), nil)
+	return successResult(fmt.Sprintf("Tapped at (%d, %d)", x, y), nil)
 }
 
 // ============================================================================
@@ -278,6 +340,16 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 }
 
 func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
+	// Check if coordinate-based swipe (percentage or absolute)
+	if step.Start != "" && step.End != "" {
+		return d.swipeWithCoordinates(step.Start, step.End, step.Duration)
+	}
+
+	if step.StartX > 0 || step.StartY > 0 || step.EndX > 0 || step.EndY > 0 {
+		return d.swipeWithAbsoluteCoords(step.StartX, step.StartY, step.EndX, step.EndY, step.Duration)
+	}
+
+	// Direction-based swipe
 	direction := strings.ToLower(step.Direction)
 	if direction == "" {
 		direction = "up"
@@ -291,6 +363,125 @@ func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
 	}
 
 	return successResult(fmt.Sprintf("Swiped %s", direction), nil)
+}
+
+// swipeWithCoordinates handles percentage-based swipe (e.g., "50%, 15%")
+func (d *Driver) swipeWithCoordinates(start, end string, durationMs int) *core.CommandResult {
+	if d.device == nil {
+		return errorResult(fmt.Errorf("device not configured"), "swipe with coordinates requires device access")
+	}
+
+	// Get screen dimensions
+	width, height, err := d.getScreenSize()
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to get screen size: %v", err))
+	}
+
+	// Parse start coordinates
+	startXPct, startYPct, err := parsePercentageCoords(start)
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("Invalid start coordinates: %v", err))
+	}
+
+	// Parse end coordinates
+	endXPct, endYPct, err := parsePercentageCoords(end)
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("Invalid end coordinates: %v", err))
+	}
+
+	// Convert percentages to pixels
+	startX := int(float64(width) * startXPct)
+	startY := int(float64(height) * startYPct)
+	endX := int(float64(width) * endXPct)
+	endY := int(float64(height) * endYPct)
+
+	return d.swipeWithAbsoluteCoords(startX, startY, endX, endY, durationMs)
+}
+
+// swipeWithAbsoluteCoords performs swipe with absolute pixel coordinates
+func (d *Driver) swipeWithAbsoluteCoords(startX, startY, endX, endY, durationMs int) *core.CommandResult {
+	if d.device == nil {
+		return errorResult(fmt.Errorf("device not configured"), "swipe with coordinates requires device access")
+	}
+
+	// Default duration if not specified
+	if durationMs <= 0 {
+		durationMs = 300
+	}
+
+	// Use ADB shell command for coordinate swipe
+	cmd := fmt.Sprintf("input swipe %d %d %d %d %d", startX, startY, endX, endY, durationMs)
+	if _, err := d.device.Shell(cmd); err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to swipe: %v", err))
+	}
+
+	return successResult(fmt.Sprintf("Swiped from (%d,%d) to (%d,%d)", startX, startY, endX, endY), nil)
+}
+
+// getScreenSize returns the device screen dimensions (width, height)
+func (d *Driver) getScreenSize() (int, int, error) {
+	// Try to get from device info via UIAutomator2
+	if d.client != nil {
+		info, err := d.client.GetDeviceInfo()
+		if err == nil && info.RealDisplaySize != "" {
+			// Parse "1080x2400" format
+			parts := strings.Split(info.RealDisplaySize, "x")
+			if len(parts) == 2 {
+				width, err1 := strconv.Atoi(parts[0])
+				height, err2 := strconv.Atoi(parts[1])
+				if err1 == nil && err2 == nil {
+					return width, height, nil
+				}
+			}
+		}
+	}
+
+	// Fallback: use wm size command
+	output, err := d.device.Shell("wm size")
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to get screen size: %w", err)
+	}
+
+	// Parse "Physical size: 1080x2400" format
+	output = strings.TrimSpace(output)
+	if idx := strings.LastIndex(output, ":"); idx != -1 {
+		output = strings.TrimSpace(output[idx+1:])
+	}
+	parts := strings.Split(output, "x")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("unexpected wm size output: %s", output)
+	}
+
+	width, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
+	height, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err1 != nil || err2 != nil {
+		return 0, 0, fmt.Errorf("failed to parse screen size: %s", output)
+	}
+
+	return width, height, nil
+}
+
+// parsePercentageCoords parses "x%, y%" format into decimal fractions (0.0-1.0)
+func parsePercentageCoords(coord string) (float64, float64, error) {
+	parts := strings.Split(coord, ",")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("expected 'x%%, y%%' format, got: %s", coord)
+	}
+
+	xStr := strings.TrimSpace(strings.TrimSuffix(parts[0], "%"))
+	yStr := strings.TrimSpace(strings.TrimSuffix(parts[1], "%"))
+
+	xPct, err := strconv.ParseFloat(xStr, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid x percentage: %s", parts[0])
+	}
+
+	yPct, err := strconv.ParseFloat(yStr, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid y percentage: %s", parts[1])
+	}
+
+	return xPct / 100.0, yPct / 100.0, nil
 }
 
 // ============================================================================
@@ -422,12 +613,21 @@ func (d *Driver) copyTextFrom(step *flow.CopyTextFromStep) *core.CommandResult {
 	var text string
 	if elem != nil {
 		text, err = elem.Text()
+		// If text is empty, try content-desc (element may have been found via descriptionMatches)
+		if text == "" {
+			if desc, descErr := elem.Attribute("content-desc"); descErr == nil && desc != "" {
+				text = desc
+			}
+		}
 		if err != nil {
 			return errorResult(err, fmt.Sprintf("Failed to get text: %v", err))
 		}
 	} else if info != nil {
-		// Element found via page source - use text from info
+		// Element found via page source - use text from info or accessibility label
 		text = info.Text
+		if text == "" && info.AccessibilityLabel != "" {
+			text = info.AccessibilityLabel
+		}
 	}
 
 	if err := d.client.SetClipboard(text); err != nil {

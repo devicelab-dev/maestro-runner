@@ -146,6 +146,12 @@ func (m *MockUIA2Client) SetImplicitWait(timeout time.Duration) error {
 	return nil
 }
 
+func (m *MockUIA2Client) GetDeviceInfo() (*uiautomator2.DeviceInfo, error) {
+	return &uiautomator2.DeviceInfo{
+		RealDisplaySize: "1080x2400",
+	}, nil
+}
+
 // ============================================================================
 // MockShellExecutor
 // ============================================================================
@@ -2380,34 +2386,16 @@ func TestTapOnRelativeSelectorRightOf(t *testing.T) {
 }
 
 func TestTapOnRelativeSelectorChildOf(t *testing.T) {
+	// Page source must contain an element matching the ChildOf selector (ID "container")
 	pageSource := `<?xml version="1.0" encoding="UTF-8"?>
 <hierarchy>
-    <node text="" bounds="[0,0][1080,500]" class="android.widget.LinearLayout">
+    <node text="" resource-id="container" bounds="[0,0][1080,500]" class="android.widget.LinearLayout">
         <node text="ChildButton" bounds="[100,100][200,150]" class="android.widget.Button" clickable="true" />
     </node>
 </hierarchy>`
 
 	var clickCalled bool
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
-		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"value": map[string]string{"ELEMENT": "anchor-elem"},
-			})
-		},
-		"GET /element/anchor-elem/text": func(w http.ResponseWriter, r *http.Request) {
-			json.NewEncoder(w).Encode(map[string]interface{}{"value": ""})
-		},
-		"GET /element/anchor-elem/rect": func(w http.ResponseWriter, r *http.Request) {
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"value": map[string]int{"x": 0, "y": 0, "width": 1080, "height": 500},
-			})
-		},
-		"GET /element/anchor-elem/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			json.NewEncoder(w).Encode(map[string]interface{}{"value": "true"})
-		},
-		"GET /element/anchor-elem/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			json.NewEncoder(w).Encode(map[string]interface{}{"value": "true"})
-		},
 		"GET /source": func(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(map[string]interface{}{"value": pageSource})
 		},

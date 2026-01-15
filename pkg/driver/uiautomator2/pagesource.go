@@ -16,6 +16,7 @@ type ParsedElement struct {
 	Text        string
 	ResourceID  string
 	ContentDesc string
+	HintText    string // hint attribute for EditText fields
 	ClassName   string
 	Bounds      core.Bounds
 	Enabled     bool
@@ -67,6 +68,8 @@ func ParsePageSource(xmlData string) ([]*ParsedElement, error) {
 						elem.ResourceID = attr.Value
 					case "content-desc":
 						elem.ContentDesc = attr.Value
+					case "hint":
+						elem.HintText = attr.Value
 					case "class":
 						elem.ClassName = attr.Value // Override if class attr exists
 					case "bounds":
@@ -179,8 +182,9 @@ func FilterBySelector(elements []*ParsedElement, sel flow.Selector) []*ParsedEle
 
 func matchesSelector(elem *ParsedElement, sel flow.Selector) bool {
 	// Text matching - supports regex patterns and literal contains
+	// Checks text, content-desc (accessibility text), and hint text
 	if sel.Text != "" {
-		if !matchesText(sel.Text, elem.Text, elem.ContentDesc) {
+		if !matchesText(sel.Text, elem.Text, elem.ContentDesc, elem.HintText) {
 			return false
 		}
 	}
@@ -233,17 +237,19 @@ func withinTolerance(actual, expected, tolerance int) bool {
 	return diff <= tolerance
 }
 
-// matchesText checks if pattern matches the element's text or content-desc.
+// matchesText checks if pattern matches the element's text, content-desc, or hint.
 // If pattern looks like a regex (contains metacharacters), use regex matching.
 // Otherwise, use case-insensitive contains matching.
 // This matches Maestro's behavior: it checks text, hintText, and accessibilityText.
-func matchesText(pattern, text, contentDesc string) bool {
+func matchesText(pattern, text, contentDesc, hintText string) bool {
 	// Check if pattern looks like a regex
 	if looksLikeRegex(pattern) {
 		re, err := regexp.Compile("(?i)" + pattern)
 		if err != nil {
 			// Invalid regex - fall back to literal matching
-			return containsIgnoreCase(text, pattern) || containsIgnoreCase(contentDesc, pattern)
+			return containsIgnoreCase(text, pattern) ||
+				containsIgnoreCase(contentDesc, pattern) ||
+				containsIgnoreCase(hintText, pattern)
 		}
 
 		// Match against text (with newline stripping like Maestro)
@@ -262,11 +268,21 @@ func matchesText(pattern, text, contentDesc string) bool {
 			}
 		}
 
+		// Match against hint text
+		if hintText != "" {
+			strippedHint := strings.ReplaceAll(hintText, "\n", " ")
+			if re.MatchString(hintText) || re.MatchString(strippedHint) || pattern == hintText || pattern == strippedHint {
+				return true
+			}
+		}
+
 		return false
 	}
 
 	// Literal text - case-insensitive contains
-	return containsIgnoreCase(text, pattern) || containsIgnoreCase(contentDesc, pattern)
+	return containsIgnoreCase(text, pattern) ||
+		containsIgnoreCase(contentDesc, pattern) ||
+		containsIgnoreCase(hintText, pattern)
 }
 
 // containsIgnoreCase checks if s contains substr (case-insensitive).

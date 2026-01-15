@@ -408,8 +408,17 @@ type RunFlowStep struct {
 // RunScriptStep runs a script.
 type RunScriptStep struct {
 	BaseStep `yaml:",inline"`
-	Script   string            `yaml:"script"`
+	Script   string            `yaml:"script"` // Script content or filename (string form)
+	File     string            `yaml:"file"`   // Script filename (map form)
 	Env      map[string]string `yaml:"env"`
+}
+
+// ScriptPath returns the script path (either Script or File field).
+func (s *RunScriptStep) ScriptPath() string {
+	if s.File != "" {
+		return s.File
+	}
+	return s.Script
 }
 
 // EvalScriptStep evaluates JavaScript.
