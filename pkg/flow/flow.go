@@ -15,7 +15,8 @@ type Config struct {
 	Name           string            `yaml:"name"`
 	Tags           []string          `yaml:"tags"`
 	Env            map[string]string `yaml:"env"`
-	Timeout        int               `yaml:"timeout"` // Flow timeout in ms
-	OnFlowStart    []Step            `yaml:"-"`       // Lifecycle hook: runs before commands
-	OnFlowComplete []Step            `yaml:"-"`       // Lifecycle hook: runs after commands
+	Timeout        int               `yaml:"timeout"`        // Flow timeout in ms
+	CommandTimeout int               `yaml:"commandTimeout"` // Default timeout for all commands in ms (overrides driver default)
+	OnFlowStart    []Step            `yaml:"-"`              // Lifecycle hook: runs before commands
+	OnFlowComplete []Step            `yaml:"-"`              // Lifecycle hook: runs after commands
 }

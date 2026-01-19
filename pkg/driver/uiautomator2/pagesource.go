@@ -387,6 +387,20 @@ func FilterContainsChild(elements []*ParsedElement, anchor *ParsedElement) []*Pa
 	return result
 }
 
+// FilterInsideOf returns elements whose center point is inside anchor bounds.
+// Different from ChildOf - uses visual center containment, not full bounds.
+func FilterInsideOf(elements []*ParsedElement, anchor *ParsedElement) []*ParsedElement {
+	var result []*ParsedElement
+
+	for _, elem := range elements {
+		if elem.Bounds.CenterInside(anchor.Bounds) {
+			result = append(result, elem)
+		}
+	}
+
+	return result
+}
+
 func isInside(inner, outer core.Bounds) bool {
 	return inner.X >= outer.X &&
 		inner.Y >= outer.Y &&

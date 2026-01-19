@@ -2,16 +2,20 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/device"
+	appiumdriver "github.com/devicelab-dev/maestro-runner/pkg/driver/appium"
 	"github.com/devicelab-dev/maestro-runner/pkg/driver/mock"
 	uia2driver "github.com/devicelab-dev/maestro-runner/pkg/driver/uiautomator2"
+	wdadriver "github.com/devicelab-dev/maestro-runner/pkg/driver/wda"
 	"github.com/devicelab-dev/maestro-runner/pkg/executor"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
 	"github.com/devicelab-dev/maestro-runner/pkg/report"
@@ -32,11 +36,24 @@ Reports are generated in the output directory:
   - With --output and --flatten: <output>/ (no timestamp subfolder)
 
 Examples:
+  # Basic usage
   maestro-runner test flow.yaml
   maestro-runner test flows/
   maestro-runner test login.yaml checkout.yaml
+
+  # With environment variables
   maestro-runner test flows/ -e USER=test -e PASS=secret
+
+  # With tag filtering
   maestro-runner test flows/ --include-tags smoke
+
+  # With Appium and capabilities file
+  maestro-runner --driver appium --caps caps.json test flow.yaml
+
+  # With cloud provider (BrowserStack/SauceLabs/LambdaTest)
+  maestro-runner --driver appium --appium-url "https://hub.provider.com/wd/hub" --caps cloud.json test flow.yaml
+
+  # Custom output directory
   maestro-runner test flows/ --output ./my-reports --flatten`,
 	Flags: []cli.Flag{
 		// Configuration
@@ -144,8 +161,10 @@ type RunConfig struct {
 	AppFile  string // App binary to install before testing
 
 	// Driver
-	Driver    string // uiautomator2, appium
-	AppiumURL string // Appium server URL
+	Driver       string                 // uiautomator2, appium
+	AppiumURL    string                 // Appium server URL
+	CapsFile     string                 // Appium capabilities JSON file path
+	Capabilities map[string]interface{} // Parsed Appium capabilities
 }
 
 func runTest(c *cli.Context) error {
@@ -162,24 +181,37 @@ func runTest(c *cli.Context) error {
 		return err
 	}
 
+	// Load Appium capabilities if provided
+	capsFile := c.String("caps")
+	var caps map[string]interface{}
+	if capsFile != "" {
+		var err error
+		caps, err = loadCapabilities(capsFile)
+		if err != nil {
+			return err
+		}
+	}
+
 	// Build run configuration
 	cfg := &RunConfig{
-		FlowPaths:   c.Args().Slice(),
-		ConfigPath:  c.String("config"),
-		Env:         env,
-		IncludeTags: c.StringSlice("include-tags"),
-		ExcludeTags: c.StringSlice("exclude-tags"),
-		OutputDir:   outputDir,
-		ShardSplit:  c.Int("shard-split"),
-		ShardAll:    c.Int("shard-all"),
-		Continuous:  c.Bool("continuous"),
-		Headless:    c.Bool("headless"),
-		Platform:    c.String("platform"),
-		Device:      c.String("device"),
-		Verbose:     c.Bool("verbose"),
-		AppFile:     c.String("app-file"),
-		Driver:      c.String("driver"),
-		AppiumURL:   c.String("appium-url"),
+		FlowPaths:    c.Args().Slice(),
+		ConfigPath:   c.String("config"),
+		Env:          env,
+		IncludeTags:  c.StringSlice("include-tags"),
+		ExcludeTags:  c.StringSlice("exclude-tags"),
+		OutputDir:    outputDir,
+		ShardSplit:   c.Int("shard-split"),
+		ShardAll:     c.Int("shard-all"),
+		Continuous:   c.Bool("continuous"),
+		Headless:     c.Bool("headless"),
+		Platform:     c.String("platform"),
+		Device:       c.String("device"),
+		Verbose:      c.Bool("verbose"),
+		AppFile:      c.String("app-file"),
+		Driver:       c.String("driver"),
+		AppiumURL:    c.String("appium-url"),
+		CapsFile:     capsFile,
+		Capabilities: caps,
 	}
 
 	return executeTest(cfg)
@@ -528,6 +560,20 @@ func parseEnvVars(envs []string) map[string]string {
 	return result
 }
 
+// loadCapabilities loads Appium capabilities from a JSON file.
+func loadCapabilities(capsFile string) (map[string]interface{}, error) {
+	data, err := os.ReadFile(capsFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read caps file: %w", err)
+	}
+
+	var caps map[string]interface{}
+	if err := json.Unmarshal(data, &caps); err != nil {
+		return nil, fmt.Errorf("failed to parse caps JSON: %w", err)
+	}
+	return caps, nil
+}
+
 // createDriver creates the appropriate driver for the platform.
 // Returns the driver, a cleanup function, and any error.
 func createDriver(cfg *RunConfig) (core.Driver, func(), error) {
@@ -547,7 +593,7 @@ func createDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	case "android", "":
 		return createAndroidDriver(cfg)
 	case "ios":
-		return nil, nil, fmt.Errorf("iOS driver not yet implemented")
+		return createIOSDriver(cfg)
 	default:
 		return nil, nil, fmt.Errorf("unsupported platform: %s", platform)
 	}
@@ -598,7 +644,7 @@ func createAndroidDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	case "uiautomator2":
 		return createUIAutomator2Driver(cfg, dev, info)
 	case "appium":
-		return createAppiumDriver(cfg, dev, info)
+		return createAppiumDriver(cfg)
 	default:
 		return nil, nil, fmt.Errorf("unsupported driver: %s (use uiautomator2 or appium)", driverType)
 	}
@@ -676,47 +722,211 @@ func createUIAutomator2Driver(cfg *RunConfig, dev *device.AndroidDevice, info de
 }
 
 // createAppiumDriver creates a driver that connects to an external Appium server.
-func createAppiumDriver(cfg *RunConfig, dev *device.AndroidDevice, info device.DeviceInfo) (core.Driver, func(), error) {
+// Uses capabilities from --caps file, with CLI flags taking precedence.
+func createAppiumDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	printSetupStep(fmt.Sprintf("Connecting to Appium server: %s", cfg.AppiumURL))
 
-	// Create client pointing to Appium server
-	client := uiautomator2.NewClientTCP(4723) // TODO: parse port from cfg.AppiumURL
-
-	// Set log path to report folder
-	if cfg.OutputDir != "" {
-		client.SetLogPath(filepath.Join(cfg.OutputDir, "client.log"))
+	// Start with capabilities from file (or empty map)
+	caps := cfg.Capabilities
+	if caps == nil {
+		caps = make(map[string]interface{})
 	}
 
-	// Create session with Appium capabilities
+	// CLI flags override caps file values
+	if cfg.Platform != "" {
+		caps["platformName"] = cfg.Platform
+	}
+	if cfg.Device != "" {
+		caps["appium:deviceName"] = cfg.Device
+		caps["appium:udid"] = cfg.Device
+	}
+	if cfg.AppFile != "" {
+		caps["appium:app"] = cfg.AppFile
+	}
+
+	// Set defaults if not provided
+	if caps["platformName"] == nil {
+		caps["platformName"] = "Android"
+	}
+	if caps["appium:automationName"] == nil {
+		caps["appium:automationName"] = "UiAutomator2"
+	}
+
 	printSetupStep("Creating Appium session...")
-	caps := uiautomator2.Capabilities{
-		PlatformName: "Android",
-		DeviceName:   info.Model,
-	}
-	if err := client.CreateSession(caps); err != nil {
+	driver, err := appiumdriver.NewDriver(cfg.AppiumURL, caps)
+	if err != nil {
 		return nil, nil, fmt.Errorf("create Appium session: %w", err)
 	}
 	printSetupSuccess("Appium session created")
 
-	// Set default implicit wait timeout (17 seconds like Maestro)
-	if err := client.SetImplicitWait(17 * time.Second); err != nil {
-		fmt.Printf("  %s⚠%s Warning: failed to set implicit wait: %v\n", color(colorYellow), color(colorReset), err)
-	}
-
-	// Create driver
-	platformInfo := &core.PlatformInfo{
-		Platform:    "android",
-		DeviceID:    info.Serial,
-		DeviceName:  fmt.Sprintf("%s %s", info.Brand, info.Model),
-		OSVersion:   info.SDK,
-		IsSimulator: info.IsEmulator,
-	}
-	driver := uia2driver.New(client, platformInfo, dev)
-
-	// Cleanup function (silent)
+	// Cleanup function
 	cleanup := func() {
-		client.Close()
+		driver.Close()
 	}
 
 	return driver, cleanup, nil
+}
+
+// createIOSDriver creates an iOS driver using WebDriverAgent.
+func createIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
+	udid := cfg.Device
+	if udid == "" {
+		// Try to find booted simulator
+		printSetupStep("Finding booted iOS simulator...")
+		var err error
+		udid, err = findBootedSimulator()
+		if err != nil {
+			return nil, nil, fmt.Errorf("no device specified and no booted simulator found: %w", err)
+		}
+		printSetupSuccess(fmt.Sprintf("Found simulator: %s", udid))
+	}
+
+	// 1. Check if WDA is installed
+	printSetupStep("Checking WDA installation...")
+	if !wdadriver.IsWDAInstalled() {
+		printSetupStep("Downloading WDA...")
+		if _, err := wdadriver.Setup(); err != nil {
+			return nil, nil, fmt.Errorf("WDA setup failed: %w", err)
+		}
+		printSetupSuccess("WDA installed")
+	} else {
+		printSetupSuccess("WDA already installed")
+	}
+
+	// 2. Create WDA runner
+	printSetupStep("Building WDA...")
+	runner := wdadriver.NewRunner(udid, "")
+	ctx := context.Background()
+
+	if err := runner.Build(ctx); err != nil {
+		return nil, nil, fmt.Errorf("WDA build failed: %w", err)
+	}
+	printSetupSuccess("WDA built")
+
+	// 3. Start WDA
+	printSetupStep("Starting WDA...")
+	if err := runner.Start(ctx); err != nil {
+		runner.Cleanup()
+		return nil, nil, fmt.Errorf("WDA start failed: %w", err)
+	}
+	printSetupSuccess("WDA started")
+
+	// 4. Create WDA client
+	client := wdadriver.NewClient(wdadriver.WDAPort)
+
+	// 5. Get device info
+	simInfo, err := getSimulatorInfo(udid)
+	if err != nil {
+		runner.Cleanup()
+		return nil, nil, fmt.Errorf("get simulator info: %w", err)
+	}
+
+	platformInfo := &core.PlatformInfo{
+		Platform:    "ios",
+		OSVersion:   simInfo.OSVersion,
+		DeviceName:  simInfo.Name,
+		DeviceID:    udid,
+		IsSimulator: true,
+	}
+
+	// 6. Create driver
+	driver := wdadriver.NewDriver(client, platformInfo)
+
+	// Cleanup function
+	cleanup := func() {
+		runner.Cleanup()
+	}
+
+	return driver, cleanup, nil
+}
+
+// findBootedSimulator finds the UDID of a booted iOS simulator.
+func findBootedSimulator() (string, error) {
+	out, err := runCommand("xcrun", "simctl", "list", "devices", "booted", "-j")
+	if err != nil {
+		return "", err
+	}
+
+	// Parse JSON to find booted device
+	// Simple parsing - look for "udid" field
+	lines := strings.Split(out, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, `"udid"`) {
+			// Extract UDID from "udid" : "XXXX-XXXX"
+			parts := strings.Split(line, ":")
+			if len(parts) >= 2 {
+				udid := strings.Trim(parts[1], ` ",`)
+				if udid != "" {
+					return udid, nil
+				}
+			}
+		}
+	}
+
+	return "", fmt.Errorf("no booted simulator found")
+}
+
+// simulatorInfo holds iOS simulator information.
+type simulatorInfo struct {
+	Name      string
+	OSVersion string
+	State     string
+}
+
+// getSimulatorInfo gets information about an iOS simulator.
+func getSimulatorInfo(udid string) (*simulatorInfo, error) {
+	out, err := runCommand("xcrun", "simctl", "list", "devices", "-j")
+	if err != nil {
+		return nil, err
+	}
+
+	// Simple parsing - find device with matching UDID
+	lines := strings.Split(out, "\n")
+	var name, osVersion string
+	foundUDID := false
+
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+
+		// Look for OS version headers like "iOS 18.6"
+		if strings.Contains(line, "iOS") && strings.Contains(line, ":") {
+			osVersion = strings.Trim(strings.Split(line, ":")[0], ` "`)
+		}
+
+		// Look for our UDID
+		if strings.Contains(line, udid) {
+			foundUDID = true
+			// Look back for name
+			for j := i - 1; j >= 0 && j >= i-5; j-- {
+				if strings.Contains(lines[j], `"name"`) {
+					parts := strings.Split(lines[j], ":")
+					if len(parts) >= 2 {
+						name = strings.Trim(parts[1], ` ",`)
+						break
+					}
+				}
+			}
+			break
+		}
+	}
+
+	if !foundUDID {
+		return nil, fmt.Errorf("simulator %s not found", udid)
+	}
+
+	return &simulatorInfo{
+		Name:      name,
+		OSVersion: osVersion,
+	}, nil
+}
+
+// runCommand runs a command and returns stdout.
+func runCommand(name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }

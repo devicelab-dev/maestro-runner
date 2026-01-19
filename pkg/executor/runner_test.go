@@ -57,6 +57,10 @@ func (m *mockDriver) GetPlatformInfo() *core.PlatformInfo {
 	return &core.PlatformInfo{Platform: "android", DeviceID: "test"}
 }
 
+func (m *mockDriver) SetFindTimeout(ms int) {
+	// no-op for mock
+}
+
 func TestRunner_Run_AllPassed(t *testing.T) {
 	tmpDir := t.TempDir()
 

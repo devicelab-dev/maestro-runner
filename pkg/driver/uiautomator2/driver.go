@@ -374,6 +374,7 @@ const (
 	filterRightOf
 	filterChildOf
 	filterContainsChild
+	filterInsideOf
 )
 
 // getRelativeFilter returns the anchor selector and filter type from a selector
@@ -391,6 +392,8 @@ func getRelativeFilter(sel flow.Selector) (*flow.Selector, relativeFilterType) {
 		return sel.ChildOf, filterChildOf
 	case sel.ContainsChild != nil:
 		return sel.ContainsChild, filterContainsChild
+	case sel.InsideOf != nil:
+		return sel.InsideOf, filterInsideOf
 	default:
 		return nil, filterNone
 	}
@@ -411,6 +414,8 @@ func applyRelativeFilter(candidates []*ParsedElement, anchor *ParsedElement, fil
 		return FilterChildOf(candidates, anchor)
 	case filterContainsChild:
 		return FilterContainsChild(candidates, anchor)
+	case filterInsideOf:
+		return FilterInsideOf(candidates, anchor)
 	default:
 		return candidates
 	}

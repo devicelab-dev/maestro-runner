@@ -24,6 +24,10 @@ type Driver interface {
 
 	// GetPlatformInfo returns device/platform information
 	GetPlatformInfo() *PlatformInfo
+
+	// SetFindTimeout sets the default timeout (in ms) for finding elements.
+	// This is used by commandTimeout in flow config.
+	SetFindTimeout(ms int)
 }
 
 // CommandResult represents the outcome of executing a single command
@@ -78,6 +82,23 @@ func (b Bounds) Center() (int, int) {
 // Contains checks if a point is within the bounds
 func (b Bounds) Contains(x, y int) bool {
 	return x >= b.X && x < b.X+b.Width && y >= b.Y && y < b.Y+b.Height
+}
+
+// CenterInside checks if the center of inner bounds is inside outer bounds.
+func (b Bounds) CenterInside(outer Bounds) bool {
+	cx, cy := b.Center()
+	return cx >= outer.X && cx <= outer.X+outer.Width &&
+		cy >= outer.Y && cy <= outer.Y+outer.Height
+}
+
+// HasNonASCII checks if text contains non-ASCII characters.
+func HasNonASCII(text string) bool {
+	for i := 0; i < len(text); i++ {
+		if text[i] > 127 {
+			return true
+		}
+	}
+	return false
 }
 
 // StateSnapshot captures the current device/app state

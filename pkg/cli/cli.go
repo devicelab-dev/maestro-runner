@@ -38,6 +38,11 @@ var GlobalFlags = []cli.Flag{
 		Value:   "http://127.0.0.1:4723",
 		EnvVars: []string{"APPIUM_URL"},
 	},
+	&cli.StringFlag{
+		Name:    "caps",
+		Usage:   "Path to Appium capabilities JSON file",
+		EnvVars: []string{"APPIUM_CAPS"},
+	},
 	&cli.BoolFlag{
 		Name:    "verbose",
 		Usage:   "Enable verbose logging",
@@ -69,8 +74,18 @@ func Execute() {
 of iOS, Android, and web applications.
 
 Examples:
+  # Run with default UIAutomator2 driver
   maestro-runner test flow.yaml
   maestro-runner test flows/ -e USER=test
+
+  # Run with Appium driver
+  maestro-runner --driver appium test flow.yaml
+  maestro-runner --driver appium --caps caps.json test flow.yaml
+
+  # Run on cloud providers (BrowserStack, Sauce Labs, LambdaTest)
+  maestro-runner --driver appium --appium-url "https://hub.browserstack.com/wd/hub" --caps bstack.json test flow.yaml
+
+  # Start device
   maestro-runner start-device --platform ios`,
 		Flags: GlobalFlags,
 		Commands: []*cli.Command{

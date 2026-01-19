@@ -62,6 +62,11 @@ func (fr *FlowRunner) Run() FlowResult {
 	}
 	fr.script.SetVariables(fr.flow.Config.Env)
 
+	// Apply commandTimeout if specified - overrides driver's default find timeout
+	if fr.flow.Config.CommandTimeout > 0 {
+		fr.driver.SetFindTimeout(fr.flow.Config.CommandTimeout)
+	}
+
 	// Notify flow start
 	flowName := fr.detail.Name
 	flowFile := filepath.Base(fr.flow.SourcePath)

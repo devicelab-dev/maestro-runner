@@ -459,3 +459,227 @@ func TestFormatDuration(t *testing.T) {
 		}
 	}
 }
+
+// Tests for loadCapabilities function
+
+func TestLoadCapabilities_ValidJSON(t *testing.T) {
+	dir := t.TempDir()
+	capsFile := dir + "/caps.json"
+	capsContent := `{
+		"platformName": "Android",
+		"appium:automationName": "UiAutomator2",
+		"appium:deviceName": "emulator-5554",
+		"appium:app": "/path/to/app.apk"
+	}`
+	if err := os.WriteFile(capsFile, []byte(capsContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	caps, err := loadCapabilities(capsFile)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if caps["platformName"] != "Android" {
+		t.Errorf("expected platformName=Android, got %v", caps["platformName"])
+	}
+	if caps["appium:automationName"] != "UiAutomator2" {
+		t.Errorf("expected appium:automationName=UiAutomator2, got %v", caps["appium:automationName"])
+	}
+	if caps["appium:deviceName"] != "emulator-5554" {
+		t.Errorf("expected appium:deviceName=emulator-5554, got %v", caps["appium:deviceName"])
+	}
+	if caps["appium:app"] != "/path/to/app.apk" {
+		t.Errorf("expected appium:app=/path/to/app.apk, got %v", caps["appium:app"])
+	}
+}
+
+func TestLoadCapabilities_WithCloudOptions(t *testing.T) {
+	dir := t.TempDir()
+	capsFile := dir + "/bstack.json"
+	capsContent := `{
+		"platformName": "Android",
+		"appium:automationName": "UiAutomator2",
+		"bstack:options": {
+			"userName": "testuser",
+			"accessKey": "testkey",
+			"projectName": "Test Project"
+		}
+	}`
+	if err := os.WriteFile(capsFile, []byte(capsContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	caps, err := loadCapabilities(capsFile)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if caps["platformName"] != "Android" {
+		t.Errorf("expected platformName=Android, got %v", caps["platformName"])
+	}
+
+	bstackOpts, ok := caps["bstack:options"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected bstack:options to be a map, got %T", caps["bstack:options"])
+	}
+	if bstackOpts["userName"] != "testuser" {
+		t.Errorf("expected userName=testuser, got %v", bstackOpts["userName"])
+	}
+	if bstackOpts["accessKey"] != "testkey" {
+		t.Errorf("expected accessKey=testkey, got %v", bstackOpts["accessKey"])
+	}
+}
+
+func TestLoadCapabilities_InvalidJSON(t *testing.T) {
+	dir := t.TempDir()
+	capsFile := dir + "/invalid.json"
+	if err := os.WriteFile(capsFile, []byte(`{invalid json}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := loadCapabilities(capsFile)
+	if err == nil {
+		t.Error("expected error for invalid JSON")
+	}
+	if !strings.Contains(err.Error(), "failed to parse caps JSON") {
+		t.Errorf("expected parse error, got: %v", err)
+	}
+}
+
+func TestLoadCapabilities_FileNotFound(t *testing.T) {
+	_, err := loadCapabilities("/nonexistent/caps.json")
+	if err == nil {
+		t.Error("expected error for nonexistent file")
+	}
+	if !strings.Contains(err.Error(), "failed to read caps file") {
+		t.Errorf("expected read error, got: %v", err)
+	}
+}
+
+func TestLoadCapabilities_EmptyJSON(t *testing.T) {
+	dir := t.TempDir()
+	capsFile := dir + "/empty.json"
+	if err := os.WriteFile(capsFile, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	caps, err := loadCapabilities(capsFile)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(caps) != 0 {
+		t.Errorf("expected empty map, got %v", caps)
+	}
+}
+
+// Test --caps flag is defined in GlobalFlags
+
+func TestGlobalFlags_CapsFlag(t *testing.T) {
+	flagNames := make(map[string]bool)
+	for _, f := range GlobalFlags {
+		for _, name := range f.Names() {
+			flagNames[name] = true
+		}
+	}
+
+	if !flagNames["caps"] {
+		t.Error("expected --caps flag to be defined in GlobalFlags")
+	}
+}
+
+// Test RunConfig with Capabilities
+
+func TestRunConfig_WithCapabilities(t *testing.T) {
+	caps := map[string]interface{}{
+		"platformName":          "Android",
+		"appium:automationName": "UiAutomator2",
+	}
+
+	cfg := &RunConfig{
+		FlowPaths:    []string{"flow.yaml"},
+		Platform:     "android",
+		Device:       "emulator-5554",
+		Driver:       "appium",
+		AppiumURL:    "http://localhost:4723",
+		CapsFile:     "caps.json",
+		Capabilities: caps,
+	}
+
+	if cfg.CapsFile != "caps.json" {
+		t.Errorf("expected CapsFile=caps.json, got %s", cfg.CapsFile)
+	}
+	if cfg.Capabilities["platformName"] != "Android" {
+		t.Errorf("expected platformName=Android, got %v", cfg.Capabilities["platformName"])
+	}
+}
+
+// Test --caps flag parsing in test command
+
+func TestTestCommand_WithCapsFlag(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create flow file
+	flowFile := dir + "/test.yaml"
+	if err := os.WriteFile(flowFile, []byte(`- tapOn: "Button"`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create caps file
+	capsFile := dir + "/caps.json"
+	capsContent := `{"platformName": "Android", "appium:automationName": "UiAutomator2"}`
+	if err := os.WriteFile(capsFile, []byte(capsContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &cli.App{
+		Name:     "test-app",
+		Flags:    GlobalFlags,
+		Commands: []*cli.Command{testCommand},
+	}
+
+	// Capture stdout to suppress output
+	oldStdout := os.Stdout
+	os.Stdout, _ = os.Open(os.DevNull)
+	defer func() { os.Stdout = oldStdout }()
+
+	// Test with --caps flag (using mock platform to avoid real driver creation)
+	err := app.Run([]string{
+		"test-app",
+		"-p", "mock",
+		"--caps", capsFile,
+		"test",
+		flowFile,
+	})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestTestCommand_WithInvalidCapsFile(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create flow file
+	flowFile := dir + "/test.yaml"
+	if err := os.WriteFile(flowFile, []byte(`- tapOn: "Button"`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &cli.App{
+		Name:     "test-app",
+		Flags:    GlobalFlags,
+		Commands: []*cli.Command{testCommand},
+	}
+
+	// Test with nonexistent caps file
+	err := app.Run([]string{
+		"test-app",
+		"-p", "mock",
+		"--caps", "/nonexistent/caps.json",
+		"test",
+		flowFile,
+	})
+	if err == nil {
+		t.Error("expected error for nonexistent caps file")
+	}
+}

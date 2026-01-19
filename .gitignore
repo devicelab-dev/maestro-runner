@@ -16,3 +16,5 @@ coverage.html
 .DS_Store
 pkg/cli/reports/
 apks/
+CLAUDE.md
+.claude/
