@@ -39,6 +39,7 @@ type Selector struct {
 	RightOf             *Selector   `yaml:"rightOf"`
 	ContainsChild       *Selector   `yaml:"containsChild"`
 	ContainsDescendants []*Selector `yaml:"containsDescendants"`
+	InsideOf            *Selector   `yaml:"insideOf"` // Visual containment (center point inside anchor bounds)
 
 	// Inline step properties (parsed with selector for YAML convenience)
 	Optional              *bool  `yaml:"optional"`
@@ -82,7 +83,8 @@ func (s *Selector) IsEmpty() bool {
 		s.LeftOf == nil &&
 		s.RightOf == nil &&
 		s.ContainsChild == nil &&
-		len(s.ContainsDescendants) == 0
+		len(s.ContainsDescendants) == 0 &&
+		s.InsideOf == nil
 }
 
 // HasRelativeSelector returns true if any relative selector is set.
@@ -93,7 +95,8 @@ func (s *Selector) HasRelativeSelector() bool {
 		s.LeftOf != nil ||
 		s.RightOf != nil ||
 		s.ContainsChild != nil ||
-		len(s.ContainsDescendants) > 0
+		len(s.ContainsDescendants) > 0 ||
+		s.InsideOf != nil
 }
 
 // Describe returns a human-readable description.

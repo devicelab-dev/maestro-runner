@@ -204,6 +204,12 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		return errorResult(fmt.Errorf("no text specified"), "No text to input")
 	}
 
+	// Check for non-ASCII characters (may cause input issues on some devices)
+	unicodeWarning := ""
+	if core.HasNonASCII(text) {
+		unicodeWarning = " (warning: non-ASCII characters may not input correctly)"
+	}
+
 	// If selector provided, find element and type into it
 	if !step.Selector.IsEmpty() {
 		elem, _, err := d.findElement(step.Selector, step.IsOptional(), step.TimeoutMs)
@@ -224,7 +230,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		}
 	}
 
-	return successResult(fmt.Sprintf("Entered text: %s", text), nil)
+	return successResult(fmt.Sprintf("Entered text: %s%s", text, unicodeWarning), nil)
 }
 
 func (d *Driver) eraseText(step *flow.EraseTextStep) *core.CommandResult {

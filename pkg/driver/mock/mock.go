@@ -134,6 +134,11 @@ func (d *Driver) GetPlatformInfo() *core.PlatformInfo {
 	}
 }
 
+// SetFindTimeout is a no-op for mock driver.
+func (d *Driver) SetFindTimeout(ms int) {
+	// Mock driver doesn't have actual timeouts
+}
+
 // needsElement returns true if the step type typically returns element info.
 func needsElement(step flow.Step) bool {
 	switch step.Type() {
