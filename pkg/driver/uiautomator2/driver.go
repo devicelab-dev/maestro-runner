@@ -1,6 +1,7 @@
 package uiautomator2
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -142,6 +143,8 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 		result = d.copyTextFrom(s)
 	case *flow.PasteTextStep:
 		result = d.pasteText(s)
+	case *flow.SetClipboardStep:
+		result = d.setClipboard(s)
 
 	// Device control
 	case *flow.SetOrientationStep:
@@ -226,6 +229,80 @@ func (d *Driver) GetPlatformInfo() *core.PlatformInfo {
 // For relative selectors or regex patterns, uses page source parsing.
 // If stepTimeoutMs > 0, uses that; otherwise uses 17s for required, 7s for optional.
 func (d *Driver) findElement(sel flow.Selector, optional bool, stepTimeoutMs int) (*uiautomator2.Element, *core.ElementInfo, error) {
+	return d.findElementWithOptions(sel, optional, stepTimeoutMs, false)
+}
+
+// findElementForTap finds an element for tap commands, prioritizing clickable elements.
+// When multiple elements match (e.g., "Login" title and "Login" button), prefers the clickable one.
+func (d *Driver) findElementForTap(sel flow.Selector, optional bool, stepTimeoutMs int) (*uiautomator2.Element, *core.ElementInfo, error) {
+	return d.findElementWithOptions(sel, optional, stepTimeoutMs, true)
+}
+
+// findElementWithOptions is the internal implementation with clickable preference option.
+func (d *Driver) findElementWithOptions(sel flow.Selector, optional bool, stepTimeoutMs int, preferClickable bool) (*uiautomator2.Element, *core.ElementInfo, error) {
+	timeout := d.calculateTimeout(optional, stepTimeoutMs)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	return d.findElementWithContext(ctx, sel, preferClickable)
+}
+
+// findElementWithContext finds an element using context for deadline management.
+// Single polling loop - context controls the timeout.
+func (d *Driver) findElementWithContext(ctx context.Context, sel flow.Selector, preferClickable bool) (*uiautomator2.Element, *core.ElementInfo, error) {
+	// Handle relative selectors via page source (position calculation required)
+	if sel.HasRelativeSelector() {
+		return d.findElementRelativeWithContext(ctx, sel)
+	}
+
+	// Handle size selectors via page source (bounds calculation required)
+	if sel.Width > 0 || sel.Height > 0 {
+		return d.findElementByPageSourceWithContext(ctx, sel)
+	}
+
+	// Build strategies for UiAutomator
+	var strategies []LocatorStrategy
+	var err error
+	if preferClickable {
+		strategies, err = buildSelectorsForTap(sel, 0)
+	} else {
+		strategies, err = buildSelectors(sel, 0)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Single polling loop with context deadline
+	var lastErr error
+	for {
+		select {
+		case <-ctx.Done():
+			if lastErr != nil {
+				return nil, nil, fmt.Errorf("%s: %w", ctx.Err(), lastErr)
+			}
+			return nil, nil, fmt.Errorf("element '%s' not found: %w", sel.Describe(), ctx.Err())
+		default:
+			// Try UiAutomator strategies
+			elem, info, err := d.tryFindElement(strategies)
+			if err == nil {
+				return elem, info, nil
+			}
+			lastErr = err
+
+			// For text-based selectors, try page source as fallback
+			if sel.Text != "" {
+				_, info, err := d.findElementByPageSourceOnce(sel)
+				if err == nil {
+					return nil, info, nil
+				}
+			}
+			// HTTP round-trip (~100ms) is natural rate limit, no sleep needed
+		}
+	}
+}
+
+// calculateTimeout returns the appropriate timeout duration based on optional flag and step timeout.
+func (d *Driver) calculateTimeout(optional bool, stepTimeoutMs int) time.Duration {
 	var timeoutMs int
 	if stepTimeoutMs > 0 {
 		timeoutMs = stepTimeoutMs
@@ -240,82 +317,48 @@ func (d *Driver) findElement(sel flow.Selector, optional bool, stepTimeoutMs int
 			timeoutMs = d.findTimeout
 		}
 	}
-	timeout := time.Duration(timeoutMs) * time.Millisecond
+	return time.Duration(timeoutMs) * time.Millisecond
+}
 
-	// Handle relative selectors via page source (position calculation required)
+// findElementOnce finds an element with a single attempt (no polling).
+// Used by waitUntil which has its own polling loop with context.
+func (d *Driver) findElementOnce(sel flow.Selector) (*uiautomator2.Element, *core.ElementInfo, error) {
+	// Handle relative selectors with single page source fetch
 	if sel.HasRelativeSelector() {
-		return d.findElementRelative(sel, int(timeout.Milliseconds()))
+		return d.findElementRelativeOnce(sel)
 	}
 
-	// Handle size selectors via page source (bounds calculation required)
+	// Handle size selectors with single page source fetch
 	if sel.Width > 0 || sel.Height > 0 {
-		return d.findElementByPageSource(sel, int(timeout.Milliseconds()))
+		return d.findElementByPageSourceOnce(sel)
 	}
 
-	// All other selectors (text, id, state filters) use UiAutomator directly
-	// including regex patterns via textMatches()/descriptionMatches()
-	strategies, err := buildSelectors(sel, int(timeout.Milliseconds()))
+	strategies, err := buildSelectors(sel, 0)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// Client-side polling - UIAutomator2 server doesn't reliably respect implicit wait
-	// No sleep between retries - HTTP round-trip (~100ms) is the natural rate limit
-	deadline := time.Now().Add(timeout)
-	var lastErr error
+	// Single attempt with UiAutomator
+	elem, info, err := d.tryFindElement(strategies)
+	if err == nil {
+		return elem, info, nil
+	}
 
-	for {
-		// Try UiAutomator strategies first
-		elem, info, err := d.tryFindElement(strategies)
+	// For text-based selectors, try page source as fallback
+	if sel.Text != "" {
+		_, info, err := d.findElementByPageSourceOnce(sel)
 		if err == nil {
-			return elem, info, nil
-		}
-		lastErr = err
-
-		// For text-based selectors, also try page source matching as fallback
-		// This catches hint text and other attributes UiAutomator doesn't expose directly
-		if sel.Text != "" {
-			_, info, err := d.findElementByPageSourceOnce(sel)
-			if err == nil {
-				return nil, info, nil
-			}
-		}
-
-		// Check if we've exceeded timeout
-		if time.Now().After(deadline) {
-			break
+			return nil, info, nil
 		}
 	}
 
-	// All strategies failed after timeout
-	if lastErr != nil {
-		return nil, nil, lastErr
-	}
-	return nil, nil, fmt.Errorf("element not found after %v", timeout)
+	return nil, nil, err
 }
 
 // findElementQuick finds an element without polling (single attempt).
-// Used by waitUntil which has its own polling loop, and assertNotVisible.
-// If timeoutMs is 0, uses QuickFindTimeout (1s) as default.
+// Deprecated: Use findElementOnce instead. Kept for backward compatibility.
 func (d *Driver) findElementQuick(sel flow.Selector, timeoutMs int) (*uiautomator2.Element, *core.ElementInfo, error) {
-	if timeoutMs <= 0 {
-		timeoutMs = QuickFindTimeout
-	}
-
-	if sel.HasRelativeSelector() {
-		return d.findElementRelative(sel, timeoutMs)
-	}
-
-	if sel.Width > 0 || sel.Height > 0 {
-		return d.findElementByPageSource(sel, timeoutMs)
-	}
-
-	strategies, err := buildSelectors(sel, timeoutMs)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return d.tryFindElement(strategies)
+	return d.findElementOnce(sel)
 }
 
 // tryFindElement attempts to find element using given strategies (single attempt).
@@ -329,8 +372,12 @@ func (d *Driver) tryFindElement(strategies []LocatorStrategy) (*uiautomator2.Ele
 		}
 
 		// Found element - build info
+		// UIAutomator2 by default only returns visible elements,
+		// so if we found it, it's visible. Don't make extra HTTP calls.
 		info := &core.ElementInfo{
-			ID: elem.ID(),
+			ID:      elem.ID(),
+			Visible: true, // Element found = visible (UIAutomator default behavior)
+			Enabled: true, // Assume enabled unless overridden
 		}
 
 		if text, err := elem.Text(); err == nil {
@@ -344,14 +391,6 @@ func (d *Driver) tryFindElement(strategies []LocatorStrategy) (*uiautomator2.Ele
 				Width:  rect.Width,
 				Height: rect.Height,
 			}
-		}
-
-		if displayed, err := elem.IsDisplayed(); err == nil {
-			info.Visible = displayed
-		}
-
-		if enabled, err := elem.IsEnabled(); err == nil {
-			info.Enabled = enabled
 		}
 
 		return elem, info, nil
@@ -421,16 +460,42 @@ func applyRelativeFilter(candidates []*ParsedElement, anchor *ParsedElement, fil
 	}
 }
 
-// findElementRelative handles relative selectors (below, above, leftOf, rightOf, childOf, containsChild, containsDescendants).
-// Uses page source XML parsing to find elements by position with polling/retry.
-// When multiple anchor elements exist, tries each anchor to find a valid match.
-func (d *Driver) findElementRelative(sel flow.Selector, timeoutMs int) (*uiautomator2.Element, *core.ElementInfo, error) {
-	timeout := time.Duration(timeoutMs) * time.Millisecond
-	if timeout <= 0 {
-		timeout = DefaultFindTimeout
-	}
-	deadline := time.Now().Add(timeout)
+// findElementRelativeWithContext handles relative selectors with context-based timeout.
+// Uses page source XML parsing to find elements by position with polling controlled by context.
+func (d *Driver) findElementRelativeWithContext(ctx context.Context, sel flow.Selector) (*uiautomator2.Element, *core.ElementInfo, error) {
+	var lastErr error
 
+	for {
+		select {
+		case <-ctx.Done():
+			if lastErr != nil {
+				return nil, nil, fmt.Errorf("%s: %w", ctx.Err(), lastErr)
+			}
+			return nil, nil, fmt.Errorf("element '%s' not found: %w", sel.Describe(), ctx.Err())
+		default:
+			info, err := d.resolveRelativeSelector(sel)
+			if err == nil {
+				return nil, info, nil
+			}
+			lastErr = err
+			// HTTP round-trip is natural rate limit, no sleep needed
+		}
+	}
+}
+
+// findElementRelativeOnce performs a single attempt to find element with relative selector.
+// No polling - returns immediately whether found or not.
+func (d *Driver) findElementRelativeOnce(sel flow.Selector) (*uiautomator2.Element, *core.ElementInfo, error) {
+	info, err := d.resolveRelativeSelector(sel)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, info, nil
+}
+
+// resolveRelativeSelector resolves a relative selector with a single page source fetch.
+// This is the core logic extracted from findElementRelative for reuse.
+func (d *Driver) resolveRelativeSelector(sel flow.Selector) (*core.ElementInfo, error) {
 	// Get anchor selector and filter type
 	anchorSelector, filterType := getRelativeFilter(sel)
 
@@ -447,112 +512,82 @@ func (d *Driver) findElementRelative(sel flow.Selector, timeoutMs int) (*uiautom
 		Checked:   sel.Checked,
 	}
 
-	var lastErr error
+	// Get page source
+	pageSource, err := d.client.Source()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get page source: %w", err)
+	}
+
+	// Parse all elements
+	allElements, err := ParsePageSource(pageSource)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse page source: %w", err)
+	}
+
+	// Filter by base selector to get target candidates
 	var candidates []*ParsedElement
+	if baseSel.Text != "" || baseSel.ID != "" || baseSel.Width > 0 || baseSel.Height > 0 {
+		candidates = FilterBySelector(allElements, baseSel)
+	} else {
+		candidates = allElements
+	}
 
-	for {
-		// Get page source
-		pageSource, err := d.client.Source()
-		if err != nil {
-			lastErr = fmt.Errorf("failed to get page source: %w", err)
-			if time.Now().After(deadline) {
-				return nil, nil, lastErr
+	// Find all anchor candidates from page source
+	// If anchor selector itself has a relative selector, resolve it recursively
+	var anchors []*ParsedElement
+	if anchorSelector != nil {
+		_, anchorFilterType := getRelativeFilter(*anchorSelector)
+		if anchorFilterType != filterNone {
+			// Anchor has nested relative selector - resolve recursively
+			_, anchorInfo, err := d.findElementRelativeWithElements(*anchorSelector, allElements)
+			if err == nil && anchorInfo != nil {
+				anchors = []*ParsedElement{{
+					Text:      anchorInfo.Text,
+					Bounds:    anchorInfo.Bounds,
+					Enabled:   anchorInfo.Enabled,
+					Displayed: anchorInfo.Visible,
+				}}
 			}
-			continue
-		}
-
-		// Parse all elements
-		allElements, err := ParsePageSource(pageSource)
-		if err != nil {
-			lastErr = fmt.Errorf("failed to parse page source: %w", err)
-			if time.Now().After(deadline) {
-				return nil, nil, lastErr
-			}
-			continue
-		}
-
-		// Filter by base selector to get target candidates
-		if baseSel.Text != "" || baseSel.ID != "" || baseSel.Width > 0 || baseSel.Height > 0 {
-			candidates = FilterBySelector(allElements, baseSel)
 		} else {
-			candidates = allElements
+			// Simple anchor - use FilterBySelector
+			anchors = FilterBySelector(allElements, *anchorSelector)
 		}
+	}
 
-		// Find all anchor candidates from page source
-		// If anchor selector itself has a relative selector, resolve it recursively
-		var anchors []*ParsedElement
-		if anchorSelector != nil {
-			_, anchorFilterType := getRelativeFilter(*anchorSelector)
-			if anchorFilterType != filterNone {
-				// Anchor has nested relative selector - resolve recursively
-				_, anchorInfo, err := d.findElementRelativeWithElements(*anchorSelector, allElements)
-				if err == nil && anchorInfo != nil {
-					// Convert ElementInfo bounds back to a ParsedElement for filtering
-					anchors = []*ParsedElement{{
-						Text:      anchorInfo.Text,
-						Bounds:    anchorInfo.Bounds,
-						Enabled:   anchorInfo.Enabled,
-						Displayed: anchorInfo.Visible,
-					}}
-				}
-			} else {
-				// Simple anchor - use FilterBySelector
-				anchors = FilterBySelector(allElements, *anchorSelector)
+	// Try each anchor candidate to find matches
+	var matchingCandidates []*ParsedElement
+	if len(anchors) > 0 {
+		for _, anchor := range anchors {
+			filtered := applyRelativeFilter(candidates, anchor, filterType)
+			if len(filtered) > 0 {
+				matchingCandidates = filtered
+				break
 			}
 		}
+		candidates = matchingCandidates
+	} else if anchorSelector != nil {
+		return nil, fmt.Errorf("anchor element not found")
+	}
 
-		// Try each anchor candidate to find matches
-		// This handles cases where multiple elements have the same text (e.g., multiple "Login" elements)
-		var matchingCandidates []*ParsedElement
-		if len(anchors) > 0 {
-			for _, anchor := range anchors {
-				filtered := applyRelativeFilter(candidates, anchor, filterType)
-				if len(filtered) > 0 {
-					matchingCandidates = filtered
-					break // Found matches with this anchor
-				}
-			}
-			candidates = matchingCandidates
-		} else if anchorSelector != nil {
-			// Anchor selector specified but no anchors found
-			lastErr = fmt.Errorf("anchor element not found")
-			if time.Now().After(deadline) {
-				return nil, nil, lastErr
-			}
-			continue
-		}
-
-		// Apply containsDescendants filter
-		if len(sel.ContainsDescendants) > 0 {
-			candidates = FilterContainsDescendants(candidates, allElements, sel.ContainsDescendants)
-		}
-
-		if len(candidates) > 0 {
-			// Found matching elements
-			break
-		}
-
-		lastErr = fmt.Errorf("no elements match relative criteria")
-		if time.Now().After(deadline) {
-			return nil, nil, lastErr
-		}
-		// Continue polling
+	// Apply containsDescendants filter
+	if len(sel.ContainsDescendants) > 0 {
+		candidates = FilterContainsDescendants(candidates, allElements, sel.ContainsDescendants)
 	}
 
 	if len(candidates) == 0 {
-		return nil, nil, fmt.Errorf("no elements match relative criteria")
+		return nil, fmt.Errorf("no elements match relative criteria")
 	}
 
-	// Step 6: Prioritize clickable elements
+	// Prioritize clickable elements
 	candidates = SortClickableFirst(candidates)
 
-	// Step 7: Apply index if specified, otherwise use deepest matching element
+	// Apply index if specified, otherwise use deepest matching element
 	var selected *ParsedElement
 	if sel.Index != "" {
 		idx := 0
 		if i, err := strconv.Atoi(sel.Index); err == nil {
 			if i < 0 {
-				i = len(candidates) + i // negative index
+				i = len(candidates) + i
 			}
 			if i >= 0 && i < len(candidates) {
 				idx = i
@@ -560,21 +595,28 @@ func (d *Driver) findElementRelative(sel flow.Selector, timeoutMs int) (*uiautom
 		}
 		selected = candidates[idx]
 	} else {
-		// Default: use deepest matching element to avoid containers
 		selected = DeepestMatchingElement(candidates)
 	}
 
-	// Return element info (no WebDriver element ID, but we have bounds for tap)
-	info := &core.ElementInfo{
+	return &core.ElementInfo{
 		Text:    selected.Text,
 		Bounds:  selected.Bounds,
 		Enabled: selected.Enabled,
 		Visible: selected.Displayed,
-	}
+	}, nil
+}
 
-	// For relative finds, we don't have WebDriver element - return nil element
-	// Caller should use bounds for tap
-	return nil, info, nil
+// findElementRelative handles relative selectors with polling/retry.
+// Deprecated: Use findElementRelativeWithContext for new code.
+func (d *Driver) findElementRelative(sel flow.Selector, timeoutMs int) (*uiautomator2.Element, *core.ElementInfo, error) {
+	timeout := time.Duration(timeoutMs) * time.Millisecond
+	if timeout <= 0 {
+		timeout = time.Duration(DefaultFindTimeout) * time.Millisecond
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	return d.findElementRelativeWithContext(ctx, sel)
 }
 
 // findElementRelativeWithElements resolves a relative selector using pre-parsed elements.
@@ -718,65 +760,74 @@ func (d *Driver) findElementByPageSourceOnce(sel flow.Selector) (*uiautomator2.E
 	return nil, nil, fmt.Errorf("no elements match selector")
 }
 
-// findElementByPageSource finds an element using page source parsing with polling.
-// Used for regex pattern matching and selectors requiring page source analysis.
-func (d *Driver) findElementByPageSource(sel flow.Selector, timeoutMs int) (*uiautomator2.Element, *core.ElementInfo, error) {
-	timeout := time.Duration(timeoutMs) * time.Millisecond
-	deadline := time.Now().Add(timeout)
+// findElementByPageSourceWithContext finds an element using page source with context-based timeout.
+func (d *Driver) findElementByPageSourceWithContext(ctx context.Context, sel flow.Selector) (*uiautomator2.Element, *core.ElementInfo, error) {
+	var lastErr error
 
 	for {
-		// Get page source
-		pageSource, err := d.client.Source()
-		if err != nil {
-			if time.Now().After(deadline) {
-				return nil, nil, fmt.Errorf("failed to get page source: %w", err)
+		select {
+		case <-ctx.Done():
+			if lastErr != nil {
+				return nil, nil, fmt.Errorf("%s: %w", ctx.Err(), lastErr)
 			}
-			continue
-		}
-
-		// Parse all elements
-		allElements, err := ParsePageSource(pageSource)
-		if err != nil {
-			if time.Now().After(deadline) {
-				return nil, nil, fmt.Errorf("failed to parse page source: %w", err)
+			return nil, nil, fmt.Errorf("element '%s' not found: %w", sel.Describe(), ctx.Err())
+		default:
+			info, err := d.findElementByPageSourceOnceInternal(sel)
+			if err == nil {
+				return nil, info, nil
 			}
-			continue
-		}
-
-		// Filter by selector (this now supports regex patterns)
-		candidates := FilterBySelector(allElements, sel)
-
-		// Prioritize clickable elements
-		candidates = SortClickableFirst(candidates)
-
-		if len(candidates) > 0 {
-			selected := DeepestMatchingElement(candidates)
-			if selected == nil {
-				selected = candidates[0]
-			}
-
-			info := &core.ElementInfo{
-				Text: selected.Text,
-				Bounds: core.Bounds{
-					X:      selected.Bounds.X,
-					Y:      selected.Bounds.Y,
-					Width:  selected.Bounds.Width,
-					Height: selected.Bounds.Height,
-				},
-				Enabled: selected.Enabled,
-				Visible: selected.Displayed,
-			}
-
-			// For page source finds, we don't have WebDriver element - return nil element
-			// Caller should use bounds for tap
-			return nil, info, nil
-		}
-
-		// Check if we've exceeded timeout
-		if time.Now().After(deadline) {
-			return nil, nil, fmt.Errorf("no elements match regex pattern: %s", sel.Text)
+			lastErr = err
+			// HTTP round-trip is natural rate limit, no sleep needed
 		}
 	}
+}
+
+// findElementByPageSourceOnceInternal performs a single page source search.
+// Returns ElementInfo on success, error on failure.
+func (d *Driver) findElementByPageSourceOnceInternal(sel flow.Selector) (*core.ElementInfo, error) {
+	pageSource, err := d.client.Source()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get page source: %w", err)
+	}
+
+	allElements, err := ParsePageSource(pageSource)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse page source: %w", err)
+	}
+
+	candidates := FilterBySelector(allElements, sel)
+	candidates = SortClickableFirst(candidates)
+
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("no elements match selector")
+	}
+
+	selected := DeepestMatchingElement(candidates)
+	if selected == nil {
+		selected = candidates[0]
+	}
+
+	return &core.ElementInfo{
+		Text: selected.Text,
+		Bounds: core.Bounds{
+			X:      selected.Bounds.X,
+			Y:      selected.Bounds.Y,
+			Width:  selected.Bounds.Width,
+			Height: selected.Bounds.Height,
+		},
+		Enabled: selected.Enabled,
+		Visible: selected.Displayed,
+	}, nil
+}
+
+// findElementByPageSource finds an element using page source parsing with polling.
+// Deprecated: Use findElementByPageSourceWithContext for new code.
+func (d *Driver) findElementByPageSource(sel flow.Selector, timeoutMs int) (*uiautomator2.Element, *core.ElementInfo, error) {
+	timeout := time.Duration(timeoutMs) * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	return d.findElementByPageSourceWithContext(ctx, sel)
 }
 
 // LocatorStrategy represents a single locator strategy with its value.
@@ -799,31 +850,82 @@ const (
 // Note: Relative selectors are handled separately in findElementRelative.
 // Note: Timeout/waiting is handled via polling in findElement, not in selectors.
 func buildSelectors(sel flow.Selector, timeoutMs int) ([]LocatorStrategy, error) {
+	return buildSelectorsWithOptions(sel, timeoutMs, false)
+}
+
+// buildSelectorsForTap builds selectors that prioritize clickable elements.
+// Used for tap commands where we want to prefer buttons over labels.
+func buildSelectorsForTap(sel flow.Selector, timeoutMs int) ([]LocatorStrategy, error) {
+	return buildSelectorsWithOptions(sel, timeoutMs, true)
+}
+
+// buildSelectorsWithOptions builds selectors with optional clickable-first prioritization.
+func buildSelectorsWithOptions(sel flow.Selector, timeoutMs int, preferClickable bool) ([]LocatorStrategy, error) {
 	var strategies []LocatorStrategy
 	stateFilters := buildStateFilters(sel)
 
 	// ID-based selector - use resourceIdMatches for partial matching
 	if sel.ID != "" {
 		escaped := escapeUiAutomator(sel.ID)
+		if preferClickable {
+			// Try clickable first for tap commands
+			strategies = append(strategies, LocatorStrategy{
+				Strategy: uiautomator2.StrategyUiAutomator,
+				Value:    `new UiSelector().resourceIdMatches(".*` + escaped + `.*").clickable(true)` + stateFilters,
+			})
+		}
 		strategies = append(strategies, LocatorStrategy{
 			Strategy: uiautomator2.StrategyUiAutomator,
 			Value:    `new UiSelector().resourceIdMatches(".*` + escaped + `.*")` + stateFilters,
 		})
 	}
 
-	// Text-based selector - supports both regex patterns and literal text
+	// Text-based selector - use textContains for literal text, textMatches for regex
 	if sel.Text != "" {
-		pattern := textToRegexPattern(sel.Text)
-		// Try text first
-		strategies = append(strategies, LocatorStrategy{
-			Strategy: uiautomator2.StrategyUiAutomator,
-			Value:    `new UiSelector().textMatches("` + pattern + `")` + stateFilters,
-		})
-		// Also try description (content-desc) for Flutter apps
-		strategies = append(strategies, LocatorStrategy{
-			Strategy: uiautomator2.StrategyUiAutomator,
-			Value:    `new UiSelector().descriptionMatches("` + pattern + `")` + stateFilters,
-		})
+		if looksLikeRegex(sel.Text) {
+			// Use textMatches for regex patterns (case-insensitive)
+			pattern := "(?is)" + escapeUiAutomatorString(sel.Text)
+			if preferClickable {
+				strategies = append(strategies, LocatorStrategy{
+					Strategy: uiautomator2.StrategyUiAutomator,
+					Value:    `new UiSelector().textMatches("` + pattern + `").clickable(true)` + stateFilters,
+				})
+				strategies = append(strategies, LocatorStrategy{
+					Strategy: uiautomator2.StrategyUiAutomator,
+					Value:    `new UiSelector().descriptionMatches("` + pattern + `").clickable(true)` + stateFilters,
+				})
+			}
+			strategies = append(strategies, LocatorStrategy{
+				Strategy: uiautomator2.StrategyUiAutomator,
+				Value:    `new UiSelector().textMatches("` + pattern + `")` + stateFilters,
+			})
+			strategies = append(strategies, LocatorStrategy{
+				Strategy: uiautomator2.StrategyUiAutomator,
+				Value:    `new UiSelector().descriptionMatches("` + pattern + `")` + stateFilters,
+			})
+		} else {
+			// Use textContains for literal text (case-insensitive by default)
+			// Escape only quotes for the string value
+			escaped := escapeUiAutomatorString(sel.Text)
+			if preferClickable {
+				strategies = append(strategies, LocatorStrategy{
+					Strategy: uiautomator2.StrategyUiAutomator,
+					Value:    `new UiSelector().textContains("` + escaped + `").clickable(true)` + stateFilters,
+				})
+				strategies = append(strategies, LocatorStrategy{
+					Strategy: uiautomator2.StrategyUiAutomator,
+					Value:    `new UiSelector().descriptionContains("` + escaped + `").clickable(true)` + stateFilters,
+				})
+			}
+			strategies = append(strategies, LocatorStrategy{
+				Strategy: uiautomator2.StrategyUiAutomator,
+				Value:    `new UiSelector().textContains("` + escaped + `")` + stateFilters,
+			})
+			strategies = append(strategies, LocatorStrategy{
+				Strategy: uiautomator2.StrategyUiAutomator,
+				Value:    `new UiSelector().descriptionContains("` + escaped + `")` + stateFilters,
+			})
+		}
 	}
 
 	// CSS selector for web views (no native wait support)
@@ -841,32 +943,28 @@ func buildSelectors(sel flow.Selector, timeoutMs int) ([]LocatorStrategy, error)
 	return strategies, nil
 }
 
-// textToRegexPattern converts text to a regex pattern for UiSelector.
-// If the text is a valid regex (contains regex metacharacters), use it as-is.
-// Otherwise, escape it for literal matching with case-insensitive contains.
-func textToRegexPattern(text string) string {
-	// Check if text looks like a regex pattern (contains unescaped metacharacters)
-	if looksLikeRegex(text) {
-		// Use as regex - add case-insensitive flag
-		return "(?is)" + escapeUiAutomatorString(text)
-	}
-	// Literal text - escape and wrap for contains matching
-	escaped := escapeUiAutomator(text)
-	return "(?is).*" + escaped + ".*"
-}
-
 // looksLikeRegex checks if text contains regex metacharacters that suggest it's a pattern.
 // Common patterns: .+, .*, [a-z], ^, $, etc.
+// A standalone period (like in "mastodon.social") is NOT treated as regex.
 func looksLikeRegex(text string) bool {
 	// Check for common regex patterns
 	for i := 0; i < len(text); i++ {
 		c := text[i]
+		// Check if it's escaped
+		if i > 0 && text[i-1] == '\\' {
+			continue
+		}
 		switch c {
-		case '.', '*', '+', '?', '^', '$', '[', ']', '(', ')', '{', '}', '|':
-			// Check if it's escaped
-			if i > 0 && text[i-1] == '\\' {
-				continue
+		case '.':
+			// Only treat '.' as regex if followed by a quantifier (*, +, ?)
+			// This allows "mastodon.social" to be treated as literal text
+			if i+1 < len(text) {
+				next := text[i+1]
+				if next == '*' || next == '+' || next == '?' {
+					return true
+				}
 			}
+		case '*', '+', '?', '^', '$', '[', ']', '(', ')', '{', '}', '|':
 			return true
 		}
 	}

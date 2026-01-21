@@ -1,6 +1,7 @@
 package appium
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"time"
@@ -98,10 +99,22 @@ func (d *Driver) executeStep(step flow.Step) *core.CommandResult {
 		return d.copyTextFrom(s)
 	case *flow.PasteTextStep:
 		return d.pasteText(s)
+	case *flow.SetClipboardStep:
+		return d.setClipboard(s)
 	case *flow.PressKeyStep:
 		return d.pressKey(s)
 	case *flow.ScrollUntilVisibleStep:
 		return d.scrollUntilVisible(s)
+	case *flow.WaitForAnimationToEndStep:
+		return d.waitForAnimationToEnd(s)
+	case *flow.WaitUntilStep:
+		return d.waitUntil(s)
+	case *flow.KillAppStep:
+		return d.killApp(s)
+	case *flow.InputRandomStep:
+		return d.inputRandom(s)
+	case *flow.TakeScreenshotStep:
+		return d.takeScreenshot(s)
 	default:
 		return errorResult(fmt.Errorf("unsupported step type: %T", step), "")
 	}
@@ -242,41 +255,85 @@ func (d *Driver) findElementByPageSource(sel flow.Selector) (*core.ElementInfo, 
 }
 
 // findElementRelative handles relative selectors (below, above, etc.)
+// Deprecated: Use findElementRelativeWithContext for new code.
 func (d *Driver) findElementRelative(sel flow.Selector, timeout time.Duration) (*core.ElementInfo, error) {
-	deadline := time.Now().Add(timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return d.findElementRelativeWithContext(ctx, sel)
+}
 
-	for {
-		source, err := d.client.Source()
-		if err != nil {
-			if time.Now().After(deadline) {
-				return nil, err
-			}
-			time.Sleep(200 * time.Millisecond)
-			continue
-		}
-
-		elements, platform, err := ParsePageSource(source)
-		if err != nil {
-			if time.Now().After(deadline) {
-				return nil, err
-			}
-			continue
-		}
-		d.platform = platform
-
-		info, err := d.findElementRelativeWithElements(sel, elements, platform)
-		if err == nil && info != nil {
-			return info, nil
-		}
-
-		if time.Now().After(deadline) {
-			if err != nil {
-				return nil, err
-			}
-			return nil, fmt.Errorf("element not found")
-		}
-		time.Sleep(200 * time.Millisecond)
+// findElementWithContext finds an element using context for deadline management.
+// This is the preferred method as it respects context cancellation and deadlines.
+func (d *Driver) findElementWithContext(ctx context.Context, sel flow.Selector) (*core.ElementInfo, error) {
+	if sel.HasRelativeSelector() {
+		return d.findElementRelativeWithContext(ctx, sel)
 	}
+
+	// Simple selector - poll until found or context cancelled
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("element not found: %s", sel.Describe())
+		default:
+			info, err := d.findElementDirect(sel)
+			if err == nil && info != nil {
+				return info, nil
+			}
+			// HTTP round-trip (~100ms) is natural rate limit, no sleep needed
+		}
+	}
+}
+
+// findElementOnce finds an element with a single attempt (no polling).
+// Used for quick checks like waitUntil where we poll externally.
+func (d *Driver) findElementOnce(sel flow.Selector) (*core.ElementInfo, error) {
+	if sel.HasRelativeSelector() {
+		return d.findElementRelativeOnce(sel)
+	}
+	return d.findElementDirect(sel)
+}
+
+// findElementRelativeWithContext handles relative selectors with context deadline.
+func (d *Driver) findElementRelativeWithContext(ctx context.Context, sel flow.Selector) (*core.ElementInfo, error) {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("element not found with relative selector")
+		default:
+			source, err := d.client.Source()
+			if err != nil {
+				continue // Retry on source fetch error
+			}
+
+			elements, platform, err := ParsePageSource(source)
+			if err != nil {
+				continue // Retry on parse error
+			}
+			d.platform = platform
+
+			info, err := d.findElementRelativeWithElements(sel, elements, platform)
+			if err == nil && info != nil {
+				return info, nil
+			}
+			// HTTP round-trip is natural rate limit, no sleep needed
+		}
+	}
+}
+
+// findElementRelativeOnce performs a single attempt to find element with relative selector.
+func (d *Driver) findElementRelativeOnce(sel flow.Selector) (*core.ElementInfo, error) {
+	source, err := d.client.Source()
+	if err != nil {
+		return nil, err
+	}
+
+	elements, platform, err := ParsePageSource(source)
+	if err != nil {
+		return nil, err
+	}
+	d.platform = platform
+
+	return d.findElementRelativeWithElements(sel, elements, platform)
 }
 
 func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements []*ParsedElement, platform string) (*core.ElementInfo, error) {

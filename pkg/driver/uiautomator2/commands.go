@@ -1,6 +1,7 @@
 package uiautomator2
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"strconv"
@@ -22,7 +23,7 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		return d.tapOnPointWithPercentage(step.Point)
 	}
 
-	elem, info, err := d.findElement(step.Selector, step.IsOptional(), step.TimeoutMs)
+	elem, info, err := d.findElementForTap(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Element not found: %v", err))
 	}
@@ -71,7 +72,7 @@ func (d *Driver) tapOnPointWithPercentage(point string) *core.CommandResult {
 }
 
 func (d *Driver) doubleTapOn(step *flow.DoubleTapOnStep) *core.CommandResult {
-	elem, info, err := d.findElement(step.Selector, step.IsOptional(), step.TimeoutMs)
+	elem, info, err := d.findElementForTap(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Element not found: %v", err))
 	}
@@ -92,7 +93,7 @@ func (d *Driver) doubleTapOn(step *flow.DoubleTapOnStep) *core.CommandResult {
 }
 
 func (d *Driver) longPressOn(step *flow.LongPressOnStep) *core.CommandResult {
-	elem, info, err := d.findElement(step.Selector, step.IsOptional(), step.TimeoutMs)
+	elem, info, err := d.findElementForTap(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Element not found: %v", err))
 	}
@@ -155,38 +156,29 @@ func (d *Driver) tapOnPoint(step *flow.TapOnPointStep) *core.CommandResult {
 // ============================================================================
 
 func (d *Driver) assertVisible(step *flow.AssertVisibleStep) *core.CommandResult {
-	elem, info, err := d.findElement(step.Selector, step.IsOptional(), step.TimeoutMs)
+	_, info, err := d.findElement(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Element not visible: %v", err))
 	}
 
-	// For page source results, elem is nil but info.Visible is set
-	if elem == nil {
-		if info != nil && info.Visible {
-			return successResult("Element is visible", info)
-		}
-		return errorResult(fmt.Errorf("element not visible"), "Element exists but is not visible")
+	// info.Visible is already set by findElement/tryFindElement
+	if info != nil && info.Visible {
+		return successResult("Element is visible", info)
 	}
 
-	// For WebDriver element results, check via API
-	displayed, err := elem.IsDisplayed()
-	if err != nil {
-		return errorResult(err, fmt.Sprintf("Failed to check visibility: %v", err))
-	}
-
-	if !displayed {
-		return errorResult(fmt.Errorf("element not visible"), "Element exists but is not visible")
-	}
-
-	return successResult("Element is visible", info)
+	return errorResult(fmt.Errorf("element not visible"), "Element exists but is not visible")
 }
 
 func (d *Driver) assertNotVisible(step *flow.AssertNotVisibleStep) *core.CommandResult {
-	// For negative assertions, use quick check - don't wait for full timeout
-	// Element not existing = success, so we should fail fast
-	// Respects step timeout if configured, otherwise uses QuickFindTimeout (1s)
-	_, _, err := d.findElementQuick(step.Selector, step.TimeoutMs)
-	if err != nil {
+	// For negative assertions, use short timeout but include page source fallback for accuracy
+	// Element not existing = success
+	// Respects step timeout if configured, otherwise uses 1s default
+	timeout := step.TimeoutMs
+	if timeout <= 0 {
+		timeout = 1000
+	}
+	_, info, err := d.findElement(step.Selector, true, timeout)
+	if err != nil || info == nil {
 		// Element not found = not visible = success
 		return successResult("Element is not visible", nil)
 	}
@@ -305,7 +297,15 @@ func (d *Driver) scroll(step *flow.ScrollStep) *core.CommandResult {
 	}
 
 	uiaDir := mapDirection(direction)
-	area := uiautomator2.RectModel{X: 0, Y: 200, Width: 1080, Height: 1600}
+
+	// Get screen size for dynamic scroll area
+	width, height := 1080, 1920 // defaults
+	if w, h, err := d.getScreenSize(); err == nil {
+		width, height = w, h
+	}
+
+	// Use most of screen for scroll area (leave margins)
+	area := uiautomator2.NewRect(0, height/8, width, height*3/4)
 
 	if err := d.client.ScrollInArea(area, uiaDir, 0.5, 0); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to scroll: %v", err))
@@ -322,16 +322,22 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 
 	maxScrolls := 10
 	uiaDir := mapDirection(direction)
-	area := uiautomator2.RectModel{X: 0, Y: 200, Width: 1080, Height: 1600}
+
+	// Get screen size for dynamic scroll area
+	width, height := 1080, 1920 // defaults
+	if w, h, err := d.getScreenSize(); err == nil {
+		width, height = w, h
+	}
+
+	// Use most of screen for scroll area (leave margins)
+	area := uiautomator2.NewRect(0, height/8, width, height*3/4)
 
 	for i := 0; i < maxScrolls; i++ {
-		// Try to find element (use short timeout since we're polling)
-		elem, info, err := d.findElement(step.Selector, true, 0)
-		if err == nil {
-			displayed, _ := elem.IsDisplayed()
-			if displayed {
-				return successResult(fmt.Sprintf("Element found after %d scrolls", i), info)
-			}
+		// Try to find element (short timeout - includes page source fallback)
+		_, info, err := d.findElement(step.Selector, true, 1000)
+		if err == nil && info != nil {
+			// Element found - return success
+			return successResult(fmt.Sprintf("Element found after %d scrolls", i), info)
 		}
 
 		// Scroll
@@ -362,7 +368,15 @@ func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
 	}
 
 	uiaDir := mapDirection(direction)
-	area := uiautomator2.RectModel{X: 0, Y: 200, Width: 1080, Height: 1600}
+
+	// Get screen size for dynamic swipe area
+	width, height := 1080, 1920 // defaults
+	if w, h, err := d.getScreenSize(); err == nil {
+		width, height = w, h
+	}
+
+	// Use most of screen for swipe area (leave margins)
+	area := uiautomator2.NewRect(0, height/8, width, height*3/4)
 
 	if err := d.client.SwipeInArea(area, uiaDir, 0.7, 0); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to swipe: %v", err))
@@ -443,6 +457,9 @@ func (d *Driver) getScreenSize() (int, int, error) {
 	}
 
 	// Fallback: use wm size command
+	if d.device == nil {
+		return 0, 0, fmt.Errorf("no device connection available to get screen size")
+	}
 	output, err := d.device.Shell("wm size")
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to get screen size: %w", err)
@@ -666,6 +683,18 @@ func (d *Driver) pasteText(_ *flow.PasteTextStep) *core.CommandResult {
 	return successResult(fmt.Sprintf("Pasted text: %s", text), nil)
 }
 
+func (d *Driver) setClipboard(step *flow.SetClipboardStep) *core.CommandResult {
+	if step.Text == "" {
+		return errorResult(fmt.Errorf("no text specified"), "setClipboard requires text")
+	}
+
+	if err := d.client.SetClipboard(step.Text); err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to set clipboard: %v", err))
+	}
+
+	return successResult(fmt.Sprintf("Set clipboard to: %s", step.Text), nil)
+}
+
 // ============================================================================
 // Device Control Commands
 // ============================================================================
@@ -723,10 +752,25 @@ func (d *Driver) openLink(step *flow.OpenLinkStep) *core.CommandResult {
 		return errorResult(fmt.Errorf("device not configured"), "openLink requires device access")
 	}
 
-	// Use am start to open the link
-	cmd := fmt.Sprintf("am start -a android.intent.action.VIEW -d '%s'", link)
+	// Build am start command
+	var cmd string
+	if step.Browser != nil && *step.Browser {
+		// Force open in browser - try common browser packages
+		// Chrome is most common, fallback to default browser activity
+		cmd = fmt.Sprintf("am start -a android.intent.action.VIEW -c android.intent.category.BROWSABLE -d '%s'", link)
+	} else {
+		// Default: let system decide (may open in app if deep link is registered)
+		cmd = fmt.Sprintf("am start -a android.intent.action.VIEW -d '%s'", link)
+	}
+
 	if _, err := d.device.Shell(cmd); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to open link: %v", err))
+	}
+
+	// If autoVerify is enabled, wait briefly for page load
+	if step.AutoVerify != nil && *step.AutoVerify {
+		// Give the browser time to open and start loading
+		time.Sleep(2 * time.Second)
 	}
 
 	return successResult(fmt.Sprintf("Opened link: %s", link), nil)
@@ -839,41 +883,60 @@ func (d *Driver) waitUntil(step *flow.WaitUntilStep) *core.CommandResult {
 	if step.TimeoutMs > 0 {
 		timeout = time.Duration(step.TimeoutMs) * time.Millisecond
 	}
-	interval := 500 * time.Millisecond
-	start := time.Now()
 
-	for time.Since(start) < timeout {
-		if step.Visible != nil {
-			// Wait until element is visible - use quick find (no polling, default 1s timeout)
-			elem, info, err := d.findElementQuick(*step.Visible, 0)
-			if err == nil && elem != nil {
-				if displayed, _ := elem.IsDisplayed(); displayed {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	// Determine selector for error messages
+	var selector *flow.Selector
+	waitingForVisible := step.Visible != nil
+	if waitingForVisible {
+		selector = step.Visible
+	} else {
+		selector = step.NotVisible
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			// Clean, clear error message with timeout value
+			if waitingForVisible {
+				return errorResult(
+					context.DeadlineExceeded,
+					fmt.Sprintf("Element '%s' not visible within %v", selector.Describe(), timeout),
+				)
+			}
+			return errorResult(
+				context.DeadlineExceeded,
+				fmt.Sprintf("Element '%s' still visible after %v", selector.Describe(), timeout),
+			)
+		default:
+			if waitingForVisible {
+				// Single attempt - context controls overall timeout
+				_, info, err := d.findElementOnce(*step.Visible)
+				if err == nil && info != nil {
 					return successResult("Element is now visible", info)
 				}
+			} else {
+				// Single attempt for not visible check
+				_, info, err := d.findElementOnce(*step.NotVisible)
+				if err != nil || info == nil {
+					return successResult("Element is no longer visible", nil)
+				}
 			}
-		} else if step.NotVisible != nil {
-			// Wait until element is not visible - use quick find (no polling, default 1s timeout)
-			_, _, err := d.findElementQuick(*step.NotVisible, 0)
-			if err != nil {
-				// Element not found = not visible
-				return successResult("Element is no longer visible", nil)
-			}
+			// HTTP round-trip (~100ms) is natural rate limit, no sleep needed
 		}
-
-		time.Sleep(interval)
 	}
-
-	if step.Visible != nil {
-		return errorResult(fmt.Errorf("timeout waiting for element"), "Element did not become visible within timeout")
-	}
-	return errorResult(fmt.Errorf("timeout waiting for element"), "Element did not disappear within timeout")
 }
 
 func (d *Driver) waitForAnimationToEnd(_ *flow.WaitForAnimationToEndStep) *core.CommandResult {
-	// Simple implementation: wait a fixed duration for animations to settle
-	// More sophisticated: poll window animation scale or compare screenshots
-	time.Sleep(1 * time.Second)
-	return successResult("Waited for animation to end", nil)
+	// NOTE: waitForAnimationToEnd is not fully implemented.
+	// Maestro uses screenshot comparison which is complex to implement correctly.
+	// For now, we pass this step with a warning.
+	return &core.CommandResult{
+		Success: true,
+		Message: "WARNING: waitForAnimationToEnd is not fully implemented - step passed without animation check",
+	}
 }
 
 // ============================================================================
