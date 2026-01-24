@@ -243,7 +243,7 @@ func TestSwipeStep_Fields(t *testing.T) {
 func TestScrollUntilVisibleStep_Fields(t *testing.T) {
 	s := ScrollUntilVisibleStep{
 		BaseStep:              BaseStep{StepType: StepScrollUntilVisible, TimeoutMs: 10000},
-		Selector:              Selector{Text: "End of list"},
+		Element:               Selector{Text: "End of list"},
 		Direction:             "DOWN",
 		MaxScrolls:            20,
 		Speed:                 40,
@@ -252,8 +252,8 @@ func TestScrollUntilVisibleStep_Fields(t *testing.T) {
 		WaitToSettleTimeoutMs: 100,
 	}
 
-	if s.Selector.Text != "End of list" {
-		t.Errorf("Selector.Text=%q, want End of list", s.Selector.Text)
+	if s.Element.Text != "End of list" {
+		t.Errorf("Element.Text=%q, want End of list", s.Element.Text)
 	}
 	if s.Direction != "DOWN" {
 		t.Errorf("Direction=%q, want DOWN", s.Direction)

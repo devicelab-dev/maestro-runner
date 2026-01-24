@@ -225,10 +225,10 @@ func isStepType(key string) bool {
 		StepSwipe, StepScroll, StepScrollUntilVisible, StepBack, StepHideKeyboard,
 		StepInputText, StepInputRandom, StepInputRandomEmail, StepInputRandomNumber,
 		StepInputRandomPersonName, StepInputRandomText,
-		StepEraseText, StepCopyTextFrom, StepPasteText,
+		StepEraseText, StepCopyTextFrom, StepPasteText, StepSetClipboard,
 		StepAssertVisible, StepAssertNotVisible, StepAssertTrue, StepAssertCondition,
 		StepAssertNoDefectsWithAI, StepAssertWithAI, StepExtractTextWithAI, StepWaitUntil,
-		StepLaunchApp, StepStopApp, StepKillApp, StepClearState, StepClearKeychain,
+		StepLaunchApp, StepStopApp, StepKillApp, StepClearState, StepClearKeychain, StepSetPermissions,
 		StepSetLocation, StepSetOrientation, StepSetAirplaneMode, StepToggleAirplaneMode,
 		StepTravel, StepOpenLink, StepOpenBrowser, StepRepeat, StepRetry, StepRunFlow,
 		StepRunScript, StepEvalScript, StepTakeScreenshot, StepStartRecording,
@@ -303,7 +303,7 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 	case StepScrollUntilVisible:
 		var s ScrollUntilVisibleStep
 		if valueNode.Kind == yaml.ScalarNode {
-			s.Selector.Text = valueNode.Value
+			s.Element.Text = valueNode.Value
 		} else if err := valueNode.Decode(&s); err != nil {
 			return nil, wrapParseError(sourcePath, valueNode.Line, err)
 		}
@@ -385,6 +385,16 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 
 	case StepPasteText:
 		return &PasteTextStep{BaseStep: BaseStep{StepType: stepType}}, nil
+
+	case StepSetClipboard:
+		var s SetClipboardStep
+		if valueNode.Kind == yaml.ScalarNode {
+			s.Text = valueNode.Value
+		} else if err := valueNode.Decode(&s); err != nil {
+			return nil, wrapParseError(sourcePath, valueNode.Line, err)
+		}
+		s.StepType = stepType
+		return &s, nil
 
 	case StepAssertVisible:
 		var s AssertVisibleStep
@@ -500,6 +510,14 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 
 	case StepClearKeychain:
 		return &ClearKeychainStep{BaseStep: BaseStep{StepType: stepType}}, nil
+
+	case StepSetPermissions:
+		var s SetPermissionsStep
+		if err := valueNode.Decode(&s); err != nil {
+			return nil, wrapParseError(sourcePath, valueNode.Line, err)
+		}
+		s.StepType = stepType
+		return &s, nil
 
 	case StepSetLocation:
 		var s SetLocationStep

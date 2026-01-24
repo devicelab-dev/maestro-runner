@@ -27,6 +27,7 @@ const (
 	StepEraseText             StepType = "eraseText"
 	StepCopyTextFrom          StepType = "copyTextFrom"
 	StepPasteText             StepType = "pasteText"
+	StepSetClipboard          StepType = "setClipboard"
 
 	// Assertions
 	StepAssertVisible         StepType = "assertVisible"
@@ -39,11 +40,12 @@ const (
 	StepWaitUntil             StepType = "extendedWaitUntil"
 
 	// App Management
-	StepLaunchApp     StepType = "launchApp"
-	StepStopApp       StepType = "stopApp"
-	StepKillApp       StepType = "killApp"
-	StepClearState    StepType = "clearState"
-	StepClearKeychain StepType = "clearKeychain"
+	StepLaunchApp      StepType = "launchApp"
+	StepStopApp        StepType = "stopApp"
+	StepKillApp        StepType = "killApp"
+	StepClearState     StepType = "clearState"
+	StepClearKeychain  StepType = "clearKeychain"
+	StepSetPermissions StepType = "setPermissions"
 
 	// Device Control
 	StepSetLocation        StepType = "setLocation"
@@ -173,7 +175,7 @@ type ScrollStep struct {
 // ScrollUntilVisibleStep scrolls until element is visible.
 type ScrollUntilVisibleStep struct {
 	BaseStep              `yaml:",inline"`
-	Selector              Selector `yaml:",inline"`
+	Element               Selector `yaml:"element"`
 	Direction             string   `yaml:"direction"`
 	MaxScrolls            int      `yaml:"maxScrolls"` // Legacy: max scroll attempts
 	Speed                 int      `yaml:"speed"`
@@ -225,6 +227,12 @@ type CopyTextFromStep struct {
 // PasteTextStep pastes text.
 type PasteTextStep struct {
 	BaseStep `yaml:",inline"`
+}
+
+// SetClipboardStep sets the clipboard to a specific text value.
+type SetClipboardStep struct {
+	BaseStep `yaml:",inline"`
+	Text     string `yaml:"text"`
 }
 
 // ============================================
@@ -324,6 +332,16 @@ type ClearStateStep struct {
 // ClearKeychainStep clears keychain.
 type ClearKeychainStep struct {
 	BaseStep `yaml:",inline"`
+}
+
+// SetPermissionsStep sets app permissions.
+// Permission values: "allow", "deny", "unset"
+// Permission shortcuts: location, camera, contacts, phone, microphone,
+// bluetooth, storage, notifications, medialibrary, calendar, sms, all
+type SetPermissionsStep struct {
+	BaseStep    `yaml:",inline"`
+	AppID       string            `yaml:"appId"`
+	Permissions map[string]string `yaml:"permissions"`
 }
 
 // ============================================
@@ -533,7 +551,7 @@ func (s *WaitUntilStep) Describe() string {
 }
 
 func (s *ScrollUntilVisibleStep) Describe() string {
-	return "scrollUntilVisible: " + s.Selector.DescribeQuoted()
+	return "scrollUntilVisible: " + s.Element.DescribeQuoted()
 }
 
 func (s *CopyTextFromStep) Describe() string {
@@ -563,4 +581,8 @@ func (s *ScrollStep) Describe() string {
 		return "scroll: " + s.Direction
 	}
 	return "scroll"
+}
+
+func (s *SetPermissionsStep) Describe() string {
+	return "setPermissions"
 }

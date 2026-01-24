@@ -279,47 +279,62 @@ func executeTest(cfg *RunConfig) error {
 		flows = append(flows, *f)
 	}
 
-	// 3. Create driver
-	driver, cleanup, err := createDriver(cfg)
-	if err != nil {
-		return fmt.Errorf("failed to create driver: %w", err)
-	}
-	defer cleanup()
-
-	// 4. Create and run executor
-	driverName := "uiautomator2"
-	if cfg.Platform == "mock" {
-		driverName = "mock"
-	}
-	runner := executor.New(driver, executor.RunnerConfig{
-		OutputDir:   cfg.OutputDir,
-		Parallelism: 0, // Sequential for now
-		Artifacts:   executor.ArtifactOnFailure,
-		Device: report.Device{
-			ID:       driver.GetPlatformInfo().DeviceID,
-			Platform: driver.GetPlatformInfo().Platform,
-			Name:     driver.GetPlatformInfo().DeviceName,
-		},
-		App: report.App{
-			ID: cfg.AppFile,
-		},
-		RunnerVersion: "0.1.0",
-		DriverName:    driverName,
-		// Live progress callbacks
-		OnFlowStart:       onFlowStart,
-		OnStepComplete:    onStepComplete,
-		OnNestedStep:      onNestedStep,
-		OnNestedFlowStart: onNestedFlowStart,
-		OnFlowEnd:         onFlowEnd,
-	})
+	// 3. Create driver and run flows
+	// For Appium: one session per flow (allows per-flow clearState capability)
+	// For native uiautomator2: single shared session for efficiency
+	var result *executor.RunResult
+	var runErr error
+	driverType := strings.ToLower(cfg.Driver)
 
 	printSetupSuccess(fmt.Sprintf("Output: %s", cfg.OutputDir))
 	fmt.Printf("\n%sExecution%s\n", color(colorBold), color(colorReset))
 	fmt.Println(strings.Repeat("─", 40))
 
-	result, err := runner.Run(context.Background(), flows)
-	if err != nil {
-		return fmt.Errorf("execution failed: %w", err)
+	if driverType == "appium" {
+		// Appium: one session per flow
+		result, runErr = executeFlowsWithPerFlowSession(cfg, flows)
+		if runErr != nil {
+			return fmt.Errorf("execution failed: %w", runErr)
+		}
+	} else {
+		// Native uiautomator2/WDA: shared session
+		driver, cleanup, err := createDriver(cfg)
+		if err != nil {
+			return fmt.Errorf("failed to create driver: %w", err)
+		}
+		defer cleanup()
+
+		// 4. Create and run executor
+		driverName := "uiautomator2"
+		if cfg.Platform == "mock" {
+			driverName = "mock"
+		}
+		runner := executor.New(driver, executor.RunnerConfig{
+			OutputDir:   cfg.OutputDir,
+			Parallelism: 0, // Sequential for now
+			Artifacts:   executor.ArtifactOnFailure,
+			Device: report.Device{
+				ID:       driver.GetPlatformInfo().DeviceID,
+				Platform: driver.GetPlatformInfo().Platform,
+				Name:     driver.GetPlatformInfo().DeviceName,
+			},
+			App: report.App{
+				ID: cfg.AppFile,
+			},
+			RunnerVersion: "0.1.0",
+			DriverName:    driverName,
+			// Live progress callbacks
+			OnFlowStart:       onFlowStart,
+			OnStepComplete:    onStepComplete,
+			OnNestedStep:      onNestedStep,
+			OnNestedFlowStart: onNestedFlowStart,
+			OnFlowEnd:         onFlowEnd,
+		})
+
+		result, runErr = runner.Run(context.Background(), flows)
+		if runErr != nil {
+			return fmt.Errorf("execution failed: %w", runErr)
+		}
 	}
 
 	// 5. Generate HTML report
@@ -574,6 +589,153 @@ func loadCapabilities(capsFile string) (map[string]interface{}, error) {
 	return caps, nil
 }
 
+// flowUsesClearState checks if a flow uses clearState in any of its steps.
+// This includes launchApp with clearState:true and standalone clearState steps.
+func flowUsesClearState(f *flow.Flow) bool {
+	return checkStepsForClearState(f.Steps)
+}
+
+// checkStepsForClearState recursively checks steps for clearState usage.
+func checkStepsForClearState(steps []flow.Step) bool {
+	for _, step := range steps {
+		switch s := step.(type) {
+		case *flow.LaunchAppStep:
+			if s.ClearState {
+				return true
+			}
+		case *flow.ClearStateStep:
+			return true
+		case *flow.RepeatStep:
+			if checkStepsForClearState(s.Steps) {
+				return true
+			}
+		case *flow.RetryStep:
+			if checkStepsForClearState(s.Steps) {
+				return true
+			}
+		case *flow.RunFlowStep:
+			if checkStepsForClearState(s.Steps) {
+				return true
+			}
+			// Note: We don't load external flow files here - that would be too expensive.
+			// For external runFlow files, clearState will be handled at runtime.
+		}
+	}
+	return false
+}
+
+// executeFlowsWithPerFlowSession runs each flow with its own Appium session.
+// This allows per-flow capability configuration (e.g., noReset based on clearState usage).
+func executeFlowsWithPerFlowSession(cfg *RunConfig, flows []flow.Flow) (*executor.RunResult, error) {
+	results := make([]executor.FlowResult, len(flows))
+	var totalDuration int64
+
+	for i, f := range flows {
+		// Analyze flow for clearState usage
+		usesClearState := flowUsesClearState(&f)
+
+		// Create per-flow capabilities
+		flowCaps := cloneCapabilities(cfg.Capabilities)
+
+		// Add noReset: false if flow uses clearState (reset app at session start)
+		if usesClearState {
+			flowCaps["appium:noReset"] = false
+			fmt.Printf("  %s→%s Flow uses clearState, setting noReset=false\n", color(colorCyan), color(colorReset))
+		}
+
+		// Create driver for this flow
+		flowCfg := *cfg
+		flowCfg.Capabilities = flowCaps
+		driver, cleanup, err := createAppiumDriver(&flowCfg)
+		if err != nil {
+			// Record failure and continue to next flow
+			results[i] = executor.FlowResult{
+				ID:     fmt.Sprintf("flow-%d", i),
+				Name:   f.Config.Name,
+				Status: report.StatusFailed,
+				Error:  fmt.Sprintf("failed to create driver: %v", err),
+			}
+			continue
+		}
+
+		// Create executor for single flow
+		runner := executor.New(driver, executor.RunnerConfig{
+			OutputDir:   cfg.OutputDir,
+			Parallelism: 0,
+			Artifacts:   executor.ArtifactOnFailure,
+			Device: report.Device{
+				ID:       driver.GetPlatformInfo().DeviceID,
+				Platform: driver.GetPlatformInfo().Platform,
+				Name:     driver.GetPlatformInfo().DeviceName,
+			},
+			App: report.App{
+				ID: cfg.AppFile,
+			},
+			RunnerVersion: "0.1.0",
+			DriverName:    "appium",
+			OnFlowStart:   func(flowIdx, totalFlows int, name, file string) { onFlowStart(i, len(flows), name, file) },
+			OnStepComplete: onStepComplete,
+			OnNestedStep:   onNestedStep,
+			OnNestedFlowStart: onNestedFlowStart,
+			OnFlowEnd:     onFlowEnd,
+		})
+
+		// Run single flow
+		result, err := runner.Run(context.Background(), []flow.Flow{f})
+		cleanup() // Clean up session after flow
+
+		if err != nil {
+			results[i] = executor.FlowResult{
+				ID:     fmt.Sprintf("flow-%d", i),
+				Name:   f.Config.Name,
+				Status: report.StatusFailed,
+				Error:  err.Error(),
+			}
+		} else if len(result.FlowResults) > 0 {
+			results[i] = result.FlowResults[0]
+			totalDuration += result.Duration
+		}
+	}
+
+	// Build aggregated result
+	runResult := &executor.RunResult{
+		TotalFlows:  len(flows),
+		FlowResults: results,
+		Duration:    totalDuration,
+	}
+
+	for _, fr := range results {
+		switch fr.Status {
+		case report.StatusPassed:
+			runResult.PassedFlows++
+		case report.StatusFailed:
+			runResult.FailedFlows++
+		case report.StatusSkipped:
+			runResult.SkippedFlows++
+		}
+	}
+
+	if runResult.FailedFlows > 0 {
+		runResult.Status = report.StatusFailed
+	} else {
+		runResult.Status = report.StatusPassed
+	}
+
+	return runResult, nil
+}
+
+// cloneCapabilities creates a copy of capabilities map.
+func cloneCapabilities(caps map[string]interface{}) map[string]interface{} {
+	if caps == nil {
+		return make(map[string]interface{})
+	}
+	cloned := make(map[string]interface{}, len(caps))
+	for k, v := range caps {
+		cloned[k] = v
+	}
+	return cloned
+}
+
 // createDriver creates the appropriate driver for the platform.
 // Returns the driver, a cleanup function, and any error.
 func createDriver(cfg *RunConfig) (core.Driver, func(), error) {
@@ -668,6 +830,18 @@ func createUIAutomator2Driver(cfg *RunConfig, dev *device.AndroidDevice, info de
 	if err := dev.StartUIAutomator2(uia2Cfg); err != nil {
 		return nil, nil, fmt.Errorf("start UIAutomator2: %w", err)
 	}
+
+	// Debug: Print socket/port info
+	if dev.SocketPath() != "" {
+		fmt.Printf("  → Socket: %s\n", dev.SocketPath())
+	} else if dev.LocalPort() != 0 {
+		fmt.Printf("  → Port: %d\n", dev.LocalPort())
+	}
+
+	// Verify server is actually responding
+	if !dev.IsUIAutomator2Running() {
+		return nil, nil, fmt.Errorf("UIAutomator2 server not responding after start")
+	}
 	printSetupSuccess("UIAutomator2 server started")
 
 	// 3. Create client
@@ -695,11 +869,12 @@ func createUIAutomator2Driver(cfg *RunConfig, dev *device.AndroidDevice, info de
 	}
 	printSetupSuccess("Session created")
 
-	// Set default implicit wait timeout (17 seconds like Maestro)
-	// This enables server-side polling for element finding
-	if err := client.SetImplicitWait(17 * time.Second); err != nil {
-		// Non-fatal: findElement will still work with its own polling
-		fmt.Printf("  %s⚠%s Warning: failed to set implicit wait: %v\n", color(colorYellow), color(colorReset), err)
+	// Disable waitForIdle - this causes 10+ second delays before every element query
+	// Our polling loops handle retries, so we don't need the server to wait for idle
+	if err := client.SetAppiumSettings(map[string]interface{}{
+		"waitForIdleTimeout": 0,
+	}); err != nil {
+		fmt.Printf("  %s⚠%s Warning: failed to set appium settings: %v\n", color(colorYellow), color(colorReset), err)
 	}
 
 	// 5. Create driver
@@ -830,7 +1005,7 @@ func createIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	}
 
 	// 6. Create driver
-	driver := wdadriver.NewDriver(client, platformInfo)
+	driver := wdadriver.NewDriver(client, platformInfo, udid)
 
 	// Cleanup function
 	cleanup := func() {

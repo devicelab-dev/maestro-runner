@@ -33,7 +33,7 @@ func NewClient(socketPath string) *Client {
 	return &Client{
 		http: &http.Client{
 			Transport: transport,
-			Timeout:   30 * time.Second,
+			Timeout:   10 * time.Second, // Balanced timeout for UIA2 operations
 		},
 		baseURL:    "http://localhost",
 		socketPath: socketPath,
@@ -45,7 +45,7 @@ func NewClient(socketPath string) *Client {
 func NewClientTCP(port int) *Client {
 	return &Client{
 		http: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: 10 * time.Second, // Balanced timeout for UIA2 operations
 		},
 		baseURL: fmt.Sprintf("http://127.0.0.1:%d", port),
 		logger:  createLogger(),
@@ -246,6 +246,21 @@ func (c *Client) SetImplicitWait(timeout time.Duration) error {
 
 	_, err := c.request("POST", c.sessionPath("/timeouts"), map[string]interface{}{
 		"implicit": timeout.Milliseconds(),
+	})
+	return err
+}
+
+// SetAppiumSettings configures Appium-specific settings.
+// Key settings:
+//   - waitForIdleTimeout: ms to wait for device idle (0 = disabled, default is 10000)
+//   - waitForSelectorTimeout: ms to wait for selector (default 0)
+func (c *Client) SetAppiumSettings(settings map[string]interface{}) error {
+	if c.sessionID == "" {
+		return fmt.Errorf("no active session")
+	}
+
+	_, err := c.request("POST", c.sessionPath("/appium/settings"), map[string]interface{}{
+		"settings": settings,
 	})
 	return err
 }

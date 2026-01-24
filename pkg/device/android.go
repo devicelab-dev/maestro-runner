@@ -27,11 +27,19 @@ type DeviceInfo struct {
 }
 
 // New creates an AndroidDevice for the given serial.
-// If serial is empty, it uses the default connected device.
+// If serial is empty, it auto-detects the connected device.
 func New(serial string) (*AndroidDevice, error) {
 	adbPath, err := findADB()
 	if err != nil {
 		return nil, err
+	}
+
+	// Auto-detect serial if not provided
+	if serial == "" {
+		serial, err = detectDeviceSerial(adbPath)
+		if err != nil {
+			return nil, fmt.Errorf("no device specified and auto-detect failed: %w", err)
+		}
 	}
 
 	d := &AndroidDevice{
@@ -45,6 +53,28 @@ func New(serial string) (*AndroidDevice, error) {
 	}
 
 	return d, nil
+}
+
+// detectDeviceSerial finds the first connected device serial.
+func detectDeviceSerial(adbPath string) (string, error) {
+	cmd := exec.Command(adbPath, "devices")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "List of") {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) >= 2 && parts[1] == "device" {
+			return parts[0], nil
+		}
+	}
+	return "", fmt.Errorf("no connected devices found")
 }
 
 // Serial returns the device serial number.

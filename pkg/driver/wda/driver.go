@@ -15,6 +15,7 @@ import (
 type Driver struct {
 	client *Client
 	info   *core.PlatformInfo
+	udid   string // Device UDID for simctl commands
 
 	// Timeouts (0 = use defaults)
 	findTimeout         int // ms, for required elements
@@ -22,10 +23,11 @@ type Driver struct {
 }
 
 // NewDriver creates a new WDA driver.
-func NewDriver(client *Client, info *core.PlatformInfo) *Driver {
+func NewDriver(client *Client, info *core.PlatformInfo, udid string) *Driver {
 	return &Driver{
 		client: client,
 		info:   info,
+		udid:   udid,
 	}
 }
 
@@ -127,6 +129,10 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	// Media
 	case *flow.TakeScreenshotStep:
 		result = d.takeScreenshot(s)
+
+	// Permissions
+	case *flow.SetPermissionsStep:
+		result = d.setPermissions(s)
 
 	default:
 		result = &core.CommandResult{

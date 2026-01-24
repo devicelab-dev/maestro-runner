@@ -228,28 +228,38 @@ func (d *Driver) GetPlatformInfo() *core.PlatformInfo {
 // Tries multiple locator strategies in order until one succeeds.
 // For relative selectors or regex patterns, uses page source parsing.
 // If stepTimeoutMs > 0, uses that; otherwise uses 17s for required, 7s for optional.
+// Returns full element info including text and bounds (3 HTTP calls).
 func (d *Driver) findElement(sel flow.Selector, optional bool, stepTimeoutMs int) (*uiautomator2.Element, *core.ElementInfo, error) {
-	return d.findElementWithOptions(sel, optional, stepTimeoutMs, false)
+	return d.findElementWithOptions(sel, optional, stepTimeoutMs, false, false)
+}
+
+// findElementFast finds an element with minimal HTTP calls (1 call).
+// Use for visibility checks where we only need to know element exists.
+func (d *Driver) findElementFast(sel flow.Selector, optional bool, stepTimeoutMs int) (*uiautomator2.Element, *core.ElementInfo, error) {
+	return d.findElementWithOptions(sel, optional, stepTimeoutMs, false, true)
 }
 
 // findElementForTap finds an element for tap commands, prioritizing clickable elements.
 // When multiple elements match (e.g., "Login" title and "Login" button), prefers the clickable one.
+// Returns full element info including bounds needed for tap coordinates (3 HTTP calls).
 func (d *Driver) findElementForTap(sel flow.Selector, optional bool, stepTimeoutMs int) (*uiautomator2.Element, *core.ElementInfo, error) {
-	return d.findElementWithOptions(sel, optional, stepTimeoutMs, true)
+	return d.findElementWithOptions(sel, optional, stepTimeoutMs, true, false)
 }
 
 // findElementWithOptions is the internal implementation with clickable preference option.
-func (d *Driver) findElementWithOptions(sel flow.Selector, optional bool, stepTimeoutMs int, preferClickable bool) (*uiautomator2.Element, *core.ElementInfo, error) {
+// Set fastMode=true for visibility checks (1 HTTP call), false for full info (3 HTTP calls).
+func (d *Driver) findElementWithOptions(sel flow.Selector, optional bool, stepTimeoutMs int, preferClickable bool, fastMode bool) (*uiautomator2.Element, *core.ElementInfo, error) {
 	timeout := d.calculateTimeout(optional, stepTimeoutMs)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	return d.findElementWithContext(ctx, sel, preferClickable)
+	return d.findElementWithContext(ctx, sel, preferClickable, fastMode)
 }
 
 // findElementWithContext finds an element using context for deadline management.
 // Single polling loop - context controls the timeout.
-func (d *Driver) findElementWithContext(ctx context.Context, sel flow.Selector, preferClickable bool) (*uiautomator2.Element, *core.ElementInfo, error) {
+// Set fastMode=true for visibility checks (1 HTTP call), false for full info (3 HTTP calls).
+func (d *Driver) findElementWithContext(ctx context.Context, sel flow.Selector, preferClickable bool, fastMode bool) (*uiautomator2.Element, *core.ElementInfo, error) {
 	// Handle relative selectors via page source (position calculation required)
 	if sel.HasRelativeSelector() {
 		return d.findElementRelativeWithContext(ctx, sel)
@@ -277,25 +287,31 @@ func (d *Driver) findElementWithContext(ctx context.Context, sel flow.Selector, 
 	for {
 		select {
 		case <-ctx.Done():
-			if lastErr != nil {
-				return nil, nil, fmt.Errorf("%s: %w", ctx.Err(), lastErr)
-			}
-			return nil, nil, fmt.Errorf("element '%s' not found: %w", sel.Describe(), ctx.Err())
-		default:
-			// Try UiAutomator strategies
-			elem, info, err := d.tryFindElement(strategies)
-			if err == nil {
-				return elem, info, nil
-			}
-			lastErr = err
-
-			// For text-based selectors, try page source as fallback
+			// UiAutomator strategies exhausted - try page source ONCE as final fallback
 			if sel.Text != "" {
 				_, info, err := d.findElementByPageSourceOnce(sel)
 				if err == nil {
 					return nil, info, nil
 				}
 			}
+			if lastErr != nil {
+				return nil, nil, fmt.Errorf("%s: %w", ctx.Err(), lastErr)
+			}
+			return nil, nil, fmt.Errorf("element '%s' not found: %w", sel.Describe(), ctx.Err())
+		default:
+			// Try UiAutomator strategies
+			var elem *uiautomator2.Element
+			var info *core.ElementInfo
+			var err error
+			if fastMode {
+				elem, info, err = d.tryFindElementFast(strategies)
+			} else {
+				elem, info, err = d.tryFindElement(strategies)
+			}
+			if err == nil {
+				return elem, info, nil
+			}
+			lastErr = err
 			// HTTP round-trip (~100ms) is natural rate limit, no sleep needed
 		}
 	}
@@ -361,8 +377,10 @@ func (d *Driver) findElementQuick(sel flow.Selector, timeoutMs int) (*uiautomato
 	return d.findElementOnce(sel)
 }
 
-// tryFindElement attempts to find element using given strategies (single attempt).
-func (d *Driver) tryFindElement(strategies []LocatorStrategy) (*uiautomator2.Element, *core.ElementInfo, error) {
+// tryFindElementFast attempts to find element using given strategies (single attempt).
+// Returns minimal info - just element ID and visible=true. No extra HTTP calls.
+// Use this for visibility checks where we only need to know element exists.
+func (d *Driver) tryFindElementFast(strategies []LocatorStrategy) (*uiautomator2.Element, *core.ElementInfo, error) {
 	var lastErr error
 	for _, s := range strategies {
 		elem, err := d.client.FindElement(s.Strategy, s.Value)
@@ -371,28 +389,13 @@ func (d *Driver) tryFindElement(strategies []LocatorStrategy) (*uiautomator2.Ele
 			continue
 		}
 
-		// Found element - build info
-		// UIAutomator2 by default only returns visible elements,
-		// so if we found it, it's visible. Don't make extra HTTP calls.
+		// Found element - return minimal info (no extra HTTP calls)
+		// UIAutomator2 by default only returns visible elements
 		info := &core.ElementInfo{
 			ID:      elem.ID(),
-			Visible: true, // Element found = visible (UIAutomator default behavior)
-			Enabled: true, // Assume enabled unless overridden
+			Visible: true,
+			Enabled: true,
 		}
-
-		if text, err := elem.Text(); err == nil {
-			info.Text = text
-		}
-
-		if rect, err := elem.Rect(); err == nil {
-			info.Bounds = core.Bounds{
-				X:      rect.X,
-				Y:      rect.Y,
-				Width:  rect.Width,
-				Height: rect.Height,
-			}
-		}
-
 		return elem, info, nil
 	}
 
@@ -400,6 +403,32 @@ func (d *Driver) tryFindElement(strategies []LocatorStrategy) (*uiautomator2.Ele
 		return nil, nil, lastErr
 	}
 	return nil, nil, fmt.Errorf("element not found")
+}
+
+// tryFindElement attempts to find element using given strategies (single attempt).
+// Returns full element info including text and bounds (3 HTTP calls total).
+// Use tryFindElementFast for visibility checks where details aren't needed.
+func (d *Driver) tryFindElement(strategies []LocatorStrategy) (*uiautomator2.Element, *core.ElementInfo, error) {
+	elem, info, err := d.tryFindElementFast(strategies)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Fetch additional details (2 more HTTP calls)
+	if text, err := elem.Text(); err == nil {
+		info.Text = text
+	}
+
+	if rect, err := elem.Rect(); err == nil {
+		info.Bounds = core.Bounds{
+			X:      rect.X,
+			Y:      rect.Y,
+			Width:  rect.Width,
+			Height: rect.Height,
+		}
+	}
+
+	return elem, info, nil
 }
 
 // relativeFilterType identifies which relative filter to apply

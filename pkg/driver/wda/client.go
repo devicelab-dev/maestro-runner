@@ -89,9 +89,21 @@ func (c *Client) Status() (map[string]interface{}, error) {
 
 // LaunchApp launches an app by bundle ID.
 func (c *Client) LaunchApp(bundleID string) error {
-	_, err := c.post(c.sessionPath("/wda/apps/launch"), map[string]interface{}{
+	return c.LaunchAppWithArgs(bundleID, nil, nil)
+}
+
+// LaunchAppWithArgs launches an app with optional arguments and environment variables.
+func (c *Client) LaunchAppWithArgs(bundleID string, arguments []string, environment map[string]string) error {
+	body := map[string]interface{}{
 		"bundleId": bundleID,
-	})
+	}
+	if len(arguments) > 0 {
+		body["arguments"] = arguments
+	}
+	if len(environment) > 0 {
+		body["environment"] = environment
+	}
+	_, err := c.post(c.sessionPath("/wda/apps/launch"), body)
 	return err
 }
 

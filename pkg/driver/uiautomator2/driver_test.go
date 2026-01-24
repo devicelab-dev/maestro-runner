@@ -172,6 +172,7 @@ func (m *MockShellExecutor) Shell(cmd string) (string, error) {
 // ============================================================================
 
 func TestBuildSelectorsText(t *testing.T) {
+	// Literal text uses textContains (not regex)
 	sel := flow.Selector{Text: "Login"}
 	strategies, err := buildSelectors(sel, 5000)
 	if err != nil {
@@ -183,13 +184,43 @@ func TestBuildSelectorsText(t *testing.T) {
 		t.Errorf("expected 2 strategies, got %d", len(strategies))
 	}
 
-	// First should be text-based
+	// First should be text-based with textContains (for literal text)
 	s := strategies[0]
-	if !strings.Contains(s.Value, "textMatches") {
-		t.Error("expected textMatches in selector")
+	if !strings.Contains(s.Value, "textContains") {
+		t.Errorf("expected textContains in selector, got: %s", s.Value)
 	}
-	if !strings.Contains(s.Value, "(?is)") {
-		t.Error("expected case-insensitive flag in selector")
+	if !strings.Contains(s.Value, `"Login"`) {
+		t.Errorf("expected Login in selector, got: %s", s.Value)
+	}
+}
+
+func TestBuildSelectorsTextWithPeriod(t *testing.T) {
+	// Text with period (domain name) uses textContains, not regex
+	sel := flow.Selector{Text: "Join mastodon.social"}
+	strategies, err := buildSelectors(sel, 5000)
+	if err != nil {
+		t.Fatalf("buildSelectors failed: %v", err)
+	}
+
+	// Should have 2 strategies: text and description
+	if len(strategies) != 2 {
+		t.Errorf("expected 2 strategies, got %d", len(strategies))
+	}
+
+	// Should use textContains, NOT textMatches
+	s := strategies[0]
+	if !strings.Contains(s.Value, "textContains") {
+		t.Errorf("expected textContains in selector, got: %s", s.Value)
+	}
+	if strings.Contains(s.Value, "textMatches") {
+		t.Errorf("should NOT use textMatches for literal text, got: %s", s.Value)
+	}
+	// The period should NOT be escaped (textContains doesn't use regex)
+	if strings.Contains(s.Value, `\.`) {
+		t.Errorf("period should not be escaped in textContains, got: %s", s.Value)
+	}
+	if !strings.Contains(s.Value, "mastodon.social") {
+		t.Errorf("expected literal text 'mastodon.social' in selector, got: %s", s.Value)
 	}
 }
 
@@ -198,19 +229,26 @@ func TestLooksLikeRegex(t *testing.T) {
 		text     string
 		expected bool
 	}{
-		{".+@.+", true},        // Email pattern
-		{".*hello.*", true},    // Contains pattern
-		{"[a-z]+", true},       // Character class
-		{"^start", true},       // Anchor
-		{"end$", true},         // Anchor
-		{"a|b", true},          // Alternation
-		{"a?b", true},          // Optional
-		{"a{2,3}", true},       // Quantifier
-		{"(group)", true},      // Group
-		{"Hello", false},       // Plain text
-		{"Hello World", false}, // Plain text with space
-		{"Login123", false},    // Alphanumeric
-		{`\.escaped`, false},   // Escaped dot
+		{".+@.+", true},                     // Email pattern
+		{".*hello.*", true},                 // Contains pattern
+		{"[a-z]+", true},                    // Character class
+		{"^start", true},                    // Anchor
+		{"end$", true},                      // Anchor
+		{"a|b", true},                       // Alternation
+		{"a?b", true},                       // Optional
+		{"a{2,3}", true},                    // Quantifier
+		{"(group)", true},                   // Group
+		{"Hello", false},                    // Plain text
+		{"Hello World", false},              // Plain text with space
+		{"Hello_World", false},              // Plain text with underscore
+		{"Login123", false},                 // Alphanumeric
+		{`\.escaped`, false},                // Escaped dot
+		{"mastodon.social", false},          // Domain name - period is literal
+		{"Join mastodon.social", false},     // Button text with domain
+		{"user@example.com", false},         // Email address (literal)
+		{"v1.2.3", false},                   // Version number
+		{"file.txt", false},                 // Filename
+		{"www.google.com", false},           // URL host
 	}
 
 	for _, tc := range tests {
@@ -223,28 +261,8 @@ func TestLooksLikeRegex(t *testing.T) {
 	}
 }
 
-func TestTextToRegexPattern(t *testing.T) {
-	tests := []struct {
-		text     string
-		expected string
-	}{
-		{".+@.+", "(?is).+@.+"},                 // Regex pattern - kept as-is with flag
-		{"Login", "(?is).*Login.*"},             // Literal - wrapped for contains
-		{"Hello World", "(?is).*Hello World.*"}, // Literal with space
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.text, func(t *testing.T) {
-			result := textToRegexPattern(tc.text)
-			if result != tc.expected {
-				t.Errorf("textToRegexPattern(%q) = %q, expected %q", tc.text, result, tc.expected)
-			}
-		})
-	}
-}
-
 func TestBuildSelectorsRegexPattern(t *testing.T) {
-	// Email regex pattern
+	// Email regex pattern - uses textMatches
 	sel := flow.Selector{Text: ".+@.+"}
 	strategies, err := buildSelectors(sel, 5000)
 	if err != nil {
@@ -865,7 +883,7 @@ func TestExecuteAllStepTypes(t *testing.T) {
 		{"HideKeyboardStep", &flow.HideKeyboardStep{}, false},
 		{"InputRandomStep", &flow.InputRandomStep{Length: 5}, true},
 		{"ScrollStep", &flow.ScrollStep{Direction: "down"}, false},
-		{"ScrollUntilVisibleStep", &flow.ScrollUntilVisibleStep{Selector: flow.Selector{Text: "btn"}}, true},
+		{"ScrollUntilVisibleStep", &flow.ScrollUntilVisibleStep{Element: flow.Selector{Text: "btn"}}, true},
 		{"SwipeStep", &flow.SwipeStep{Direction: "up"}, false},
 		{"BackStep", &flow.BackStep{}, false},
 		{"PressKeyStep", &flow.PressKeyStep{Key: "enter"}, false},
@@ -1301,7 +1319,10 @@ func TestAssertVisibleWithElement(t *testing.T) {
 	}
 }
 
-func TestAssertVisibleNotDisplayed(t *testing.T) {
+// TestAssertVisibleElementFound tests that assertVisible succeeds when element is found.
+// Note: UIAutomator2 by default only returns visible elements, so we assume visible=true when found.
+// We no longer call IsDisplayed() as it causes slow HTTP calls and UIAutomator handles visibility filtering.
+func TestAssertVisibleElementFoundIsVisible(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1316,12 +1337,7 @@ func TestAssertVisibleNotDisplayed(t *testing.T) {
 				"value": map[string]int{"x": 100, "y": 200, "width": 50, "height": 30},
 			})
 		},
-		"GET /element/elem-vis/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			json.NewEncoder(w).Encode(map[string]interface{}{"value": "false"}) // Not displayed
-		},
-		"GET /element/elem-vis/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			json.NewEncoder(w).Encode(map[string]interface{}{"value": "true"})
-		},
+		// Note: displayed/enabled endpoints no longer called - we assume visible=true when found
 	})
 	defer server.Close()
 
@@ -1331,44 +1347,8 @@ func TestAssertVisibleNotDisplayed(t *testing.T) {
 	step := &flow.AssertVisibleStep{Selector: flow.Selector{Text: "Label"}}
 	result := driver.Execute(step)
 
-	if result.Success {
-		t.Error("expected failure when element is not displayed")
-	}
-}
-
-func TestAssertVisibleDisplayedError(t *testing.T) {
-	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
-		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"value": map[string]string{"ELEMENT": "elem-vis"},
-			})
-		},
-		"GET /element/elem-vis/text": func(w http.ResponseWriter, r *http.Request) {
-			json.NewEncoder(w).Encode(map[string]interface{}{"value": "Label"})
-		},
-		"GET /element/elem-vis/rect": func(w http.ResponseWriter, r *http.Request) {
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"value": map[string]int{"x": 100, "y": 200, "width": 50, "height": 30},
-			})
-		},
-		"GET /element/elem-vis/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]interface{}{"value": "error"})
-		},
-		"GET /element/elem-vis/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			json.NewEncoder(w).Encode(map[string]interface{}{"value": "true"})
-		},
-	})
-	defer server.Close()
-
-	client := newMockHTTPClient(server.URL)
-	driver := New(client.Client, nil, nil)
-
-	step := &flow.AssertVisibleStep{Selector: flow.Selector{Text: "Label"}}
-	result := driver.Execute(step)
-
-	if result.Success {
-		t.Error("expected failure when IsDisplayed errors")
+	if !result.Success {
+		t.Errorf("expected success when element found (UIAutomator filters invisible), got: %v", result.Error)
 	}
 }
 
@@ -1850,6 +1830,11 @@ func TestScrollUntilVisibleFound(t *testing.T) {
 		"POST /appium/actions": func(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(map[string]interface{}{"value": nil})
 		},
+		"GET /appium/device/info": func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"value": map[string]interface{}{"realDisplaySize": "1080x2400"},
+			})
+		},
 	})
 	defer server.Close()
 
@@ -1857,7 +1842,7 @@ func TestScrollUntilVisibleFound(t *testing.T) {
 	driver := New(client.Client, nil, nil)
 
 	step := &flow.ScrollUntilVisibleStep{
-		Selector:  flow.Selector{Text: "Target"},
+		Element:   flow.Selector{Text: "Target"},
 		Direction: "down",
 	}
 	result := driver.Execute(step)
@@ -1878,6 +1863,21 @@ func TestScrollUntilVisibleScrollError(t *testing.T) {
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]interface{}{"value": "scroll error"})
 		},
+		"GET /appium/device/info": func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"value": map[string]interface{}{"realDisplaySize": "1080x2400"},
+			})
+		},
+		"GET /source": func(w http.ResponseWriter, r *http.Request) {
+			// Return valid hierarchy without target element
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"value": `<hierarchy><node text="Other" bounds="[0,0][100,100]"/></hierarchy>`,
+			})
+		},
+		"POST /appium/gestures/scroll": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]interface{}{"value": "scroll error"})
+		},
 	})
 	defer server.Close()
 
@@ -1885,8 +1885,9 @@ func TestScrollUntilVisibleScrollError(t *testing.T) {
 	driver := New(client.Client, nil, nil)
 
 	step := &flow.ScrollUntilVisibleStep{
-		Selector:  flow.Selector{Text: "Target"},
+		Element:   flow.Selector{Text: "Target"},
 		Direction: "down",
+		BaseStep:  flow.BaseStep{TimeoutMs: 2000}, // Short timeout for test
 	}
 	result := driver.Execute(step)
 

@@ -180,7 +180,7 @@ func extractSelector(step flow.Step) *Selector {
 	case *flow.AssertNotVisibleStep:
 		sel = &s.Selector
 	case *flow.ScrollUntilVisibleStep:
-		sel = &s.Selector
+		sel = &s.Element
 	case *flow.InputTextStep:
 		sel = &s.Selector
 	case *flow.CopyTextFromStep:

@@ -53,12 +53,32 @@ type PointModel struct {
 	Y int `json:"y"`
 }
 
-// RectModel represents a rectangle.
-type RectModel struct {
+// ElementRect represents element bounds from /element/{id}/rect API.
+// This uses x/y/width/height format returned by WebDriver element rect endpoint.
+type ElementRect struct {
 	X      int `json:"x"`
 	Y      int `json:"y"`
 	Width  int `json:"width"`
 	Height int `json:"height"`
+}
+
+// RectModel represents a rectangle for scroll/swipe area operations.
+// UIAutomator2 gesture APIs expect left/top/width/height format.
+type RectModel struct {
+	Left   int `json:"left"`
+	Top    int `json:"top"`
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
+// NewRect creates a RectModel from x, y, width, height values.
+func NewRect(x, y, width, height int) RectModel {
+	return RectModel{
+		Left:   x,
+		Top:    y,
+		Width:  width,
+		Height: height,
+	}
 }
 
 // ClickRequest for tap gestures.

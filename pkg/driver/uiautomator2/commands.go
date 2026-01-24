@@ -18,14 +18,28 @@ import (
 // ============================================================================
 
 func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
-	// Check if using percentage-based Point (e.g., "85%, 50%")
-	if step.Point != "" {
+	// Check if using percentage-based Point WITHOUT selector (screen-relative tap)
+	if step.Point != "" && step.Selector.IsEmpty() {
 		return d.tapOnPointWithPercentage(step.Point)
 	}
 
 	elem, info, err := d.findElementForTap(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Element not found: %v", err))
+	}
+
+	// If Point is specified WITH selector, tap at relative position within element bounds
+	if step.Point != "" && info != nil && info.Bounds.Width > 0 {
+		xPct, yPct, parseErr := parsePercentageCoords(step.Point)
+		if parseErr != nil {
+			return errorResult(parseErr, fmt.Sprintf("Invalid point coordinates: %v", parseErr))
+		}
+		x := info.Bounds.X + int(float64(info.Bounds.Width)*xPct)
+		y := info.Bounds.Y + int(float64(info.Bounds.Height)*yPct)
+		if err := d.client.Click(x, y); err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to tap at relative point: %v", err))
+		}
+		return successResult(fmt.Sprintf("Tapped at relative point (%d, %d) on element", x, y), info)
 	}
 
 	// For relative selectors, elem is nil but we have bounds - tap at center
@@ -156,12 +170,13 @@ func (d *Driver) tapOnPoint(step *flow.TapOnPointStep) *core.CommandResult {
 // ============================================================================
 
 func (d *Driver) assertVisible(step *flow.AssertVisibleStep) *core.CommandResult {
-	_, info, err := d.findElement(step.Selector, step.IsOptional(), step.TimeoutMs)
+	// Use findElementFast - only need to check element exists (1 HTTP call vs 3)
+	_, info, err := d.findElementFast(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Element not visible: %v", err))
 	}
 
-	// info.Visible is already set by findElement/tryFindElement
+	// info.Visible is already set by findElementFast
 	if info != nil && info.Visible {
 		return successResult("Element is visible", info)
 	}
@@ -170,20 +185,32 @@ func (d *Driver) assertVisible(step *flow.AssertVisibleStep) *core.CommandResult
 }
 
 func (d *Driver) assertNotVisible(step *flow.AssertNotVisibleStep) *core.CommandResult {
-	// For negative assertions, use short timeout but include page source fallback for accuracy
-	// Element not existing = success
-	// Respects step timeout if configured, otherwise uses 1s default
+	// Poll until element is NOT visible (or timeout)
+	// Used to verify element has disappeared after an action
 	timeout := step.TimeoutMs
 	if timeout <= 0 {
-		timeout = 1000
-	}
-	_, info, err := d.findElement(step.Selector, true, timeout)
-	if err != nil || info == nil {
-		// Element not found = not visible = success
-		return successResult("Element is not visible", nil)
+		timeout = 5000
 	}
 
-	return errorResult(fmt.Errorf("element is visible"), "Element should not be visible but was found")
+	deadline := time.Now().Add(time.Duration(timeout) * time.Millisecond)
+	pollInterval := 500 * time.Millisecond
+
+	for {
+		// Quick check if element exists (no waiting)
+		_, info, err := d.findElementQuick(step.Selector, 0)
+		if err != nil || info == nil {
+			// Element not found = not visible = success
+			return successResult("Element is not visible", nil)
+		}
+
+		// Element still visible - check if we've timed out
+		if time.Now().After(deadline) {
+			return errorResult(fmt.Errorf("element is visible"), "Element should not be visible but was found")
+		}
+
+		// Wait before next check
+		time.Sleep(pollInterval)
+	}
 }
 
 // ============================================================================
@@ -213,9 +240,20 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		}
 	} else {
 		// Type into focused element
+		// First try WebDriver activeElement endpoint
 		active, err := d.client.ActiveElement()
 		if err != nil {
-			return errorResult(err, "No focused element to type into")
+			// Fallback: find element with focused=true via page source
+			focusedTrue := true
+			focusedSel := flow.Selector{Focused: &focusedTrue}
+			elem, _, findErr := d.findElement(focusedSel, false, 2000)
+			if findErr != nil {
+				return errorResult(err, "No focused element to type into")
+			}
+			if err := elem.SendKeys(text); err != nil {
+				return errorResult(err, fmt.Sprintf("Failed to input text: %v", err))
+			}
+			return successResult(fmt.Sprintf("Entered text: %s%s", text, unicodeWarning), nil)
 		}
 		if err := active.SendKeys(text); err != nil {
 			return errorResult(err, fmt.Sprintf("Failed to input text: %v", err))
@@ -296,7 +334,9 @@ func (d *Driver) scroll(step *flow.ScrollStep) *core.CommandResult {
 		direction = "down"
 	}
 
-	uiaDir := mapDirection(direction)
+	// Invert direction: scroll direction = content movement, swipe = finger gesture
+	// "scroll down" means reveal content below, which requires swiping up
+	uiaDir := invertScrollDirection(direction)
 
 	// Get screen size for dynamic scroll area
 	width, height := 1080, 1920 // defaults
@@ -321,7 +361,9 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	}
 
 	maxScrolls := 10
-	uiaDir := mapDirection(direction)
+	// Invert direction: scroll direction = content movement, swipe = finger gesture
+	// "scroll down" means reveal content below, which requires swiping up
+	uiaDir := invertScrollDirection(direction)
 
 	// Get screen size for dynamic scroll area
 	width, height := 1080, 1920 // defaults
@@ -334,7 +376,7 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 
 	for i := 0; i < maxScrolls; i++ {
 		// Try to find element (short timeout - includes page source fallback)
-		_, info, err := d.findElement(step.Selector, true, 1000)
+		_, info, err := d.findElement(step.Element, true, 1000)
 		if err == nil && info != nil {
 			// Element found - return success
 			return successResult(fmt.Sprintf("Element found after %d scrolls", i), info)
@@ -369,20 +411,153 @@ func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
 
 	uiaDir := mapDirection(direction)
 
-	// Get screen size for dynamic swipe area
+	// If selector specified, swipe within that element's bounds
+	if step.Selector != nil && !step.Selector.IsEmpty() {
+		_, info, err := d.findElement(*step.Selector, step.IsOptional(), step.TimeoutMs)
+		if err != nil {
+			return errorResult(err, fmt.Sprintf("Element not found for swipe: %v", err))
+		}
+		if info != nil && info.Bounds.Width > 0 {
+			area := uiautomator2.NewRect(
+				info.Bounds.X,
+				info.Bounds.Y,
+				info.Bounds.Width,
+				info.Bounds.Height,
+			)
+			if err := d.client.SwipeInArea(area, uiaDir, 0.7, 0); err != nil {
+				return errorResult(err, fmt.Sprintf("Failed to swipe in element: %v", err))
+			}
+			return successResult(fmt.Sprintf("Swiped %s in element", direction), info)
+		}
+	}
+
+	// Get screen size
 	width, height := 1080, 1920 // defaults
 	if w, h, err := d.getScreenSize(); err == nil {
 		width, height = w, h
 	}
 
-	// Use most of screen for swipe area (leave margins)
-	area := uiautomator2.NewRect(0, height/8, width, height*3/4)
+	// No selector specified - try to find a scrollable element
+	// Wait up to 10 seconds for page to load and find scrollable
+	scrollableInfo, scrollableCount := d.findScrollableElement(10000)
 
-	if err := d.client.SwipeInArea(area, uiaDir, 0.7, 0); err != nil {
-		return errorResult(err, fmt.Sprintf("Failed to swipe: %v", err))
+	// Print debug info about scrollable elements found
+	if scrollableInfo != nil {
+		b := scrollableInfo.Bounds
+		fmt.Printf("[swipe] Found %d scrollable(s), using: bounds=[%d,%d,%d,%d]\n",
+			scrollableCount, b.X, b.Y, b.Width, b.Height)
+
+		// Use coordinate-based swipe within scrollable bounds
+		// Centered at 50% horizontally, 70%→30% vertically (relative to scrollable area)
+		centerX := b.X + b.Width/2
+		var startY, endY int
+		switch direction {
+		case "up":
+			startY = b.Y + b.Height*70/100
+			endY = b.Y + b.Height*30/100
+		case "down":
+			startY = b.Y + b.Height*30/100
+			endY = b.Y + b.Height*70/100
+		default:
+			startY = b.Y + b.Height*70/100
+			endY = b.Y + b.Height*30/100
+		}
+
+		fmt.Printf("[swipe] Coords in scrollable: (%d,%d) → (%d,%d)\n", centerX, startY, centerX, endY)
+		return d.swipeWithAbsoluteCoords(centerX, startY, centerX, endY, step.Duration)
 	}
 
-	return successResult(fmt.Sprintf("Swiped %s", direction), nil)
+	fmt.Printf("[swipe] No scrollable found, using screen coordinates (50%% center)\n")
+	// Fallback: Use coordinates starting from 50% center
+	return d.swipeWithMaestroCoordinates(direction, width, height, step.Duration)
+}
+
+// findScrollableElement waits for and finds a scrollable element.
+// Returns the element info and count of scrollables found.
+func (d *Driver) findScrollableElement(timeoutMs int) (*core.ElementInfo, int) {
+	timeout := time.Duration(timeoutMs) * time.Millisecond
+	deadline := time.Now().Add(timeout)
+	pollInterval := 500 * time.Millisecond
+
+	for time.Now().Before(deadline) {
+		source, err := d.client.Source()
+		if err != nil {
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		elements, err := ParsePageSource(source)
+		if err != nil {
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		scrollables := FilterScrollable(elements)
+
+		// If exactly one scrollable, use it
+		if len(scrollables) == 1 {
+			elem := scrollables[0]
+			return &core.ElementInfo{
+				Bounds: elem.Bounds,
+			}, 1
+		}
+
+		// If multiple scrollables, find the largest one (likely the main content area)
+		if len(scrollables) > 1 {
+			largest := FindLargestScrollable(elements)
+			if largest != nil {
+				return &core.ElementInfo{
+					Bounds: largest.Bounds,
+				}, len(scrollables)
+			}
+		}
+
+		time.Sleep(pollInterval)
+	}
+
+	return nil, 0
+}
+
+// swipeWithMaestroCoordinates performs swipe using centered coordinates.
+// Uses 50% as center point with 70%→30% range to avoid triggering system gestures.
+// UP: 50%,70% → 50%,30% (swipe finger up, content moves up, reveals below)
+// DOWN: 50%,30% → 50%,70% (swipe finger down, content moves down, reveals above)
+// LEFT: 70%,50% → 30%,50%
+// RIGHT: 30%,50% → 70%,50%
+func (d *Driver) swipeWithMaestroCoordinates(direction string, width, height, durationMs int) *core.CommandResult {
+	var startX, startY, endX, endY int
+
+	switch direction {
+	case "up":
+		startX = width / 2
+		startY = height * 70 / 100
+		endX = width / 2
+		endY = height * 30 / 100
+	case "down":
+		startX = width / 2
+		startY = height * 30 / 100
+		endX = width / 2
+		endY = height * 70 / 100
+	case "left":
+		startX = width * 70 / 100
+		startY = height / 2
+		endX = width * 30 / 100
+		endY = height / 2
+	case "right":
+		startX = width * 30 / 100
+		startY = height / 2
+		endX = width * 70 / 100
+		endY = height / 2
+	default:
+		// Default to up
+		startX = width / 2
+		startY = height * 70 / 100
+		endX = width / 2
+		endY = height * 30 / 100
+	}
+
+	fmt.Printf("[swipe] Using screen coords: (%d,%d) → (%d,%d)\n", startX, startY, endX, endY)
+	return d.swipeWithAbsoluteCoords(startX, startY, endX, endY, durationMs)
 }
 
 // swipeWithCoordinates handles percentage-based swipe (e.g., "50%, 15%")
@@ -559,9 +734,47 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 		}
 	}
 
-	// Launch app using monkey (works without knowing activity name)
-	// Alternative: am start -n appID/.MainActivity
-	cmd := fmt.Sprintf("monkey -p %s -c android.intent.category.LAUNCHER 1", appID)
+	// Apply permissions (default: all allow, like Maestro)
+	permissions := step.Permissions
+	if len(permissions) == 0 {
+		permissions = map[string]string{"all": "allow"}
+	}
+	result := d.applyPermissions(appID, permissions)
+	if !result.Success {
+		// Log warning but don't fail - permission errors are common for non-runtime permissions
+		// Continue with launch
+	}
+
+	// Launch app - use am start with arguments if provided, otherwise monkey
+	var cmd string
+	if len(step.Arguments) > 0 {
+		// Build am start command with intent extras
+		cmd = fmt.Sprintf("am start -n %s/.MainActivity -a android.intent.action.MAIN -c android.intent.category.LAUNCHER", appID)
+		for key, value := range step.Arguments {
+			switch v := value.(type) {
+			case string:
+				cmd += fmt.Sprintf(" --es %s '%s'", key, v)
+			case int:
+				cmd += fmt.Sprintf(" --ei %s %d", key, v)
+			case int64:
+				cmd += fmt.Sprintf(" --ei %s %d", key, v)
+			case float64:
+				// YAML numbers can be float64
+				if v == float64(int(v)) {
+					cmd += fmt.Sprintf(" --ei %s %d", key, int(v))
+				} else {
+					cmd += fmt.Sprintf(" --ef %s %f", key, v)
+				}
+			case bool:
+				cmd += fmt.Sprintf(" --ez %s %t", key, v)
+			default:
+				cmd += fmt.Sprintf(" --es %s '%v'", key, v)
+			}
+		}
+	} else {
+		// Use monkey (works without knowing activity name)
+		cmd = fmt.Sprintf("monkey -p %s -c android.intent.category.LAUNCHER 1", appID)
+	}
 	if _, err := d.device.Shell(cmd); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to launch app: %v", err))
 	}
@@ -621,6 +834,205 @@ func (d *Driver) killApp(step *flow.KillAppStep) *core.CommandResult {
 	}
 
 	return successResult(fmt.Sprintf("Killed app: %s", appID), nil)
+}
+
+func (d *Driver) setPermissions(step *flow.SetPermissionsStep) *core.CommandResult {
+	appID := step.AppID
+	if appID == "" {
+		return errorResult(fmt.Errorf("no appId specified"), "No app ID for permissions")
+	}
+
+	if d.device == nil {
+		return errorResult(fmt.Errorf("device not configured"), "setPermissions requires device access")
+	}
+
+	if len(step.Permissions) == 0 {
+		return errorResult(fmt.Errorf("no permissions specified"), "No permissions to set")
+	}
+
+	return d.applyPermissions(appID, step.Permissions)
+}
+
+// applyPermissions applies permission settings to an app.
+// Permissions map: shortcut/permission name -> "allow"/"deny"/"unset"
+func (d *Driver) applyPermissions(appID string, permissions map[string]string) *core.CommandResult {
+	var granted, revoked, errors []string
+
+	for name, value := range permissions {
+		// Handle "all" shortcut - applies to all common permissions
+		if strings.ToLower(name) == "all" {
+			allPerms := getAllPermissions()
+			for _, perm := range allPerms {
+				err := d.applyPermission(appID, perm, value)
+				if err != nil {
+					errors = append(errors, fmt.Sprintf("%s: %v", perm, err))
+				} else if value == "allow" {
+					granted = append(granted, perm)
+				} else if value == "deny" {
+					revoked = append(revoked, perm)
+				}
+			}
+			continue
+		}
+
+		// Resolve permission shortcut to Android permission names
+		perms := resolvePermissionShortcut(name)
+		for _, perm := range perms {
+			err := d.applyPermission(appID, perm, value)
+			if err != nil {
+				errors = append(errors, fmt.Sprintf("%s: %v", perm, err))
+			} else if value == "allow" {
+				granted = append(granted, perm)
+			} else if value == "deny" {
+				revoked = append(revoked, perm)
+			}
+		}
+	}
+
+	if len(errors) > 0 {
+		return errorResult(
+			fmt.Errorf("some permissions failed"),
+			fmt.Sprintf("Granted: %d, Revoked: %d, Errors: %v", len(granted), len(revoked), errors),
+		)
+	}
+
+	return successResult(fmt.Sprintf("Permissions updated: %d granted, %d revoked", len(granted), len(revoked)), nil)
+}
+
+// applyPermission grants or revokes a single permission.
+func (d *Driver) applyPermission(appID, permission, value string) error {
+	switch strings.ToLower(value) {
+	case "allow":
+		_, err := d.device.Shell(fmt.Sprintf("pm grant %s %s", appID, permission))
+		return err
+	case "deny", "unset":
+		_, err := d.device.Shell(fmt.Sprintf("pm revoke %s %s", appID, permission))
+		return err
+	default:
+		return fmt.Errorf("invalid permission value: %s (use allow/deny/unset)", value)
+	}
+}
+
+// resolvePermissionShortcut maps Maestro permission shortcuts to Android permission names.
+func resolvePermissionShortcut(shortcut string) []string {
+	switch strings.ToLower(shortcut) {
+	case "location":
+		return []string{
+			"android.permission.ACCESS_FINE_LOCATION",
+			"android.permission.ACCESS_COARSE_LOCATION",
+			"android.permission.ACCESS_BACKGROUND_LOCATION",
+		}
+	case "camera":
+		return []string{"android.permission.CAMERA"}
+	case "contacts":
+		return []string{
+			"android.permission.READ_CONTACTS",
+			"android.permission.WRITE_CONTACTS",
+			"android.permission.GET_ACCOUNTS",
+		}
+	case "phone":
+		return []string{
+			"android.permission.READ_PHONE_STATE",
+			"android.permission.CALL_PHONE",
+			"android.permission.READ_CALL_LOG",
+			"android.permission.WRITE_CALL_LOG",
+			"android.permission.USE_SIP",
+			"android.permission.PROCESS_OUTGOING_CALLS",
+		}
+	case "microphone":
+		return []string{"android.permission.RECORD_AUDIO"}
+	case "bluetooth":
+		return []string{
+			"android.permission.BLUETOOTH_CONNECT",
+			"android.permission.BLUETOOTH_SCAN",
+			"android.permission.BLUETOOTH_ADVERTISE",
+		}
+	case "storage":
+		return []string{
+			"android.permission.READ_EXTERNAL_STORAGE",
+			"android.permission.WRITE_EXTERNAL_STORAGE",
+			"android.permission.READ_MEDIA_IMAGES",
+			"android.permission.READ_MEDIA_VIDEO",
+			"android.permission.READ_MEDIA_AUDIO",
+		}
+	case "notifications":
+		return []string{"android.permission.POST_NOTIFICATIONS"}
+	case "medialibrary":
+		return []string{
+			"android.permission.READ_MEDIA_IMAGES",
+			"android.permission.READ_MEDIA_VIDEO",
+			"android.permission.READ_MEDIA_AUDIO",
+		}
+	case "calendar":
+		return []string{
+			"android.permission.READ_CALENDAR",
+			"android.permission.WRITE_CALENDAR",
+		}
+	case "sms":
+		return []string{
+			"android.permission.SEND_SMS",
+			"android.permission.RECEIVE_SMS",
+			"android.permission.READ_SMS",
+			"android.permission.RECEIVE_WAP_PUSH",
+			"android.permission.RECEIVE_MMS",
+		}
+	case "sensors", "activity_recognition":
+		return []string{
+			"android.permission.BODY_SENSORS",
+			"android.permission.ACTIVITY_RECOGNITION",
+		}
+	default:
+		// Assume it's a full Android permission name
+		if strings.HasPrefix(shortcut, "android.permission.") {
+			return []string{shortcut}
+		}
+		// Try adding the prefix
+		return []string{"android.permission." + strings.ToUpper(shortcut)}
+	}
+}
+
+// getAllPermissions returns all common Android runtime permissions.
+func getAllPermissions() []string {
+	return []string{
+		// Location
+		"android.permission.ACCESS_FINE_LOCATION",
+		"android.permission.ACCESS_COARSE_LOCATION",
+		"android.permission.ACCESS_BACKGROUND_LOCATION",
+		// Camera
+		"android.permission.CAMERA",
+		// Contacts
+		"android.permission.READ_CONTACTS",
+		"android.permission.WRITE_CONTACTS",
+		"android.permission.GET_ACCOUNTS",
+		// Phone
+		"android.permission.READ_PHONE_STATE",
+		"android.permission.CALL_PHONE",
+		"android.permission.READ_CALL_LOG",
+		"android.permission.WRITE_CALL_LOG",
+		// Microphone
+		"android.permission.RECORD_AUDIO",
+		// Storage
+		"android.permission.READ_EXTERNAL_STORAGE",
+		"android.permission.WRITE_EXTERNAL_STORAGE",
+		"android.permission.READ_MEDIA_IMAGES",
+		"android.permission.READ_MEDIA_VIDEO",
+		"android.permission.READ_MEDIA_AUDIO",
+		// Calendar
+		"android.permission.READ_CALENDAR",
+		"android.permission.WRITE_CALENDAR",
+		// SMS
+		"android.permission.SEND_SMS",
+		"android.permission.RECEIVE_SMS",
+		"android.permission.READ_SMS",
+		// Notifications
+		"android.permission.POST_NOTIFICATIONS",
+		// Bluetooth
+		"android.permission.BLUETOOTH_CONNECT",
+		"android.permission.BLUETOOTH_SCAN",
+		// Sensors
+		"android.permission.BODY_SENSORS",
+		"android.permission.ACTIVITY_RECOGNITION",
+	}
 }
 
 // ============================================================================
@@ -1082,6 +1494,24 @@ func mapDirection(dir string) string {
 		return uiautomator2.DirectionRight
 	default:
 		return uiautomator2.DirectionDown
+	}
+}
+
+// invertScrollDirection converts scroll direction (content movement direction)
+// to swipe direction (finger gesture direction).
+// In Maestro: ScrollDirection.DOWN -> SwipeDirection.UP (to reveal content below)
+func invertScrollDirection(dir string) string {
+	switch dir {
+	case "up":
+		return uiautomator2.DirectionDown
+	case "down":
+		return uiautomator2.DirectionUp
+	case "left":
+		return uiautomator2.DirectionRight
+	case "right":
+		return uiautomator2.DirectionLeft
+	default:
+		return uiautomator2.DirectionUp // default: scroll down = swipe up
 	}
 }
 

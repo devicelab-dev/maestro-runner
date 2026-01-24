@@ -773,7 +773,8 @@ func TestParse_SwipeWithAllFields(t *testing.T) {
 func TestParse_ScrollUntilVisibleWithAllFields(t *testing.T) {
 	yaml := `
 - scrollUntilVisible:
-    text: "End of list"
+    element:
+      text: "End of list"
     direction: DOWN
     timeout: 30000
     maxScrolls: 20
@@ -792,8 +793,8 @@ func TestParse_ScrollUntilVisibleWithAllFields(t *testing.T) {
 		t.Fatalf("expected ScrollUntilVisibleStep, got %T", flow.Steps[0])
 	}
 
-	if scroll.Selector.Text != "End of list" {
-		t.Errorf("Selector.Text=%q, want End of list", scroll.Selector.Text)
+	if scroll.Element.Text != "End of list" {
+		t.Errorf("Element.Text=%q, want End of list", scroll.Element.Text)
 	}
 	if scroll.Direction != "DOWN" {
 		t.Errorf("Direction=%q, want DOWN", scroll.Direction)
@@ -1043,7 +1044,7 @@ func TestParse_DecodeErrors(t *testing.T) {
 		{"tapOnPoint invalid", `- tapOnPoint: {x: "not a number"}`},
 		{"swipe invalid", `- swipe: {direction: [invalid]}`},
 		{"scroll invalid", `- scroll: {direction: [invalid]}`},
-		{"scrollUntilVisible invalid", `- scrollUntilVisible: {text: [invalid]}`},
+		{"scrollUntilVisible invalid", `- scrollUntilVisible: {element: [invalid]}`},
 		{"inputText invalid", `- inputText: {text: [invalid]}`},
 		{"inputRandom invalid", `- inputRandom: {type: [invalid]}`},
 		{"eraseText invalid", `- eraseText: {characters: "not a number"}`},

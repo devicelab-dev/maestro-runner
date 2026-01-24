@@ -54,6 +54,41 @@ type Selector struct {
 	Label                 string `yaml:"label"`                 // Step label
 }
 
+// selectorRaw is used for YAML parsing to capture the "element" field.
+type selectorRaw struct {
+	Text                  string      `yaml:"text"`
+	Element               string      `yaml:"element"` // Shorthand for text (used in scrollUntilVisible, etc.)
+	ID                    string      `yaml:"id"`
+	Width                 int         `yaml:"width"`
+	Height                int         `yaml:"height"`
+	Tolerance             int         `yaml:"tolerance"`
+	Enabled               *bool       `yaml:"enabled"`
+	Selected              *bool       `yaml:"selected"`
+	Checked               *bool       `yaml:"checked"`
+	Focused               *bool       `yaml:"focused"`
+	Index                 string      `yaml:"index"`
+	Traits                string      `yaml:"traits"`
+	CSS                   string      `yaml:"css"`
+	ChildOf               *Selector   `yaml:"childOf"`
+	Below                 *Selector   `yaml:"below"`
+	Above                 *Selector   `yaml:"above"`
+	LeftOf                *Selector   `yaml:"leftOf"`
+	RightOf               *Selector   `yaml:"rightOf"`
+	ContainsChild         *Selector   `yaml:"containsChild"`
+	ContainsDescendants   []*Selector `yaml:"containsDescendants"`
+	InsideOf              *Selector   `yaml:"insideOf"`
+	Optional              *bool       `yaml:"optional"`
+	RetryTapIfNoChange    *bool       `yaml:"retryTapIfNoChange"`
+	WaitUntilVisible      *bool       `yaml:"waitUntilVisible"`
+	Point                 string      `yaml:"point"`
+	Start                 string      `yaml:"start"`
+	End                   string      `yaml:"end"`
+	Repeat                int         `yaml:"repeat"`
+	Delay                 int         `yaml:"delay"`
+	WaitToSettleTimeoutMs int         `yaml:"waitToSettleTimeoutMs"`
+	Label                 string      `yaml:"label"`
+}
+
 // UnmarshalYAML allows Selector to be unmarshaled from string or struct.
 func (s *Selector) UnmarshalYAML(node *yaml.Node) error {
 	if node.Kind == yaml.ScalarNode {
@@ -61,12 +96,48 @@ func (s *Selector) UnmarshalYAML(node *yaml.Node) error {
 		return nil
 	}
 
-	type selectorAlias Selector
-	var alias selectorAlias
-	if err := node.Decode(&alias); err != nil {
+	var raw selectorRaw
+	if err := node.Decode(&raw); err != nil {
 		return err
 	}
-	*s = Selector(alias)
+
+	// Copy fields
+	s.Text = raw.Text
+	s.ID = raw.ID
+	s.Width = raw.Width
+	s.Height = raw.Height
+	s.Tolerance = raw.Tolerance
+	s.Enabled = raw.Enabled
+	s.Selected = raw.Selected
+	s.Checked = raw.Checked
+	s.Focused = raw.Focused
+	s.Index = raw.Index
+	s.Traits = raw.Traits
+	s.CSS = raw.CSS
+	s.ChildOf = raw.ChildOf
+	s.Below = raw.Below
+	s.Above = raw.Above
+	s.LeftOf = raw.LeftOf
+	s.RightOf = raw.RightOf
+	s.ContainsChild = raw.ContainsChild
+	s.ContainsDescendants = raw.ContainsDescendants
+	s.InsideOf = raw.InsideOf
+	s.Optional = raw.Optional
+	s.RetryTapIfNoChange = raw.RetryTapIfNoChange
+	s.WaitUntilVisible = raw.WaitUntilVisible
+	s.Point = raw.Point
+	s.Start = raw.Start
+	s.End = raw.End
+	s.Repeat = raw.Repeat
+	s.Delay = raw.Delay
+	s.WaitToSettleTimeoutMs = raw.WaitToSettleTimeoutMs
+	s.Label = raw.Label
+
+	// "element" is a shorthand for "text" (used in scrollUntilVisible, etc.)
+	if raw.Element != "" && s.Text == "" {
+		s.Text = raw.Element
+	}
+
 	return nil
 }
 

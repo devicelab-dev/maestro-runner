@@ -123,7 +123,7 @@ func createTestDriver(server *httptest.Server) *Driver {
 		ScreenWidth:  390,
 		ScreenHeight: 844,
 	}
-	return NewDriver(client, info)
+	return NewDriver(client, info, "")
 }
 
 // TestNewDriver tests driver creation
@@ -131,7 +131,7 @@ func TestNewDriver(t *testing.T) {
 	client := &Client{}
 	info := &core.PlatformInfo{Platform: "ios"}
 
-	driver := NewDriver(client, info)
+	driver := NewDriver(client, info, "")
 	if driver == nil {
 		t.Fatal("Expected driver to be created")
 	}
@@ -1083,7 +1083,7 @@ func TestScrollUntilVisibleElementFound(t *testing.T) {
 	driver := createTestDriver(server)
 
 	step := &flow.ScrollUntilVisibleStep{
-		Selector:  flow.Selector{Text: "TargetButton"},
+		Element:   flow.Selector{Text: "TargetButton"},
 		Direction: "down",
 		BaseStep:  flow.BaseStep{TimeoutMs: 10000},
 	}
@@ -1101,7 +1101,7 @@ func TestScrollUntilVisibleElementNotFound(t *testing.T) {
 	driver := createTestDriver(server)
 
 	step := &flow.ScrollUntilVisibleStep{
-		Selector:  flow.Selector{Text: "NonExistent"},
+		Element:   flow.Selector{Text: "NonExistent"},
 		Direction: "up",
 		BaseStep:  flow.BaseStep{TimeoutMs: 1000}, // Short timeout
 	}
@@ -1119,7 +1119,7 @@ func TestScrollUntilVisibleDefaultDirection(t *testing.T) {
 	driver := createTestDriver(server)
 
 	step := &flow.ScrollUntilVisibleStep{
-		Selector: flow.Selector{Text: "TargetButton"},
+		Element: flow.Selector{Text: "TargetButton"},
 		// Direction not set - should default to "down"
 	}
 
@@ -2321,7 +2321,7 @@ func TestInputTextSelectorNotFound(t *testing.T) {
 		sessionID:  "test-session",
 	}
 	info := &core.PlatformInfo{Platform: "ios", ScreenWidth: 390, ScreenHeight: 844}
-	driver := NewDriver(client, info)
+	driver := NewDriver(client, info, "")
 	driver.SetFindTimeout(100) // Short timeout
 
 	step := &flow.InputTextStep{
@@ -2427,7 +2427,7 @@ func TestLaunchAppWithoutSession(t *testing.T) {
 		sessionID:  "", // No session
 	}
 	info := &core.PlatformInfo{Platform: "ios", ScreenWidth: 390, ScreenHeight: 844}
-	driver := NewDriver(client, info)
+	driver := NewDriver(client, info, "")
 
 	step := &flow.LaunchAppStep{AppID: "com.test.app"}
 	result := driver.launchApp(step)
@@ -2465,7 +2465,7 @@ func TestLaunchAppCreateSessionFails(t *testing.T) {
 		sessionID:  "", // No session
 	}
 	info := &core.PlatformInfo{Platform: "ios", ScreenWidth: 390, ScreenHeight: 844}
-	driver := NewDriver(client, info)
+	driver := NewDriver(client, info, "")
 
 	step := &flow.LaunchAppStep{AppID: "com.test.app"}
 	result := driver.launchApp(step)
@@ -2633,7 +2633,7 @@ func TestDoubleTapOnNotFound(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{baseURL: server.URL, httpClient: http.DefaultClient, sessionID: "test-session"}
-	driver := NewDriver(client, &core.PlatformInfo{Platform: "ios", ScreenWidth: 390, ScreenHeight: 844})
+	driver := NewDriver(client, &core.PlatformInfo{Platform: "ios", ScreenWidth: 390, ScreenHeight: 844}, "")
 	driver.SetFindTimeout(100)
 
 	step := &flow.DoubleTapOnStep{
@@ -2666,7 +2666,7 @@ func TestLongPressOnNotFound(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{baseURL: server.URL, httpClient: http.DefaultClient, sessionID: "test-session"}
-	driver := NewDriver(client, &core.PlatformInfo{Platform: "ios", ScreenWidth: 390, ScreenHeight: 844})
+	driver := NewDriver(client, &core.PlatformInfo{Platform: "ios", ScreenWidth: 390, ScreenHeight: 844}, "")
 	driver.SetFindTimeout(100)
 
 	step := &flow.LongPressOnStep{
@@ -2867,7 +2867,7 @@ func TestAssertVisibleNotFound(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{baseURL: server.URL, httpClient: http.DefaultClient, sessionID: "test-session"}
-	driver := NewDriver(client, &core.PlatformInfo{Platform: "ios", ScreenWidth: 390, ScreenHeight: 844})
+	driver := NewDriver(client, &core.PlatformInfo{Platform: "ios", ScreenWidth: 390, ScreenHeight: 844}, "")
 	driver.SetFindTimeout(100)
 
 	step := &flow.AssertVisibleStep{
@@ -5087,7 +5087,7 @@ func TestScrollUntilVisibleScrollFails(t *testing.T) {
 	driver := createTestDriver(server)
 
 	step := &flow.ScrollUntilVisibleStep{
-		Selector: flow.Selector{Text: "NotFound"},
+		Element:  flow.Selector{Text: "NotFound"},
 		BaseStep: flow.BaseStep{TimeoutMs: 100},
 	}
 	result := driver.scrollUntilVisible(step)
@@ -5249,7 +5249,7 @@ func TestScrollUntilVisibleMaxScrolls(t *testing.T) {
 	driver := createTestDriver(server)
 
 	step := &flow.ScrollUntilVisibleStep{
-		Selector:   flow.Selector{Text: "NotFound"},
+		Element:    flow.Selector{Text: "NotFound"},
 		MaxScrolls: 3, // Limit max scrolls
 		BaseStep:   flow.BaseStep{TimeoutMs: 60000},
 	}
@@ -5517,7 +5517,7 @@ func TestScrollUntilVisibleWithTimeoutMs(t *testing.T) {
 	driver := createTestDriver(server)
 
 	step := &flow.ScrollUntilVisibleStep{
-		Selector: flow.Selector{Text: "NotFound"},
+		Element:  flow.Selector{Text: "NotFound"},
 		BaseStep: flow.BaseStep{TimeoutMs: 2000}, // 2 seconds = ~2 scrolls
 	}
 	result := driver.scrollUntilVisible(step)
@@ -5548,7 +5548,7 @@ func TestExecuteScrollUntilVisibleStep(t *testing.T) {
 	driver := createTestDriver(server)
 
 	step := &flow.ScrollUntilVisibleStep{
-		Selector: flow.Selector{Text: "Target"},
+		Element: flow.Selector{Text: "Target"},
 	}
 	result := driver.Execute(step)
 

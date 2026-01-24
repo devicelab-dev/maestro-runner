@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -15,8 +16,8 @@ import (
 // Tap commands
 
 func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
-	// Check if using percentage-based Point (e.g., "85%, 50%")
-	if step.Point != "" {
+	// Check if using percentage-based Point WITHOUT selector (screen-relative tap)
+	if step.Point != "" && step.Selector.IsEmpty() {
 		return d.tapOnPointWithPercentage(step.Point)
 	}
 
@@ -26,6 +27,20 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 			return successResult("Optional element not found, skipping tap", nil)
 		}
 		return errorResult(err, fmt.Sprintf("Element not found: %s", selectorDesc(step.Selector)))
+	}
+
+	// If Point is specified WITH selector, tap at relative position within element bounds
+	if step.Point != "" && info != nil && info.Bounds.Width > 0 {
+		xPct, yPct, parseErr := parsePercentageCoords(step.Point)
+		if parseErr != nil {
+			return errorResult(parseErr, "Invalid point coordinates")
+		}
+		x := float64(info.Bounds.X) + float64(info.Bounds.Width)*xPct
+		y := float64(info.Bounds.Y) + float64(info.Bounds.Height)*yPct
+		if err := d.client.Tap(x, y); err != nil {
+			return errorResult(err, "Tap at relative point failed")
+		}
+		return successResult(fmt.Sprintf("Tapped at relative point (%.0f, %.0f) on element", x, y), info)
 	}
 
 	// If we have a WDA element ID, use element click (better for focus handling)
@@ -147,10 +162,11 @@ func (d *Driver) assertVisible(step *flow.AssertVisibleStep) *core.CommandResult
 }
 
 func (d *Driver) assertNotVisible(step *flow.AssertNotVisibleStep) *core.CommandResult {
-	// Use short timeout but include page source fallback for accuracy
+	// Poll to confirm element stays invisible
+	// Default 5s aligns closer to Maestro's optionalLookupTimeoutMs (7s)
 	timeoutMs := step.TimeoutMs
 	if timeoutMs <= 0 {
-		timeoutMs = 1000
+		timeoutMs = 5000
 	}
 
 	info, err := d.findElement(step.Selector, true, timeoutMs)
@@ -280,20 +296,27 @@ func (d *Driver) scroll(step *flow.ScrollStep) *core.CommandResult {
 	centerY := float64(height) / 2
 	scrollDistance := float64(height) / 3
 
+	// Scroll direction = content movement direction
+	// "scroll down" means reveal content below, which requires swiping UP
+	// Maestro: ScrollDirection.DOWN -> SwipeDirection.UP
 	var fromX, fromY, toX, toY float64
 	switch step.Direction {
 	case "up":
-		fromX, fromY = centerX, centerY+scrollDistance/2
-		toX, toY = centerX, centerY-scrollDistance/2
-	case "down":
+		// Scroll up = reveal top content = swipe DOWN
 		fromX, fromY = centerX, centerY-scrollDistance/2
 		toX, toY = centerX, centerY+scrollDistance/2
+	case "down":
+		// Scroll down = reveal bottom content = swipe UP
+		fromX, fromY = centerX, centerY+scrollDistance/2
+		toX, toY = centerX, centerY-scrollDistance/2
 	case "left":
-		fromX, fromY = centerX+scrollDistance/2, centerY
-		toX, toY = centerX-scrollDistance/2, centerY
-	case "right":
+		// Scroll left = reveal left content = swipe RIGHT
 		fromX, fromY = centerX-scrollDistance/2, centerY
 		toX, toY = centerX+scrollDistance/2, centerY
+	case "right":
+		// Scroll right = reveal right content = swipe LEFT
+		fromX, fromY = centerX+scrollDistance/2, centerY
+		toX, toY = centerX-scrollDistance/2, centerY
 	default:
 		return errorResult(fmt.Errorf("invalid direction: %s", step.Direction), "Invalid scroll direction")
 	}
@@ -318,7 +341,7 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 
 	for i := 0; i < maxScrolls; i++ {
 		// Check if element is visible (includes page source fallback)
-		info, err := d.findElement(step.Selector, true, 1000)
+		info, err := d.findElement(step.Element, true, 1000)
 		if err == nil && info != nil {
 			return successResult("Element found after scrolling", info)
 		}
@@ -333,7 +356,7 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 		time.Sleep(300 * time.Millisecond) // Wait for scroll animation
 	}
 
-	return errorResult(fmt.Errorf("element not found after scrolling"), fmt.Sprintf("Element not found: %s", selectorDesc(step.Selector)))
+	return errorResult(fmt.Errorf("element not found after scrolling"), fmt.Sprintf("Element not found: %s", selectorDesc(step.Element)))
 }
 
 func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
@@ -367,9 +390,27 @@ func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
 		toY = float64(step.EndY)
 	} else {
 		// Direction-based swipe
-		centerX := float64(width) / 2
-		centerY := float64(height) / 2
-		swipeDistance := float64(height) / 3
+		var areaX, areaY, areaW, areaH float64
+		areaX, areaY = 0, 0
+		areaW, areaH = float64(width), float64(height)
+
+		// If selector specified, swipe within that element's bounds
+		if step.Selector != nil && !step.Selector.IsEmpty() {
+			info, err := d.findElement(*step.Selector, false, step.TimeoutMs)
+			if err != nil {
+				return errorResult(err, fmt.Sprintf("Element not found for swipe: %s", step.Selector.Describe()))
+			}
+			if info != nil && info.Bounds.Width > 0 {
+				areaX = float64(info.Bounds.X)
+				areaY = float64(info.Bounds.Y)
+				areaW = float64(info.Bounds.Width)
+				areaH = float64(info.Bounds.Height)
+			}
+		}
+
+		centerX := areaX + areaW/2
+		centerY := areaY + areaH/2
+		swipeDistance := areaH / 3
 
 		switch step.Direction {
 		case "up":
@@ -379,9 +420,11 @@ func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
 			fromX, fromY = centerX, centerY-swipeDistance/2
 			toX, toY = centerX, centerY+swipeDistance/2
 		case "left":
+			swipeDistance = areaW / 3
 			fromX, fromY = centerX+swipeDistance/2, centerY
 			toX, toY = centerX-swipeDistance/2, centerY
 		case "right":
+			swipeDistance = areaW / 3
 			fromX, fromY = centerX-swipeDistance/2, centerY
 			toX, toY = centerX+swipeDistance/2, centerY
 		default:
@@ -438,6 +481,26 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 		return errorResult(fmt.Errorf("bundleID required"), "Bundle ID is required for launchApp")
 	}
 
+	// Apply permissions (default: all allow, like Maestro)
+	// Only works on simulators with UDID
+	if d.udid != "" {
+		permissions := step.Permissions
+		if len(permissions) == 0 {
+			permissions = map[string]string{"all": "allow"}
+		}
+		for name, value := range permissions {
+			if strings.ToLower(name) == "all" {
+				for _, perm := range getIOSPermissions() {
+					_ = d.applyIOSPermission(bundleID, perm, value)
+				}
+			} else {
+				for _, perm := range resolveIOSPermissionShortcut(name) {
+					_ = d.applyIOSPermission(bundleID, perm, value)
+				}
+			}
+		}
+	}
+
 	// If no session exists, create one (which also launches the app)
 	if !d.client.HasSession() {
 		if err := d.client.CreateSession(bundleID); err != nil {
@@ -447,8 +510,31 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 		return successResult(fmt.Sprintf("Launched app: %s", bundleID), nil)
 	}
 
+	// Convert arguments map to iOS launch arguments format
+	var launchArgs []string
+	var launchEnv map[string]string
+	if len(step.Arguments) > 0 {
+		launchEnv = make(map[string]string)
+		for key, value := range step.Arguments {
+			// iOS arguments: pass as -key value pairs for command line args
+			// or as environment variables
+			switch v := value.(type) {
+			case string:
+				launchArgs = append(launchArgs, fmt.Sprintf("-%s", key), v)
+			case bool:
+				if v {
+					launchArgs = append(launchArgs, fmt.Sprintf("-%s", key), "true")
+				} else {
+					launchArgs = append(launchArgs, fmt.Sprintf("-%s", key), "false")
+				}
+			default:
+				launchArgs = append(launchArgs, fmt.Sprintf("-%s", key), fmt.Sprintf("%v", v))
+			}
+		}
+	}
+
 	// Session exists - use LaunchApp to launch/relaunch the app
-	if err := d.client.LaunchApp(bundleID); err != nil {
+	if err := d.client.LaunchAppWithArgs(bundleID, launchArgs, launchEnv); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to launch app: %s", bundleID))
 	}
 
@@ -730,4 +816,142 @@ func parsePercentageCoords(coord string) (float64, float64, error) {
 	}
 
 	return x / 100.0, y / 100.0, nil
+}
+
+// setPermissions sets app permissions using xcrun simctl privacy (iOS simulator only).
+func (d *Driver) setPermissions(step *flow.SetPermissionsStep) *core.CommandResult {
+	appID := step.AppID
+	if appID == "" {
+		return errorResult(fmt.Errorf("no appId specified"), "No app ID for permissions")
+	}
+
+	if d.udid == "" {
+		return &core.CommandResult{
+			Success: true,
+			Message: "setPermissions skipped (no UDID - permissions require simulator)",
+		}
+	}
+
+	if len(step.Permissions) == 0 {
+		return errorResult(fmt.Errorf("no permissions specified"), "No permissions to set")
+	}
+
+	var granted, revoked, errors []string
+
+	for name, value := range step.Permissions {
+		if strings.ToLower(name) == "all" {
+			// Apply to all common iOS permissions
+			allPerms := getIOSPermissions()
+			for _, perm := range allPerms {
+				if err := d.applyIOSPermission(appID, perm, value); err != nil {
+					errors = append(errors, fmt.Sprintf("%s: %v", perm, err))
+				} else if strings.ToLower(value) == "allow" {
+					granted = append(granted, perm)
+				} else {
+					revoked = append(revoked, perm)
+				}
+			}
+			continue
+		}
+
+		// Map shortcut to iOS permission service name
+		perms := resolveIOSPermissionShortcut(name)
+		for _, perm := range perms {
+			if err := d.applyIOSPermission(appID, perm, value); err != nil {
+				errors = append(errors, fmt.Sprintf("%s: %v", perm, err))
+			} else if strings.ToLower(value) == "allow" {
+				granted = append(granted, perm)
+			} else {
+				revoked = append(revoked, perm)
+			}
+		}
+	}
+
+	msg := fmt.Sprintf("Permissions set: %d granted, %d revoked", len(granted), len(revoked))
+	if len(errors) > 0 {
+		msg += fmt.Sprintf(", %d errors", len(errors))
+	}
+
+	return &core.CommandResult{
+		Success: true,
+		Message: msg,
+	}
+}
+
+// applyIOSPermission grants or revokes a single permission using xcrun simctl privacy.
+func (d *Driver) applyIOSPermission(appID, permission, value string) error {
+	var action string
+	switch strings.ToLower(value) {
+	case "allow":
+		action = "grant"
+	case "deny":
+		action = "revoke"
+	case "unset":
+		action = "reset"
+	default:
+		return fmt.Errorf("invalid permission value: %s (use allow/deny/unset)", value)
+	}
+
+	// xcrun simctl privacy <device> <action> <service> <bundle-id>
+	cmd := exec.Command("xcrun", "simctl", "privacy", d.udid, action, permission, appID)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s: %s", err, string(output))
+	}
+	return nil
+}
+
+// resolveIOSPermissionShortcut maps shortcut names to iOS privacy service names.
+func resolveIOSPermissionShortcut(shortcut string) []string {
+	switch strings.ToLower(shortcut) {
+	case "location", "location-always":
+		return []string{"location-always"}
+	case "camera":
+		return []string{"camera"}
+	case "contacts":
+		return []string{"contacts"}
+	case "phone":
+		return []string{"contacts"} // iOS doesn't have separate phone permission
+	case "microphone":
+		return []string{"microphone"}
+	case "photos", "medialibrary":
+		return []string{"photos"}
+	case "calendar":
+		return []string{"calendar"}
+	case "reminders":
+		return []string{"reminders"}
+	case "notifications":
+		return []string{"notifications"}
+	case "bluetooth":
+		return []string{"bluetooth-peripheral"}
+	case "health":
+		return []string{"health"}
+	case "homekit":
+		return []string{"homekit"}
+	case "motion":
+		return []string{"motion"}
+	case "speech":
+		return []string{"speech-recognition"}
+	case "siri":
+		return []string{"siri"}
+	case "faceid":
+		return []string{"faceid"}
+	default:
+		// Assume it's already a valid service name
+		return []string{shortcut}
+	}
+}
+
+// getIOSPermissions returns all common iOS privacy services.
+func getIOSPermissions() []string {
+	return []string{
+		"location-always",
+		"camera",
+		"microphone",
+		"photos",
+		"contacts",
+		"calendar",
+		"reminders",
+		"notifications",
+	}
 }

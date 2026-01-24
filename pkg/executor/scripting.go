@@ -498,7 +498,7 @@ func (se *ScriptEngine) ExpandStep(step flow.Step) {
 			s.NotVisible = se.expandSelector(s.NotVisible)
 		}
 	case *flow.ScrollUntilVisibleStep:
-		s.Selector = *se.expandSelector(&s.Selector)
+		s.Element = *se.expandSelector(&s.Element)
 	case *flow.CopyTextFromStep:
 		s.Selector = *se.expandSelector(&s.Selector)
 	case *flow.LaunchAppStep:

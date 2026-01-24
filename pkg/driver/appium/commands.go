@@ -217,7 +217,7 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 
 	for i := 0; i < maxScrolls && time.Now().Before(deadline); i++ {
 		// Check if element is visible
-		info, err := d.findElement(step.Selector, 1*time.Second)
+		info, err := d.findElement(step.Element, 1*time.Second)
 		if err == nil && info != nil {
 			return successResult("Element found", info)
 		}
@@ -321,6 +321,18 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 
 	if appID == "" {
 		return errorResult(fmt.Errorf("no app ID specified"), "")
+	}
+
+	// Stop app first if requested (default: true)
+	if step.StopApp == nil || *step.StopApp {
+		_ = d.client.TerminateApp(appID)
+	}
+
+	// Clear state if requested
+	if step.ClearState {
+		if err := d.client.ClearAppData(appID); err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to clear app state: %s", appID))
+		}
 	}
 
 	if err := d.client.LaunchApp(appID); err != nil {

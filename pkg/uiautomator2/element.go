@@ -156,17 +156,17 @@ func (e *Element) Attribute(name string) (string, error) {
 }
 
 // Rect returns the element's bounds.
-func (e *Element) Rect() (RectModel, error) {
+func (e *Element) Rect() (ElementRect, error) {
 	data, err := e.client.request("GET", e.client.sessionPath("/element/"+e.id+"/rect"), nil)
 	if err != nil {
-		return RectModel{}, err
+		return ElementRect{}, err
 	}
 
 	var resp struct {
-		Value RectModel `json:"value"`
+		Value ElementRect `json:"value"`
 	}
 	if err := json.Unmarshal(data, &resp); err != nil {
-		return RectModel{}, err
+		return ElementRect{}, err
 	}
 
 	return resp.Value, nil

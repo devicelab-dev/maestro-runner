@@ -136,22 +136,33 @@ func findFreePort(start, end int) (int, error) {
 
 // StopUIAutomator2 stops the UIAutomator2 server.
 func (d *AndroidDevice) StopUIAutomator2() error {
-	// Force stop both packages
+	// Force stop both packages - this should kill the instrumentation runner
 	d.Shell("am force-stop " + UIAutomator2Server)
 	d.Shell("am force-stop " + UIAutomator2Test)
 
-	// Clean up socket (Linux/Mac)
+	// Give processes time to die
+	time.Sleep(300 * time.Millisecond)
+
+	// Clean up socket (Linux/Mac) - always try default path even if socketPath not set
 	if d.socketPath != "" {
 		d.RemoveSocketForward(d.socketPath)
 		os.Remove(d.socketPath)
 		d.socketPath = ""
 	}
+	// Also clean up default socket path (in case of stale from previous run)
+	defaultSocket := d.DefaultSocketPath()
+	d.RemoveSocketForward(defaultSocket)
+	os.Remove(defaultSocket)
 
 	// Clean up port forward (Windows)
 	if d.localPort != 0 {
 		d.RemoveForward(d.localPort)
 		d.localPort = 0
 	}
+
+	// Remove any adb forward for the device port (cleans up stale forwards)
+	d.adb("forward", "--remove", fmt.Sprintf("tcp:%d", 6790))
+
 	return nil
 }
 
@@ -195,13 +206,13 @@ func checkHealthViaSocket(socketPath string) bool {
 		},
 		Timeout: 2 * time.Second,
 	}
-	return checkHealthWithClient(client, "http://localhost/status")
+	return checkHealthWithClient(client, "http://localhost/wd/hub/status")
 }
 
 // checkHealthViaTCP checks health via TCP port (Windows).
 func checkHealthViaTCP(port int) bool {
 	client := &http.Client{Timeout: 2 * time.Second}
-	return checkHealthWithClient(client, fmt.Sprintf("http://127.0.0.1:%d/status", port))
+	return checkHealthWithClient(client, fmt.Sprintf("http://127.0.0.1:%d/wd/hub/status", port))
 }
 
 // checkHealthWithClient performs health check using the given client and URL.

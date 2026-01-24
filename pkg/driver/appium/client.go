@@ -12,6 +12,9 @@ import (
 	"time"
 )
 
+// W3C WebDriver element identifier key (standard constant)
+const w3cElementKey = "element-6066-11e4-a52e-4f735466cecf"
+
 // Client handles HTTP communication with Appium server.
 type Client struct {
 	serverURL string
@@ -64,6 +67,26 @@ func (c *Client) Connect(capabilities map[string]interface{}) error {
 
 	// Get screen size
 	c.fetchScreenSize()
+
+	// Configure UiAutomator2/XCUITest settings for faster element finding
+	// Without these settings, drivers wait for UI to be "idle" which causes 10-20s delays
+	if c.platform == "ios" {
+		// iOS XCUITest settings:
+		// - waitForIdleTimeout: Don't wait for app to be idle (default varies)
+		// - animationCoolOffTimeout: Don't wait for animations to finish (default 2s)
+		c.SetSettings(map[string]interface{}{
+			"waitForIdleTimeout":     0,
+			"animationCoolOffTimeout": 0,
+		})
+	} else {
+		// Android UiAutomator2 settings:
+		// - waitForIdleTimeout: Don't wait for UI thread to be idle (default 10-20s)
+		// - waitForSelectorTimeout: Don't add extra wait when finding elements (default 0)
+		c.SetSettings(map[string]interface{}{
+			"waitForIdleTimeout":     0,
+			"waitForSelectorTimeout": 0,
+		})
+	}
 
 	return nil
 }
@@ -170,7 +193,7 @@ func (c *Client) GetActiveElement() (string, error) {
 	return "", fmt.Errorf("no active element")
 }
 
-// ClickElement clicks an element.
+// ClickElement clicks an element using WebDriver standard endpoint.
 func (c *Client) ClickElement(elementID string) error {
 	_, err := c.post(c.elementPath(elementID)+"/click", nil)
 	return err
@@ -245,10 +268,26 @@ func (c *Client) performTouchAction(actions []map[string]interface{}) error {
 	return err
 }
 
-// Tap performs a tap at coordinates.
+// Tap performs a tap at coordinates using W3C touch actions.
 func (c *Client) Tap(x, y int) error {
 	return c.performTouchAction([]map[string]interface{}{
-		{"type": "pointerMove", "duration": 0, "x": x, "y": y},
+		{"type": "pointerMove", "duration": 0, "x": x, "y": y, "origin": "viewport"},
+		{"type": "pointerDown", "button": 0},
+		{"type": "pause", "duration": 50},
+		{"type": "pointerUp", "button": 0},
+	})
+}
+
+// TapElement performs a tap on an element using W3C touch actions with element origin.
+func (c *Client) TapElement(elementID string) error {
+	return c.performTouchAction([]map[string]interface{}{
+		{
+			"type":     "pointerMove",
+			"duration": 0,
+			"x":        0,
+			"y":        0,
+			"origin":   map[string]interface{}{w3cElementKey: elementID},
+		},
 		{"type": "pointerDown", "button": 0},
 		{"type": "pause", "duration": 50},
 		{"type": "pointerUp", "button": 0},
@@ -369,17 +408,22 @@ func (c *Client) TerminateApp(appID string) error {
 func (c *Client) ClearAppData(appID string) error {
 	c.TerminateApp(appID)
 
-	script := "mobile: clearApp"
-	args := map[string]interface{}{}
 	if c.platform == "ios" {
-		args["bundleId"] = appID
-	} else {
-		args["appId"] = appID
+		// iOS: use mobile: clearApp (only works on simulator)
+		_, err := c.post(c.sessionPath()+"/execute/sync", map[string]interface{}{
+			"script": "mobile: clearApp",
+			"args":   []interface{}{map[string]interface{}{"bundleId": appID}},
+		})
+		return err
 	}
 
+	// Android: use mobile: shell to run pm clear (same as native driver)
 	_, err := c.post(c.sessionPath()+"/execute/sync", map[string]interface{}{
-		"script": script,
-		"args":   []interface{}{args},
+		"script": "mobile: shell",
+		"args": []interface{}{map[string]interface{}{
+			"command": "pm",
+			"args":    []string{"clear", appID},
+		}},
 	})
 	return err
 }
@@ -488,6 +532,16 @@ func (c *Client) SetImplicitWait(timeout time.Duration) error {
 	return err
 }
 
+// SetSettings updates Appium driver settings.
+// For Android UiAutomator2: waitForIdleTimeout, waitForSelectorTimeout
+// For iOS XCUITest: snapshotMaxDepth, customSnapshotTimeout
+func (c *Client) SetSettings(settings map[string]interface{}) error {
+	_, err := c.post(c.sessionPath()+"/appium/settings", map[string]interface{}{
+		"settings": settings,
+	})
+	return err
+}
+
 // ExecuteMobile executes a mobile: command.
 func (c *Client) ExecuteMobile(command string, args map[string]interface{}) (interface{}, error) {
 	resp, err := c.post(c.sessionPath()+"/execute/sync", map[string]interface{}{
@@ -571,13 +625,9 @@ func (c *Client) request(method, path string, body interface{}) (map[string]inte
 }
 
 func extractElementID(value map[string]interface{}) string {
-	// W3C format: element-6066-11e4-a52e-4f735466cecf
-	for key, val := range value {
-		if strings.HasPrefix(key, "element-") {
-			if id, ok := val.(string); ok {
-				return id
-			}
-		}
+	// W3C format
+	if id, ok := value[w3cElementKey].(string); ok {
+		return id
 	}
 	// Legacy format
 	if id, ok := value["ELEMENT"].(string); ok {

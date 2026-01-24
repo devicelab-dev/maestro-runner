@@ -24,6 +24,7 @@ type ParsedElement struct {
 	Focused     bool
 	Displayed   bool
 	Clickable   bool
+	Scrollable  bool
 	Children    []*ParsedElement
 	Depth       int // depth in hierarchy (for deepestMatchingElement)
 }
@@ -84,6 +85,8 @@ func ParsePageSource(xmlData string) ([]*ParsedElement, error) {
 						elem.Displayed = attr.Value != "false"
 					case "clickable":
 						elem.Clickable = attr.Value == "true"
+					case "scrollable":
+						elem.Scrollable = attr.Value == "true"
 					}
 				}
 
@@ -518,4 +521,38 @@ func SortClickableFirst(elements []*ParsedElement) []*ParsedElement {
 	}
 
 	return append(clickable, nonClickable...)
+}
+
+// FilterScrollable returns only scrollable elements from the list.
+// Used to find scrollable containers for swipe operations.
+func FilterScrollable(elements []*ParsedElement) []*ParsedElement {
+	var result []*ParsedElement
+	for _, elem := range elements {
+		if elem.Scrollable && elem.Bounds.Width > 0 && elem.Bounds.Height > 0 {
+			result = append(result, elem)
+		}
+	}
+	return result
+}
+
+// FindLargestScrollable returns the scrollable element with the largest area.
+// Returns nil if no scrollable elements are found.
+func FindLargestScrollable(elements []*ParsedElement) *ParsedElement {
+	scrollables := FilterScrollable(elements)
+	if len(scrollables) == 0 {
+		return nil
+	}
+
+	largest := scrollables[0]
+	largestArea := largest.Bounds.Width * largest.Bounds.Height
+
+	for _, elem := range scrollables[1:] {
+		area := elem.Bounds.Width * elem.Bounds.Height
+		if area > largestArea {
+			largest = elem
+			largestArea = area
+		}
+	}
+
+	return largest
 }

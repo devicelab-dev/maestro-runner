@@ -203,6 +203,7 @@ func (d *Driver) findElement(sel flow.Selector, timeout time.Duration) (*core.El
 }
 
 // findElementDirect finds element using Appium's native strategies.
+// Uses UiAutomator selectors for Android (fast) instead of page source parsing (slow).
 func (d *Driver) findElementDirect(sel flow.Selector) (*core.ElementInfo, error) {
 	// Try ID first
 	if sel.ID != "" {
@@ -211,21 +212,92 @@ func (d *Driver) findElementDirect(sel flow.Selector) (*core.ElementInfo, error)
 				return d.getElementInfo(elemID)
 			}
 		} else {
-			// Android: try resource-id
+			// Android: use UiAutomator for ID (faster than id strategy)
+			escaped := escapeUiAutomatorString(sel.ID)
+			uiSelector := fmt.Sprintf(`new UiSelector().resourceIdMatches(".*%s.*")`, escaped)
+			if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
+				return d.getElementInfo(elemID)
+			}
+			// Fallback to standard id strategy
 			if elemID, err := d.client.FindElement("id", sel.ID); err == nil {
 				return d.getElementInfo(elemID)
 			}
 		}
 	}
 
-	// Try text using XPath or platform-specific
+	// Try text using native platform strategies (fast)
 	if sel.Text != "" {
-		// Use page source parsing for complex text matching
-		return d.findElementByPageSource(sel)
+		if d.platform == "ios" {
+			// iOS: use -ios predicate string
+			escaped := escapeIOSPredicateString(sel.Text)
+			predicate := fmt.Sprintf(`label CONTAINS[c] "%s" OR name CONTAINS[c] "%s"`, escaped, escaped)
+			if elemID, err := d.client.FindElement("-ios predicate string", predicate); err == nil && elemID != "" {
+				return d.getElementInfo(elemID)
+			}
+		} else {
+			// Android: use UiAutomator selectors (much faster than page source)
+			escaped := escapeUiAutomatorString(sel.Text)
+
+			// Try exact text match first
+			uiSelector := fmt.Sprintf(`new UiSelector().text("%s")`, escaped)
+			if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
+				return d.getElementInfo(elemID)
+			}
+
+			// Try textContains
+			uiSelector = fmt.Sprintf(`new UiSelector().textContains("%s")`, escaped)
+			if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
+				return d.getElementInfo(elemID)
+			}
+
+			// Try description (content-desc)
+			uiSelector = fmt.Sprintf(`new UiSelector().description("%s")`, escaped)
+			if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
+				return d.getElementInfo(elemID)
+			}
+
+			// Try descriptionContains
+			uiSelector = fmt.Sprintf(`new UiSelector().descriptionContains("%s")`, escaped)
+			if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
+				return d.getElementInfo(elemID)
+			}
+		}
 	}
 
-	// Fallback to page source parsing
+	// Fallback to page source parsing for complex selectors
 	return d.findElementByPageSource(sel)
+}
+
+// escapeUiAutomatorString escapes quotes for UiAutomator string
+func escapeUiAutomatorString(s string) string {
+	var result string
+	for _, c := range s {
+		switch c {
+		case '"':
+			result += `\"`
+		case '\\':
+			result += `\\`
+		default:
+			result += string(c)
+		}
+	}
+	return result
+}
+
+// escapeIOSPredicateString escapes quotes for iOS predicate string
+func escapeIOSPredicateString(s string) string {
+	var result string
+	for _, c := range s {
+		switch c {
+		case '"':
+			result += `\"`
+		case '\\':
+			result += `\\`
+		default:
+			result += string(c)
+		}
+	}
+	return result
 }
 
 // findElementByPageSource finds element by parsing page source XML.

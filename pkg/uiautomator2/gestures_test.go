@@ -152,7 +152,8 @@ func TestSwipeInArea(t *testing.T) {
 	client, server := newTestClientWithSession(func(w http.ResponseWriter, r *http.Request) {
 		var req SwipeRequest
 		json.NewDecoder(r.Body).Decode(&req)
-		if req.Area.X != 0 || req.Area.Y != 100 || req.Area.Width != 500 || req.Area.Height != 800 {
+		// NewRect(0, 100, 500, 800) creates Left=0, Top=100, Width=500, Height=800
+		if req.Area.Left != 0 || req.Area.Top != 100 || req.Area.Width != 500 || req.Area.Height != 800 {
 			t.Errorf("unexpected area: %+v", req.Area)
 		}
 		if req.Direction != "down" {
@@ -162,7 +163,7 @@ func TestSwipeInArea(t *testing.T) {
 	})
 	defer server.Close()
 
-	area := RectModel{X: 0, Y: 100, Width: 500, Height: 800}
+	area := NewRect(0, 100, 500, 800)
 	err := client.SwipeInArea(area, "down", 0.8, 500)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -197,14 +198,15 @@ func TestScrollInArea(t *testing.T) {
 	client, server := newTestClientWithSession(func(w http.ResponseWriter, r *http.Request) {
 		var req ScrollRequest
 		json.NewDecoder(r.Body).Decode(&req)
-		if req.Area.X != 10 || req.Area.Y != 20 {
+		// NewRect(10, 20, 100, 200) creates Left=10, Top=20, Width=100, Height=200
+		if req.Area.Left != 10 || req.Area.Top != 20 || req.Area.Width != 100 || req.Area.Height != 200 {
 			t.Errorf("unexpected area: %+v", req.Area)
 		}
 		json.NewEncoder(w).Encode(map[string]interface{}{})
 	})
 	defer server.Close()
 
-	area := RectModel{X: 10, Y: 20, Width: 100, Height: 200}
+	area := NewRect(10, 20, 100, 200)
 	err := client.ScrollInArea(area, "up", 0.5, 500)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

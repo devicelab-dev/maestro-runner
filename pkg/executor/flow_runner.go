@@ -81,6 +81,40 @@ func (fr *FlowRunner) Run() FlowResult {
 	flowStatus := report.StatusPassed
 	var flowError string
 
+	// Execute onFlowComplete in defer (runs even on failure)
+	defer func() {
+		if len(fr.flow.Config.OnFlowComplete) > 0 {
+			for _, step := range fr.flow.Config.OnFlowComplete {
+				fr.executeNestedStep(step) // Ignore failures in cleanup
+			}
+		}
+	}()
+
+	// Execute onFlowStart hooks
+	if len(fr.flow.Config.OnFlowStart) > 0 {
+		for _, step := range fr.flow.Config.OnFlowStart {
+			result := fr.executeNestedStep(step)
+			if !result.Success && !step.IsOptional() {
+				// onFlowStart failed - fail the flow
+				fr.flowWriter.End(report.StatusFailed)
+				if fr.config.OnFlowEnd != nil {
+					fr.config.OnFlowEnd(flowName, false, time.Since(flowStart).Milliseconds())
+				}
+				return FlowResult{
+					ID:           fr.detail.ID,
+					Name:         fr.detail.Name,
+					Status:       report.StatusFailed,
+					Duration:     time.Since(flowStart).Milliseconds(),
+					Error:        fmt.Sprintf("onFlowStart failed: %v", result.Error),
+					StepsTotal:   fr.stepsPassed + fr.stepsFailed + fr.stepsSkipped,
+					StepsPassed:  fr.stepsPassed,
+					StepsFailed:  fr.stepsFailed,
+					StepsSkipped: fr.stepsSkipped,
+				}
+			}
+		}
+	}
+
 	for i, step := range fr.flow.Steps {
 		// Check context cancellation
 		if fr.ctx.Err() != nil {
@@ -593,6 +627,26 @@ func (fr *FlowRunner) executeSubFlow(subFlow flow.Flow) *core.CommandResult {
 				Success: false,
 				Error:   fr.ctx.Err(),
 				Message: "Sub-flow cancelled",
+			}
+		}
+
+		// Inject subflow's appId into app lifecycle steps (same as executeStep does for main flow)
+		switch s := step.(type) {
+		case *flow.LaunchAppStep:
+			if s.AppID == "" && subFlow.Config.AppID != "" {
+				s.AppID = subFlow.Config.AppID
+			}
+		case *flow.StopAppStep:
+			if s.AppID == "" && subFlow.Config.AppID != "" {
+				s.AppID = subFlow.Config.AppID
+			}
+		case *flow.KillAppStep:
+			if s.AppID == "" && subFlow.Config.AppID != "" {
+				s.AppID = subFlow.Config.AppID
+			}
+		case *flow.ClearStateStep:
+			if s.AppID == "" && subFlow.Config.AppID != "" {
+				s.AppID = subFlow.Config.AppID
 			}
 		}
 

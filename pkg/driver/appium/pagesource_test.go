@@ -433,8 +433,10 @@ func TestLooksLikeRegex(t *testing.T) {
 		expected bool
 	}{
 		{"hello", false},
-		{"hello.*world", true},
-		{"hello.world", true},
+		{"hello.*world", true},          // .* is regex
+		{"hello.+world", true},          // .+ is regex
+		{"hello.?world", true},          // .? is regex
+		{"hello.world", false},          // standalone period is NOT regex (domain-like)
 		{"[abc]", true},
 		{"a+b", true},
 		{"a?b", true},
@@ -442,7 +444,11 @@ func TestLooksLikeRegex(t *testing.T) {
 		{"^start", true},
 		{"end$", true},
 		{"(group)", true},
-		{`a\*b`, false}, // escaped
+		{`a\*b`, false},                 // escaped
+		{"mastodon.social", false},      // domain name
+		{"Join mastodon.social", false}, // button text with domain
+		{"v1.2.3", false},               // version number
+		{"file.txt", false},             // filename
 	}
 
 	for _, tt := range tests {

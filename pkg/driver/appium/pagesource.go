@@ -415,14 +415,26 @@ func containsIgnoreCase(s, substr string) bool {
 	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }
 
+// looksLikeRegex checks if text contains regex metacharacters.
+// A standalone period (like in "mastodon.social") is NOT treated as regex.
 func looksLikeRegex(text string) bool {
 	for i := 0; i < len(text); i++ {
 		c := text[i]
+		// Check if it's escaped
+		if i > 0 && text[i-1] == '\\' {
+			continue
+		}
 		switch c {
-		case '.', '*', '+', '?', '^', '$', '[', ']', '(', ')', '{', '}', '|':
-			if i > 0 && text[i-1] == '\\' {
-				continue
+		case '.':
+			// Only treat '.' as regex if followed by a quantifier (*, +, ?)
+			// This allows "mastodon.social" to be treated as literal text
+			if i+1 < len(text) {
+				next := text[i+1]
+				if next == '*' || next == '+' || next == '?' {
+					return true
+				}
 			}
+		case '*', '+', '?', '^', '$', '[', ']', '(', ')', '{', '}', '|':
 			return true
 		}
 	}

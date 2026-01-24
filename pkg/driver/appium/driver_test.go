@@ -340,7 +340,7 @@ func TestExecuteAppiumScrollUntilVisible(t *testing.T) {
 
 	step := &flow.ScrollUntilVisibleStep{
 		BaseStep:  flow.BaseStep{TimeoutMs: 5000},
-		Selector:  flow.Selector{Text: "Login"},
+		Element:   flow.Selector{Text: "Login"},
 		Direction: "down",
 	}
 	result := driver.Execute(step)
@@ -1411,7 +1411,7 @@ func TestAppiumScrollUntilVisibleSuccess(t *testing.T) {
 	driver := createTestAppiumDriver(server)
 
 	step := &flow.ScrollUntilVisibleStep{
-		Selector:  flow.Selector{Text: "TargetButton"},
+		Element:   flow.Selector{Text: "TargetButton"},
 		Direction: "down",
 		BaseStep:  flow.BaseStep{TimeoutMs: 10000},
 	}
@@ -1453,7 +1453,7 @@ func TestAppiumScrollUntilVisibleNotFound(t *testing.T) {
 	driver := createTestAppiumDriver(server)
 
 	step := &flow.ScrollUntilVisibleStep{
-		Selector:  flow.Selector{Text: "NonExistent"},
+		Element:   flow.Selector{Text: "NonExistent"},
 		Direction: "down",
 		BaseStep:  flow.BaseStep{TimeoutMs: 1000},
 	}
