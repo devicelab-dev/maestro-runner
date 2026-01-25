@@ -67,6 +67,17 @@ func (fr *FlowRunner) Run() FlowResult {
 		fr.driver.SetFindTimeout(fr.flow.Config.CommandTimeout)
 	}
 
+	// Apply waitForIdleTimeout - flow config overrides global setting
+	// Always set it to ensure previous flow's setting doesn't persist
+	waitForIdleTimeout := fr.config.WaitForIdleTimeout // global default
+	if fr.flow.Config.WaitForIdleTimeout != nil {
+		waitForIdleTimeout = *fr.flow.Config.WaitForIdleTimeout // flow override
+	}
+	if err := fr.driver.SetWaitForIdleTimeout(waitForIdleTimeout); err != nil {
+		// Log warning but continue - some drivers don't support this
+		_ = err // ignore error, just continue
+	}
+
 	// Notify flow start
 	flowName := fr.detail.Name
 	flowFile := filepath.Base(fr.flow.SourcePath)

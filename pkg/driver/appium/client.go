@@ -86,9 +86,49 @@ func (c *Client) Connect(capabilities map[string]interface{}) error {
 			"waitForIdleTimeout":     0,
 			"waitForSelectorTimeout": 0,
 		})
+
+		// Grant all dangerous permissions via adb shell (more reliable than autoGrantPermissions capability)
+		if appPackage, ok := capabilities["appium:appPackage"].(string); ok && appPackage != "" {
+			c.grantAllPermissions(appPackage)
+		}
 	}
 
 	return nil
+}
+
+// grantAllPermissions grants all common dangerous runtime permissions to the app.
+// This is more reliable than the autoGrantPermissions capability which only works on fresh install.
+func (c *Client) grantAllPermissions(appPackage string) {
+	// Common dangerous permissions that apps might need
+	permissions := []string{
+		"android.permission.READ_EXTERNAL_STORAGE",
+		"android.permission.WRITE_EXTERNAL_STORAGE",
+		"android.permission.CAMERA",
+		"android.permission.RECORD_AUDIO",
+		"android.permission.ACCESS_FINE_LOCATION",
+		"android.permission.ACCESS_COARSE_LOCATION",
+		"android.permission.READ_CONTACTS",
+		"android.permission.WRITE_CONTACTS",
+		"android.permission.READ_CALENDAR",
+		"android.permission.WRITE_CALENDAR",
+		"android.permission.READ_PHONE_STATE",
+		"android.permission.CALL_PHONE",
+		"android.permission.READ_CALL_LOG",
+		"android.permission.WRITE_CALL_LOG",
+		"android.permission.SEND_SMS",
+		"android.permission.RECEIVE_SMS",
+		"android.permission.READ_SMS",
+		"android.permission.POST_NOTIFICATIONS",
+		"android.permission.BODY_SENSORS",
+	}
+
+	for _, perm := range permissions {
+		// Ignore errors - permission might not be requested by app or already granted
+		c.ExecuteMobile("shell", map[string]interface{}{
+			"command": "pm",
+			"args":    []string{"grant", appPackage, perm},
+		})
+	}
 }
 
 // Disconnect closes the session.

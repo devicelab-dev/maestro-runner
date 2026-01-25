@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devicelab-dev/maestro-runner/pkg/config"
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/device"
 	appiumdriver "github.com/devicelab-dev/maestro-runner/pkg/driver/appium"
@@ -112,6 +113,14 @@ Examples:
 			Usage: "Run in headless mode (web only)",
 		},
 
+		// Driver settings
+		&cli.IntFlag{
+			Name:    "wait-for-idle-timeout",
+			Usage:   "Wait for device idle in ms (0 = disabled, default 5000)",
+			Value:   5000,
+			EnvVars: []string{"MAESTRO_WAIT_FOR_IDLE_TIMEOUT"},
+		},
+
 		// AI options
 		&cli.BoolFlag{
 			Name:  "analyze",
@@ -165,6 +174,9 @@ type RunConfig struct {
 	AppiumURL    string                 // Appium server URL
 	CapsFile     string                 // Appium capabilities JSON file path
 	Capabilities map[string]interface{} // Parsed Appium capabilities
+
+	// Driver settings
+	WaitForIdleTimeout int // Wait for device idle in ms (0 = disabled, default 5000)
 }
 
 func runTest(c *cli.Context) error {
@@ -192,26 +204,46 @@ func runTest(c *cli.Context) error {
 		}
 	}
 
+	// Load workspace config if provided
+	var workspaceConfig *config.Config
+	configPath := c.String("config")
+	if configPath != "" {
+		var err error
+		workspaceConfig, err = config.Load(configPath)
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+	}
+
 	// Build run configuration
 	cfg := &RunConfig{
-		FlowPaths:    c.Args().Slice(),
-		ConfigPath:   c.String("config"),
-		Env:          env,
-		IncludeTags:  c.StringSlice("include-tags"),
-		ExcludeTags:  c.StringSlice("exclude-tags"),
-		OutputDir:    outputDir,
-		ShardSplit:   c.Int("shard-split"),
-		ShardAll:     c.Int("shard-all"),
-		Continuous:   c.Bool("continuous"),
-		Headless:     c.Bool("headless"),
-		Platform:     c.String("platform"),
-		Device:       c.String("device"),
-		Verbose:      c.Bool("verbose"),
-		AppFile:      c.String("app-file"),
-		Driver:       c.String("driver"),
-		AppiumURL:    c.String("appium-url"),
-		CapsFile:     capsFile,
-		Capabilities: caps,
+		FlowPaths:          c.Args().Slice(),
+		ConfigPath:         configPath,
+		Env:                env,
+		IncludeTags:        c.StringSlice("include-tags"),
+		ExcludeTags:        c.StringSlice("exclude-tags"),
+		OutputDir:          outputDir,
+		ShardSplit:         c.Int("shard-split"),
+		ShardAll:           c.Int("shard-all"),
+		Continuous:         c.Bool("continuous"),
+		Headless:           c.Bool("headless"),
+		Platform:           c.String("platform"),
+		Device:             c.String("device"),
+		Verbose:            c.Bool("verbose"),
+		AppFile:            c.String("app-file"),
+		Driver:             c.String("driver"),
+		AppiumURL:          c.String("appium-url"),
+		CapsFile:           capsFile,
+		Capabilities:       caps,
+		WaitForIdleTimeout: c.Int("wait-for-idle-timeout"),
+	}
+
+	// Apply workspace config values (CLI flags take precedence)
+	if workspaceConfig != nil {
+		// If wait-for-idle-timeout was not explicitly set on CLI, use config value
+		if !c.IsSet("wait-for-idle-timeout") && workspaceConfig.WaitForIdleTimeout != 0 {
+			cfg.WaitForIdleTimeout = workspaceConfig.WaitForIdleTimeout
+		}
 	}
 
 	return executeTest(cfg)
@@ -321,8 +353,9 @@ func executeTest(cfg *RunConfig) error {
 			App: report.App{
 				ID: cfg.AppFile,
 			},
-			RunnerVersion: "0.1.0",
-			DriverName:    driverName,
+			RunnerVersion:      "0.1.0",
+			DriverName:         driverName,
+			WaitForIdleTimeout: cfg.WaitForIdleTimeout,
 			// Live progress callbacks
 			OnFlowStart:       onFlowStart,
 			OnStepComplete:    onStepComplete,
@@ -671,13 +704,14 @@ func executeFlowsWithPerFlowSession(cfg *RunConfig, flows []flow.Flow) (*executo
 			App: report.App{
 				ID: cfg.AppFile,
 			},
-			RunnerVersion: "0.1.0",
-			DriverName:    "appium",
-			OnFlowStart:   func(flowIdx, totalFlows int, name, file string) { onFlowStart(i, len(flows), name, file) },
-			OnStepComplete: onStepComplete,
-			OnNestedStep:   onNestedStep,
-			OnNestedFlowStart: onNestedFlowStart,
-			OnFlowEnd:     onFlowEnd,
+			RunnerVersion:      "0.1.0",
+			DriverName:         "appium",
+			WaitForIdleTimeout: cfg.WaitForIdleTimeout,
+			OnFlowStart:        func(flowIdx, totalFlows int, name, file string) { onFlowStart(i, len(flows), name, file) },
+			OnStepComplete:     onStepComplete,
+			OnNestedStep:       onNestedStep,
+			OnNestedFlowStart:  onNestedFlowStart,
+			OnFlowEnd:          onFlowEnd,
 		})
 
 		// Run single flow
@@ -869,10 +903,11 @@ func createUIAutomator2Driver(cfg *RunConfig, dev *device.AndroidDevice, info de
 	}
 	printSetupSuccess("Session created")
 
-	// Disable waitForIdle - this causes 10+ second delays before every element query
-	// Our polling loops handle retries, so we don't need the server to wait for idle
+	// Set waitForIdle timeout - configurable via --wait-for-idle-timeout or config.yaml
+	// Default is 5000ms which balances speed and reliability
+	// Set to 0 to disable (faster but may miss animations)
 	if err := client.SetAppiumSettings(map[string]interface{}{
-		"waitForIdleTimeout": 0,
+		"waitForIdleTimeout": cfg.WaitForIdleTimeout,
 	}); err != nil {
 		fmt.Printf("  %s⚠%s Warning: failed to set appium settings: %v\n", color(colorYellow), color(colorReset), err)
 	}
@@ -925,6 +960,10 @@ func createAppiumDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	}
 	if caps["appium:automationName"] == nil {
 		caps["appium:automationName"] = "UiAutomator2"
+	}
+	// Auto-grant permissions by default (user can override with false in caps file)
+	if caps["appium:autoGrantPermissions"] == nil {
+		caps["appium:autoGrantPermissions"] = true
 	}
 
 	printSetupStep("Creating Appium session...")
