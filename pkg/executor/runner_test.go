@@ -61,6 +61,11 @@ func (m *mockDriver) SetFindTimeout(ms int) {
 	// no-op for mock
 }
 
+func (m *mockDriver) SetWaitForIdleTimeout(ms int) error {
+	// no-op for mock
+	return nil
+}
+
 func TestRunner_Run_AllPassed(t *testing.T) {
 	tmpDir := t.TempDir()
 

@@ -41,6 +41,13 @@ func (d *Driver) SetOptionalFindTimeout(ms int) {
 	d.optionalFindTimeout = ms
 }
 
+// SetWaitForIdleTimeout sets the wait for idle timeout.
+// Note: This is a no-op for iOS/WDA as idle timeout is not applicable.
+func (d *Driver) SetWaitForIdleTimeout(ms int) error {
+	// iOS/WDA does not support waitForIdleTimeout
+	return nil
+}
+
 // Element finding timeouts (milliseconds).
 const (
 	DefaultFindTimeout  = 17000 // 17 seconds for required elements

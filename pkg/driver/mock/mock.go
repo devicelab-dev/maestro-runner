@@ -139,6 +139,12 @@ func (d *Driver) SetFindTimeout(ms int) {
 	// Mock driver doesn't have actual timeouts
 }
 
+// SetWaitForIdleTimeout is a no-op for mock driver.
+func (d *Driver) SetWaitForIdleTimeout(ms int) error {
+	// Mock driver doesn't have actual idle timeout
+	return nil
+}
+
 // needsElement returns true if the step type typically returns element info.
 func needsElement(step flow.Step) bool {
 	switch step.Type() {

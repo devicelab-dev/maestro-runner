@@ -39,6 +39,9 @@ type RunnerConfig struct {
 	RunnerVersion string
 	DriverName    string
 
+	// Driver settings
+	WaitForIdleTimeout int // Global wait for idle timeout in ms
+
 	// Live progress callbacks
 	OnFlowStart       func(flowIdx, totalFlows int, name, file string)
 	OnStepComplete    func(idx int, desc string, passed bool, durationMs int64, err string)

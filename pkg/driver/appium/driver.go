@@ -162,6 +162,14 @@ func (d *Driver) SetFindTimeout(ms int) {
 	d.findTimeout = time.Duration(ms) * time.Millisecond
 }
 
+// SetWaitForIdleTimeout sets the wait for idle timeout.
+// 0 = disabled, >0 = wait up to N ms for device to be idle.
+func (d *Driver) SetWaitForIdleTimeout(ms int) error {
+	return d.client.SetSettings(map[string]interface{}{
+		"waitForIdleTimeout": ms,
+	})
+}
+
 // getFindTimeout returns the configured timeout or the default.
 func (d *Driver) getFindTimeout() time.Duration {
 	if d.findTimeout > 0 {

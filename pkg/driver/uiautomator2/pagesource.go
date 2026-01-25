@@ -26,7 +26,8 @@ type ParsedElement struct {
 	Clickable   bool
 	Scrollable  bool
 	Children    []*ParsedElement
-	Depth       int // depth in hierarchy (for deepestMatchingElement)
+	Parent      *ParsedElement // parent element for clickable lookup
+	Depth       int            // depth in hierarchy (for deepestMatchingElement)
 }
 
 // ParsePageSource parses Android UI hierarchy XML into elements.
@@ -136,11 +137,12 @@ func ParsePageSource(xmlData string) ([]*ParsedElement, error) {
 	return elements, nil
 }
 
-// flattenElement flattens a tree of elements into a list, setting depth.
+// flattenElement flattens a tree of elements into a list, setting depth and parent.
 func flattenElement(elem *ParsedElement, depth int) []*ParsedElement {
 	elem.Depth = depth
 	result := []*ParsedElement{elem}
 	for _, child := range elem.Children {
+		child.Parent = elem // Set parent reference
 		result = append(result, flattenElement(child, depth+1)...)
 	}
 	return result
@@ -555,4 +557,32 @@ func FindLargestScrollable(elements []*ParsedElement) *ParsedElement {
 	}
 
 	return largest
+}
+
+// GetClickableElement returns the element to tap on.
+// If the element itself is clickable, returns it.
+// If not clickable, walks up the parent chain to find the first clickable parent.
+// Returns the original element if no clickable parent is found.
+// This handles React Native pattern where text nodes aren't clickable but their containers are.
+func GetClickableElement(elem *ParsedElement) *ParsedElement {
+	if elem == nil {
+		return nil
+	}
+
+	// If element itself is clickable, use it
+	if elem.Clickable {
+		return elem
+	}
+
+	// Walk up parent chain to find clickable parent
+	parent := elem.Parent
+	for parent != nil {
+		if parent.Clickable {
+			return parent
+		}
+		parent = parent.Parent
+	}
+
+	// No clickable parent found - return original element
+	return elem
 }

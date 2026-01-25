@@ -28,6 +28,11 @@ type Driver interface {
 	// SetFindTimeout sets the default timeout (in ms) for finding elements.
 	// This is used by commandTimeout in flow config.
 	SetFindTimeout(ms int)
+
+	// SetWaitForIdleTimeout sets the wait for idle timeout (in ms).
+	// 0 = disabled, >0 = wait up to N ms for device to be idle.
+	// This is used by waitForIdleTimeout in flow config.
+	SetWaitForIdleTimeout(ms int) error
 }
 
 // CommandResult represents the outcome of executing a single command

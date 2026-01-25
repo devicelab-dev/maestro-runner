@@ -434,8 +434,18 @@ func looksLikeRegex(text string) bool {
 					return true
 				}
 			}
-		case '*', '+', '?', '^', '$', '[', ']', '(', ')', '{', '}', '|':
+		case '*', '+', '?', '[', ']', '{', '}', '|':
 			return true
+		case '^':
+			// ^ at start is common in regex, but at end it's likely literal
+			if i == 0 {
+				return true
+			}
+		case '$':
+			// $ at end is common in regex (end anchor), but at start it's likely literal (currency)
+			if i == len(text)-1 {
+				return true
+			}
 		}
 	}
 	return false

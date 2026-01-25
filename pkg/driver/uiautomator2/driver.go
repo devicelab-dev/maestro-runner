@@ -49,6 +49,9 @@ type UIA2Client interface {
 	GetClipboard() (string, error)
 	SetClipboard(text string) error
 	GetDeviceInfo() (*uiautomator2.DeviceInfo, error)
+
+	// Settings
+	SetAppiumSettings(settings map[string]interface{}) error
 }
 
 // Driver implements core.Driver using UIAutomator2.
@@ -80,6 +83,14 @@ func (d *Driver) SetFindTimeout(ms int) {
 // SetOptionalFindTimeout sets the timeout for finding optional elements.
 func (d *Driver) SetOptionalFindTimeout(ms int) {
 	d.optionalFindTimeout = ms
+}
+
+// SetWaitForIdleTimeout sets the wait for idle timeout.
+// 0 = disabled, >0 = wait up to N ms for device to be idle.
+func (d *Driver) SetWaitForIdleTimeout(ms int) error {
+	return d.client.SetAppiumSettings(map[string]interface{}{
+		"waitForIdleTimeout": ms,
+	})
 }
 
 // Execute runs a single step and returns the result.
@@ -241,9 +252,121 @@ func (d *Driver) findElementFast(sel flow.Selector, optional bool, stepTimeoutMs
 
 // findElementForTap finds an element for tap commands, prioritizing clickable elements.
 // When multiple elements match (e.g., "Login" title and "Login" button), prefers the clickable one.
-// Returns full element info including bounds needed for tap coordinates (3 HTTP calls).
+// Strategy for text-based selectors:
+//  1. Try UiAutomator with .clickable(true) - fast if element itself is clickable
+//  2. If fails, check if text exists at all
+//  3. If text exists but not clickable → page source with clickable parent lookup
+//  4. If text doesn't exist → keep polling
+// This handles React Native pattern where text nodes aren't clickable but parent containers are.
 func (d *Driver) findElementForTap(sel flow.Selector, optional bool, stepTimeoutMs int) (*uiautomator2.Element, *core.ElementInfo, error) {
+	// For relative selectors (below, above, etc.), use page source which handles them correctly
+	if sel.HasRelativeSelector() {
+		timeout := d.calculateTimeout(optional, stepTimeoutMs)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		return d.findElementRelativeWithContext(ctx, sel)
+	}
+
+	// For ID-based selectors, use standard UiAutomator approach (IDs are usually unique)
+	if sel.ID != "" {
+		return d.findElementWithOptions(sel, optional, stepTimeoutMs, true, false)
+	}
+
+	// For text-based selectors, use smart fallback strategy
+	if sel.Text != "" {
+		timeout := d.calculateTimeout(optional, stepTimeoutMs)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		return d.findElementForTapWithContext(ctx, sel)
+	}
+
+	// For other selectors, use standard approach
 	return d.findElementWithOptions(sel, optional, stepTimeoutMs, true, false)
+}
+
+// findElementForTapWithContext implements the smart tap element finding strategy.
+// Tries clickable UiAutomator first, falls back to page source if text exists but isn't clickable.
+func (d *Driver) findElementForTapWithContext(ctx context.Context, sel flow.Selector) (*uiautomator2.Element, *core.ElementInfo, error) {
+	// Build clickable-only strategies
+	clickableStrategies, err := buildClickableOnlyStrategies(sel)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Build text-exists strategies (without clickable filter)
+	textExistsStrategies, err := buildSelectors(sel, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var lastErr error
+	for {
+		select {
+		case <-ctx.Done():
+			if lastErr != nil {
+				return nil, nil, fmt.Errorf("%s: %w", ctx.Err(), lastErr)
+			}
+			return nil, nil, fmt.Errorf("element '%s' not found: %w", sel.Describe(), ctx.Err())
+		default:
+			// Step 1: Try clickable strategies first (fast path)
+			elem, info, err := d.tryFindElement(clickableStrategies)
+			if err == nil {
+				return elem, info, nil
+			}
+
+			// Step 2: Check if text exists at all
+			_, _, existsErr := d.tryFindElementFast(textExistsStrategies)
+			if existsErr != nil {
+				// Text doesn't exist yet - keep polling
+				lastErr = existsErr
+				continue
+			}
+
+			// Step 3: Text exists but not clickable → use page source with parent lookup
+			_, info, err = d.findElementByPageSourceOnce(sel)
+			if err == nil {
+				return nil, info, nil
+			}
+			lastErr = err
+		}
+	}
+}
+
+// buildClickableOnlyStrategies builds UiAutomator strategies that only match clickable elements.
+func buildClickableOnlyStrategies(sel flow.Selector) ([]LocatorStrategy, error) {
+	var strategies []LocatorStrategy
+	stateFilters := buildStateFilters(sel)
+
+	if sel.Text != "" {
+		if looksLikeRegex(sel.Text) {
+			pattern := "(?is)" + escapeUiAutomatorString(sel.Text)
+			strategies = append(strategies, LocatorStrategy{
+				Strategy: uiautomator2.StrategyUiAutomator,
+				Value:    `new UiSelector().textMatches("` + pattern + `").clickable(true)` + stateFilters,
+			})
+			strategies = append(strategies, LocatorStrategy{
+				Strategy: uiautomator2.StrategyUiAutomator,
+				Value:    `new UiSelector().descriptionMatches("` + pattern + `").clickable(true)` + stateFilters,
+			})
+		} else {
+			escaped := escapeUiAutomatorString(sel.Text)
+			strategies = append(strategies, LocatorStrategy{
+				Strategy: uiautomator2.StrategyUiAutomator,
+				Value:    `new UiSelector().textContains("` + escaped + `").clickable(true)` + stateFilters,
+			})
+			strategies = append(strategies, LocatorStrategy{
+				Strategy: uiautomator2.StrategyUiAutomator,
+				Value:    `new UiSelector().descriptionContains("` + escaped + `").clickable(true)` + stateFilters,
+			})
+		}
+	}
+
+	if len(strategies) == 0 {
+		return nil, fmt.Errorf("no text selector specified")
+	}
+
+	return strategies, nil
 }
 
 // findElementWithOptions is the internal implementation with clickable preference option.
@@ -627,9 +750,13 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector) (*core.ElementInfo, 
 		selected = DeepestMatchingElement(candidates)
 	}
 
+	// If element isn't clickable, try to find a clickable parent
+	// This handles React Native pattern where text nodes aren't clickable but containers are
+	clickableElem := GetClickableElement(selected)
+
 	return &core.ElementInfo{
 		Text:    selected.Text,
-		Bounds:  selected.Bounds,
+		Bounds:  clickableElem.Bounds,
 		Enabled: selected.Enabled,
 		Visible: selected.Displayed,
 	}, nil
@@ -740,9 +867,13 @@ func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements 
 		selected = DeepestMatchingElement(candidates)
 	}
 
+	// If element isn't clickable, try to find a clickable parent
+	// This handles React Native pattern where text nodes aren't clickable but containers are
+	clickableElem := GetClickableElement(selected)
+
 	info := &core.ElementInfo{
 		Text:    selected.Text,
-		Bounds:  selected.Bounds,
+		Bounds:  clickableElem.Bounds,
 		Enabled: selected.Enabled,
 		Visible: selected.Displayed,
 	}
@@ -772,13 +903,17 @@ func (d *Driver) findElementByPageSourceOnce(sel flow.Selector) (*uiautomator2.E
 			selected = candidates[0]
 		}
 
+		// If element isn't clickable, try to find a clickable parent
+		// This handles React Native pattern where text nodes aren't clickable but containers are
+		clickableElem := GetClickableElement(selected)
+
 		info := &core.ElementInfo{
 			Text: selected.Text,
 			Bounds: core.Bounds{
-				X:      selected.Bounds.X,
-				Y:      selected.Bounds.Y,
-				Width:  selected.Bounds.Width,
-				Height: selected.Bounds.Height,
+				X:      clickableElem.Bounds.X,
+				Y:      clickableElem.Bounds.Y,
+				Width:  clickableElem.Bounds.Width,
+				Height: clickableElem.Bounds.Height,
 			},
 			Enabled: selected.Enabled,
 			Visible: selected.Displayed,
@@ -836,13 +971,17 @@ func (d *Driver) findElementByPageSourceOnceInternal(sel flow.Selector) (*core.E
 		selected = candidates[0]
 	}
 
+	// If element isn't clickable, try to find a clickable parent
+	// This handles React Native pattern where text nodes aren't clickable but containers are
+	clickableElem := GetClickableElement(selected)
+
 	return &core.ElementInfo{
 		Text: selected.Text,
 		Bounds: core.Bounds{
-			X:      selected.Bounds.X,
-			Y:      selected.Bounds.Y,
-			Width:  selected.Bounds.Width,
-			Height: selected.Bounds.Height,
+			X:      clickableElem.Bounds.X,
+			Y:      clickableElem.Bounds.Y,
+			Width:  clickableElem.Bounds.Width,
+			Height: clickableElem.Bounds.Height,
 		},
 		Enabled: selected.Enabled,
 		Visible: selected.Displayed,
@@ -993,8 +1132,18 @@ func looksLikeRegex(text string) bool {
 					return true
 				}
 			}
-		case '*', '+', '?', '^', '$', '[', ']', '(', ')', '{', '}', '|':
+		case '*', '+', '?', '[', ']', '{', '}', '|':
 			return true
+		case '^':
+			// ^ at start is common in regex, but at end it's likely literal
+			if i == 0 {
+				return true
+			}
+		case '$':
+			// $ at end is common in regex (end anchor), but at start it's likely literal (currency)
+			if i == len(text)-1 {
+				return true
+			}
 		}
 	}
 	return false
