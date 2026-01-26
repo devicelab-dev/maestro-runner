@@ -39,6 +39,9 @@ type RunnerConfig struct {
 	RunnerVersion string
 	DriverName    string
 
+	// Environment variables from CLI (-e KEY=VALUE)
+	Env map[string]string
+
 	// Driver settings
 	WaitForIdleTimeout int // Global wait for idle timeout in ms
 

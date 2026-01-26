@@ -315,10 +315,16 @@ func (d *Driver) findElementForTapWithContext(ctx context.Context, sel flow.Sele
 				return elem, info, nil
 			}
 
-			// Step 2: Check if text exists at all
+			// Step 2: Check if text exists at all (via UiAutomator)
 			_, _, existsErr := d.tryFindElementFast(textExistsStrategies)
 			if existsErr != nil {
-				// Text doesn't exist yet - keep polling
+				// Text not found via UiAutomator - try page source as fallback
+				// (handles hint text, content-desc, etc. that UiAutomator misses)
+				_, info, err = d.findElementByPageSourceOnce(sel)
+				if err == nil {
+					return nil, info, nil
+				}
+				// Still not found - keep polling
 				lastErr = existsErr
 				continue
 			}

@@ -262,6 +262,16 @@ func (c *Client) GetElementText(elementID string) (string, error) {
 	return text, nil
 }
 
+// GetElementAttribute returns an element's attribute value.
+func (c *Client) GetElementAttribute(elementID, name string) (string, error) {
+	resp, err := c.get(c.elementPath(elementID) + "/attribute/" + name)
+	if err != nil {
+		return "", err
+	}
+	value, _ := resp["value"].(string)
+	return value, nil
+}
+
 // GetElementRect returns an element's position and size.
 func (c *Client) GetElementRect(elementID string) (x, y, w, h int, err error) {
 	resp, err := c.get(c.elementPath(elementID) + "/rect")
