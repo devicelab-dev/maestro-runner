@@ -23,6 +23,7 @@ type ParsedElement struct {
 	Clickable bool
 	Depth     int
 	Children  []*ParsedElement
+	Parent    *ParsedElement // parent element for clickable lookup
 
 	// Android
 	Text        string
@@ -266,11 +267,12 @@ func parseIOSPageSource(xmlData string) ([]*ParsedElement, error) {
 	return elements, nil
 }
 
-// flattenElement flattens a tree of elements into a list.
+// flattenElement flattens a tree of elements into a list, setting depth and parent.
 func flattenElement(elem *ParsedElement, depth int) []*ParsedElement {
 	elem.Depth = depth
 	result := []*ParsedElement{elem}
 	for _, child := range elem.Children {
+		child.Parent = elem // Set parent reference
 		result = append(result, flattenElement(child, depth+1)...)
 	}
 	return result
@@ -434,7 +436,7 @@ func looksLikeRegex(text string) bool {
 					return true
 				}
 			}
-		case '*', '+', '?', '[', ']', '{', '}', '|':
+		case '*', '+', '?', '[', ']', '{', '}', '|', '(', ')':
 			return true
 		case '^':
 			// ^ at start is common in regex, but at end it's likely literal
@@ -618,6 +620,34 @@ func SortClickableFirst(elements []*ParsedElement) []*ParsedElement {
 	}
 
 	return append(clickable, nonClickable...)
+}
+
+// GetClickableElement returns the element to tap on.
+// If the element itself is clickable, returns it.
+// If not clickable, walks up the parent chain to find the first clickable parent.
+// Returns the original element if no clickable parent is found.
+// This handles React Native pattern where text nodes aren't clickable but their containers are.
+func GetClickableElement(elem *ParsedElement) *ParsedElement {
+	if elem == nil {
+		return nil
+	}
+
+	// If element itself is clickable, use it
+	if elem.Clickable {
+		return elem
+	}
+
+	// Walk up parent chain to find clickable parent
+	parent := elem.Parent
+	for parent != nil {
+		if parent.Clickable {
+			return parent
+		}
+		parent = parent.Parent
+	}
+
+	// No clickable parent found - return original element
+	return elem
 }
 
 // Sorting helpers

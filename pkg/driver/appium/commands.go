@@ -19,7 +19,8 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		timeout = d.getFindTimeout()
 	}
 
-	info, err := d.findElement(step.Selector, timeout)
+	// Use findElementForTap which prioritizes clickable elements
+	info, err := d.findElementForTap(step.Selector, timeout)
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Element not found: %s", step.Selector.Describe()))
 	}
@@ -38,7 +39,8 @@ func (d *Driver) doubleTapOn(step *flow.DoubleTapOnStep) *core.CommandResult {
 		timeout = d.getFindTimeout()
 	}
 
-	info, err := d.findElement(step.Selector, timeout)
+	// Use findElementForTap which prioritizes clickable elements
+	info, err := d.findElementForTap(step.Selector, timeout)
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Element not found: %s", step.Selector.Describe()))
 	}
@@ -57,7 +59,8 @@ func (d *Driver) longPressOn(step *flow.LongPressOnStep) *core.CommandResult {
 		timeout = d.getFindTimeout()
 	}
 
-	info, err := d.findElement(step.Selector, timeout)
+	// Use findElementForTap which prioritizes clickable elements
+	info, err := d.findElementForTap(step.Selector, timeout)
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Element not found: %s", step.Selector.Describe()))
 	}

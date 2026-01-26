@@ -67,11 +67,13 @@ func (fr *FlowRunner) Run() FlowResult {
 		fr.driver.SetFindTimeout(fr.flow.Config.CommandTimeout)
 	}
 
-	// Apply waitForIdleTimeout - flow config overrides global setting
-	// Always set it to ensure previous flow's setting doesn't persist
-	waitForIdleTimeout := fr.config.WaitForIdleTimeout // global default
+	// Apply waitForIdleTimeout with priority:
+	// Flow config > CLI flag > Workspace config > Cap file > Default (5000ms)
+	// fr.config.WaitForIdleTimeout already has CLI > Workspace > Cap > Default applied
+	// Here we apply flow-level override if specified
+	waitForIdleTimeout := fr.config.WaitForIdleTimeout
 	if fr.flow.Config.WaitForIdleTimeout != nil {
-		waitForIdleTimeout = *fr.flow.Config.WaitForIdleTimeout // flow override
+		waitForIdleTimeout = *fr.flow.Config.WaitForIdleTimeout // flow override (highest priority)
 	}
 	if err := fr.driver.SetWaitForIdleTimeout(waitForIdleTimeout); err != nil {
 		// Log warning but continue - some drivers don't support this

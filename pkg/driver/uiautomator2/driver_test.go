@@ -152,6 +152,10 @@ func (m *MockUIA2Client) GetDeviceInfo() (*uiautomator2.DeviceInfo, error) {
 	}, nil
 }
 
+func (m *MockUIA2Client) SetAppiumSettings(settings map[string]interface{}) error {
+	return nil
+}
+
 // ============================================================================
 // MockShellExecutor
 // ============================================================================
@@ -637,7 +641,8 @@ func TestExecuteScrollDefaultDirection(t *testing.T) {
 
 func TestExecuteSwipe(t *testing.T) {
 	client := &MockUIA2Client{}
-	driver := New(client, nil, nil)
+	shell := &MockShellExecutor{}
+	driver := New(client, nil, shell)
 
 	step := &flow.SwipeStep{Direction: "up"}
 	result := driver.Execute(step)
@@ -645,14 +650,16 @@ func TestExecuteSwipe(t *testing.T) {
 	if !result.Success {
 		t.Errorf("expected success, got error: %v", result.Error)
 	}
-	if len(client.swipeCalls) != 1 {
-		t.Errorf("expected 1 swipe call, got %d", len(client.swipeCalls))
+	// When no scrollable element found, swipe uses shell command
+	if len(shell.commands) != 1 {
+		t.Errorf("expected 1 shell command, got %d", len(shell.commands))
 	}
 }
 
 func TestExecuteSwipeError(t *testing.T) {
-	client := &MockUIA2Client{swipeErr: errors.New("swipe failed")}
-	driver := New(client, nil, nil)
+	client := &MockUIA2Client{}
+	shell := &MockShellExecutor{err: errors.New("swipe failed")}
+	driver := New(client, nil, shell)
 
 	step := &flow.SwipeStep{Direction: "up"}
 	result := driver.Execute(step)
@@ -664,7 +671,8 @@ func TestExecuteSwipeError(t *testing.T) {
 
 func TestExecuteSwipeDefaultDirection(t *testing.T) {
 	client := &MockUIA2Client{}
-	driver := New(client, nil, nil)
+	shell := &MockShellExecutor{}
+	driver := New(client, nil, shell)
 
 	step := &flow.SwipeStep{Direction: ""} // empty = default up
 	result := driver.Execute(step)
@@ -863,7 +871,8 @@ func TestExecuteAllStepTypes(t *testing.T) {
 	// This test covers the Execute switch statement for all step types
 	// Most will fail because they need findElement, but this covers the switch paths
 	client := &MockUIA2Client{}
-	driver := New(client, nil, nil)
+	shell := &MockShellExecutor{}
+	driver := New(client, nil, shell)
 	driver.SetFindTimeout(100)        // 100ms for fast test failure
 	driver.SetOptionalFindTimeout(50) // 50ms for optional elements
 

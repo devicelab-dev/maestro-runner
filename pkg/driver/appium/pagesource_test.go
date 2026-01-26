@@ -494,3 +494,72 @@ func TestFilterContainsDescendants(t *testing.T) {
 func boolPtr(b bool) *bool {
 	return &b
 }
+
+func TestGetClickableElement(t *testing.T) {
+	// Build a hierarchy: GrandParent (clickable) -> Parent (not clickable) -> Child (not clickable)
+	grandParent := &ParsedElement{
+		Text:      "GrandParent",
+		Clickable: true,
+		Bounds:    core.Bounds{X: 0, Y: 0, Width: 500, Height: 500},
+	}
+	parent := &ParsedElement{
+		Text:      "Parent",
+		Clickable: false,
+		Bounds:    core.Bounds{X: 50, Y: 50, Width: 400, Height: 400},
+		Parent:    grandParent,
+	}
+	child := &ParsedElement{
+		Text:      "Child",
+		Clickable: false,
+		Bounds:    core.Bounds{X: 100, Y: 100, Width: 200, Height: 100},
+		Parent:    parent,
+	}
+
+	// Test: child is not clickable, should return grandparent
+	result := GetClickableElement(child)
+	if result != grandParent {
+		t.Errorf("Expected grandParent (clickable), got %s", result.Text)
+	}
+
+	// Test: parent is not clickable, should return grandparent
+	result = GetClickableElement(parent)
+	if result != grandParent {
+		t.Errorf("Expected grandParent (clickable), got %s", result.Text)
+	}
+
+	// Test: grandparent is clickable, should return itself
+	result = GetClickableElement(grandParent)
+	if result != grandParent {
+		t.Errorf("Expected grandParent (itself), got %s", result.Text)
+	}
+
+	// Test: element with no clickable parent returns itself
+	orphan := &ParsedElement{
+		Text:      "Orphan",
+		Clickable: false,
+		Bounds:    core.Bounds{X: 0, Y: 0, Width: 100, Height: 50},
+		Parent:    nil,
+	}
+	result = GetClickableElement(orphan)
+	if result != orphan {
+		t.Errorf("Expected orphan (no clickable parent), got %s", result.Text)
+	}
+
+	// Test: clickable element returns itself even with clickable parent
+	clickableChild := &ParsedElement{
+		Text:      "ClickableChild",
+		Clickable: true,
+		Bounds:    core.Bounds{X: 100, Y: 100, Width: 200, Height: 100},
+		Parent:    grandParent,
+	}
+	result = GetClickableElement(clickableChild)
+	if result != clickableChild {
+		t.Errorf("Expected clickableChild (itself), got %s", result.Text)
+	}
+
+	// Test: nil element returns nil
+	result = GetClickableElement(nil)
+	if result != nil {
+		t.Errorf("Expected nil for nil input, got %v", result)
+	}
+}

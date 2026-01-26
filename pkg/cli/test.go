@@ -238,11 +238,22 @@ func runTest(c *cli.Context) error {
 		WaitForIdleTimeout: c.Int("wait-for-idle-timeout"),
 	}
 
-	// Apply workspace config values (CLI flags take precedence)
-	if workspaceConfig != nil {
-		// If wait-for-idle-timeout was not explicitly set on CLI, use config value
-		if !c.IsSet("wait-for-idle-timeout") && workspaceConfig.WaitForIdleTimeout != 0 {
+	// Apply waitForIdleTimeout with priority:
+	// Flow config > CLI flag > Workspace config > Cap file > Default (5000ms)
+	// (Flow config is handled in flow_runner.go)
+	if !c.IsSet("wait-for-idle-timeout") {
+		// CLI not explicitly set, check other sources
+		if workspaceConfig != nil && workspaceConfig.WaitForIdleTimeout != 0 {
+			// Use workspace config
 			cfg.WaitForIdleTimeout = workspaceConfig.WaitForIdleTimeout
+		} else if caps != nil {
+			// Check caps file for waitForIdleTimeout
+			if val, ok := caps["appium:waitForIdleTimeout"].(float64); ok {
+				cfg.WaitForIdleTimeout = int(val)
+			} else if val, ok := caps["waitForIdleTimeout"].(float64); ok {
+				cfg.WaitForIdleTimeout = int(val)
+			}
+			// else: keep default 5000ms from CLI flag
 		}
 	}
 
@@ -679,6 +690,12 @@ func executeFlowsWithPerFlowSession(cfg *RunConfig, flows []flow.Flow) (*executo
 		// Create driver for this flow
 		flowCfg := *cfg
 		flowCfg.Capabilities = flowCaps
+
+		// Apply flow-level waitForIdleTimeout override if specified
+		// Priority: Flow config > CLI flag > Workspace config > Cap file > Default
+		if f.Config.WaitForIdleTimeout != nil {
+			flowCfg.WaitForIdleTimeout = *f.Config.WaitForIdleTimeout
+		}
 		driver, cleanup, err := createAppiumDriver(&flowCfg)
 		if err != nil {
 			// Record failure and continue to next flow
@@ -964,6 +981,17 @@ func createAppiumDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	// Auto-grant permissions by default (user can override with false in caps file)
 	if caps["appium:autoGrantPermissions"] == nil {
 		caps["appium:autoGrantPermissions"] = true
+	}
+
+	// Add waitForIdleTimeout to capabilities for session creation
+	// Priority: Flow config > CLI flag > Workspace config > Cap file > Default (5000ms)
+	// (Flow config override is handled in flow_runner.go)
+	// Using appium:settings capability to pass settings during session creation (saves one HTTP call)
+	if caps["appium:settings"] == nil {
+		caps["appium:settings"] = make(map[string]interface{})
+	}
+	if settings, ok := caps["appium:settings"].(map[string]interface{}); ok {
+		settings["waitForIdleTimeout"] = cfg.WaitForIdleTimeout
 	}
 
 	printSetupStep("Creating Appium session...")

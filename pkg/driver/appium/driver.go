@@ -15,10 +15,12 @@ const DefaultFindTimeout = 10 * time.Second
 
 // Driver implements core.Driver using Appium server.
 type Driver struct {
-	client      *Client
-	platform    string        // detected from page source or capabilities
-	appID       string        // current app ID
-	findTimeout time.Duration // configurable timeout for finding elements
+	client                    *Client
+	platform                  string        // detected from page source or capabilities
+	appID                     string        // current app ID
+	findTimeout               time.Duration // configurable timeout for finding elements
+	currentWaitForIdleTimeout int           // track current value to skip redundant calls
+	waitForIdleTimeoutSet     bool          // whether waitForIdleTimeout has been set
 }
 
 // NewDriver creates a new Appium driver.
@@ -39,6 +41,17 @@ func NewDriver(serverURL string, capabilities map[string]interface{}) (*Driver, 
 		d.appID = appID
 	} else if appID, ok := capabilities["appium:bundleId"].(string); ok {
 		d.appID = appID
+	}
+
+	// Track waitForIdleTimeout if set via appium:settings capability
+	if settings, ok := capabilities["appium:settings"].(map[string]interface{}); ok {
+		if val, ok := settings["waitForIdleTimeout"].(int); ok {
+			d.currentWaitForIdleTimeout = val
+			d.waitForIdleTimeoutSet = true
+		} else if val, ok := settings["waitForIdleTimeout"].(float64); ok {
+			d.currentWaitForIdleTimeout = int(val)
+			d.waitForIdleTimeoutSet = true
+		}
 	}
 
 	return d, nil
@@ -164,10 +177,19 @@ func (d *Driver) SetFindTimeout(ms int) {
 
 // SetWaitForIdleTimeout sets the wait for idle timeout.
 // 0 = disabled, >0 = wait up to N ms for device to be idle.
+// Skips the HTTP call if the value is already set (optimization for per-flow sessions).
 func (d *Driver) SetWaitForIdleTimeout(ms int) error {
-	return d.client.SetSettings(map[string]interface{}{
+	if d.waitForIdleTimeoutSet && d.currentWaitForIdleTimeout == ms {
+		return nil // already set, skip HTTP call
+	}
+	err := d.client.SetSettings(map[string]interface{}{
 		"waitForIdleTimeout": ms,
 	})
+	if err == nil {
+		d.currentWaitForIdleTimeout = ms
+		d.waitForIdleTimeoutSet = true
+	}
+	return err
 }
 
 // getFindTimeout returns the configured timeout or the default.
@@ -331,7 +353,87 @@ func (d *Driver) findElementByPageSource(sel flow.Selector) (*core.ElementInfo, 
 	candidates = SortClickableFirst(candidates)
 	selected := DeepestMatchingElement(candidates)
 
-	return elementToInfo(selected, platform), nil
+	// If element isn't clickable, try to find a clickable parent
+	// This handles React Native pattern where text nodes aren't clickable but containers are
+	clickableElem := GetClickableElement(selected)
+
+	return elementToInfoWithClickable(selected, clickableElem, platform), nil
+}
+
+// findElementForTap finds an element for tap commands, prioritizing clickable elements.
+// When multiple elements match (e.g., "Login" title and "Login" button), prefers the clickable one.
+// For Android with text-based selectors:
+//  1. Try UiAutomator with .clickable(true) - fast if element itself is clickable
+//  2. If text exists but not clickable → page source with clickable parent lookup
+// This handles React Native pattern where text nodes aren't clickable but parent containers are.
+func (d *Driver) findElementForTap(sel flow.Selector, timeout time.Duration) (*core.ElementInfo, error) {
+	if timeout <= 0 {
+		timeout = d.getFindTimeout()
+	}
+
+	// For relative selectors, use page source (position calculation required)
+	if sel.HasRelativeSelector() {
+		return d.findElementRelative(sel, timeout)
+	}
+
+	deadline := time.Now().Add(timeout)
+
+	for {
+		// Try clickable-first approach for text-based selectors on Android
+		if sel.Text != "" && d.platform != "ios" {
+			info, err := d.findElementForTapDirect(sel)
+			if err == nil && info != nil {
+				return info, nil
+			}
+		} else {
+			// For ID-based or iOS selectors, use standard approach
+			info, err := d.findElementDirect(sel)
+			if err == nil && info != nil {
+				return info, nil
+			}
+		}
+
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("element not found: %s", sel.Describe())
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// findElementForTapDirect finds element for tap, trying clickable first then fallback to page source.
+func (d *Driver) findElementForTapDirect(sel flow.Selector) (*core.ElementInfo, error) {
+	escaped := escapeUiAutomatorString(sel.Text)
+
+	// Step 1: Try clickable elements first (fast path)
+	// Try textContains with clickable filter
+	uiSelector := fmt.Sprintf(`new UiSelector().textContains("%s").clickable(true)`, escaped)
+	if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
+		return d.getElementInfo(elemID)
+	}
+
+	// Try descriptionContains with clickable filter
+	uiSelector = fmt.Sprintf(`new UiSelector().descriptionContains("%s").clickable(true)`, escaped)
+	if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
+		return d.getElementInfo(elemID)
+	}
+
+	// Step 2: Check if text exists at all (without clickable filter)
+	uiSelector = fmt.Sprintf(`new UiSelector().textContains("%s")`, escaped)
+	_, textExistsErr := d.client.FindElement("-android uiautomator", uiSelector)
+
+	if textExistsErr != nil {
+		// Also try description
+		uiSelector = fmt.Sprintf(`new UiSelector().descriptionContains("%s")`, escaped)
+		_, textExistsErr = d.client.FindElement("-android uiautomator", uiSelector)
+	}
+
+	if textExistsErr != nil {
+		// Text doesn't exist - return error to trigger retry
+		return nil, fmt.Errorf("element with text '%s' not found", sel.Text)
+	}
+
+	// Step 3: Text exists but not clickable → use page source with parent lookup
+	return d.findElementByPageSource(sel)
 }
 
 // findElementRelative handles relative selectors (below, above, etc.)
@@ -504,7 +606,11 @@ func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements 
 		selected = DeepestMatchingElement(candidates)
 	}
 
-	return elementToInfo(selected, platform), nil
+	// If element isn't clickable, try to find a clickable parent
+	// This handles React Native pattern where text nodes aren't clickable but containers are
+	clickableElem := GetClickableElement(selected)
+
+	return elementToInfoWithClickable(selected, clickableElem, platform), nil
 }
 
 // Filter types
@@ -606,6 +712,33 @@ func elementToInfo(elem *ParsedElement, platform string) *core.ElementInfo {
 		}
 		info.ID = elem.ResourceID
 		info.Class = elem.ClassName
+	}
+
+	return info
+}
+
+// elementToInfoWithClickable creates ElementInfo using bounds from clickable element.
+// This allows tapping on the clickable parent while preserving the matched element's text.
+func elementToInfoWithClickable(matched, clickable *ParsedElement, platform string) *core.ElementInfo {
+	info := &core.ElementInfo{
+		Bounds:  clickable.Bounds, // Use clickable element's bounds for tap
+		Enabled: matched.Enabled,
+		Visible: matched.Displayed,
+	}
+
+	if platform == "ios" {
+		info.Text = matched.Label
+		if info.Text == "" {
+			info.Text = matched.Name
+		}
+		info.Class = matched.Type
+	} else {
+		info.Text = matched.Text
+		if info.Text == "" {
+			info.Text = matched.ContentDesc
+		}
+		info.ID = matched.ResourceID
+		info.Class = matched.ClassName
 	}
 
 	return info

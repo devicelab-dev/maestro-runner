@@ -1132,7 +1132,7 @@ func looksLikeRegex(text string) bool {
 					return true
 				}
 			}
-		case '*', '+', '?', '[', ']', '{', '}', '|':
+		case '*', '+', '?', '[', ']', '{', '}', '|', '(', ')':
 			return true
 		case '^':
 			// ^ at start is common in regex, but at end it's likely literal

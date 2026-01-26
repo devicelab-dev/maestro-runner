@@ -69,21 +69,28 @@ func (c *Client) Connect(capabilities map[string]interface{}) error {
 	c.fetchScreenSize()
 
 	// Configure UiAutomator2/XCUITest settings for faster element finding
-	// Without these settings, drivers wait for UI to be "idle" which causes 10-20s delays
+	// Extract waitForIdleTimeout from appium:settings capability if provided
+	waitForIdleTimeout := 0 // default to 0 (disabled) for backward compatibility
+	if settings, ok := capabilities["appium:settings"].(map[string]interface{}); ok {
+		if val, ok := settings["waitForIdleTimeout"].(int); ok {
+			waitForIdleTimeout = val
+		} else if val, ok := settings["waitForIdleTimeout"].(float64); ok {
+			waitForIdleTimeout = int(val)
+		}
+	}
+
 	if c.platform == "ios" {
 		// iOS XCUITest settings:
-		// - waitForIdleTimeout: Don't wait for app to be idle (default varies)
 		// - animationCoolOffTimeout: Don't wait for animations to finish (default 2s)
 		c.SetSettings(map[string]interface{}{
-			"waitForIdleTimeout":     0,
+			"waitForIdleTimeout":      waitForIdleTimeout,
 			"animationCoolOffTimeout": 0,
 		})
 	} else {
 		// Android UiAutomator2 settings:
-		// - waitForIdleTimeout: Don't wait for UI thread to be idle (default 10-20s)
 		// - waitForSelectorTimeout: Don't add extra wait when finding elements (default 0)
 		c.SetSettings(map[string]interface{}{
-			"waitForIdleTimeout":     0,
+			"waitForIdleTimeout":     waitForIdleTimeout,
 			"waitForSelectorTimeout": 0,
 		})
 
