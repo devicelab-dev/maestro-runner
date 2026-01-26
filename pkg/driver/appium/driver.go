@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
@@ -235,6 +236,11 @@ func (d *Driver) findElement(sel flow.Selector, timeout time.Duration) (*core.El
 // findElementDirect finds element using Appium's native strategies.
 // Uses UiAutomator selectors for Android (fast) instead of page source parsing (slow).
 func (d *Driver) findElementDirect(sel flow.Selector) (*core.ElementInfo, error) {
+	// If selector has state filters, use page source (UiAutomator doesn't support these)
+	if sel.Enabled != nil || sel.Selected != nil || sel.Focused != nil || sel.Checked != nil {
+		return d.findElementByPageSource(sel)
+	}
+
 	// Try ID first
 	if sel.ID != "" {
 		if d.platform == "ios" {
@@ -268,28 +274,41 @@ func (d *Driver) findElementDirect(sel flow.Selector) (*core.ElementInfo, error)
 			// Android: use UiAutomator selectors (much faster than page source)
 			escaped := escapeUiAutomatorString(sel.Text)
 
-			// Try exact text match first
-			uiSelector := fmt.Sprintf(`new UiSelector().text("%s")`, escaped)
-			if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
-				return d.getElementInfo(elemID)
-			}
+			if looksLikeRegex(sel.Text) {
+				// Use textMatches for regex patterns
+				uiSelector := fmt.Sprintf(`new UiSelector().textMatches("%s")`, escaped)
+				if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
+					return d.getElementInfo(elemID)
+				}
+				// Try descriptionMatches
+				uiSelector = fmt.Sprintf(`new UiSelector().descriptionMatches("%s")`, escaped)
+				if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
+					return d.getElementInfo(elemID)
+				}
+			} else {
+				// Try exact text match first
+				uiSelector := fmt.Sprintf(`new UiSelector().text("%s")`, escaped)
+				if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
+					return d.getElementInfo(elemID)
+				}
 
-			// Try textContains
-			uiSelector = fmt.Sprintf(`new UiSelector().textContains("%s")`, escaped)
-			if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
-				return d.getElementInfo(elemID)
-			}
+				// Try textContains
+				uiSelector = fmt.Sprintf(`new UiSelector().textContains("%s")`, escaped)
+				if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
+					return d.getElementInfo(elemID)
+				}
 
-			// Try description (content-desc)
-			uiSelector = fmt.Sprintf(`new UiSelector().description("%s")`, escaped)
-			if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
-				return d.getElementInfo(elemID)
-			}
+				// Try description (content-desc)
+				uiSelector = fmt.Sprintf(`new UiSelector().description("%s")`, escaped)
+				if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
+					return d.getElementInfo(elemID)
+				}
 
-			// Try descriptionContains
-			uiSelector = fmt.Sprintf(`new UiSelector().descriptionContains("%s")`, escaped)
-			if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
-				return d.getElementInfo(elemID)
+				// Try descriptionContains
+				uiSelector = fmt.Sprintf(`new UiSelector().descriptionContains("%s")`, escaped)
+				if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
+					return d.getElementInfo(elemID)
+				}
 			}
 		}
 	}
@@ -298,20 +317,11 @@ func (d *Driver) findElementDirect(sel flow.Selector) (*core.ElementInfo, error)
 	return d.findElementByPageSource(sel)
 }
 
-// escapeUiAutomatorString escapes quotes for UiAutomator string
+// escapeUiAutomatorString escapes only double quotes for UiAutomator string.
+// Used when the text is already a regex pattern - backslashes are NOT escaped
+// to preserve regex metacharacters like \d, \w, etc.
 func escapeUiAutomatorString(s string) string {
-	var result string
-	for _, c := range s {
-		switch c {
-		case '"':
-			result += `\"`
-		case '\\':
-			result += `\\`
-		default:
-			result += string(c)
-		}
-	}
-	return result
+	return strings.ReplaceAll(s, `"`, `\"`)
 }
 
 // escapeIOSPredicateString escapes quotes for iOS predicate string
@@ -428,7 +438,13 @@ func (d *Driver) findElementForTapDirect(sel flow.Selector) (*core.ElementInfo, 
 	}
 
 	if textExistsErr != nil {
-		// Text doesn't exist - return error to trigger retry
+		// Text not found via UiAutomator - try page source as fallback
+		// (handles hint text, content-desc, etc. that UiAutomator misses)
+		info, err := d.findElementByPageSource(sel)
+		if err == nil {
+			return info, nil
+		}
+		// Still not found - return error to trigger retry
 		return nil, fmt.Errorf("element with text '%s' not found", sel.Text)
 	}
 
@@ -683,12 +699,16 @@ func (d *Driver) getElementInfo(elementID string) (*core.ElementInfo, error) {
 	displayed, _ := d.client.IsElementDisplayed(elementID)
 	enabled, _ := d.client.IsElementEnabled(elementID)
 
+	// Get content-desc (AccessibilityLabel) - important for elements found via descriptionMatches
+	contentDesc, _ := d.client.GetElementAttribute(elementID, "content-desc")
+
 	return &core.ElementInfo{
-		ID:      elementID,
-		Text:    text,
-		Bounds:  core.Bounds{X: x, Y: y, Width: w, Height: h},
-		Visible: displayed,
-		Enabled: enabled,
+		ID:                 elementID,
+		Text:               text,
+		AccessibilityLabel: contentDesc,
+		Bounds:             core.Bounds{X: x, Y: y, Width: w, Height: h},
+		Visible:            displayed,
+		Enabled:            enabled,
 	}, nil
 }
 

@@ -46,6 +46,10 @@ func (fr *FlowRunner) Run() FlowResult {
 	// Import system environment variables
 	fr.script.ImportSystemEnv()
 
+	// Apply CLI environment variables (from -e flags)
+	// These take precedence over system env, but flow-level env takes precedence over these
+	fr.script.SetVariables(fr.config.Env)
+
 	// Set flow directory for relative path resolution
 	if fr.flow.SourcePath != "" {
 		fr.script.SetFlowDir(filepath.Dir(fr.flow.SourcePath))
@@ -56,7 +60,7 @@ func (fr *FlowRunner) Run() FlowResult {
 		fr.script.SetPlatform(info.Platform)
 	}
 
-	// Apply flow config variables
+	// Apply flow config variables (takes precedence over CLI env)
 	if fr.flow.Config.AppID != "" {
 		fr.script.SetVariable("APP_ID", fr.flow.Config.AppID)
 	}
@@ -283,6 +287,7 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 
 	// CopyTextFrom - delegate to driver and sync copied text to script engine
 	case *flow.CopyTextFromStep:
+		fr.script.ExpandStep(step) // Expand variables in selector
 		result = fr.driver.Execute(step)
 		if result.Success && result.Data != nil {
 			if text, ok := result.Data.(string); ok {

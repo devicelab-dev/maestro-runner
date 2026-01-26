@@ -246,19 +246,12 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 }
 
 func (d *Driver) eraseText(step *flow.EraseTextStep) *core.CommandResult {
-	// Try to clear active element
-	if elemID, err := d.client.GetActiveElement(); err == nil && elemID != "" {
-		if err := d.client.ClearElement(elemID); err == nil {
-			return successResult("Cleared text from active element", nil)
-		}
-	}
-
-	// Fallback: send delete keys
 	chars := step.Characters
 	if chars <= 0 {
 		chars = 50 // Default
 	}
 
+	// Send delete keys for the specified count (don't use ClearElement as it clears ALL text)
 	for i := 0; i < chars; i++ {
 		d.client.PressKeyCode(67) // Android KEYCODE_DEL
 	}
@@ -435,7 +428,11 @@ func (d *Driver) copyTextFrom(step *flow.CopyTextFromStep) *core.CommandResult {
 		return errorResult(err, "Element not found for copyTextFrom")
 	}
 
+	// Get text, falling back to AccessibilityLabel if empty
 	text := info.Text
+	if text == "" && info.AccessibilityLabel != "" {
+		text = info.AccessibilityLabel
+	}
 	if text == "" {
 		return errorResult(fmt.Errorf("element has no text"), "")
 	}
@@ -444,7 +441,7 @@ func (d *Driver) copyTextFrom(step *flow.CopyTextFromStep) *core.CommandResult {
 		return errorResult(err, "Failed to set clipboard")
 	}
 
-	result := successResult(fmt.Sprintf("Copied text: %s", text), info)
+	result := successResult(fmt.Sprintf("Copied text: '%s' (len=%d)", text, len(text)), info)
 	result.Data = text
 	return result
 }

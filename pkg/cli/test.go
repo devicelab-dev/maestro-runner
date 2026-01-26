@@ -215,11 +215,22 @@ func runTest(c *cli.Context) error {
 		}
 	}
 
+	// Merge env variables: workspace config env + CLI env (CLI takes precedence)
+	mergedEnv := make(map[string]string)
+	if workspaceConfig != nil {
+		for k, v := range workspaceConfig.Env {
+			mergedEnv[k] = v
+		}
+	}
+	for k, v := range env {
+		mergedEnv[k] = v // CLI overrides workspace config
+	}
+
 	// Build run configuration
 	cfg := &RunConfig{
 		FlowPaths:          c.Args().Slice(),
 		ConfigPath:         configPath,
-		Env:                env,
+		Env:                mergedEnv,
 		IncludeTags:        c.StringSlice("include-tags"),
 		ExcludeTags:        c.StringSlice("exclude-tags"),
 		OutputDir:          outputDir,
@@ -366,6 +377,7 @@ func executeTest(cfg *RunConfig) error {
 			},
 			RunnerVersion:      "0.1.0",
 			DriverName:         driverName,
+			Env:                cfg.Env,
 			WaitForIdleTimeout: cfg.WaitForIdleTimeout,
 			// Live progress callbacks
 			OnFlowStart:       onFlowStart,
@@ -723,6 +735,7 @@ func executeFlowsWithPerFlowSession(cfg *RunConfig, flows []flow.Flow) (*executo
 			},
 			RunnerVersion:      "0.1.0",
 			DriverName:         "appium",
+			Env:                cfg.Env,
 			WaitForIdleTimeout: cfg.WaitForIdleTimeout,
 			OnFlowStart:        func(flowIdx, totalFlows int, name, file string) { onFlowStart(i, len(flows), name, file) },
 			OnStepComplete:     onStepComplete,
