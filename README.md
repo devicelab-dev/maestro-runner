@@ -67,6 +67,8 @@ Maestro is a great format for writing mobile UI tests, but its runner has archit
 
 maestro-runner is a clean-room reimplementation that keeps the Maestro YAML format but replaces the execution engine with a pluggable, configurable architecture. Write your tests in the same YAML you already know, then run them on any backend.
 
+These aren't theoretical problems. Of the [top 100 most-discussed open mobile issues](docs/maestro-issues-analysis.md) on Maestro's GitHub, maestro-runner addresses 78% — through specific fixes or architectural choices that prevent the problem entirely. Another 600+ issues were closed by Maestro without resolution; many of these don't occur under maestro-runner's architecture.
+
 ## Features
 
 - **Maestro YAML compatible** — Parses and runs standard Maestro flow files (39 command types)
