@@ -10,72 +10,27 @@ A fast, Go-based test runner for [Maestro](https://maestro.mobile.dev/) YAML flo
 go install github.com/devicelab-dev/maestro-runner@latest
 ```
 
-Or build from source:
-
-```bash
-git clone https://github.com/devicelab-dev/maestro-runner.git
-cd maestro-runner
-make build
-```
-
 ### Run
 
 ```bash
-# Android (UIAutomator2 — default)
-maestro-runner test login.yaml
-
-# iOS
-maestro-runner test login.yaml --platform ios
-
-# Via Appium
-maestro-runner --driver appium test login.yaml
-
-# Run an entire folder
-maestro-runner test flows/
-
-# With tag filtering
-maestro-runner test flows/ --include-tags smoke --exclude-tags slow
-
-# With environment variables
-maestro-runner test flows/ -e USER=test -e PASS=secret
-```
-
-### View the report
-
-Reports are written to `./reports/<timestamp>/`:
-
-```
-reports/
-└── 2026-01-27_15-04-05/
-    ├── report.json       # Machine-readable results
-    ├── report.html       # Interactive HTML report
-    ├── flows/
-    │   └── flow-000.json # Per-flow command details
-    └── assets/
-        └── flow-000/     # Screenshots, hierarchy dumps, logs
+maestro-runner test flow.yaml                        # Android (default)
+maestro-runner test flow.yaml --platform ios          # iOS
+maestro-runner --driver appium test flow.yaml         # Appium (local or cloud)
 ```
 
 ## Why maestro-runner?
 
-Same Maestro YAML you already know, different execution engine.
+**3.6x faster** · **14x less memory** · **single binary, no JVM** · **your existing YAML files work as-is**
 
-| | Maestro | maestro-runner |
-|---|---|---|
-| **Parallel execution** | Hardcoded port 7001 — one instance per machine | Dynamic ports, parallel-ready |
-| **Timeouts** | Hardcoded 17s — no configuration | Configurable per-command and per-flow |
-| **Text input** | Character-by-character, drops/mangles text | Direct ADB input, reliable |
-| **Cloud providers** | Not supported | BrowserStack, Sauce Labs, LambdaTest via Appium |
-| **Memory** | ~289 MB (JVM) | ~21 MB (Go) |
-| **Setup** | JVM + multiple dependencies | Single binary, no JVM |
-| **Architecture** | 1500-line orchestrator class | Pluggable drivers, small components |
+Drop-in replacement for the Maestro runner. If you've hit any of these, maestro-runner fixes them:
 
-Additional improvements over Maestro:
-
-- **Faster element finding** — native UIAutomator2/WDA selectors instead of polling; quick 1s check for `assertNotVisible` instead of full 17s timeout
-- **Clickable element prioritization** — walks up the parent chain to find the clickable ancestor (handles React Native patterns)
-- **Better regex** — native `textMatches()` selector with smarter detection to avoid false positives
-- **Multiple drivers** — UIAutomator2 (Android), Appium (Android/iOS + cloud), WDA (iOS)
-- **Interactive HTML reports** — JSON + HTML with sub-command expansion for `runFlow`, `repeat`, `retry`
+- **`inputText` drops characters** → direct ADB input, reliable Unicode support
+- **Tests are slow** → native element selectors, no polling, configurable idle timeouts
+- **Can't configure timeouts** → per-command and per-flow, `--wait-for-idle-timeout 0` to disable
+- **Can't run parallel** → dynamic ports, multiple instances on one machine
+- **JVM eats memory in CI** → ~21 MB Go binary vs ~289 MB JVM
+- **No cloud support** → BrowserStack, Sauce Labs, LambdaTest via Appium
+- **Elements not found reliably** → clickable parent traversal, native `textMatches()` regex, smarter visibility checks
 
 Addresses [78% of the top 100 most-discussed open issues](docs/maestro-issues-analysis.md) on Maestro's GitHub.
 
@@ -109,8 +64,6 @@ waitForIdleTimeout: 3000    # Device idle wait (ms), 0 to disable
 |-------|-------------|
 | `commandTimeout` | Override the default element-find timeout for all commands in this flow (ms) |
 | `waitForIdleTimeout` | Override the device idle wait for this flow (ms, `0` to disable) |
-| `tags` | Tags for `--include-tags` / `--exclude-tags` filtering |
-| `env` | Flow-level environment variables (available as `${VAR}` in steps) |
 
 ## Drivers
 
@@ -191,62 +144,17 @@ maestro-runner --platform ios test flow.yaml
 maestro-runner --platform ios --device "iPhone 15" test flow.yaml
 ```
 
-## Configuration
-
-Create `config.yaml` in your test directory for shared settings:
-
-```yaml
-# Flow selection
-flows:
-  - "**/*.yaml"
-
-# Tag filtering
-includeTags:
-  - smoke
-excludeTags:
-  - wip
-
-# Environment
-env:
-  API_URL: https://staging.example.com
-
-# Timeouts
-waitForIdleTimeout: 3000    # ms, 0 to disable
-```
-
-**Priority** (highest wins): CLI flags > config.yaml > capabilities file > defaults.
-
-## CLI Reference
-
-### Global flags
-
-| Flag | Env var | Default | Description |
-|------|---------|---------|-------------|
-| `--platform, -p` | `MAESTRO_PLATFORM` | `android` | Target platform: `android`, `ios` |
-| `--device, --udid` | `MAESTRO_DEVICE` | auto-detect | Device ID (comma-separated for multiple) |
-| `--driver, -d` | `MAESTRO_DRIVER` | `uiautomator2` | Driver: `uiautomator2`, `appium` |
-| `--appium-url` | `APPIUM_URL` | `http://127.0.0.1:4723` | Appium server URL |
-| `--caps` | `APPIUM_CAPS` | | Path to Appium capabilities JSON |
-| `--app-file` | `MAESTRO_APP_FILE` | | App binary to install before testing |
-| `--verbose` | `MAESTRO_VERBOSE` | `false` | Enable verbose logging |
-| `--no-ansi` | | `false` | Disable colored output |
-
-### `test` command
-
-```bash
-maestro-runner test [flags] <flow-or-folder>...
-```
+## CLI Flags (maestro-runner specific)
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--config` | `config.yaml` | Path to workspace config |
-| `--env, -e` | | Environment variable `KEY=VALUE` (repeatable) |
-| `--include-tags` | | Only run flows matching these tags |
-| `--exclude-tags` | | Skip flows matching these tags |
-| `--output` | `./reports` | Report output directory |
-| `--flatten` | `false` | Don't create timestamp subfolder |
-| `--continuous, -c` | `false` | Continuous mode (re-run on change) |
+| `--driver, -d` | `uiautomator2` | Driver: `uiautomator2`, `appium` |
+| `--appium-url` | `http://127.0.0.1:4723` | Appium server URL |
+| `--caps` | | Path to Appium capabilities JSON |
+| `--app-file` | | App binary to install before testing |
 | `--wait-for-idle-timeout` | `5000` | Device idle wait in ms (0 to disable) |
+
+All standard Maestro flags (`--platform`, `--device`, `--env`, `--include-tags`, `--exclude-tags`, etc.) are also supported. Run `maestro-runner test --help` for the full list.
 
 ## Architecture
 
