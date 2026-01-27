@@ -1,6 +1,6 @@
 # maestro-runner
 
-A fast, Go-based test runner for [Maestro](https://maestro.mobile.dev/) YAML flows with pluggable driver backends.
+**3.6x faster** · **14x less memory** · **single binary, no JVM** · your existing [Maestro](https://maestro.mobile.dev/) YAML files work as-is — with the features and fixes Maestro hasn't delivered.
 
 ## Quick Start
 
@@ -20,9 +20,7 @@ maestro-runner --driver appium test flow.yaml         # Appium (local or cloud)
 
 ## Why maestro-runner?
 
-**3.6x faster** · **14x less memory** · **single binary, no JVM** · **your existing YAML files work as-is**
-
-Drop-in replacement for the Maestro runner. If you've hit any of these, maestro-runner fixes them:
+If you've hit any of these, maestro-runner fixes them:
 
 - **`inputText` drops characters** → direct ADB input, reliable Unicode support
 - **Tests are slow** → native element selectors, no polling, configurable idle timeouts
