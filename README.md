@@ -86,11 +86,9 @@ maestro-runner is a clean-room reimplementation that keeps the Maestro YAML form
 - **Appium driver:** Appium server 2.x (`npm i -g appium`)
 - **WDA driver:** Xcode command-line tools (`xcrun`)
 
-## Writing Flows
+## Flow Config
 
-Flows are YAML files with an optional config header (first YAML document) and a list of steps.
-
-### Flow config header
+Flows support an optional config header as the first YAML document. These fields are maestro-runner extensions on top of standard Maestro YAML:
 
 ```yaml
 appId: com.example.app
@@ -103,189 +101,16 @@ env:
 commandTimeout: 10000       # Default per-command timeout (ms)
 waitForIdleTimeout: 3000    # Device idle wait (ms), 0 to disable
 ---
-# Steps follow
 - launchApp: com.example.app
 - tapOn: "Login"
 ```
 
-### Commands
-
-#### Navigation and interaction
-
-```yaml
-- tapOn: "Login"                    # Tap element by text
-- tapOn:
-    id: btn_submit                  # Tap by resource/accessibility ID
-- doubleTapOn: "Item"
-- longPressOn: "Delete"
-- tapOnPoint:                       # Tap at coordinates
-    x: 200
-    y: 400
-- swipe:                            # Swipe gesture
-    direction: UP                   # UP, DOWN, LEFT, RIGHT
-    duration: 500
-- scroll                            # Scroll down
-- scrollUntilVisible:
-    element:
-      text: "Load More"
-    direction: DOWN
-- back                              # Press back button
-- hideKeyboard
-```
-
-#### Text input
-
-```yaml
-- inputText: "hello world"
-- inputText:
-    text: "hello"
-    selector:
-      id: search_field
-- eraseText: 5                      # Erase 5 characters
-- copyTextFrom:
-    text: "Price"                   # Copy text from element
-- pasteText
-- inputRandom:
-    type: EMAIL                     # EMAIL, TEXT, NUMBER, PERSON_NAME
-    length: 10
-```
-
-#### Assertions
-
-```yaml
-- assertVisible: "Welcome"
-- assertNotVisible: "Error"
-- assertTrue: "${output.status == 'ok'}"  # JavaScript condition
-- assertVisible:
-    text: "Order #\\d+"             # Regex pattern
-- assertCondition:
-    visible:
-      text: "Dashboard"
-    timeout: 15000                  # Custom timeout for this step
-```
-
-#### App lifecycle
-
-```yaml
-- launchApp: com.example.app
-- launchApp:
-    appId: com.example.app
-    clearState: true                # Wipe app data before launch
-    clearKeychain: true             # iOS: clear keychain
-    permissions:
-      notifications: allow
-      location: allow
-- stopApp: com.example.app
-- clearState: com.example.app
-```
-
-#### JavaScript
-
-```yaml
-- evalScript: "output.counter = 1"
-- assertTrue: "${output.counter == 1}"
-- runScript: scripts/setup.js
-```
-
-#### Flow control
-
-```yaml
-- repeat:
-    times: 3
-    steps:
-      - tapOn: "Next"
-      - assertVisible: "Page"
-
-- retry:
-    maxRetries: 2
-    steps:
-      - tapOn: "Submit"
-      - assertVisible: "Success"
-
-- runFlow: other-flow.yaml          # Run another flow file
-- runFlow:
-    when:
-      visible: "Login Screen"
-    steps:                          # Or inline steps
-      - tapOn: "Login"
-```
-
-#### Device control
-
-```yaml
-- setLocation:
-    latitude: 37.7749
-    longitude: -122.4194
-- openLink: "myapp://deep/link"
-- pressKey: HOME
-- takeScreenshot: screenshot_name
-```
-
-### Selectors
-
-Elements can be found by text, ID, or a combination:
-
-```yaml
-# Simple text match
-- tapOn: "Login"
-
-# By ID
-- tapOn:
-    id: btn_login
-
-# Regex match
-- tapOn:
-    text: "Order #\\d+"
-
-# Relative positioning
-- tapOn:
-    text: "Edit"
-    below:
-      text: "Username"
-
-# Multiple constraints
-- tapOn:
-    text: "Submit"
-    enabled: true
-    index: "0"
-```
-
-Relative selector directions: `below`, `above`, `leftOf`, `rightOf`, `containsChild`, `containsDescendants`.
-
-### Environment variables
-
-```yaml
-# In flow header
-env:
-  BASE_URL: https://api.example.com
-
-# In steps — ${VAR} syntax
-- inputText: "${TEST_USER}"
-- openLink: "${BASE_URL}/login"
-```
-
-Pass from the CLI:
-
-```bash
-maestro-runner test flows/ -e USER=test -e PASS=secret
-```
-
-Or in `config.yaml`:
-
-```yaml
-env:
-  USER: test
-  PASS: secret
-```
-
-### Optional steps and labels
-
-```yaml
-- assertVisible:
-    text: "Cookie banner"
-    optional: true                  # Won't fail the flow if missing
-    label: "Dismiss cookie banner"  # Custom label in reports
-```
+| Field | Description |
+|-------|-------------|
+| `commandTimeout` | Override the default element-find timeout for all commands in this flow (ms) |
+| `waitForIdleTimeout` | Override the device idle wait for this flow (ms, `0` to disable) |
+| `tags` | Tags for `--include-tags` / `--exclude-tags` filtering |
+| `env` | Flow-level environment variables (available as `${VAR}` in steps) |
 
 ## Drivers
 
