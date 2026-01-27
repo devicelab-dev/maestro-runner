@@ -18,23 +18,7 @@ cd maestro-runner
 make build
 ```
 
-### Write a flow
-
-Create `login.yaml`:
-
-```yaml
-appId: com.example.app
----
-- launchApp: com.example.app
-- tapOn: "Email"
-- inputText: "test@example.com"
-- tapOn: "Password"
-- inputText: "secret123"
-- tapOn: "Login"
-- assertVisible: "Welcome"
-```
-
-### Run it
+### Run
 
 ```bash
 # Android (UIAutomator2 — default)
