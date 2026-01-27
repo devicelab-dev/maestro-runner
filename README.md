@@ -2,6 +2,75 @@
 
 A fast, Go-based test runner for [Maestro](https://maestro.mobile.dev/) YAML flows with pluggable driver backends.
 
+## Quick Start
+
+### Install
+
+```bash
+go install github.com/devicelab-dev/maestro-runner@latest
+```
+
+Or build from source:
+
+```bash
+git clone https://github.com/devicelab-dev/maestro-runner.git
+cd maestro-runner
+make build
+```
+
+### Write a flow
+
+Create `login.yaml`:
+
+```yaml
+appId: com.example.app
+---
+- launchApp: com.example.app
+- tapOn: "Email"
+- inputText: "test@example.com"
+- tapOn: "Password"
+- inputText: "secret123"
+- tapOn: "Login"
+- assertVisible: "Welcome"
+```
+
+### Run it
+
+```bash
+# Android (UIAutomator2 — default)
+maestro-runner test login.yaml
+
+# iOS
+maestro-runner test login.yaml --platform ios
+
+# Via Appium
+maestro-runner --driver appium test login.yaml
+
+# Run an entire folder
+maestro-runner test flows/
+
+# With tag filtering
+maestro-runner test flows/ --include-tags smoke --exclude-tags slow
+
+# With environment variables
+maestro-runner test flows/ -e USER=test -e PASS=secret
+```
+
+### View the report
+
+Reports are written to `./reports/<timestamp>/`:
+
+```
+reports/
+└── 2026-01-27_15-04-05/
+    ├── report.json       # Machine-readable results
+    ├── report.html       # Interactive HTML report
+    ├── flows/
+    │   └── flow-000.json # Per-flow command details
+    └── assets/
+        └── flow-000/     # Screenshots, hierarchy dumps, logs
+```
+
 ## Why maestro-runner?
 
 Maestro is a great format for writing mobile UI tests, but its runner has architectural limitations that hurt real-world usage:
@@ -26,75 +95,12 @@ maestro-runner is a clean-room reimplementation that keeps the Maestro YAML form
 - **Regex selectors** — Pattern matching for element text and assertions
 - **Environment variables** — Pass config via CLI flags, YAML, or config file
 
-## Installation
-
-```bash
-go install github.com/devicelab-dev/maestro-runner@latest
-```
-
-Or build from source:
-
-```bash
-git clone https://github.com/devicelab-dev/maestro-runner.git
-cd maestro-runner
-make build
-```
-
 ### Requirements
 
 - Go 1.22+
 - **UIAutomator2 driver:** `adb` (Android SDK Platform-Tools)
 - **Appium driver:** Appium server 2.x (`npm i -g appium`)
 - **WDA driver:** Xcode command-line tools (`xcrun`)
-
-## Quick Start
-
-### 1. Write a flow
-
-Create `login.yaml`:
-
-```yaml
-appId: com.example.app
----
-- launchApp: com.example.app
-- tapOn: "Email"
-- inputText: "test@example.com"
-- tapOn: "Password"
-- inputText: "secret123"
-- tapOn: "Login"
-- assertVisible: "Welcome"
-```
-
-### 2. Run it
-
-```bash
-# Android (UIAutomator2 — default)
-maestro-runner test login.yaml
-
-# iOS
-maestro-runner test login.yaml --platform ios
-
-# Via Appium
-maestro-runner --driver appium test login.yaml
-
-# Run an entire folder
-maestro-runner test flows/
-```
-
-### 3. View the report
-
-Reports are written to `./reports/<timestamp>/`:
-
-```
-reports/
-└── 2026-01-27_15-04-05/
-    ├── report.json       # Machine-readable results
-    ├── report.html       # Interactive HTML report
-    ├── flows/
-    │   └── flow-000.json # Per-flow command details
-    └── assets/
-        └── flow-000/     # Screenshots, hierarchy dumps, logs
-```
 
 ## Writing Flows
 
