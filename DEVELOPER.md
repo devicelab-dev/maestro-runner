@@ -1,63 +1,61 @@
 # Developer Guide
 
-This guide explains the architecture of maestro-runner and how to extend it.
+How the code is organized and how to extend it.
 
-## Architecture Overview
-
-maestro-runner follows a 3-part design:
+## Architecture
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
 │    YAML     │────▶│   Executor  │────▶│   Report    │
 │   Parser    │     │   (Driver)  │     │  Generator  │
 └─────────────┘     └─────────────┘     └─────────────┘
-     flow/              core/              report/
+     flow/         core/ + driver/         report/
 ```
 
-1. **YAML Parser** (`pkg/flow`) - Parses Maestro flow files into typed step structures
-2. **Executor** (`pkg/core`, `pkg/executor`) - Executes steps via Driver implementations
-3. **Report** (`pkg/report`) - Generates test reports (JUnit, JSON)
+1. **YAML Parser** (`pkg/flow`) — Parses Maestro flow files into typed step structures
+2. **Executor** (`pkg/executor`) — Orchestrates flow execution, delegates commands to Driver implementations
+3. **Report** (`pkg/report`) — Generates test reports (JSON, HTML)
 
-## Package Overview
+## Packages
 
 | Package | Purpose |
 |---------|---------|
-| `pkg/cli` | Command-line interface and argument parsing |
+| `pkg/cli` | CLI commands and argument parsing |
 | `pkg/config` | Configuration file loading (`config.yaml`) |
-| `pkg/core` | Execution model: Driver, Result, Status, Artifacts |
-| `pkg/executor` | Driver implementations (Appium, Native, Detox) |
+| `pkg/core` | Core types: Driver interface, CommandResult, Status, Artifacts |
+| `pkg/device` | Android device management via ADB |
+| `pkg/driver/appium` | Appium driver (Android/iOS, local and cloud) |
+| `pkg/driver/uiautomator2` | UIAutomator2 driver (Android, direct) |
+| `pkg/driver/wda` | WebDriverAgent driver (iOS) |
+| `pkg/driver/mock` | Mock driver for testing |
+| `pkg/executor` | Flow runner — orchestrates step execution and callbacks |
 | `pkg/flow` | YAML parsing, Step types, Selectors |
-| `pkg/report` | Test report generation |
-| `pkg/validator` | Pre-execution flow validation |
+| `pkg/jsengine` | JavaScript evaluation engine (evalScript, assertTrue) |
+| `pkg/report` | JSON and HTML report generation |
+| `pkg/uiautomator2` | UIAutomator2 HTTP protocol client |
+| `pkg/validator` | Pre-execution flow validation and tag filtering |
 
 ## Key Interfaces
 
-### Driver Interface
+### Driver (`pkg/core/driver.go`)
 
-The `Driver` interface (`pkg/core/driver.go`) is the abstraction for executing commands on devices:
+The abstraction all backends implement:
 
 ```go
 type Driver interface {
-    // Execute runs a single step and returns the result
     Execute(step flow.Step) *CommandResult
-
-    // Screenshot captures the current screen as PNG
     Screenshot() ([]byte, error)
-
-    // Hierarchy captures the UI hierarchy as JSON
     Hierarchy() ([]byte, error)
-
-    // GetState returns the current device/app state
     GetState() *StateSnapshot
-
-    // GetPlatformInfo returns device/platform information
     GetPlatformInfo() *PlatformInfo
+    SetFindTimeout(ms int)
+    SetWaitForIdleTimeout(ms int) error
 }
 ```
 
-### Step Interface
+### Step (`pkg/flow/step.go`)
 
-All flow steps implement the `Step` interface (`pkg/flow/step.go`):
+All flow steps implement:
 
 ```go
 type Step interface {
@@ -70,22 +68,19 @@ type Step interface {
 
 ## How to Add a New Driver
 
-To add support for a new execution backend (e.g., Detox, Espresso):
-
 ### 1. Create the driver package
 
 ```
-pkg/executor/detox/
+pkg/driver/mydriver/
 ├── driver.go       # Driver implementation
 ├── driver_test.go  # Tests
-├── commands.go     # Command implementations
-└── session.go      # Session management
+└── commands.go     # Command implementations
 ```
 
 ### 2. Implement the Driver interface
 
 ```go
-package detox
+package mydriver
 
 import (
     "github.com/devicelab-dev/maestro-runner/pkg/core"
@@ -93,11 +88,7 @@ import (
 )
 
 type Driver struct {
-    // driver state
-}
-
-func New(config Config) (*Driver, error) {
-    // initialize driver
+    findTimeout int
 }
 
 func (d *Driver) Execute(step flow.Step) *core.CommandResult {
@@ -106,7 +97,6 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
         return d.executeTap(s)
     case *flow.InputTextStep:
         return d.executeInputText(s)
-    // ... handle other step types
     default:
         return &core.CommandResult{
             Success: false,
@@ -115,38 +105,24 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
     }
 }
 
-func (d *Driver) Screenshot() ([]byte, error) {
-    // capture screenshot
-}
-
-func (d *Driver) Hierarchy() ([]byte, error) {
-    // capture UI hierarchy
-}
-
-func (d *Driver) GetState() *core.StateSnapshot {
-    // return current state
-}
-
-func (d *Driver) GetPlatformInfo() *core.PlatformInfo {
-    // return platform info
-}
+func (d *Driver) Screenshot() ([]byte, error)       { /* capture screenshot */ }
+func (d *Driver) Hierarchy() ([]byte, error)         { /* capture UI hierarchy */ }
+func (d *Driver) GetState() *core.StateSnapshot      { /* return current state */ }
+func (d *Driver) GetPlatformInfo() *core.PlatformInfo { /* return platform info */ }
+func (d *Driver) SetFindTimeout(ms int)              { d.findTimeout = ms }
+func (d *Driver) SetWaitForIdleTimeout(ms int) error  { return nil }
 ```
 
 ### 3. Register the driver
 
-Add the driver to the executor factory (when implemented).
+Wire it up in `pkg/cli/test.go` where drivers are selected based on the `--driver` flag.
 
 ## How to Add a New Step Type
 
-To add support for a new Maestro command:
-
-### 1. Add the step type constant
-
-In `pkg/flow/step.go`:
+### 1. Add the step type constant in `pkg/flow/step.go`
 
 ```go
 const (
-    // ... existing types
     StepMyNewCommand StepType = "myNewCommand"
 )
 ```
@@ -156,9 +132,7 @@ const (
 ```go
 type MyNewCommandStep struct {
     BaseStep `yaml:",inline"`
-    // Step-specific fields
     Target   string `yaml:"target"`
-    Duration int    `yaml:"duration"`
 }
 
 func (s *MyNewCommandStep) Describe() string {
@@ -166,53 +140,20 @@ func (s *MyNewCommandStep) Describe() string {
 }
 ```
 
-### 3. Add parsing logic
+### 3. Add parsing in `pkg/flow/parser.go`
 
-In `pkg/flow/parser.go`, add to `parseStep()`:
+Add a case to `parseStep()` for the new command key.
 
-```go
-case "myNewCommand":
-    step := &MyNewCommandStep{
-        BaseStep: BaseStep{StepType: StepMyNewCommand},
-    }
-    if err := mapstructure.Decode(value, step); err != nil {
-        return nil, err
-    }
-    return step, nil
-```
+### 4. Add driver handling
 
-### 4. Add driver implementation
-
-In each driver, add handling for the new step type in `Execute()`.
+In each driver's `Execute()` method, add a `case *flow.MyNewCommandStep` branch.
 
 ### 5. Add tests
 
 - Parser test in `pkg/flow/parser_test.go`
-- Driver test in `pkg/executor/<driver>/<driver>_test.go`
-
-## How to Add a New Report Format
-
-### 1. Create the reporter
-
-In `pkg/report/`:
-
-```go
-type HTMLReporter struct {
-    outputPath string
-}
-
-func (r *HTMLReporter) Generate(result *core.SuiteResult) error {
-    // generate HTML report
-}
-```
-
-### 2. Register the format
-
-Add to the report factory/CLI options.
+- Driver test in `pkg/driver/<driver>/driver_test.go`
 
 ## Result Model
-
-The execution produces a hierarchy of results:
 
 ```
 SuiteResult
@@ -240,41 +181,3 @@ SuiteResult
 | `errored` | Unexpected error occurred |
 | `skipped` | Skipped (condition not met) |
 | `warned` | Passed with warnings |
-
-## Design Principles
-
-1. **Executor-agnostic** - Appium, Native, Detox are equal implementations
-2. **Configurable timeouts** - Flow, step, and command level
-3. **Small, focused components** - No god classes
-4. **Independent parts** - Changes in one don't affect others
-5. **KISS and DRY** - Keep it simple, don't repeat yourself
-
-## Common Tasks
-
-### Debug flow parsing
-
-```go
-f, err := flow.ParseFile("test.yaml")
-if err != nil {
-    log.Fatal(err)
-}
-for _, step := range f.Steps {
-    fmt.Printf("%s: %s\n", step.Type(), step.Describe())
-}
-```
-
-### Validate flows programmatically
-
-```go
-v := validator.New(includeTags, excludeTags)
-result := v.Validate("./tests/")
-if !result.IsValid() {
-    for _, err := range result.Errors {
-        fmt.Println(err)
-    }
-}
-```
-
-## Questions?
-
-Open an issue or check existing discussions.
