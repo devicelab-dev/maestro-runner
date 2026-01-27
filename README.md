@@ -1,15 +1,30 @@
 # maestro-runner
 
-A Go-based test runner for [Maestro](https://maestro.mobile.dev/) mobile UI testing flows.
+A fast, Go-based test runner for [Maestro](https://maestro.mobile.dev/) YAML flows with pluggable driver backends.
+
+## Why maestro-runner?
+
+Maestro is a great format for writing mobile UI tests, but its runner has architectural limitations that hurt real-world usage:
+
+- **Hardcoded ports** — Android gRPC on port 7001, making parallel execution on the same machine impossible
+- **Hardcoded timeouts** — No way to configure wait durations at the flow, step, or command level
+- **Flaky text input** — Character-by-character key presses that drop or mangle text
+- **No cloud provider support** — Can't run on BrowserStack, Sauce Labs, or LambdaTest out of the box
+- **Monolithic architecture** — A 1500-line orchestrator class that's hard to extend
+
+maestro-runner is a clean-room reimplementation that keeps the Maestro YAML format but replaces the execution engine with a pluggable, configurable architecture. Write your tests in the same YAML you already know, then run them on any backend.
 
 ## Features
 
-- Parse and validate Maestro YAML flow files
-- Execute flows on iOS and Android devices
-- Multiple executor backends (Appium, Native, Detox)
-- Configurable timeouts at flow, step, and command levels
-- JUnit/JSON test reports
-- Tag-based test filtering
+- **Maestro YAML compatible** — Parses and runs standard Maestro flow files (39 command types)
+- **Multiple drivers** — UIAutomator2 (Android, default), Appium (Android/iOS + cloud), WDA (iOS)
+- **Configurable timeouts** — At flow, step, and command levels
+- **Cloud-ready** — Works with BrowserStack, Sauce Labs, LambdaTest via Appium
+- **Tag-based filtering** — Include/exclude flows by tag
+- **Rich reports** — JSON with real-time updates and interactive HTML reports
+- **JavaScript scripting** — `evalScript`, `assertTrue`, `runScript` with full JS engine
+- **Regex selectors** — Pattern matching for element text and assertions
+- **Environment variables** — Pass config via CLI flags, YAML, or config file
 
 ## Installation
 
@@ -25,88 +40,306 @@ cd maestro-runner
 make build
 ```
 
+### Requirements
+
+- Go 1.22+
+- **UIAutomator2 driver:** `adb` (Android SDK Platform-Tools)
+- **Appium driver:** Appium server 2.x (`npm i -g appium`)
+- **WDA driver:** Xcode command-line tools (`xcrun`)
+
 ## Quick Start
 
-### Run tests on Android (UIAutomator2 - default)
+### 1. Write a flow
 
-```bash
-maestro-runner test flow.yaml
-maestro-runner test flows/ --device emulator-5554
+Create `login.yaml`:
+
+```yaml
+appId: com.example.app
+---
+- launchApp: com.example.app
+- tapOn: "Email"
+- inputText: "test@example.com"
+- tapOn: "Password"
+- inputText: "secret123"
+- tapOn: "Login"
+- assertVisible: "Welcome"
 ```
 
-### Run tests on iOS
+### 2. Run it
 
 ```bash
-maestro-runner test flow.yaml --platform ios --device "iPhone 15"
+# Android (UIAutomator2 — default)
+maestro-runner test login.yaml
+
+# iOS
+maestro-runner test login.yaml --platform ios
+
+# Via Appium
+maestro-runner --driver appium test login.yaml
+
+# Run an entire folder
+maestro-runner test flows/
 ```
 
-### With tag filtering
+### 3. View the report
 
-```bash
-maestro-runner test flows/ --include-tags smoke --exclude-tags slow
+Reports are written to `./reports/<timestamp>/`:
+
+```
+reports/
+└── 2026-01-27_15-04-05/
+    ├── report.json       # Machine-readable results
+    ├── report.html       # Interactive HTML report
+    ├── flows/
+    │   └── flow-000.json # Per-flow command details
+    └── assets/
+        └── flow-000/     # Screenshots, hierarchy dumps, logs
 ```
 
-### With environment variables
+## Writing Flows
+
+Flows are YAML files with an optional config header (first YAML document) and a list of steps.
+
+### Flow config header
+
+```yaml
+appId: com.example.app
+name: Login Flow
+tags:
+  - smoke
+  - critical
+env:
+  TEST_USER: demo
+timeout: 60000              # Flow timeout (ms)
+commandTimeout: 10000       # Default per-command timeout (ms)
+waitForIdleTimeout: 3000    # Device idle wait (ms), 0 to disable
+---
+# Steps follow
+- launchApp: com.example.app
+- tapOn: "Login"
+```
+
+### Commands
+
+#### Navigation and interaction
+
+```yaml
+- tapOn: "Login"                    # Tap element by text
+- tapOn:
+    id: btn_submit                  # Tap by resource/accessibility ID
+- doubleTapOn: "Item"
+- longPressOn: "Delete"
+- tapOnPoint:                       # Tap at coordinates
+    x: 200
+    y: 400
+- swipe:                            # Swipe gesture
+    direction: UP                   # UP, DOWN, LEFT, RIGHT
+    duration: 500
+- scroll                            # Scroll down
+- scrollUntilVisible:
+    element:
+      text: "Load More"
+    direction: DOWN
+- back                              # Press back button
+- hideKeyboard
+```
+
+#### Text input
+
+```yaml
+- inputText: "hello world"
+- inputText:
+    text: "hello"
+    selector:
+      id: search_field
+- eraseText: 5                      # Erase 5 characters
+- copyTextFrom:
+    text: "Price"                   # Copy text from element
+- pasteText
+- inputRandom:
+    type: EMAIL                     # EMAIL, TEXT, NUMBER, PERSON_NAME
+    length: 10
+```
+
+#### Assertions
+
+```yaml
+- assertVisible: "Welcome"
+- assertNotVisible: "Error"
+- assertTrue: "${output.status == 'ok'}"  # JavaScript condition
+- assertVisible:
+    text: "Order #\\d+"             # Regex pattern
+- assertCondition:
+    visible:
+      text: "Dashboard"
+    timeout: 15000                  # Custom timeout for this step
+```
+
+#### App lifecycle
+
+```yaml
+- launchApp: com.example.app
+- launchApp:
+    appId: com.example.app
+    clearState: true                # Wipe app data before launch
+    clearKeychain: true             # iOS: clear keychain
+    permissions:
+      notifications: allow
+      location: allow
+- stopApp: com.example.app
+- clearState: com.example.app
+```
+
+#### JavaScript
+
+```yaml
+- evalScript: "output.counter = 1"
+- assertTrue: "${output.counter == 1}"
+- runScript: scripts/setup.js
+```
+
+#### Flow control
+
+```yaml
+- repeat:
+    times: 3
+    steps:
+      - tapOn: "Next"
+      - assertVisible: "Page"
+
+- retry:
+    maxRetries: 2
+    steps:
+      - tapOn: "Submit"
+      - assertVisible: "Success"
+
+- runFlow: other-flow.yaml          # Run another flow file
+- runFlow:
+    when:
+      visible: "Login Screen"
+    steps:                          # Or inline steps
+      - tapOn: "Login"
+```
+
+#### Device control
+
+```yaml
+- setLocation:
+    latitude: 37.7749
+    longitude: -122.4194
+- openLink: "myapp://deep/link"
+- pressKey: HOME
+- takeScreenshot: screenshot_name
+```
+
+### Selectors
+
+Elements can be found by text, ID, or a combination:
+
+```yaml
+# Simple text match
+- tapOn: "Login"
+
+# By ID
+- tapOn:
+    id: btn_login
+
+# Regex match
+- tapOn:
+    text: "Order #\\d+"
+
+# Relative positioning
+- tapOn:
+    text: "Edit"
+    below:
+      text: "Username"
+
+# Multiple constraints
+- tapOn:
+    text: "Submit"
+    enabled: true
+    index: "0"
+```
+
+Relative selector directions: `below`, `above`, `leftOf`, `rightOf`, `containsChild`, `containsDescendants`.
+
+### Environment variables
+
+```yaml
+# In flow header
+env:
+  BASE_URL: https://api.example.com
+
+# In steps — ${VAR} syntax
+- inputText: "${TEST_USER}"
+- openLink: "${BASE_URL}/login"
+```
+
+Pass from the CLI:
 
 ```bash
 maestro-runner test flows/ -e USER=test -e PASS=secret
 ```
 
-## Using Appium
+Or in `config.yaml`:
 
-### Local Appium Server
-
-```bash
-# Start Appium server first
-appium
-
-# Run with Appium driver
-maestro-runner --driver appium test flow.yaml
-maestro-runner --driver appium --device emulator-5554 test flow.yaml
+```yaml
+env:
+  USER: test
+  PASS: secret
 ```
 
-### With Capabilities File
+### Optional steps and labels
 
-Create a capabilities JSON file for more control:
+```yaml
+- assertVisible:
+    text: "Cookie banner"
+    optional: true                  # Won't fail the flow if missing
+    label: "Dismiss cookie banner"  # Custom label in reports
+```
+
+## Drivers
+
+### UIAutomator2 (default)
+
+Direct connection to Android devices via UIAutomator2. No external server needed.
+
+```bash
+maestro-runner test flow.yaml
+maestro-runner test flow.yaml --device emulator-5554
+```
+
+Automatically installs UIAutomator2 APKs from `./apks/` if present.
+
+### Appium
+
+Connects to an Appium 2.x server. Supports local devices and cloud providers.
+
+```bash
+# Local
+appium &
+maestro-runner --driver appium test flow.yaml
+
+# With capabilities file
+maestro-runner --driver appium --caps caps.json test flow.yaml
+```
+
+#### Capabilities file
 
 ```json
 {
   "platformName": "Android",
   "appium:automationName": "UiAutomator2",
   "appium:deviceName": "emulator-5554",
-  "appium:app": "/path/to/app.apk",
-  "appium:platformVersion": "14"
+  "appium:app": "/path/to/app.apk"
 }
 ```
 
-```bash
-maestro-runner --driver appium --caps caps.json test flow.yaml
-```
+CLI flags override capabilities: `--platform` overrides `platformName`, `--device` overrides `appium:deviceName`, `--app-file` overrides `appium:app`.
 
-**Priority:** CLI flags override capabilities file values:
-- `--platform` overrides `platformName`
-- `--device` overrides `appium:deviceName`
-- `--app-file` overrides `appium:app`
+#### Cloud providers
 
-### Cloud Providers
-
-#### BrowserStack
-
-```json
-{
-  "platformName": "Android",
-  "appium:automationName": "UiAutomator2",
-  "appium:platformVersion": "13.0",
-  "appium:deviceName": "Samsung Galaxy S23",
-  "appium:app": "bs://app-id",
-  "bstack:options": {
-    "userName": "YOUR_USERNAME",
-    "accessKey": "YOUR_ACCESS_KEY",
-    "projectName": "My Project",
-    "buildName": "Build 1"
-  }
-}
-```
+BrowserStack:
 
 ```bash
 maestro-runner --driver appium \
@@ -115,22 +348,7 @@ maestro-runner --driver appium \
   test flow.yaml
 ```
 
-#### Sauce Labs
-
-```json
-{
-  "platformName": "Android",
-  "appium:automationName": "UiAutomator2",
-  "appium:platformVersion": "13",
-  "appium:deviceName": "Google Pixel 7",
-  "appium:app": "storage:filename=app.apk",
-  "sauce:options": {
-    "username": "YOUR_USERNAME",
-    "accessKey": "YOUR_ACCESS_KEY",
-    "name": "Test Run"
-  }
-}
-```
+Sauce Labs:
 
 ```bash
 maestro-runner --driver appium \
@@ -139,23 +357,7 @@ maestro-runner --driver appium \
   test flow.yaml
 ```
 
-#### LambdaTest
-
-```json
-{
-  "platformName": "Android",
-  "appium:automationName": "UiAutomator2",
-  "appium:platformVersion": "13",
-  "appium:deviceName": "Pixel 7",
-  "appium:app": "lt://APP_ID",
-  "lt:options": {
-    "username": "YOUR_USERNAME",
-    "accessKey": "YOUR_ACCESS_KEY",
-    "project": "My Project",
-    "build": "Build 1"
-  }
-}
-```
+LambdaTest:
 
 ```bash
 maestro-runner --driver appium \
@@ -164,60 +366,91 @@ maestro-runner --driver appium \
   test flow.yaml
 ```
 
-## CLI Reference
+See [Appium capabilities docs](https://appium.io/docs/en/latest/guides/caps/) for the full list of options.
 
-### Global Flags
+### WDA (iOS)
 
-| Flag | Env Var | Description |
-|------|---------|-------------|
-| `--platform, -p` | `MAESTRO_PLATFORM` | Platform: ios, android |
-| `--device, --udid` | `MAESTRO_DEVICE` | Device ID (comma-separated for multiple) |
-| `--driver, -d` | `MAESTRO_DRIVER` | Driver: uiautomator2 (default), appium |
-| `--appium-url` | `APPIUM_URL` | Appium server URL (default: http://127.0.0.1:4723) |
-| `--caps` | `APPIUM_CAPS` | Path to Appium capabilities JSON file |
-| `--app-file` | `MAESTRO_APP_FILE` | App binary (.apk, .app, .ipa) to install |
-| `--verbose` | `MAESTRO_VERBOSE` | Enable verbose logging |
+Uses WebDriverAgent for iOS simulators.
 
-### Test Command Flags
-
-| Flag | Description |
-|------|-------------|
-| `--env, -e` | Environment variables (KEY=VALUE, repeatable) |
-| `--include-tags` | Only run flows with these tags |
-| `--exclude-tags` | Skip flows with these tags |
-| `--output` | Output directory for reports (default: ./reports) |
-| `--flatten` | Don't create timestamp subfolder |
-| `--continuous, -c` | Enable continuous mode |
+```bash
+maestro-runner --platform ios test flow.yaml
+maestro-runner --platform ios --device "iPhone 15" test flow.yaml
+```
 
 ## Configuration
 
-Create a `config.yaml` in your test directory:
+Create `config.yaml` in your test directory for shared settings:
 
 ```yaml
+# Flow selection
 flows:
   - "**/*.yaml"
 
+# Tag filtering
 includeTags:
   - smoke
-
 excludeTags:
   - wip
 
-appId: com.example.app
+# Environment
+env:
+  API_URL: https://staging.example.com
+
+# Timeouts
+waitForIdleTimeout: 3000    # ms, 0 to disable
 ```
 
-## Documentation
+**Priority** (highest wins): CLI flags > config.yaml > capabilities file > defaults.
 
-- [Developer Guide](DEVELOPER.md) - Architecture and how to extend
-- [Contributing](CONTRIBUTING.md) - How to contribute
-- [Changelog](CHANGELOG.md) - Version history
+## CLI Reference
 
-## Requirements
+### Global flags
 
-- Go 1.21+
-- For Appium executor: Appium server 2.x
-- For Native executor: Platform-specific tools (xcrun, adb)
+| Flag | Env var | Default | Description |
+|------|---------|---------|-------------|
+| `--platform, -p` | `MAESTRO_PLATFORM` | `android` | Target platform: `android`, `ios` |
+| `--device, --udid` | `MAESTRO_DEVICE` | auto-detect | Device ID (comma-separated for multiple) |
+| `--driver, -d` | `MAESTRO_DRIVER` | `uiautomator2` | Driver: `uiautomator2`, `appium` |
+| `--appium-url` | `APPIUM_URL` | `http://127.0.0.1:4723` | Appium server URL |
+| `--caps` | `APPIUM_CAPS` | | Path to Appium capabilities JSON |
+| `--app-file` | `MAESTRO_APP_FILE` | | App binary to install before testing |
+| `--verbose` | `MAESTRO_VERBOSE` | `false` | Enable verbose logging |
+| `--no-ansi` | | `false` | Disable colored output |
+
+### `test` command
+
+```bash
+maestro-runner test [flags] <flow-or-folder>...
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--config` | `config.yaml` | Path to workspace config |
+| `--env, -e` | | Environment variable `KEY=VALUE` (repeatable) |
+| `--include-tags` | | Only run flows matching these tags |
+| `--exclude-tags` | | Skip flows matching these tags |
+| `--output` | `./reports` | Report output directory |
+| `--flatten` | `false` | Don't create timestamp subfolder |
+| `--continuous, -c` | `false` | Continuous mode (re-run on change) |
+| `--wait-for-idle-timeout` | `5000` | Device idle wait in ms (0 to disable) |
+
+## Architecture
+
+```
+YAML Parser ──> Executor ──> Report Generator
+  (pkg/flow)    (pkg/executor)   (pkg/report)
+                    │
+        ┌───────────┼───────────┐
+        │           │           │
+  UIAutomator2    Appium       WDA
+```
+
+Each part is independent. See [DEVELOPER.md](DEVELOPER.md) for details on adding new drivers, commands, or report formats.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## License
 
-Apache License 2.0 - see [LICENSE](LICENSE) for details.
+Apache License 2.0 — see [LICENSE](LICENSE).
