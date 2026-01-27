@@ -41,16 +41,9 @@ Addresses [78% of the top 100 most-discussed open issues](docs/maestro-issues-an
 
 ## Flow Config
 
-Flows support an optional config header as the first YAML document. These fields are maestro-runner extensions on top of standard Maestro YAML:
+maestro-runner adds two fields to the standard Maestro flow config header that Maestro doesn't support:
 
 ```yaml
-appId: com.example.app
-name: Login Flow
-tags:
-  - smoke
-  - critical
-env:
-  TEST_USER: demo
 commandTimeout: 10000       # Default per-command timeout (ms)
 waitForIdleTimeout: 3000    # Device idle wait (ms), 0 to disable
 ---
@@ -151,6 +144,7 @@ maestro-runner --platform ios --device "iPhone 15" test flow.yaml
 | `--caps` | | Path to Appium capabilities JSON |
 | `--app-file` | | App binary to install before testing |
 | `--wait-for-idle-timeout` | `5000` | Device idle wait in ms (0 to disable) |
+| `--team-id` | | Apple Development Team ID for WDA code signing (iOS) |
 
 All standard Maestro flags (`--platform`, `--device`, `--env`, `--include-tags`, `--exclude-tags`, etc.) are also supported. Run `maestro-runner test --help` for the full list.
 

@@ -62,6 +62,11 @@ var GlobalFlags = []cli.Flag{
 		Name:  "no-ansi",
 		Usage: "Disable ANSI colors",
 	},
+	&cli.StringFlag{
+		Name:    "team-id",
+		Usage:   "Apple Development Team ID for WDA code signing (iOS)",
+		EnvVars: []string{"MAESTRO_TEAM_ID", "DEVELOPMENT_TEAM"},
+	},
 }
 
 // Execute runs the CLI.

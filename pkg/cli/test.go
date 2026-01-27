@@ -176,7 +176,8 @@ type RunConfig struct {
 	Capabilities map[string]interface{} // Parsed Appium capabilities
 
 	// Driver settings
-	WaitForIdleTimeout int // Wait for device idle in ms (0 = disabled, default 5000)
+	WaitForIdleTimeout int    // Wait for device idle in ms (0 = disabled, default 5000)
+	TeamID             string // Apple Development Team ID for WDA code signing
 }
 
 func runTest(c *cli.Context) error {
@@ -247,6 +248,7 @@ func runTest(c *cli.Context) error {
 		CapsFile:           capsFile,
 		Capabilities:       caps,
 		WaitForIdleTimeout: c.Int("wait-for-idle-timeout"),
+		TeamID:             c.String("team-id"),
 	}
 
 	// Apply waitForIdleTimeout with priority:
@@ -1050,7 +1052,7 @@ func createIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 
 	// 2. Create WDA runner
 	printSetupStep("Building WDA...")
-	runner := wdadriver.NewRunner(udid, "")
+	runner := wdadriver.NewRunner(udid, cfg.TeamID)
 	ctx := context.Background()
 
 	if err := runner.Build(ctx); err != nil {
