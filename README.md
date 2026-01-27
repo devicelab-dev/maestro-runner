@@ -57,29 +57,27 @@ reports/
 
 ## Why maestro-runner?
 
-Maestro is a great format for writing mobile UI tests, but its runner has architectural limitations that hurt real-world usage:
+Same Maestro YAML you already know, different execution engine.
 
-- **Hardcoded ports** — Android gRPC on port 7001, making parallel execution on the same machine impossible
-- **Hardcoded timeouts** — No way to configure wait durations at the flow, step, or command level
-- **Flaky text input** — Character-by-character key presses that drop or mangle text
-- **No cloud provider support** — Can't run on BrowserStack, Sauce Labs, or LambdaTest out of the box
-- **Monolithic architecture** — A 1500-line orchestrator class that's hard to extend
+| | Maestro | maestro-runner |
+|---|---|---|
+| **Parallel execution** | Hardcoded port 7001 — one instance per machine | Dynamic ports, parallel-ready |
+| **Timeouts** | Hardcoded 17s — no configuration | Configurable per-command and per-flow |
+| **Text input** | Character-by-character, drops/mangles text | Direct ADB input, reliable |
+| **Cloud providers** | Not supported | BrowserStack, Sauce Labs, LambdaTest via Appium |
+| **Memory** | ~289 MB (JVM) | ~21 MB (Go) |
+| **Setup** | JVM + multiple dependencies | Single binary, no JVM |
+| **Architecture** | 1500-line orchestrator class | Pluggable drivers, small components |
 
-maestro-runner is a clean-room reimplementation that keeps the Maestro YAML format but replaces the execution engine with a pluggable, configurable architecture. Write your tests in the same YAML you already know, then run them on any backend.
+Additional improvements over Maestro:
 
-These aren't theoretical problems. Of the [top 100 most-discussed open mobile issues](docs/maestro-issues-analysis.md) on Maestro's GitHub, maestro-runner addresses 78% — through specific fixes or architectural choices that prevent the problem entirely. Another 600+ issues were closed by Maestro without resolution; many of these don't occur under maestro-runner's architecture.
+- **Faster element finding** — native UIAutomator2/WDA selectors instead of polling; quick 1s check for `assertNotVisible` instead of full 17s timeout
+- **Clickable element prioritization** — walks up the parent chain to find the clickable ancestor (handles React Native patterns)
+- **Better regex** — native `textMatches()` selector with smarter detection to avoid false positives
+- **Multiple drivers** — UIAutomator2 (Android), Appium (Android/iOS + cloud), WDA (iOS)
+- **Interactive HTML reports** — JSON + HTML with sub-command expansion for `runFlow`, `repeat`, `retry`
 
-## Features
-
-- **Maestro YAML compatible** — Parses and runs standard Maestro flow files (39 command types)
-- **Multiple drivers** — UIAutomator2 (Android, default), Appium (Android/iOS + cloud), WDA (iOS)
-- **Configurable timeouts** — Per-command and per-flow idle timeouts
-- **Cloud-ready** — Works with BrowserStack, Sauce Labs, LambdaTest via Appium
-- **Tag-based filtering** — Include/exclude flows by tag
-- **Rich reports** — JSON with real-time updates and interactive HTML reports
-- **JavaScript scripting** — `evalScript`, `assertTrue`, `runScript` with full JS engine
-- **Regex selectors** — Pattern matching for element text and assertions
-- **Environment variables** — Pass config via CLI flags, YAML, or config file
+Addresses [78% of the top 100 most-discussed open issues](docs/maestro-issues-analysis.md) on Maestro's GitHub.
 
 ### Requirements
 
