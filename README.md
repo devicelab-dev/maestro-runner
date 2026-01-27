@@ -18,7 +18,7 @@ maestro-runner is a clean-room reimplementation that keeps the Maestro YAML form
 
 - **Maestro YAML compatible** — Parses and runs standard Maestro flow files (39 command types)
 - **Multiple drivers** — UIAutomator2 (Android, default), Appium (Android/iOS + cloud), WDA (iOS)
-- **Configurable timeouts** — At flow, step, and command levels
+- **Configurable timeouts** — Per-command and per-flow idle timeouts
 - **Cloud-ready** — Works with BrowserStack, Sauce Labs, LambdaTest via Appium
 - **Tag-based filtering** — Include/exclude flows by tag
 - **Rich reports** — JSON with real-time updates and interactive HTML reports
@@ -110,7 +110,6 @@ tags:
   - critical
 env:
   TEST_USER: demo
-timeout: 60000              # Flow timeout (ms)
 commandTimeout: 10000       # Default per-command timeout (ms)
 waitForIdleTimeout: 3000    # Device idle wait (ms), 0 to disable
 ---
