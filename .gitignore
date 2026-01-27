@@ -3,9 +3,19 @@ maestro-runner
 maestro-runner-*
 *.exe
 
-# Test coverage
+# Build artifacts
+bin/
+
+# Test coverage & profiling
 coverage.out
 coverage.html
+*.test
+*.out
+*.prof
+
+# Environment
+.env
+.env.local
 
 # IDE
 .idea/
@@ -15,6 +25,8 @@ coverage.html
 # OS
 .DS_Store
 pkg/cli/reports/
+reports/
 apks/
+docs/
 CLAUDE.md
 .claude/

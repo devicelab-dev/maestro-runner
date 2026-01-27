@@ -7,32 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-01-27
+
 ### Added
-- CLI with validate and run commands
+- CLI with `validate` and `run` commands
 - Configuration loading from `config.yaml`
 - YAML flow parser with support for all Maestro commands
 - Flow validator with dependency resolution
-- Core execution model (Driver, Result, Status, Artifacts)
 - Tag-based test filtering (include/exclude)
-
-### Changed
-- Nothing yet
-
-### Deprecated
-- Nothing yet
-
-### Removed
-- Nothing yet
+- UIAutomator2 driver with native element waiting
+- Appium driver with per-flow sessions and capabilities file support
+- WDA driver for iOS via WebDriverAgent
+- JavaScript scripting engine (`evalScript`, `assertTrue`, `runScript`)
+- Regex pattern matching for element selectors (`assertVisible`, `copyTextFrom`)
+- Coordinate-based swipe and percentage-based tap support
+- Nested relative selector support
+- Step-level and command-level configurable timeouts
+- Context-based timeout management
+- Configurable `waitForIdleTimeout` for UIAutomator2
+- `inputRandom` with DataType support
+- JSON report output with real-time updates
+- HTML report generator with sub-command expansion for `runFlow`, `repeat`, `retry`
+- Clickable element prioritization for Appium
 
 ### Fixed
-- Nothing yet
-
-### Security
-- Nothing yet
-
-## [0.1.0] - TBD
-
-### Added
-- Initial release
-- Flow parsing and validation
-- Basic CLI structure
+- JS `evalScript` and `assertTrue` parsing for Maestro `${...}` syntax
+- Step counting accuracy in reports
+- Appium driver regex matching
