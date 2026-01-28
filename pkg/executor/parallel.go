@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
@@ -69,8 +70,9 @@ func (pr *ParallelRunner) Run(ctx context.Context, flows []flow.Flow) (*RunResul
 	indexWriter := report.NewIndexWriter(pr.config.OutputDir, index)
 	defer indexWriter.Close()
 
-	// Mark run as started
+	// Mark run as started and track wall clock time
 	indexWriter.Start()
+	startTime := time.Now()
 
 	// Create work queue with flow indices
 	workQueue := make(chan workItem, len(flows))
@@ -118,22 +120,26 @@ func (pr *ParallelRunner) Run(ctx context.Context, flows []flow.Flow) (*RunResul
 	// Wait for all workers to complete
 	wg.Wait()
 
+	// Calculate actual wall clock time
+	wallClockDuration := time.Since(startTime).Milliseconds()
+
 	// Mark run as complete
 	indexWriter.End()
 
 	// Build result using the same logic as single-device runner
-	return pr.buildRunResult(results), nil
+	return pr.buildRunResult(results, wallClockDuration), nil
 }
 
 // buildRunResult aggregates flow results into a run result.
-func (pr *ParallelRunner) buildRunResult(flowResults []FlowResult) *RunResult {
+// For parallel execution, use wall clock duration instead of sum of flow durations.
+func (pr *ParallelRunner) buildRunResult(flowResults []FlowResult, wallClockDuration int64) *RunResult {
 	result := &RunResult{
 		TotalFlows:  len(flowResults),
 		FlowResults: flowResults,
+		Duration:    wallClockDuration, // Use actual wall clock time for parallel execution
 	}
 
 	for _, fr := range flowResults {
-		result.Duration += fr.Duration
 		switch fr.Status {
 		case report.StatusPassed:
 			result.PassedFlows++

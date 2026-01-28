@@ -1293,6 +1293,37 @@ func isPortInUse(port uint16) bool {
 	return false
 }
 
+// checkDeviceAvailable checks if a device is available and not in use.
+// Returns error if device is busy or not found.
+func checkDeviceAvailable(deviceID, platform string) error {
+	if platform == "ios" {
+		// Check iOS device/simulator availability via port
+		port := wdadriver.PortFromUDID(deviceID)
+		if isPortInUse(port) {
+			return fmt.Errorf("device is in use (port %d already bound)", port)
+		}
+	} else {
+		// Check Android device availability via socket
+		// For emulators, deviceID is like "emulator-5554"
+		// For physical devices, it's the serial number
+		socketPath := fmt.Sprintf("/tmp/uia2-%s.sock", deviceID)
+		if isSocketInUse(socketPath) {
+			return fmt.Errorf("device is in use (socket %s already bound)", socketPath)
+		}
+
+		// Also verify device is connected via adb
+		cmd := exec.Command("adb", "-s", deviceID, "get-state")
+		output, err := cmd.Output()
+		if err != nil {
+			return fmt.Errorf("device not found or not connected")
+		}
+		if strings.TrimSpace(string(output)) != "device" {
+			return fmt.Errorf("device state is not 'device': %s", strings.TrimSpace(string(output)))
+		}
+	}
+	return nil
+}
+
 // getDriversDir returns the absolute path to the drivers subdirectory.
 // This ensures the path works correctly even in parallel goroutines.
 func getDriversDir(platform string) (string, error) {
@@ -1439,6 +1470,20 @@ func executeParallel(cfg *RunConfig, deviceIDs []string, flows []flow.Flow) (*ex
 		return nil, fmt.Errorf("no devices available for parallel execution")
 	}
 
+	platform := strings.ToLower(cfg.Platform)
+	if platform == "" {
+		platform = "android"
+	}
+
+	// Pre-check: Validate all devices are available before starting any initialization
+	printSetupStep(fmt.Sprintf("Checking availability of %d device(s)...", len(deviceIDs)))
+	for i, deviceID := range deviceIDs {
+		if err := checkDeviceAvailable(deviceID, platform); err != nil {
+			return nil, fmt.Errorf("device %d/%d (%s) is not available: %w\nAll devices must be available to start parallel execution", i+1, len(deviceIDs), deviceID, err)
+		}
+	}
+	printSetupSuccess(fmt.Sprintf("All %d device(s) available", len(deviceIDs)))
+
 	// Create device workers
 	var workers []executor.DeviceWorker
 	var cleanups []func()
@@ -1448,11 +1493,6 @@ func executeParallel(cfg *RunConfig, deviceIDs []string, flows []flow.Flow) (*ex
 		for _, cleanup := range cleanups {
 			cleanup()
 		}
-	}
-
-	platform := strings.ToLower(cfg.Platform)
-	if platform == "" {
-		platform = "android"
 	}
 
 	// Create a driver for each device
