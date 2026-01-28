@@ -952,7 +952,10 @@ func createUIAutomator2Driver(cfg *RunConfig, dev *device.AndroidDevice, info de
 	// 1. Check/install UIAutomator2 APKs
 	if !dev.IsInstalled(device.UIAutomator2Server) {
 		printSetupStep("Installing UIAutomator2 APKs...")
-		apksDir := "./drivers/android"
+		apksDir, err := getDriversDir("android")
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to locate drivers directory: %w", err)
+		}
 		if err := dev.InstallUIAutomator2(apksDir); err != nil {
 			return nil, nil, fmt.Errorf("install UIAutomator2: %w", err)
 		}
@@ -1288,6 +1291,26 @@ func isPortInUse(port uint16) bool {
 	}
 	ln.Close()
 	return false
+}
+
+// getDriversDir returns the absolute path to the drivers subdirectory.
+// This ensures the path works correctly even in parallel goroutines.
+func getDriversDir(platform string) (string, error) {
+	// Get current working directory
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to get working directory: %w", err)
+	}
+
+	// Build absolute path to drivers directory
+	driversPath := filepath.Join(cwd, "drivers", platform)
+
+	// Verify directory exists
+	if _, err := os.Stat(driversPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("drivers directory not found: %s", driversPath)
+	}
+
+	return driversPath, nil
 }
 
 // isSocketInUse checks if a Unix socket is in use by attempting to connect to it.
