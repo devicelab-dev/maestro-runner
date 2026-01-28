@@ -1477,10 +1477,16 @@ func executeParallel(cfg *RunConfig, deviceIDs []string, flows []flow.Flow) (*ex
 
 	// Pre-check: Validate all devices are available before starting any initialization
 	printSetupStep(fmt.Sprintf("Checking availability of %d device(s)...", len(deviceIDs)))
+	var unavailableDevices []string
 	for i, deviceID := range deviceIDs {
 		if err := checkDeviceAvailable(deviceID, platform); err != nil {
-			return nil, fmt.Errorf("device %d/%d (%s) is not available: %w\nAll devices must be available to start parallel execution", i+1, len(deviceIDs), deviceID, err)
+			unavailableDevices = append(unavailableDevices, fmt.Sprintf("  Device %d/%d (%s): %v", i+1, len(deviceIDs), deviceID, err))
 		}
+	}
+	if len(unavailableDevices) > 0 {
+		errMsg := fmt.Sprintf("%d device(s) not available:\n%s\n\nAll devices must be available to start parallel execution",
+			len(unavailableDevices), strings.Join(unavailableDevices, "\n"))
+		return nil, fmt.Errorf(errMsg)
 	}
 	printSetupSuccess(fmt.Sprintf("All %d device(s) available", len(deviceIDs)))
 
