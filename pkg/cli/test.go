@@ -93,12 +93,8 @@ Examples:
 
 		// Parallelization
 		&cli.IntFlag{
-			Name:  "shard-split",
-			Usage: "Split tests across N devices",
-		},
-		&cli.IntFlag{
-			Name:  "shard-all",
-			Usage: "Run all tests on N devices",
+			Name:  "parallel",
+			Usage: "Run tests in parallel on N devices (auto-selects available devices)",
 		},
 
 		// Execution modes
@@ -140,6 +136,26 @@ Examples:
 	Action: runTest,
 }
 
+// parseDevices parses device configuration from --device and --parallel flags.
+// Returns a slice of device UDIDs:
+// - If --device has comma-separated values: split and return them
+// - If --parallel N without --device: return nil (auto-detect handled later)
+// - If neither: return nil (single device mode, auto-detect)
+func parseDevices(deviceFlag string, parallelCount int, platform string) []string {
+	if deviceFlag != "" {
+		// Split comma-separated devices
+		devices := strings.Split(deviceFlag, ",")
+		for i, d := range devices {
+			devices[i] = strings.TrimSpace(d)
+		}
+		return devices
+	}
+
+	// --parallel without --device means auto-detect
+	// Return nil to trigger auto-detection in executeTest
+	return nil
+}
+
 // RunConfig holds the complete test run configuration.
 type RunConfig struct {
 	// Paths
@@ -157,8 +173,7 @@ type RunConfig struct {
 	OutputDir string // Final resolved output directory
 
 	// Parallelization
-	ShardSplit int
-	ShardAll   int
+	Parallel int // Number of devices to use (0 = single device mode)
 
 	// Execution
 	Continuous bool
@@ -166,7 +181,7 @@ type RunConfig struct {
 
 	// Device
 	Platform string
-	Device   string
+	Devices  []string // Device UDIDs (can be comma-separated or multiple from --parallel)
 	Verbose  bool
 	AppFile  string // App binary to install before testing
 
@@ -236,12 +251,11 @@ func runTest(c *cli.Context) error {
 		IncludeTags:        c.StringSlice("include-tags"),
 		ExcludeTags:        c.StringSlice("exclude-tags"),
 		OutputDir:          outputDir,
-		ShardSplit:         c.Int("shard-split"),
-		ShardAll:           c.Int("shard-all"),
+		Parallel:           c.Int("parallel"),
 		Continuous:         c.Bool("continuous"),
 		Headless:           c.Bool("headless"),
 		Platform:           c.String("platform"),
-		Device:             c.String("device"),
+		Devices:            parseDevices(c.String("device"), c.Int("parallel"), c.String("platform")),
 		Verbose:            c.Bool("verbose"),
 		AppFile:            c.String("app-file"),
 		Driver:             c.String("driver"),
@@ -336,32 +350,58 @@ func executeTest(cfg *RunConfig) error {
 		flows = append(flows, *f)
 	}
 
-	// 3. Create driver and run flows
-	// For Appium: one session per flow (allows per-flow clearState capability)
-	// For native uiautomator2: single shared session for efficiency
-	var result *executor.RunResult
-	var runErr error
+	// 3. Determine execution mode: parallel or single device
+	needsParallelExecution := cfg.Parallel > 0 || len(cfg.Devices) > 1
 	driverType := strings.ToLower(cfg.Driver)
+
+	// 4. Auto-detect devices if needed for parallel execution
+	var deviceIDs []string
+	if needsParallelExecution {
+		if len(cfg.Devices) > 0 {
+			// Use explicitly specified devices
+			deviceIDs = cfg.Devices
+		} else if cfg.Parallel > 0 {
+			// Auto-detect devices
+			var err error
+			deviceIDs, err = autoDetectDevices(cfg.Platform, cfg.Parallel)
+			if err != nil {
+				return fmt.Errorf("failed to auto-detect devices: %w", err)
+			}
+		}
+		printSetupSuccess(fmt.Sprintf("Using %d device(s) for parallel execution", len(deviceIDs)))
+	}
 
 	printSetupSuccess(fmt.Sprintf("Output: %s", cfg.OutputDir))
 	fmt.Printf("\n%sExecution%s\n", color(colorBold), color(colorReset))
 	fmt.Println(strings.Repeat("─", 40))
 
+	var result *executor.RunResult
+	var runErr error
+
+	// 5. Execute flows
 	if driverType == "appium" {
-		// Appium: one session per flow
+		// Appium: one session per flow (not yet supported for parallel)
+		if needsParallelExecution {
+			return fmt.Errorf("parallel execution not yet supported for Appium driver")
+		}
 		result, runErr = executeFlowsWithPerFlowSession(cfg, flows)
 		if runErr != nil {
 			return fmt.Errorf("execution failed: %w", runErr)
 		}
+	} else if needsParallelExecution {
+		// Parallel execution with multiple devices
+		result, runErr = executeParallel(cfg, deviceIDs, flows)
+		if runErr != nil {
+			return fmt.Errorf("parallel execution failed: %w", runErr)
+		}
 	} else {
-		// Native uiautomator2/WDA: shared session
+		// Single device execution
 		driver, cleanup, err := createDriver(cfg)
 		if err != nil {
 			return fmt.Errorf("failed to create driver: %w", err)
 		}
 		defer cleanup()
 
-		// 4. Create and run executor
 		driverName := "uiautomator2"
 		if cfg.Platform == "mock" {
 			driverName = "mock"
@@ -809,11 +849,17 @@ func createDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	platform := strings.ToLower(cfg.Platform)
 	driverType := strings.ToLower(cfg.Driver)
 
+	// Get device ID (first device if multiple specified)
+	deviceID := ""
+	if len(cfg.Devices) > 0 {
+		deviceID = cfg.Devices[0]
+	}
+
 	// Mock driver for testing
 	if platform == "mock" || driverType == "mock" {
 		driver := mock.New(mock.Config{
 			Platform: cfg.Platform,
-			DeviceID: cfg.Device,
+			DeviceID: deviceID,
 		})
 		return driver, func() {}, nil
 	}
@@ -845,9 +891,19 @@ func createAndroidDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		driverType = "uiautomator2"
 	}
 
+	// Get device ID (first device if multiple specified)
+	deviceID := ""
+	if len(cfg.Devices) > 0 {
+		deviceID = cfg.Devices[0]
+	}
+
 	// 1. Connect to device
-	printSetupStep(fmt.Sprintf("Connecting to device %s...", cfg.Device))
-	dev, err := device.New(cfg.Device)
+	if deviceID != "" {
+		printSetupStep(fmt.Sprintf("Connecting to device %s...", deviceID))
+	} else {
+		printSetupStep("Connecting to device...")
+	}
+	dev, err := device.New(deviceID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("connect to device: %w", err)
 	}
@@ -987,13 +1043,19 @@ func createAppiumDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		caps = make(map[string]interface{})
 	}
 
+	// Get device ID (first device if multiple specified)
+	deviceID := ""
+	if len(cfg.Devices) > 0 {
+		deviceID = cfg.Devices[0]
+	}
+
 	// CLI flags override caps file values
 	if cfg.Platform != "" {
 		caps["platformName"] = cfg.Platform
 	}
-	if cfg.Device != "" {
-		caps["appium:deviceName"] = cfg.Device
-		caps["appium:udid"] = cfg.Device
+	if deviceID != "" {
+		caps["appium:deviceName"] = deviceID
+		caps["appium:udid"] = deviceID
 	}
 	if cfg.AppFile != "" {
 		caps["appium:app"] = cfg.AppFile
@@ -1039,7 +1101,12 @@ func createAppiumDriver(cfg *RunConfig) (core.Driver, func(), error) {
 
 // createIOSDriver creates an iOS driver using WebDriverAgent.
 func createIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
-	udid := cfg.Device
+	// Get device ID (first device if multiple specified)
+	udid := ""
+	if len(cfg.Devices) > 0 {
+		udid = cfg.Devices[0]
+	}
+
 	if udid == "" {
 		// Try to find booted simulator
 		printSetupStep("Finding booted iOS simulator...")
@@ -1246,4 +1313,194 @@ func isSocketInUse(socketPath string) bool {
 	}
 	conn.Close()
 	return true // socket is active and in use
+}
+
+// autoDetectDevices finds N available devices for the specified platform.
+// Returns device IDs that can be used for parallel execution.
+func autoDetectDevices(platform string, count int) ([]string, error) {
+	if count <= 0 {
+		return nil, fmt.Errorf("device count must be positive")
+	}
+
+	platform = strings.ToLower(platform)
+	switch platform {
+	case "android", "":
+		return autoDetectAndroidDevices(count)
+	case "ios":
+		return autoDetectIOSDevices(count)
+	default:
+		return nil, fmt.Errorf("unsupported platform for auto-detection: %s", platform)
+	}
+}
+
+// autoDetectAndroidDevices finds N available Android devices.
+func autoDetectAndroidDevices(count int) ([]string, error) {
+	// Use adb devices to list all connected devices
+	cmd := exec.Command("adb", "devices")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list Android devices: %w", err)
+	}
+
+	// Parse output to find device serials
+	var devices []string
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "List of devices") || strings.HasPrefix(line, "*") {
+			continue
+		}
+		// Line format: "serial\tdevice"
+		parts := strings.Fields(line)
+		if len(parts) >= 2 && parts[1] == "device" {
+			devices = append(devices, parts[0])
+		}
+	}
+
+	if len(devices) == 0 {
+		return nil, fmt.Errorf("no Android devices found")
+	}
+
+	// Return up to count devices
+	if len(devices) > count {
+		devices = devices[:count]
+	}
+
+	return devices, nil
+}
+
+// autoDetectIOSDevices finds N available iOS simulators/devices.
+func autoDetectIOSDevices(count int) ([]string, error) {
+	// List booted simulators
+	out, err := runCommand("xcrun", "simctl", "list", "devices", "booted", "-j")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list iOS devices: %w", err)
+	}
+
+	// Parse JSON to find booted device UDIDs
+	var devices []string
+	lines := strings.Split(out, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, `"udid"`) {
+			// Extract UDID from "udid" : "XXXX-XXXX"
+			parts := strings.Split(line, ":")
+			if len(parts) >= 2 {
+				udid := strings.Trim(parts[1], ` ",`)
+				if udid != "" {
+					devices = append(devices, udid)
+				}
+			}
+		}
+	}
+
+	if len(devices) == 0 {
+		return nil, fmt.Errorf("no booted iOS simulators found\nHint: Start %d simulator(s) or specify devices with --device", count)
+	}
+
+	// Return up to count devices
+	if len(devices) > count {
+		devices = devices[:count]
+	}
+
+	if len(devices) < count {
+		return nil, fmt.Errorf("found %d booted simulators but need %d\nHint: Start more simulators or use --parallel %d", len(devices), count, len(devices))
+	}
+
+	return devices, nil
+}
+
+// executeParallel runs tests in parallel across multiple devices.
+func executeParallel(cfg *RunConfig, deviceIDs []string, flows []flow.Flow) (*executor.RunResult, error) {
+	if len(deviceIDs) == 0 {
+		return nil, fmt.Errorf("no devices available for parallel execution")
+	}
+
+	// Create device workers
+	var workers []executor.DeviceWorker
+	var cleanups []func()
+
+	// Track if we need to clean up on error
+	cleanupAll := func() {
+		for _, cleanup := range cleanups {
+			cleanup()
+		}
+	}
+
+	platform := strings.ToLower(cfg.Platform)
+	if platform == "" {
+		platform = "android"
+	}
+
+	// Create a driver for each device
+	for i, deviceID := range deviceIDs {
+		printSetupStep(fmt.Sprintf("[Device %d/%d] Connecting to %s...", i+1, len(deviceIDs), deviceID))
+
+		// Create device-specific config
+		deviceCfg := *cfg
+		deviceCfg.Devices = []string{deviceID}
+
+		var driver core.Driver
+		var cleanup func()
+		var err error
+
+		if platform == "ios" {
+			deviceCfg.Platform = "ios"
+			driver, cleanup, err = createIOSDriver(&deviceCfg)
+		} else {
+			deviceCfg.Platform = "android"
+			driver, cleanup, err = createAndroidDriver(&deviceCfg)
+		}
+
+		if err != nil {
+			cleanupAll()
+			return nil, fmt.Errorf("failed to create driver for device %s: %w", deviceID, err)
+		}
+
+		workers = append(workers, executor.DeviceWorker{
+			ID:       i,
+			DeviceID: deviceID,
+			Driver:   driver,
+			Cleanup:  cleanup,
+		})
+		cleanups = append(cleanups, cleanup)
+	}
+
+	// Create parallel runner
+	driverName := "uiautomator2"
+	if platform == "ios" {
+		driverName = "wda"
+	} else if cfg.Platform == "mock" {
+		driverName = "mock"
+	}
+
+	// Use first device's info for report (parallel report will show multiple devices)
+	firstDriver := workers[0].Driver
+	runnerConfig := executor.RunnerConfig{
+		OutputDir:   cfg.OutputDir,
+		Parallelism: 0,
+		Artifacts:   executor.ArtifactOnFailure,
+		Device: report.Device{
+			ID:       firstDriver.GetPlatformInfo().DeviceID,
+			Platform: firstDriver.GetPlatformInfo().Platform,
+			Name:     fmt.Sprintf("%d devices", len(workers)),
+		},
+		App: report.App{
+			ID: cfg.AppFile,
+		},
+		RunnerVersion:      "0.1.0",
+		DriverName:         driverName,
+		Env:                cfg.Env,
+		WaitForIdleTimeout: cfg.WaitForIdleTimeout,
+		OnFlowStart:        onFlowStart,
+		OnStepComplete:     onStepComplete,
+		OnNestedStep:       onNestedStep,
+		OnNestedFlowStart:  onNestedFlowStart,
+		OnFlowEnd:          onFlowEnd,
+	}
+
+	parallelRunner := executor.NewParallelRunner(workers, runnerConfig)
+
+	// Run tests in parallel
+	return parallelRunner.Run(context.Background(), flows)
 }
