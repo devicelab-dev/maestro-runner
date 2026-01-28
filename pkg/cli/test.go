@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -858,7 +859,19 @@ func createAndroidDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	}
 	printSetupSuccess(fmt.Sprintf("Connected to %s %s (SDK %s)", info.Brand, info.Model, info.SDK))
 
-	// 2. Install app if specified
+	// 2. Check if device is already in use (for UIAutomator2 driver)
+	// Do this BEFORE installing app to fail fast
+	if driverType == "uiautomator2" {
+		socketPath := dev.DefaultSocketPath()
+		if isSocketInUse(socketPath) {
+			return nil, nil, fmt.Errorf("device %s is already in use\n"+
+				"Another maestro-runner instance may be using this device.\n"+
+				"Socket: %s\n"+
+				"Hint: Wait for it to finish or use a different device", dev.Serial(), socketPath)
+		}
+	}
+
+	// 3. Install app if specified
 	if cfg.AppFile != "" {
 		printSetupStep(fmt.Sprintf("Installing app: %s", cfg.AppFile))
 		if err := dev.Install(cfg.AppFile); err != nil {
@@ -867,7 +880,7 @@ func createAndroidDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		printSetupSuccess("App installed")
 	}
 
-	// 3. Create driver based on type
+	// 4. Create driver based on type
 	switch driverType {
 	case "uiautomator2":
 		return createUIAutomator2Driver(cfg, dev, info)
@@ -1033,9 +1046,18 @@ func createIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		var err error
 		udid, err = findBootedSimulator()
 		if err != nil {
-			return nil, nil, fmt.Errorf("no device specified and no booted simulator found: %w", err)
+			return nil, nil, fmt.Errorf("no device found\n" +
+				"Hint: Specify a device with --device <UDID> or start a device/emulator")
 		}
 		printSetupSuccess(fmt.Sprintf("Found simulator: %s", udid))
+	}
+
+	// Check if device port is already in use (another instance using this device)
+	port := wdadriver.PortFromUDID(udid)
+	if isPortInUse(port) {
+		return nil, nil, fmt.Errorf("device %s is in use (port %d already bound)\n"+
+			"Another maestro-runner instance may be using this device.\n"+
+			"Hint: Wait for it to finish or use a different device with --device <UDID>", udid, port)
 	}
 
 	// 1. Check if WDA is installed
@@ -1069,7 +1091,8 @@ func createIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	printSetupSuccess("WDA started")
 
 	// 4. Create WDA client
-	client := wdadriver.NewClient(wdadriver.WDAPort)
+	printSetupSuccess(fmt.Sprintf("WDA port: %d", runner.Port()))
+	client := wdadriver.NewClient(runner.Port())
 
 	// 5. Get device info
 	simInfo, err := getSimulatorInfo(udid)
@@ -1186,4 +1209,41 @@ func runCommand(name string, args ...string) (string, error) {
 		return "", err
 	}
 	return string(out), nil
+}
+
+// isPortInUse checks if a TCP port is already bound on localhost.
+// Used to detect if another maestro-runner instance is using the same device.
+func isPortInUse(port uint16) bool {
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return true // port in use
+	}
+	ln.Close()
+	return false
+}
+
+// isSocketInUse checks if a Unix socket is in use by attempting to connect to it.
+// Used to detect if another maestro-runner instance is using the same Android device.
+// On Windows, where sockets aren't used, this always returns false (TCP port check is used instead).
+func isSocketInUse(socketPath string) bool {
+	if socketPath == "" {
+		return false
+	}
+
+	// Check if socket file exists
+	if _, err := os.Stat(socketPath); os.IsNotExist(err) {
+		return false // socket file doesn't exist, so not in use
+	}
+
+	// Try to connect to the socket to verify it's actually active
+	conn, err := net.DialTimeout("unix", socketPath, 500*time.Millisecond)
+	if err != nil {
+		// Socket file exists but can't connect - might be stale
+		// Try to remove it and consider it not in use
+		os.Remove(socketPath)
+		return false
+	}
+	conn.Close()
+	return true // socket is active and in use
 }

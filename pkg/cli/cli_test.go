@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"net"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/urfave/cli/v2"
 )
@@ -681,5 +683,127 @@ func TestTestCommand_WithInvalidCapsFile(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("expected error for nonexistent caps file")
+	}
+}
+
+// Tests for isPortInUse function
+
+func TestIsPortInUse_AvailablePort(t *testing.T) {
+	// Port 0 means the OS will assign an available port
+	// We test with a high port that's very unlikely to be in use
+	// Use a random high port in ephemeral range
+	port := uint16(49152 + (time.Now().UnixNano() % 1000))
+
+	// First check - port should be free
+	inUse := isPortInUse(port)
+	if inUse {
+		t.Skipf("port %d already in use, skipping test", port)
+	}
+}
+
+func TestIsPortInUse_PortInUse(t *testing.T) {
+	// Start a listener on a random port
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to create listener: %v", err)
+	}
+	defer ln.Close()
+
+	// Get the port that was assigned
+	addr := ln.Addr().(*net.TCPAddr)
+	port := uint16(addr.Port)
+
+	// Now isPortInUse should return true
+	inUse := isPortInUse(port)
+	if !inUse {
+		t.Errorf("expected port %d to be in use", port)
+	}
+}
+
+func TestIsPortInUse_PortBecomesAvailable(t *testing.T) {
+	// Start a listener
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to create listener: %v", err)
+	}
+
+	addr := ln.Addr().(*net.TCPAddr)
+	port := uint16(addr.Port)
+
+	// Port should be in use
+	if !isPortInUse(port) {
+		t.Error("expected port to be in use while listener is active")
+	}
+
+	// Close the listener
+	ln.Close()
+
+	// Give the OS a moment to release the port
+	time.Sleep(10 * time.Millisecond)
+
+	// Port should now be available
+	if isPortInUse(port) {
+		t.Skipf("port %d still in use after close (OS may have TIME_WAIT), skipping", port)
+	}
+}
+
+// Tests for isSocketInUse function
+
+func TestIsSocketInUse_NonExistentSocket(t *testing.T) {
+	socketPath := "/tmp/test-socket-nonexistent.sock"
+	os.Remove(socketPath) // Ensure it doesn't exist
+
+	if isSocketInUse(socketPath) {
+		t.Error("expected non-existent socket to not be in use")
+	}
+}
+
+func TestIsSocketInUse_EmptyPath(t *testing.T) {
+	if isSocketInUse("") {
+		t.Error("expected empty socket path to not be in use")
+	}
+}
+
+func TestIsSocketInUse_ActiveSocket(t *testing.T) {
+	socketPath := "/tmp/test-socket-active-" + time.Now().Format("20060102150405") + ".sock"
+	os.Remove(socketPath) // Clean up if exists
+
+	// Create a listener on the socket
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("failed to create socket listener: %v", err)
+	}
+	defer ln.Close()
+	defer os.Remove(socketPath)
+
+	// Socket should be in use
+	if !isSocketInUse(socketPath) {
+		t.Error("expected active socket to be in use")
+	}
+}
+
+func TestIsSocketInUse_StaleSocket(t *testing.T) {
+	socketPath := "/tmp/test-socket-stale-" + time.Now().Format("20060102150405") + ".sock"
+	os.Remove(socketPath) // Clean up if exists
+
+	// Create a socket file without a listener (stale)
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("failed to create socket: %v", err)
+	}
+	ln.Close() // Close immediately to make it stale
+
+	// Give OS time to clean up
+	time.Sleep(10 * time.Millisecond)
+
+	// Stale socket should be detected as not in use (and cleaned up)
+	if isSocketInUse(socketPath) {
+		t.Error("expected stale socket to not be in use")
+	}
+
+	// Socket file should be removed
+	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
+		t.Error("expected stale socket file to be removed")
+		os.Remove(socketPath) // Clean up
 	}
 }

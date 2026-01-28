@@ -35,7 +35,10 @@ func (c *Client) CreateSession(bundleID string) error {
 	caps := map[string]interface{}{
 		"capabilities": map[string]interface{}{
 			"alwaysMatch": map[string]interface{}{
-				"bundleId": bundleID,
+				"bundleId":                  bundleID,
+				"shouldWaitForQuiescence":   false,
+				"waitForIdleTimeout":        0,
+				"shouldUseTestManagerForVisibilityDetection": false,
 			},
 		},
 	}
@@ -58,6 +61,25 @@ func (c *Client) CreateSession(bundleID string) error {
 	}
 
 	return nil
+}
+
+// UpdateSettings updates WDA session settings.
+// Supports keys like shouldWaitForQuiescence, waitForIdleTimeout, etc.
+func (c *Client) UpdateSettings(settings map[string]interface{}) error {
+	_, err := c.post(c.sessionPath("/appium/settings"), map[string]interface{}{
+		"settings": settings,
+	})
+	return err
+}
+
+// DisableQuiescence disables WDA's wait-for-quiescence behavior.
+// This prevents the XCTest "-[XCUIApplicationProcess waitForQuiescenceIncludingAnimationsIdle:]"
+// crash on certain Xcode/iOS version combinations.
+func (c *Client) DisableQuiescence() error {
+	return c.UpdateSettings(map[string]interface{}{
+		"shouldWaitForQuiescence":   false,
+		"waitForIdleTimeout":        0,
+	})
 }
 
 // DeleteSession ends the current session.
@@ -353,6 +375,18 @@ func (c *Client) FindElements(using, value string) ([]string, error) {
 func (c *Client) ElementClick(elementID string) error {
 	_, err := c.post(c.sessionPath(fmt.Sprintf("/element/%s/click", elementID)), nil)
 	return err
+}
+
+// ElementName returns the element's tag name (e.g., "XCUIElementTypeTextField").
+func (c *Client) ElementName(elementID string) (string, error) {
+	resp, err := c.get(c.sessionPath(fmt.Sprintf("/element/%s/name", elementID)))
+	if err != nil {
+		return "", err
+	}
+	if value, ok := resp["value"].(string); ok {
+		return value, nil
+	}
+	return "", fmt.Errorf("invalid element name response")
 }
 
 // ElementText returns an element's text.

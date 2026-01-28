@@ -21,7 +21,17 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		return d.tapOnPointWithPercentage(step.Point)
 	}
 
-	info, err := d.findElement(step.Selector, step.Optional, step.TimeoutMs)
+	// Handle keyboard key names — iOS keyboard buttons aren't reliably findable via WDA
+	if step.Selector.Text != "" {
+		if keyChar := iosKeyboardKey(step.Selector.Text); keyChar != "" {
+			if err := d.client.SendKeys(keyChar); err != nil {
+				return errorResult(err, fmt.Sprintf("Failed to send key: %s", step.Selector.Text))
+			}
+			return successResult(fmt.Sprintf("Pressed keyboard key: %s", step.Selector.Text), nil)
+		}
+	}
+
+	info, err := d.findElementForTap(step.Selector, step.Optional, step.TimeoutMs)
 	if err != nil {
 		if step.Optional {
 			return successResult("Optional element not found, skipping tap", nil)
@@ -43,25 +53,36 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		return successResult(fmt.Sprintf("Tapped at relative point (%.0f, %.0f) on element", x, y), info)
 	}
 
-	// If we have a WDA element ID, use element click (better for focus handling)
+	// Determine if element is a text field (needs focus verification)
+	isTextField := false
 	if info.ID != "" {
-		if err := d.client.ElementClick(info.ID); err != nil {
-			// Fallback to coordinate tap if element click fails
-			x := float64(info.Bounds.X + info.Bounds.Width/2)
-			y := float64(info.Bounds.Y + info.Bounds.Height/2)
-			if err := d.client.Tap(x, y); err != nil {
-				return errorResult(err, "Tap failed")
-			}
+		if name, err := d.client.ElementName(info.ID); err == nil {
+			isTextField = strings.Contains(name, "TextField")
 		}
-		return successResult("Tapped element", info)
 	}
 
-	// Tap center of element using coordinates
-	x := float64(info.Bounds.X + info.Bounds.Width/2)
-	y := float64(info.Bounds.Y + info.Bounds.Height/2)
+	// Strategy: ElementClick first (WDA's internal element targeting handles z-order),
+	// then coordinate tap as fallback. For text fields, verify focus after each attempt
+	// because ElementClick can return success without actually focusing the field.
+	tapped := false
+	if info.ID != "" {
+		if err := d.client.ElementClick(info.ID); err == nil {
+			tapped = true
+			if isTextField {
+				time.Sleep(100 * time.Millisecond)
+				if _, err := d.client.GetActiveElement(); err != nil {
+					tapped = false // No focus — retry with coordinate tap
+				}
+			}
+		}
+	}
 
-	if err := d.client.Tap(x, y); err != nil {
-		return errorResult(err, "Tap failed")
+	if !tapped {
+		x := float64(info.Bounds.X + info.Bounds.Width/2)
+		y := float64(info.Bounds.Y + info.Bounds.Height/2)
+		if err := d.client.Tap(x, y); err != nil {
+			return errorResult(err, "Tap failed")
+		}
 	}
 
 	return successResult("Tapped element", info)
@@ -90,7 +111,7 @@ func (d *Driver) tapOnPointWithPercentage(point string) *core.CommandResult {
 }
 
 func (d *Driver) doubleTapOn(step *flow.DoubleTapOnStep) *core.CommandResult {
-	info, err := d.findElement(step.Selector, false, step.TimeoutMs)
+	info, err := d.findElementForTap(step.Selector, false, step.TimeoutMs)
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Element not found: %s", selectorDesc(step.Selector)))
 	}
@@ -106,7 +127,7 @@ func (d *Driver) doubleTapOn(step *flow.DoubleTapOnStep) *core.CommandResult {
 }
 
 func (d *Driver) longPressOn(step *flow.LongPressOnStep) *core.CommandResult {
-	info, err := d.findElement(step.Selector, false, step.TimeoutMs)
+	info, err := d.findElementForTap(step.Selector, false, step.TimeoutMs)
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Element not found: %s", selectorDesc(step.Selector)))
 	}
@@ -213,6 +234,16 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		time.Sleep(100 * time.Millisecond) // Wait for focus
 	}
 
+	// Wait for keyboard to be ready by confirming a text field is focused.
+	// Poll GetActiveElement up to 1s (5 attempts, 200ms apart) similar to
+	// original Maestro's InputTextRouteHandler.swift keyboard wait.
+	for i := 0; i < 5; i++ {
+		if elemID, err := d.client.GetActiveElement(); err == nil && elemID != "" {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
 	if err := d.client.SendKeys(text); err != nil {
 		return errorResult(err, "Input text failed")
 	}
@@ -228,16 +259,15 @@ func (d *Driver) eraseText(step *flow.EraseTextStep) *core.CommandResult {
 		}
 	}
 
-	// Fallback: Send delete keys
+	// Fallback: Send all delete keys in a single request
 	count := step.Characters
 	if count == 0 {
 		count = 50 // default
 	}
 
-	for i := 0; i < count; i++ {
-		if err := d.client.SendKeys("\b"); err != nil {
-			return errorResult(err, "Erase text failed")
-		}
+	deleteStr := strings.Repeat("\b", count)
+	if err := d.client.SendKeys(deleteStr); err != nil {
+		return errorResult(err, "Erase text failed")
 	}
 
 	return successResult(fmt.Sprintf("Erased %d characters", count), nil)
@@ -453,24 +483,48 @@ func (d *Driver) back(step *flow.BackStep) *core.CommandResult {
 }
 
 func (d *Driver) pressKey(step *flow.PressKeyStep) *core.CommandResult {
-	switch step.Key {
+	switch strings.ToLower(step.Key) {
 	case "home":
 		if err := d.client.Home(); err != nil {
 			return errorResult(err, "Press home failed")
 		}
-	case "volumeUp":
+	case "volumeup", "volume_up":
 		if err := d.client.PressButton("volumeUp"); err != nil {
 			return errorResult(err, "Press volume up failed")
 		}
-	case "volumeDown":
+	case "volumedown", "volume_down":
 		if err := d.client.PressButton("volumeDown"); err != nil {
 			return errorResult(err, "Press volume down failed")
 		}
 	default:
-		return errorResult(fmt.Errorf("unknown key: %s", step.Key), "Unknown key")
+		// Try keyboard key
+		if keyChar := iosKeyboardKey(step.Key); keyChar != "" {
+			if err := d.client.SendKeys(keyChar); err != nil {
+				return errorResult(err, fmt.Sprintf("Press %s failed", step.Key))
+			}
+		} else {
+			return errorResult(fmt.Errorf("unknown key: %s", step.Key), "Unknown key")
+		}
 	}
 
 	return successResult(fmt.Sprintf("Pressed %s", step.Key), nil)
+}
+
+// iosKeyboardKey maps keyboard key names to the character to send via WDA SendKeys.
+// Returns empty string if the name is not a recognized keyboard key.
+func iosKeyboardKey(name string) string {
+	switch strings.ToLower(name) {
+	case "return", "enter":
+		return "\n"
+	case "tab":
+		return "\t"
+	case "delete", "backspace":
+		return "\b"
+	case "space":
+		return " "
+	default:
+		return ""
+	}
 }
 
 // App lifecycle
@@ -506,6 +560,8 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 		if err := d.client.CreateSession(bundleID); err != nil {
 			return errorResult(err, fmt.Sprintf("Failed to create session for app: %s", bundleID))
 		}
+		// Disable quiescence wait to prevent XCTest crashes on certain Xcode/iOS versions
+		_ = d.client.DisableQuiescence()
 		time.Sleep(time.Second) // Brief wait for app to start
 		return successResult(fmt.Sprintf("Launched app: %s", bundleID), nil)
 	}

@@ -228,6 +228,138 @@ func (d *Driver) findElementWithContext(ctx context.Context, sel flow.Selector) 
 	}
 }
 
+// findElementForTap finds an element using a strategy optimized for tap actions.
+// For text selectors, it tries interactive element types first (TextField, SecureTextField, Button),
+// then falls back to generic text matching with clickable parent lookup via page source.
+func (d *Driver) findElementForTap(sel flow.Selector, optional bool, stepTimeoutMs int) (*core.ElementInfo, error) {
+	// For relative selectors, use page source which handles them correctly
+	if sel.HasRelativeSelector() {
+		timeout := d.calculateTimeout(optional, stepTimeoutMs)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		return d.findElementRelativeWithContext(ctx, sel)
+	}
+
+	// For ID-based selectors, use standard findElement (IDs are usually unique)
+	if sel.ID != "" {
+		return d.findElement(sel, optional, stepTimeoutMs)
+	}
+
+	// For text-based selectors, use smart fallback strategy
+	if sel.Text != "" {
+		timeout := d.calculateTimeout(optional, stepTimeoutMs)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		return d.findElementForTapWithContext(ctx, sel)
+	}
+
+	// For other selectors, use standard approach
+	return d.findElement(sel, optional, stepTimeoutMs)
+}
+
+// findElementForTapWithContext implements the smart tap element finding strategy.
+// Tries interactive WDA queries first (TextField, SecureTextField, Button), then falls back
+// to generic predicate to check if text exists, and finally page source with clickable parent lookup.
+func (d *Driver) findElementForTapWithContext(ctx context.Context, sel flow.Selector) (*core.ElementInfo, error) {
+	stateFilter := buildStateFilter(sel)
+	var lastErr error
+
+	for {
+		select {
+		case <-ctx.Done():
+			if lastErr != nil {
+				return nil, fmt.Errorf("%s: %w", ctx.Err(), lastErr)
+			}
+			return nil, fmt.Errorf("element '%s' not found: %w", sel.Describe(), ctx.Err())
+		default:
+			// Step 1: Try interactive element types first (TextField, SecureTextField, Button)
+			if info, err := d.findInteractiveElementByWDA(sel, stateFilter); err == nil {
+				return info, nil
+			}
+
+			// Step 2a: Try exact-match predicate first.
+			// This prevents "Password" from matching "Forgot Password?" etc.
+			exactPredicate := fmt.Sprintf("(label == '%s' OR name == '%s' OR value == '%s')%s",
+				sel.Text, sel.Text, sel.Text, stateFilter)
+			exactElemID, _ := d.client.FindElement("predicate string", exactPredicate)
+
+			// Step 2b: Check if text exists via substring WDA predicate
+			predicateBase := fmt.Sprintf("label CONTAINS[c] '%s' OR name CONTAINS[c] '%s' OR value CONTAINS[c] '%s'",
+				sel.Text, sel.Text, sel.Text)
+			predicate := "(" + predicateBase + ")" + stateFilter
+			containsElemID, textExistsErr := d.client.FindElement("predicate string", predicate)
+
+			// Prefer exact match element for fallback; use contains match otherwise
+			fallbackElemID := exactElemID
+			if fallbackElemID == "" {
+				fallbackElemID = containsElemID
+			}
+
+			if textExistsErr != nil && exactElemID == "" {
+				// Text not found via WDA at all - try page source as fallback
+				if info, err := d.findElementByPageSourceOnce(sel); err == nil {
+					return info, nil
+				}
+				// Still not found - keep polling
+				lastErr = textExistsErr
+				continue
+			}
+
+			// Step 3: Text exists but not in an interactive element → page source with parent lookup
+			if info, err := d.findElementByPageSourceOnce(sel); err == nil {
+				return info, nil
+			}
+
+			// Step 4: Page source failed (e.g. quiescence error) — use the best predicate element.
+			// Exact match is preferred to avoid "Password" hitting "Forgot Password?" etc.
+			if fallbackElemID != "" {
+				if info, err := d.getElementInfo(fallbackElemID); err == nil {
+					return info, nil
+				} else {
+					lastErr = err
+				}
+			}
+		}
+	}
+}
+
+// findInteractiveElementByWDA tries WDA queries for interactive element types only.
+func (d *Driver) findInteractiveElementByWDA(sel flow.Selector, stateFilter string) (*core.ElementInfo, error) {
+	// Try class chain queries first (support placeholderValue attribute)
+	textFieldChain := fmt.Sprintf("**/XCUIElementTypeTextField[`(label CONTAINS[c] '%s' OR value CONTAINS[c] '%s' OR placeholderValue CONTAINS[c] '%s')%s`]", sel.Text, sel.Text, sel.Text, stateFilter)
+	if elemID, err := d.client.FindElement("class chain", textFieldChain); err == nil && elemID != "" {
+		return d.getElementInfo(elemID)
+	}
+
+	secureFieldChain := fmt.Sprintf("**/XCUIElementTypeSecureTextField[`(label CONTAINS[c] '%s' OR value CONTAINS[c] '%s' OR placeholderValue CONTAINS[c] '%s')%s`]", sel.Text, sel.Text, sel.Text, stateFilter)
+	if elemID, err := d.client.FindElement("class chain", secureFieldChain); err == nil && elemID != "" {
+		return d.getElementInfo(elemID)
+	}
+
+	// Button queries use exact match (==[c]) to avoid "Password" matching "Forgot Password?" etc.
+	buttonChain := fmt.Sprintf("**/XCUIElementTypeButton[`(label ==[c] '%s' OR name ==[c] '%s')%s`]", sel.Text, sel.Text, stateFilter)
+	if elemID, err := d.client.FindElement("class chain", buttonChain); err == nil && elemID != "" {
+		return d.getElementInfo(elemID)
+	}
+
+	// Fallback: try type-filtered predicate queries.
+	// Class chain queries can fail due to quiescence while predicate queries may succeed.
+	// Note: placeholderValue is not reliably available in predicate queries, so we use label/value only.
+	textMatchCond := fmt.Sprintf("(label CONTAINS[c] '%s' OR value CONTAINS[c] '%s')", sel.Text, sel.Text)
+	for _, elemType := range []string{"XCUIElementTypeTextField", "XCUIElementTypeSecureTextField", "XCUIElementTypeSearchField"} {
+		pred := fmt.Sprintf("type == '%s' AND %s", elemType, textMatchCond)
+		if elemID, err := d.client.FindElement("predicate string", pred); err == nil && elemID != "" {
+			return d.getElementInfo(elemID)
+		}
+	}
+	buttonPred := fmt.Sprintf("type == 'XCUIElementTypeButton' AND (label ==[c] '%s' OR name ==[c] '%s')", sel.Text, sel.Text)
+	if elemID, err := d.client.FindElement("predicate string", buttonPred); err == nil && elemID != "" {
+		return d.getElementInfo(elemID)
+	}
+
+	return nil, fmt.Errorf("no interactive element found via WDA")
+}
+
 // calculateTimeout returns the appropriate timeout duration.
 func (d *Driver) calculateTimeout(optional bool, stepTimeoutMs int) time.Duration {
 	var timeoutMs int
@@ -318,13 +450,13 @@ func (d *Driver) findElementByWDA(sel flow.Selector) (*core.ElementInfo, error) 
 
 	if sel.Text != "" {
 		// Try TextField with matching placeholder/value
-		textFieldChain := fmt.Sprintf("**/XCUIElementTypeTextField[`(label CONTAINS[c] '%s' OR value CONTAINS[c] '%s')%s`]", sel.Text, sel.Text, stateFilter)
+		textFieldChain := fmt.Sprintf("**/XCUIElementTypeTextField[`(label CONTAINS[c] '%s' OR value CONTAINS[c] '%s' OR placeholderValue CONTAINS[c] '%s')%s`]", sel.Text, sel.Text, sel.Text, stateFilter)
 		if elemID, err := d.client.FindElement("class chain", textFieldChain); err == nil && elemID != "" {
 			return d.getElementInfo(elemID)
 		}
 
 		// Try SecureTextField
-		secureFieldChain := fmt.Sprintf("**/XCUIElementTypeSecureTextField[`(label CONTAINS[c] '%s' OR value CONTAINS[c] '%s')%s`]", sel.Text, sel.Text, stateFilter)
+		secureFieldChain := fmt.Sprintf("**/XCUIElementTypeSecureTextField[`(label CONTAINS[c] '%s' OR value CONTAINS[c] '%s' OR placeholderValue CONTAINS[c] '%s')%s`]", sel.Text, sel.Text, sel.Text, stateFilter)
 		if elemID, err := d.client.FindElement("class chain", secureFieldChain); err == nil && elemID != "" {
 			return d.getElementInfo(elemID)
 		}
@@ -521,9 +653,13 @@ func (d *Driver) findElementByPageSourceOnce(sel flow.Selector) (*core.ElementIn
 		selected = candidates[0]
 	}
 
+	// If element isn't a clickable type, try to find a clickable parent
+	// This handles patterns where text labels aren't interactive but their containers are
+	clickableElem := GetClickableElement(selected)
+
 	return &core.ElementInfo{
 		Text:    selected.Label,
-		Bounds:  selected.Bounds,
+		Bounds:  clickableElem.Bounds,
 		Enabled: selected.Enabled,
 		Visible: selected.Displayed,
 	}, nil
