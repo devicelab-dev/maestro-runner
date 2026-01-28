@@ -745,11 +745,20 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 		// Continue with launch
 	}
 
-	// Launch app - use am start with arguments if provided, otherwise monkey
+	// Launch app - resolve launcher activity and use am start
+	// First, resolve the launcher activity using cmd package
+	resolveCmd := fmt.Sprintf("cmd package resolve-activity --brief %s | tail -n 1", appID)
+	launcherActivity, err := d.device.Shell(resolveCmd)
+	if err != nil || strings.Contains(launcherActivity, "No activity found") {
+		return errorResult(err, fmt.Sprintf("Failed to resolve launcher activity for %s", appID))
+	}
+	launcherActivity = strings.TrimSpace(launcherActivity)
+
+	// Build am start command
 	var cmd string
 	if len(step.Arguments) > 0 {
 		// Build am start command with intent extras
-		cmd = fmt.Sprintf("am start -n %s/.MainActivity -a android.intent.action.MAIN -c android.intent.category.LAUNCHER", appID)
+		cmd = fmt.Sprintf("am start -n %s", launcherActivity)
 		for key, value := range step.Arguments {
 			switch v := value.(type) {
 			case string:
@@ -772,8 +781,8 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 			}
 		}
 	} else {
-		// Use monkey (works without knowing activity name)
-		cmd = fmt.Sprintf("monkey -p %s -c android.intent.category.LAUNCHER 1", appID)
+		// Simple launch without arguments
+		cmd = fmt.Sprintf("am start -n %s", launcherActivity)
 	}
 	if _, err := d.device.Shell(cmd); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to launch app: %v", err))
