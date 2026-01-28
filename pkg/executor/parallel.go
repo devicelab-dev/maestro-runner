@@ -3,7 +3,10 @@ package executor
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
@@ -95,7 +98,6 @@ func (pr *ParallelRunner) Run(ctx context.Context, flows []flow.Flow) (*RunResul
 
 		go func(w DeviceWorker) {
 			defer wg.Done()
-			defer w.Cleanup()
 
 			// Create runner for this worker
 			// Each worker uses its own driver but shares the report
@@ -119,6 +121,14 @@ func (pr *ParallelRunner) Run(ctx context.Context, flows []flow.Flow) (*RunResul
 
 	// Wait for all workers to complete
 	wg.Wait()
+
+	// Cleanup all workers after tests complete
+	// This ensures cleanup happens synchronously after all work is done
+	for i := range pr.workers {
+		pr.workers[i].Cleanup()
+	}
+	// Give cleanup a moment to complete (socket/port release)
+	time.Sleep(100 * time.Millisecond)
 
 	// Calculate actual wall clock time
 	wallClockDuration := time.Since(startTime).Milliseconds()
