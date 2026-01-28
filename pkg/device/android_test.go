@@ -341,7 +341,7 @@ func TestAndroidDevice_Install_Uninstall(t *testing.T) {
 	}
 
 	// Use settings APK for testing (less critical than UIAutomator2)
-	apkPath := "../../apks/settings_apk-debug.apk"
+	apkPath := "../../drivers/android/settings_apk-debug.apk"
 	pkg := AppiumSettings
 
 	// Uninstall first if installed
@@ -386,7 +386,7 @@ func TestAndroidDevice_InstallUIAutomator2(t *testing.T) {
 	}
 
 	// This should be a no-op if already installed
-	if err := device.InstallUIAutomator2("../../apks"); err != nil {
+	if err := device.InstallUIAutomator2("../../drivers/android"); err != nil {
 		t.Errorf("InstallUIAutomator2 failed: %v", err)
 	}
 
@@ -430,7 +430,7 @@ func TestAndroidDevice_UninstallUIAutomator2(t *testing.T) {
 	}
 
 	// First ensure UIAutomator2 is installed
-	if err := device.InstallUIAutomator2("../../apks"); err != nil {
+	if err := device.InstallUIAutomator2("../../drivers/android"); err != nil {
 		t.Fatalf("InstallUIAutomator2 failed: %v", err)
 	}
 
@@ -448,7 +448,7 @@ func TestAndroidDevice_UninstallUIAutomator2(t *testing.T) {
 	}
 
 	// Reinstall for other tests
-	if err := device.InstallUIAutomator2("../../apks"); err != nil {
+	if err := device.InstallUIAutomator2("../../drivers/android"); err != nil {
 		t.Fatalf("Reinstall failed: %v", err)
 	}
 }
@@ -463,7 +463,7 @@ func TestCheckHealthViaTCP(t *testing.T) {
 
 func TestFindAPK(t *testing.T) {
 	// Test finding APK in apks directory
-	apkPath, err := findAPK("../../apks", "appium-uiautomator2-server-v*.apk")
+	apkPath, err := findAPK("../../drivers/android", "appium-uiautomator2-server-v*.apk")
 	if err != nil {
 		t.Fatalf("findAPK failed: %v", err)
 	}
@@ -472,7 +472,7 @@ func TestFindAPK(t *testing.T) {
 	}
 
 	// Test with non-existent pattern
-	_, err = findAPK("../../apks", "nonexistent-*.apk")
+	_, err = findAPK("../../drivers/android", "nonexistent-*.apk")
 	if err == nil {
 		t.Error("expected error for non-existent pattern")
 	}

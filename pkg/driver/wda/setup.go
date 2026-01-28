@@ -17,36 +17,27 @@ const (
 	WDADir     = ".maestro/wda"
 )
 
-// Setup ensures WDA is downloaded and ready to build.
+// Setup ensures WDA is available (bundled in project).
 func Setup() (string, error) {
 	wdaPath, err := GetWDAPath()
 	if err != nil {
 		return "", err
 	}
 
-	// Check if already downloaded
+	// Check if bundled WDA exists
 	projectPath := filepath.Join(wdaPath, "WebDriverAgent.xcodeproj")
-	if _, err := os.Stat(projectPath); err == nil {
-		return wdaPath, nil
+	if _, err := os.Stat(projectPath); err != nil {
+		return "", fmt.Errorf("WebDriverAgent not found at %s\nPlease ensure drivers/ios/WebDriverAgent-%s exists",
+			wdaPath, strings.TrimPrefix(WDAVersion, "v"))
 	}
 
-	// Download WDA
-	fmt.Printf("Downloading WebDriverAgent %s...\n", WDAVersion)
-	if err := downloadWDA(wdaPath); err != nil {
-		return "", fmt.Errorf("failed to download WDA: %w", err)
-	}
-
-	fmt.Println("WebDriverAgent downloaded successfully")
 	return wdaPath, nil
 }
 
-// GetWDAPath returns the path where WDA is/should be installed.
+// GetWDAPath returns the path where WDA is bundled in the project.
 func GetWDAPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("failed to get home directory: %w", err)
-	}
-	return filepath.Join(home, WDADir, fmt.Sprintf("WebDriverAgent-%s", strings.TrimPrefix(WDAVersion, "v"))), nil
+	// Use bundled WDA in drivers/ios directory
+	return filepath.Join(".", "drivers", "ios", fmt.Sprintf("WebDriverAgent-%s", strings.TrimPrefix(WDAVersion, "v"))), nil
 }
 
 // GetWDABasePath returns the base WDA directory.

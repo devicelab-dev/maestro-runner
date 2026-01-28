@@ -1,0 +1,65 @@
+/**
+ * Copyright (c) 2015-present, Facebook, Inc.
+ * All rights reserved.
+ *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree. An additional grant
+ * of patent rights can be found in the PATENTS file in the same directory.
+ */
+
+#import <XCTest/XCTest.h>
+
+NS_ASSUME_NONNULL_BEGIN
+
+/**
+ Types a text into the currently focused element.
+
+ @param text text that should be typed
+ @param typingSpeed Frequency of typing (letters per sec)
+ @param error If there is an error, upon return contains an NSError object that describes the problem.
+ @return YES if the operation succeeds, otherwise NO.
+ */
+BOOL FBTypeText(NSString *text, NSUInteger typingSpeed, NSError **error);
+
+@interface XCUIElement (FBTyping)
+
+/**
+ Types a text into element.
+ It will try to activate keyboard on element, if element has no keyboard focus.
+
+ @param text text that should be typed
+ @param shouldClear Whether to clear the input field before start typing
+ @param error If there is an error, upon return contains an NSError object that describes the problem.
+ @return YES if the operation succeeds, otherwise NO.
+ */
+- (BOOL)fb_typeText:(NSString *)text
+        shouldClear:(BOOL)shouldClear
+              error:(NSError **)error;
+
+/**
+ Types a text into element.
+ It will try to activate keyboard on element, if element has no keyboard focus.
+
+ @param text text that should be typed
+ @param shouldClear Whether to clear the input field before start typing
+ @param frequency Frequency of typing (letters per sec)
+ @param error If there is an error, upon return contains an NSError object that describes the problem.
+ @return YES if the operation succeeds, otherwise NO.
+ */
+- (BOOL)fb_typeText:(NSString *)text
+        shouldClear:(BOOL)shouldClear
+          frequency:(NSUInteger)frequency
+              error:(NSError **)error;
+
+/**
+ Clears text on element.
+ It will try to activate keyboard on element, if element has no keyboard focus.
+
+ @param error If there is an error, upon return contains an NSError object that describes the problem.
+ @return YES if the operation succeeds, otherwise NO.
+ */
+- (BOOL)fb_clearTextWithError:(NSError **)error;
+
+@end
+
+NS_ASSUME_NONNULL_END

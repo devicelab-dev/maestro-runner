@@ -896,7 +896,7 @@ func createUIAutomator2Driver(cfg *RunConfig, dev *device.AndroidDevice, info de
 	// 1. Check/install UIAutomator2 APKs
 	if !dev.IsInstalled(device.UIAutomator2Server) {
 		printSetupStep("Installing UIAutomator2 APKs...")
-		apksDir := "./apks"
+		apksDir := "./drivers/android"
 		if err := dev.InstallUIAutomator2(apksDir); err != nil {
 			return nil, nil, fmt.Errorf("install UIAutomator2: %w", err)
 		}
