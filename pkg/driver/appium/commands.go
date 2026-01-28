@@ -329,6 +329,12 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 		if err := d.client.ClearAppData(appID); err != nil {
 			return errorResult(err, fmt.Sprintf("Failed to clear app state: %s", appID))
 		}
+
+		// Grant permissions after clearing state (pm clear resets permissions).
+		// Use flow-specified permissions if provided, otherwise grant all.
+		if d.client.Platform() == "android" {
+			d.grantPermissions(appID, step.Permissions)
+		}
 	}
 
 	if err := d.client.LaunchApp(appID); err != nil {
@@ -673,4 +679,64 @@ func parsePercentageCoords(coord string) (float64, float64, error) {
 	}
 
 	return x / 100, y / 100, nil
+}
+
+// grantPermissions grants permissions via mobile: shell pm grant.
+// If the permissions map is provided, only those are granted (keys are permission names).
+// If empty/nil, all common runtime permissions are granted.
+func (d *Driver) grantPermissions(appID string, permissions map[string]string) {
+	if len(permissions) > 0 {
+		for perm := range permissions {
+			d.client.ExecuteMobile("shell", map[string]interface{}{
+				"command": "pm",
+				"args":    []string{"grant", appID, perm},
+			})
+		}
+		return
+	}
+
+	for _, perm := range getAllPermissions() {
+		d.client.ExecuteMobile("shell", map[string]interface{}{
+			"command": "pm",
+			"args":    []string{"grant", appID, perm},
+		})
+	}
+}
+
+// getAllPermissions returns all common Android runtime permissions.
+func getAllPermissions() []string {
+	return []string{
+		"android.permission.ACCESS_FINE_LOCATION",
+		"android.permission.ACCESS_COARSE_LOCATION",
+		"android.permission.ACCESS_BACKGROUND_LOCATION",
+		"android.permission.CAMERA",
+		"android.permission.READ_CONTACTS",
+		"android.permission.WRITE_CONTACTS",
+		"android.permission.GET_ACCOUNTS",
+		"android.permission.READ_PHONE_STATE",
+		"android.permission.CALL_PHONE",
+		"android.permission.READ_CALL_LOG",
+		"android.permission.WRITE_CALL_LOG",
+		"android.permission.USE_SIP",
+		"android.permission.PROCESS_OUTGOING_CALLS",
+		"android.permission.RECORD_AUDIO",
+		"android.permission.BLUETOOTH_CONNECT",
+		"android.permission.BLUETOOTH_SCAN",
+		"android.permission.BLUETOOTH_ADVERTISE",
+		"android.permission.READ_EXTERNAL_STORAGE",
+		"android.permission.WRITE_EXTERNAL_STORAGE",
+		"android.permission.READ_MEDIA_IMAGES",
+		"android.permission.READ_MEDIA_VIDEO",
+		"android.permission.READ_MEDIA_AUDIO",
+		"android.permission.POST_NOTIFICATIONS",
+		"android.permission.READ_CALENDAR",
+		"android.permission.WRITE_CALENDAR",
+		"android.permission.SEND_SMS",
+		"android.permission.RECEIVE_SMS",
+		"android.permission.READ_SMS",
+		"android.permission.RECEIVE_WAP_PUSH",
+		"android.permission.RECEIVE_MMS",
+		"android.permission.BODY_SENSORS",
+		"android.permission.ACTIVITY_RECOGNITION",
+	}
 }

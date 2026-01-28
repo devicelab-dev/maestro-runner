@@ -37,6 +37,20 @@ func NewClient(serverURL string) *Client {
 
 // Connect creates a new session with the given capabilities.
 func (c *Client) Connect(capabilities map[string]interface{}) error {
+	// For Android with clearState (noReset=false): disable auto-launch so we can
+	// grant permissions via pm grant before the app starts (avoids permission popups).
+	// When noReset is true (default), permissions persist across sessions so this isn't needed.
+	var androidAppPackage, androidAppActivity string
+	if p, ok := capabilities["platformName"].(string); ok && strings.EqualFold(p, "android") {
+		if noReset, ok := capabilities["appium:noReset"].(bool); ok && !noReset {
+			if pkg, ok := capabilities["appium:appPackage"].(string); ok && pkg != "" {
+				androidAppPackage = pkg
+				androidAppActivity, _ = capabilities["appium:appActivity"].(string)
+				capabilities["appium:autoLaunch"] = false
+			}
+		}
+	}
+
 	body := map[string]interface{}{
 		"capabilities": map[string]interface{}{
 			"alwaysMatch": capabilities,
@@ -94,48 +108,27 @@ func (c *Client) Connect(capabilities map[string]interface{}) error {
 			"waitForSelectorTimeout": 0,
 		})
 
-		// Grant all dangerous permissions via adb shell (more reliable than autoGrantPermissions capability)
-		if appPackage, ok := capabilities["appium:appPackage"].(string); ok && appPackage != "" {
-			c.grantAllPermissions(appPackage)
+		// Grant all permissions and launch app (autoLaunch was disabled above)
+		if androidAppPackage != "" {
+			for _, perm := range getAllPermissions() {
+				// Ignore errors - permission might not be declared by the app
+				c.ExecuteMobile("shell", map[string]interface{}{
+					"command": "pm",
+					"args":    []string{"grant", androidAppPackage, perm},
+				})
+			}
+			if androidAppActivity != "" {
+				c.ExecuteMobile("startActivity", map[string]interface{}{
+					"appPackage":  androidAppPackage,
+					"appActivity": androidAppActivity,
+				})
+			} else {
+				c.LaunchApp(androidAppPackage)
+			}
 		}
 	}
 
 	return nil
-}
-
-// grantAllPermissions grants all common dangerous runtime permissions to the app.
-// This is more reliable than the autoGrantPermissions capability which only works on fresh install.
-func (c *Client) grantAllPermissions(appPackage string) {
-	// Common dangerous permissions that apps might need
-	permissions := []string{
-		"android.permission.READ_EXTERNAL_STORAGE",
-		"android.permission.WRITE_EXTERNAL_STORAGE",
-		"android.permission.CAMERA",
-		"android.permission.RECORD_AUDIO",
-		"android.permission.ACCESS_FINE_LOCATION",
-		"android.permission.ACCESS_COARSE_LOCATION",
-		"android.permission.READ_CONTACTS",
-		"android.permission.WRITE_CONTACTS",
-		"android.permission.READ_CALENDAR",
-		"android.permission.WRITE_CALENDAR",
-		"android.permission.READ_PHONE_STATE",
-		"android.permission.CALL_PHONE",
-		"android.permission.READ_CALL_LOG",
-		"android.permission.WRITE_CALL_LOG",
-		"android.permission.SEND_SMS",
-		"android.permission.RECEIVE_SMS",
-		"android.permission.READ_SMS",
-		"android.permission.POST_NOTIFICATIONS",
-		"android.permission.BODY_SENSORS",
-	}
-
-	for _, perm := range permissions {
-		// Ignore errors - permission might not be requested by app or already granted
-		c.ExecuteMobile("shell", map[string]interface{}{
-			"command": "pm",
-			"args":    []string{"grant", appPackage, perm},
-		})
-	}
 }
 
 // Disconnect closes the session.
