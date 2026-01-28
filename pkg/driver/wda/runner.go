@@ -64,6 +64,7 @@ func PortFromUDID(udid string) uint16 {
 }
 
 // Build compiles WDA for the target device.
+// Uses a persistent build cache directory specific to iOS version, device type, and team ID.
 func (r *Runner) Build(ctx context.Context) error {
 	wdaPath, err := GetWDAPath()
 	if err != nil {
@@ -71,14 +72,23 @@ func (r *Runner) Build(ctx context.Context) error {
 	}
 	r.wdaPath = wdaPath
 
-	// Create temp build directory
-	r.buildDir, err = os.MkdirTemp("", "wda-build-*")
+	// Get build cache directory specific to this configuration
+	r.buildDir, err = r.getBuildCacheDir()
 	if err != nil {
-		return fmt.Errorf("failed to create build directory: %w", err)
+		return fmt.Errorf("failed to get build cache directory: %w", err)
 	}
 
+	os.MkdirAll(r.buildDir, 0755)
 	os.MkdirAll(filepath.Join(r.buildDir, "logs"), 0755)
 
+	// Check if already built by looking for xctestrun file
+	if _, err := r.findXctestrun(); err == nil {
+		// Build exists - skip rebuilding
+		fmt.Printf("WebDriverAgent already built (using cached build: %s)\n", filepath.Base(r.buildDir))
+		return nil
+	}
+
+	// Need to build
 	logPath := filepath.Join(r.buildDir, "logs", "build.log")
 	logFile, err := os.Create(logPath)
 	if err != nil {
@@ -241,13 +251,137 @@ func (r *Runner) Stop() {
 	}
 }
 
-// Cleanup stops WDA and removes build artifacts.
+// Cleanup stops WDA runner.
+// Note: Build directory is now persistent and not removed to enable build reuse.
 func (r *Runner) Cleanup() {
 	r.Stop()
-	if r.buildDir != "" {
-		os.RemoveAll(r.buildDir)
-		r.buildDir = ""
+	// Build directory is persistent (in cache), don't remove it
+}
+
+// getBuildCacheDir returns the cache directory path for this specific configuration.
+// Format: ~/.maestro-runner/cache/wda-builds/{config-name}/
+// Examples:
+//   - Simulator: sim-ios18.5-iphone/
+//   - Real device: device-ios18.0-teamABC123/
+func (r *Runner) getBuildCacheDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
+
+	// Get device info
+	isSimulator, err := r.isSimulator()
+	if err != nil {
+		return "", err
+	}
+
+	iosVersion, err := r.getIOSVersion()
+	if err != nil {
+		return "", err
+	}
+
+	// Generate config-specific directory name
+	var configName string
+	if isSimulator {
+		// Simulator: sim-ios{version}-iphone
+		configName = fmt.Sprintf("sim-ios%s-iphone", iosVersion)
+	} else {
+		// Real device: device-ios{version}-team{teamID}
+		teamID := r.teamID
+		if teamID == "" {
+			teamID = "default"
+		}
+		configName = fmt.Sprintf("device-ios%s-team%s", iosVersion, teamID)
+	}
+
+	cacheDir := filepath.Join(home, ".maestro-runner", "cache", "wda-builds", configName)
+	return cacheDir, nil
+}
+
+// isSimulator checks if the device is a simulator.
+func (r *Runner) isSimulator() (bool, error) {
+	// Run simctl to check if this UDID is a simulator
+	cmd := exec.Command("xcrun", "simctl", "list", "devices", "-j")
+	output, err := cmd.Output()
+	if err != nil {
+		// If simctl fails, assume it might be a real device
+		return false, nil
+	}
+
+	// Parse JSON to check if UDID exists in simulator list
+	var data map[string]interface{}
+	if err := json.Unmarshal(output, &data); err != nil {
+		return false, err
+	}
+
+	devices, ok := data["devices"].(map[string]interface{})
+	if !ok {
+		return false, nil
+	}
+
+	// Check if our UDID appears in any runtime
+	for _, deviceList := range devices {
+		if list, ok := deviceList.([]interface{}); ok {
+			for _, device := range list {
+				if deviceMap, ok := device.(map[string]interface{}); ok {
+					if udid, ok := deviceMap["udid"].(string); ok && udid == r.deviceUDID {
+						return true, nil
+					}
+				}
+			}
+		}
+	}
+
+	return false, nil
+}
+
+// getIOSVersion returns the iOS version of the device.
+func (r *Runner) getIOSVersion() (string, error) {
+	// Try simctl first (for simulators)
+	cmd := exec.Command("xcrun", "simctl", "list", "devices", "-j")
+	output, err := cmd.Output()
+	if err == nil {
+		var data map[string]interface{}
+		if err := json.Unmarshal(output, &data); err == nil {
+			devices, ok := data["devices"].(map[string]interface{})
+			if ok {
+				for runtime, deviceList := range devices {
+					if list, ok := deviceList.([]interface{}); ok {
+						for _, device := range list {
+							if deviceMap, ok := device.(map[string]interface{}); ok {
+								if udid, ok := deviceMap["udid"].(string); ok && udid == r.deviceUDID {
+									// Extract iOS version from runtime string
+									// Example: "com.apple.CoreSimulator.SimRuntime.iOS-18-5" -> "18.5"
+									parts := strings.Split(runtime, ".")
+									if len(parts) > 0 {
+										lastPart := parts[len(parts)-1]
+										// iOS-18-5 -> 18.5
+										version := strings.TrimPrefix(lastPart, "iOS-")
+										version = strings.ReplaceAll(version, "-", ".")
+										return version, nil
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// For real devices, use ideviceinfo (requires libimobiledevice)
+	// Fallback to a generic version if not available
+	cmd = exec.Command("ideviceinfo", "-u", r.deviceUDID, "-k", "ProductVersion")
+	output, err = cmd.Output()
+	if err == nil {
+		version := strings.TrimSpace(string(output))
+		if version != "" {
+			return version, nil
+		}
+	}
+
+	// Fallback: use a generic version identifier
+	return "unknown", nil
 }
 
 func (r *Runner) destination() string {
