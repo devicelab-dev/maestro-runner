@@ -251,7 +251,50 @@ func (d *Driver) eraseText(step *flow.EraseTextStep) *core.CommandResult {
 		chars = 50 // Default
 	}
 
-	// Send delete keys for the specified count (don't use ClearElement as it clears ALL text)
+	// Try optimized approach first (Clear or text replacement)
+	// This is much faster than pressing delete key N times (3 HTTP calls vs N calls)
+	activeElemID, err := d.client.GetActiveElement()
+	if err == nil && activeElemID != "" {
+		// Got active element - try to read its text
+		currentText, textErr := d.client.GetElementText(activeElemID)
+		if textErr == nil {
+			textLen := len([]rune(currentText)) // Use runes for proper Unicode handling
+
+			// Case 1: Erase all text (or more than exists) - just Clear() in one shot
+			if chars >= textLen || textLen == 0 {
+				if clearErr := d.client.ClearElement(activeElemID); clearErr == nil {
+					return successResult(fmt.Sprintf("Cleared %d characters", textLen), nil)
+				}
+				// Clear failed, fall through to delete key approach
+			} else {
+				// Case 2: Erase N chars from end - use text replacement
+				runes := []rune(currentText)
+				remaining := string(runes[:textLen-chars])
+
+				if clearErr := d.client.ClearElement(activeElemID); clearErr == nil {
+					if remaining != "" {
+						if sendErr := d.client.SendKeys(remaining); sendErr == nil {
+							return successResult(fmt.Sprintf("Erased %d characters", chars), nil)
+						}
+						// SendKeys failed, fall through to delete key approach
+					} else {
+						// Remaining text is empty, Clear() already did the job
+						return successResult(fmt.Sprintf("Erased %d characters", chars), nil)
+					}
+				}
+				// Clear failed, fall through to delete key approach
+			}
+		}
+		// GetElementText failed (e.g., password field), fall through to delete key approach
+	}
+	// GetActiveElement failed, fall through to delete key approach
+
+	// Fallback: Press delete key multiple times
+	// This is slower (N HTTP calls) but works in edge cases:
+	// - Can't find focused element
+	// - Element doesn't support Clear() or Text()
+	// - Password fields that don't expose text
+	// - Custom input components
 	for i := 0; i < chars; i++ {
 		d.client.PressKeyCode(67) // Android KEYCODE_DEL
 	}

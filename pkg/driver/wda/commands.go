@@ -252,25 +252,57 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 }
 
 func (d *Driver) eraseText(step *flow.EraseTextStep) *core.CommandResult {
-	// Try to use ElementClear on the active element (faster and more reliable)
-	if elemID, err := d.client.GetActiveElement(); err == nil && elemID != "" {
-		if err := d.client.ElementClear(elemID); err == nil {
-			return successResult("Cleared text from active element", nil)
-		}
+	chars := step.Characters
+	if chars == 0 {
+		chars = 50 // default
 	}
+
+	// Try optimized approach first (Clear or text replacement)
+	// This is much faster than sending delete keys (3 HTTP calls vs N characters)
+	elemID, err := d.client.GetActiveElement()
+	if err == nil && elemID != "" {
+		// Got active element - try to read its text
+		currentText, textErr := d.client.ElementText(elemID)
+		if textErr == nil {
+			textLen := len([]rune(currentText)) // Use runes for proper Unicode handling
+
+			// Case 1: Erase all text (or more than exists) - just Clear() in one shot
+			if chars >= textLen || textLen == 0 {
+				if clearErr := d.client.ElementClear(elemID); clearErr == nil {
+					return successResult(fmt.Sprintf("Cleared %d characters", textLen), nil)
+				}
+				// Clear failed, fall through to delete key approach
+			} else {
+				// Case 2: Erase N chars from end - use text replacement
+				runes := []rune(currentText)
+				remaining := string(runes[:textLen-chars])
+
+				if clearErr := d.client.ElementClear(elemID); clearErr == nil {
+					if remaining != "" {
+						if sendErr := d.client.SendKeys(remaining); sendErr == nil {
+							return successResult(fmt.Sprintf("Erased %d characters", chars), nil)
+						}
+						// SendKeys failed, fall through to delete key approach
+					} else {
+						// Remaining text is empty, Clear() already did the job
+						return successResult(fmt.Sprintf("Erased %d characters", chars), nil)
+					}
+				}
+				// Clear failed, fall through to delete key approach
+			}
+		}
+		// ElementText failed (e.g., secure text field), fall through to delete key approach
+	}
+	// GetActiveElement failed, fall through to delete key approach
 
 	// Fallback: Send all delete keys in a single request
-	count := step.Characters
-	if count == 0 {
-		count = 50 // default
-	}
-
-	deleteStr := strings.Repeat("\b", count)
+	// WDA supports sending multiple backspace characters at once
+	deleteStr := strings.Repeat("\b", chars)
 	if err := d.client.SendKeys(deleteStr); err != nil {
 		return errorResult(err, "Erase text failed")
 	}
 
-	return successResult(fmt.Sprintf("Erased %d characters", count), nil)
+	return successResult(fmt.Sprintf("Erased %d characters", chars), nil)
 }
 
 func (d *Driver) hideKeyboard(step *flow.HideKeyboardStep) *core.CommandResult {

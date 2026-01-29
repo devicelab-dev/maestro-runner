@@ -272,7 +272,50 @@ func (d *Driver) eraseText(step *flow.EraseTextStep) *core.CommandResult {
 		chars = 50 // default
 	}
 
-	// Press delete key multiple times
+	// Try optimized approach first (Clear or text replacement)
+	// This is much faster than pressing delete key N times (3 HTTP calls vs N calls)
+	active, err := d.client.ActiveElement()
+	if err == nil {
+		// Got active element - try to read its text
+		currentText, textErr := active.Text()
+		if textErr == nil {
+			textLen := len([]rune(currentText)) // Use runes for proper Unicode handling
+
+			// Case 1: Erase all text (or more than exists) - just Clear() in one shot
+			if chars >= textLen || textLen == 0 {
+				if clearErr := active.Clear(); clearErr == nil {
+					return successResult(fmt.Sprintf("Cleared %d characters", textLen), nil)
+				}
+				// Clear failed, fall through to delete key approach
+			} else {
+				// Case 2: Erase N chars from end - use text replacement
+				runes := []rune(currentText)
+				remaining := string(runes[:textLen-chars])
+
+				if clearErr := active.Clear(); clearErr == nil {
+					if remaining != "" {
+						if sendErr := active.SendKeys(remaining); sendErr == nil {
+							return successResult(fmt.Sprintf("Erased %d characters", chars), nil)
+						}
+						// SendKeys failed, fall through to delete key approach
+					} else {
+						// Remaining text is empty, Clear() already did the job
+						return successResult(fmt.Sprintf("Erased %d characters", chars), nil)
+					}
+				}
+				// Clear failed, fall through to delete key approach
+			}
+		}
+		// Text() failed (e.g., password field), fall through to delete key approach
+	}
+	// ActiveElement() failed, fall through to delete key approach
+
+	// Fallback: Press delete key multiple times
+	// This is slower (N HTTP calls) but works in edge cases:
+	// - Can't find focused element
+	// - Element doesn't support Clear() or Text()
+	// - Password fields that don't expose text
+	// - Custom input components
 	for i := 0; i < chars; i++ {
 		if err := d.client.PressKeyCode(uiautomator2.KeyCodeDelete); err != nil {
 			return errorResult(err, fmt.Sprintf("Failed to erase text: %v", err))
