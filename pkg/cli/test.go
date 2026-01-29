@@ -202,17 +202,56 @@ func runTest(c *cli.Context) error {
 		return fmt.Errorf("at least one flow file or folder is required")
 	}
 
+	// Helper to get flag value from current or parent context
+	// When run as subcommand, global flags are in parent context
+	getString := func(name string) string {
+		if c.IsSet(name) {
+			return c.String(name)
+		}
+		if c.Lineage()[1] != nil {
+			return c.Lineage()[1].String(name)
+		}
+		return c.String(name)
+	}
+	getInt := func(name string) int {
+		if c.IsSet(name) {
+			return c.Int(name)
+		}
+		if c.Lineage()[1] != nil {
+			return c.Lineage()[1].Int(name)
+		}
+		return c.Int(name)
+	}
+	getBool := func(name string) bool {
+		if c.IsSet(name) {
+			return c.Bool(name)
+		}
+		if c.Lineage()[1] != nil {
+			return c.Lineage()[1].Bool(name)
+		}
+		return c.Bool(name)
+	}
+	getStringSlice := func(name string) []string {
+		if c.IsSet(name) {
+			return c.StringSlice(name)
+		}
+		if c.Lineage()[1] != nil {
+			return c.Lineage()[1].StringSlice(name)
+		}
+		return c.StringSlice(name)
+	}
+
 	// Parse environment variables
-	env := parseEnvVars(c.StringSlice("env"))
+	env := parseEnvVars(getStringSlice("env"))
 
 	// Resolve output directory
-	outputDir, err := resolveOutputDir(c.String("output"), c.Bool("flatten"))
+	outputDir, err := resolveOutputDir(getString("output"), getBool("flatten"))
 	if err != nil {
 		return err
 	}
 
 	// Load Appium capabilities if provided
-	capsFile := c.String("caps")
+	capsFile := getString("caps")
 	var caps map[string]interface{}
 	if capsFile != "" {
 		var err error
@@ -224,7 +263,7 @@ func runTest(c *cli.Context) error {
 
 	// Load workspace config if provided
 	var workspaceConfig *config.Config
-	configPath := c.String("config")
+	configPath := getString("config")
 	if configPath != "" {
 		var err error
 		workspaceConfig, err = config.Load(configPath)
@@ -255,23 +294,23 @@ func runTest(c *cli.Context) error {
 		FlowPaths:          c.Args().Slice(),
 		ConfigPath:         configPath,
 		Env:                mergedEnv,
-		IncludeTags:        c.StringSlice("include-tags"),
-		ExcludeTags:        c.StringSlice("exclude-tags"),
+		IncludeTags:        getStringSlice("include-tags"),
+		ExcludeTags:        getStringSlice("exclude-tags"),
 		OutputDir:          outputDir,
-		Parallel:           c.Int("parallel"),
-		Continuous:         c.Bool("continuous"),
-		Headless:           c.Bool("headless"),
-		Platform:           c.String("platform"),
-		Devices:            parseDevices(c.String("device"), c.Int("parallel"), c.String("platform")),
-		Verbose:            c.Bool("verbose"),
-		AppFile:            c.String("app-file"),
+		Parallel:           getInt("parallel"),
+		Continuous:         getBool("continuous"),
+		Headless:           getBool("headless"),
+		Platform:           getString("platform"),
+		Devices:            parseDevices(getString("device"), getInt("parallel"), getString("platform")),
+		Verbose:            getBool("verbose"),
+		AppFile:            getString("app-file"),
 		AppID:              appID,
-		Driver:             c.String("driver"),
-		AppiumURL:          c.String("appium-url"),
+		Driver:             getString("driver"),
+		AppiumURL:          getString("appium-url"),
 		CapsFile:           capsFile,
 		Capabilities:       caps,
-		WaitForIdleTimeout: c.Int("wait-for-idle-timeout"),
-		TeamID:             c.String("team-id"),
+		WaitForIdleTimeout: getInt("wait-for-idle-timeout"),
+		TeamID:             getString("team-id"),
 	}
 
 	// Apply waitForIdleTimeout with priority:
