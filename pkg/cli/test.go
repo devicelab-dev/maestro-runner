@@ -355,8 +355,12 @@ func executeTest(cfg *RunConfig) error {
 		printSetupSuccess(fmt.Sprintf("Report: %s", htmlPath))
 	}
 
-	// 6. Print summary
-	printSummary(result)
+	// 6. Print unified output (works for both single and parallel)
+	if err := printUnifiedOutput(cfg.OutputDir, result); err != nil {
+		fmt.Printf("Warning: Failed to print unified output: %v\n", err)
+		// Fallback to basic summary
+		printSummary(result)
+	}
 
 	// Exit with code 1 if any flows failed (summary already printed)
 	if result.Status != report.StatusPassed {
