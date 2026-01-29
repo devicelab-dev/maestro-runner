@@ -299,9 +299,9 @@ func TestFilterContainsChild(t *testing.T) {
 // TestFilterInsideOf tests filtering elements whose center is inside anchor
 func TestFilterInsideOf(t *testing.T) {
 	elements := []*ParsedElement{
-		{Label: "CenterInside", Bounds: core.Bounds{X: 50, Y: 50, Width: 20, Height: 20}},     // center at (60, 60)
+		{Label: "CenterInside", Bounds: core.Bounds{X: 50, Y: 50, Width: 20, Height: 20}},      // center at (60, 60)
 		{Label: "CenterOutside", Bounds: core.Bounds{X: 180, Y: 180, Width: 100, Height: 100}}, // center at (230, 230)
-		{Label: "PartialOverlap", Bounds: core.Bounds{X: 80, Y: 80, Width: 100, Height: 100}}, // center at (130, 130), inside
+		{Label: "PartialOverlap", Bounds: core.Bounds{X: 80, Y: 80, Width: 100, Height: 100}},  // center at (130, 130), inside
 	}
 
 	anchor := &ParsedElement{Bounds: core.Bounds{X: 0, Y: 0, Width: 200, Height: 200}}
@@ -368,10 +368,10 @@ func TestLooksLikeRegex(t *testing.T) {
 		expected bool
 	}{
 		{"hello", false},
-		{"hello.*world", true},          // .* is regex
-		{"hello.+world", true},          // .+ is regex
-		{"hello.?world", true},          // .? is regex
-		{"hello.world", false},          // standalone period is NOT regex (domain-like)
+		{"hello.*world", true}, // .* is regex
+		{"hello.+world", true}, // .+ is regex
+		{"hello.?world", true}, // .? is regex
+		{"hello.world", false}, // standalone period is NOT regex (domain-like)
 		{"^start", true},
 		{"end$", true},
 		{"[abc]", true},

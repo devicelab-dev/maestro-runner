@@ -233,26 +233,26 @@ func TestLooksLikeRegex(t *testing.T) {
 		text     string
 		expected bool
 	}{
-		{".+@.+", true},                     // Email pattern
-		{".*hello.*", true},                 // Contains pattern
-		{"[a-z]+", true},                    // Character class
-		{"^start", true},                    // Anchor
-		{"end$", true},                      // Anchor
-		{"a|b", true},                       // Alternation
-		{"a?b", true},                       // Optional
-		{"a{2,3}", true},                    // Quantifier
-		{"(group)", true},                   // Group
-		{"Hello", false},                    // Plain text
-		{"Hello World", false},              // Plain text with space
-		{"Hello_World", false},              // Plain text with underscore
-		{"Login123", false},                 // Alphanumeric
-		{`\.escaped`, false},                // Escaped dot
-		{"mastodon.social", false},          // Domain name - period is literal
-		{"Join mastodon.social", false},     // Button text with domain
-		{"user@example.com", false},         // Email address (literal)
-		{"v1.2.3", false},                   // Version number
-		{"file.txt", false},                 // Filename
-		{"www.google.com", false},           // URL host
+		{".+@.+", true},                 // Email pattern
+		{".*hello.*", true},             // Contains pattern
+		{"[a-z]+", true},                // Character class
+		{"^start", true},                // Anchor
+		{"end$", true},                  // Anchor
+		{"a|b", true},                   // Alternation
+		{"a?b", true},                   // Optional
+		{"a{2,3}", true},                // Quantifier
+		{"(group)", true},               // Group
+		{"Hello", false},                // Plain text
+		{"Hello World", false},          // Plain text with space
+		{"Hello_World", false},          // Plain text with underscore
+		{"Login123", false},             // Alphanumeric
+		{`\.escaped`, false},            // Escaped dot
+		{"mastodon.social", false},      // Domain name - period is literal
+		{"Join mastodon.social", false}, // Button text with domain
+		{"user@example.com", false},     // Email address (literal)
+		{"v1.2.3", false},               // Version number
+		{"file.txt", false},             // Filename
+		{"www.google.com", false},       // URL host
 	}
 
 	for _, tc := range tests {
@@ -413,9 +413,9 @@ func TestEscapeUiAutomator(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := escapeUiAutomator(tt.input)
+		got := escapeUIAutomator(tt.input)
 		if got != tt.expected {
-			t.Errorf("escapeUiAutomator(%q) = %q, want %q", tt.input, got, tt.expected)
+			t.Errorf("escapeUIAutomator(%q) = %q, want %q", tt.input, got, tt.expected)
 		}
 	}
 }
@@ -958,7 +958,7 @@ func TestClearStateShellError(t *testing.T) {
 // ============================================================================
 
 func TestEscapeUiAutomatorCarriageReturn(t *testing.T) {
-	got := escapeUiAutomator("with\rreturn")
+	got := escapeUIAutomator("with\rreturn")
 	if got != `with\rreturn` {
 		t.Errorf("expected 'with\\rreturn', got %q", got)
 	}
