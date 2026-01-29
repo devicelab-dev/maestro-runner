@@ -460,25 +460,28 @@ func executeSingleDevice(cfg *RunConfig, flows []flow.Flow) (*executor.RunResult
 		driverName = "mock"
 	}
 
+	deviceInfo := &report.Device{
+		ID:          driver.GetPlatformInfo().DeviceID,
+		Platform:    driver.GetPlatformInfo().Platform,
+		Name:        driver.GetPlatformInfo().DeviceName,
+		OSVersion:   driver.GetPlatformInfo().OSVersion,
+		IsSimulator: driver.GetPlatformInfo().IsSimulator,
+	}
+
 	runner := executor.New(driver, executor.RunnerConfig{
 		OutputDir:   cfg.OutputDir,
 		Parallelism: 0,
 		Artifacts:   executor.ArtifactOnFailure,
-		Device: report.Device{
-			ID:          driver.GetPlatformInfo().DeviceID,
-			Platform:    driver.GetPlatformInfo().Platform,
-			Name:        driver.GetPlatformInfo().DeviceName,
-			OSVersion:   driver.GetPlatformInfo().OSVersion,
-			IsSimulator: driver.GetPlatformInfo().IsSimulator,
-		},
+		Device: *deviceInfo,
 		App: report.App{
 			ID:      driver.GetPlatformInfo().AppID,
 			Version: driver.GetPlatformInfo().AppVersion,
 		},
-		RunnerVersion: "0.1.0",
-		DriverName:    driverName,
+		RunnerVersion:      "0.1.0",
+		DriverName:         driverName,
 		Env:                cfg.Env,
 		WaitForIdleTimeout: cfg.WaitForIdleTimeout,
+		DeviceInfo:         deviceInfo,
 		OnFlowStart:        onFlowStart,
 		OnStepComplete:     onStepComplete,
 		OnNestedStep:       onNestedStep,
@@ -530,6 +533,8 @@ func color(c string) string {
 }
 
 // Live progress callbacks
+// Note: For unified output, we'll read DeviceInfo from the runner config
+// This callback is used during execution but detailed device info is shown in summary
 func onFlowStart(flowIdx, totalFlows int, name, file string) {
 	fmt.Printf("\n  %s[%d/%d]%s %s%s%s (%s)\n",
 		color(colorCyan), flowIdx+1, totalFlows, color(colorReset),
@@ -595,7 +600,7 @@ func onNestedStep(depth int, desc string, passed bool, durationMs int64, errMsg 
 	}
 }
 
-func onFlowEnd(name string, passed bool, durationMs int64) {
+func onFlowEnd(name string, passed bool, durationMs int64, errMsg string) {
 	if passed {
 		fmt.Printf("%s✓ %s%s %s%s%s\n",
 			color(colorGreen), color(colorReset), name, color(colorGray), formatDuration(durationMs), color(colorReset))
