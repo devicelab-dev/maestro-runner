@@ -1673,15 +1673,11 @@ func createParallelRunner(cfg *RunConfig, workers []executor.DeviceWorker, platf
 			ID:      firstDriver.GetPlatformInfo().AppID,
 			Version: firstDriver.GetPlatformInfo().AppVersion,
 		},
-		RunnerVersion: "0.1.0",
-		DriverName:    driverName,
+		RunnerVersion:      "0.1.0",
+		DriverName:         driverName,
 		Env:                cfg.Env,
 		WaitForIdleTimeout: cfg.WaitForIdleTimeout,
-		OnFlowStart:        onFlowStart,
-		OnStepComplete:     onStepComplete,
-		OnNestedStep:       onNestedStep,
-		OnNestedFlowStart:  onNestedFlowStart,
-		OnFlowEnd:          onFlowEnd,
+		// Callbacks will be set per-worker in parallel.go with device info
 	}
 
 	return executor.NewParallelRunner(workers, runnerConfig)
