@@ -27,8 +27,45 @@ type workItem struct {
 
 // ParallelRunner coordinates parallel test execution across multiple devices.
 type ParallelRunner struct {
-	workers []DeviceWorker
-	config  RunnerConfig
+	workers     []DeviceWorker
+	config      RunnerConfig
+	outputMutex sync.Mutex
+}
+
+// Terminal color codes for parallel output
+const (
+	colorReset  = "\033[0m"
+	colorGreen  = "\033[32m"
+	colorRed    = "\033[31m"
+	colorGray   = "\033[90m"
+	colorCyan   = "\033[36m"
+)
+
+func color(c string) string {
+	return c
+}
+
+// formatDeviceLabel creates a short device label for event logs
+func formatDeviceLabel(device *report.Device) string {
+	if device == nil {
+		return "Unknown"
+	}
+	// For event logs, just show device name
+	return device.Name
+}
+
+// formatDuration formats milliseconds as human-readable duration
+func formatDuration(ms int64) string {
+	if ms < 1000 {
+		return fmt.Sprintf("%dms", ms)
+	}
+	seconds := float64(ms) / 1000.0
+	if seconds < 60 {
+		return fmt.Sprintf("%.1fs", seconds)
+	}
+	minutes := int(seconds / 60)
+	secs := int(seconds) % 60
+	return fmt.Sprintf("%dm%ds", minutes, secs)
 }
 
 // NewParallelRunner creates a parallel runner with multiple device workers.
@@ -109,6 +146,40 @@ func (pr *ParallelRunner) Run(ctx context.Context, flows []flow.Flow) (*RunResul
 			// Create device-specific config with device info set
 			workerConfig := pr.config
 			workerConfig.DeviceInfo = deviceInfo
+
+			// Create device-specific callbacks that include device info in output
+			deviceLabel := formatDeviceLabel(deviceInfo)
+
+			workerConfig.OnFlowStart = func(flowIdx, totalFlows int, name, file string) {
+				pr.outputMutex.Lock()
+				defer pr.outputMutex.Unlock()
+				fmt.Printf("[%s] [%d/%d] %s (%s) - Started\n",
+					deviceLabel, flowIdx+1, totalFlows, name, file)
+			}
+
+			workerConfig.OnFlowEnd = func(name string, passed bool, durationMs int64, errMsg string) {
+				pr.outputMutex.Lock()
+				defer pr.outputMutex.Unlock()
+
+				status := "✓ Passed"
+				statusColor := color(colorGreen)
+				if !passed {
+					status = "✗ Failed"
+					statusColor = color(colorRed)
+				}
+
+				fmt.Printf("[%s] %s - %s%s%s (%s)\n",
+					deviceLabel, name, statusColor, status, color(colorReset), formatDuration(durationMs))
+
+				if !passed && errMsg != "" {
+					fmt.Printf("  Error: %s\n", errMsg)
+				}
+			}
+
+			// Suppress detailed command output during parallel execution
+			workerConfig.OnStepComplete = func(idx int, desc string, passed bool, durationMs int64, errMsg string) {}
+			workerConfig.OnNestedStep = func(depth int, desc string, passed bool, durationMs int64, errMsg string) {}
+			workerConfig.OnNestedFlowStart = func(depth int, desc string) {}
 
 			// Create runner for this worker with device-specific config
 			runner := &Runner{
