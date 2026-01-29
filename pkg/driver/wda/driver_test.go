@@ -5640,4 +5640,3 @@ func TestFindElementByWDAWithIDNotFound(t *testing.T) {
 		t.Error("Expected failure when ID not found")
 	}
 }
-

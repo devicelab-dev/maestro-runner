@@ -335,9 +335,9 @@ func TestFilterContainsChild(t *testing.T) {
 func TestFilterInsideOf(t *testing.T) {
 	anchor := &ParsedElement{Bounds: core.Bounds{X: 100, Y: 100, Width: 200, Height: 200}}
 	elements := []*ParsedElement{
-		{Text: "CenterInside", Bounds: core.Bounds{X: 150, Y: 150, Width: 100, Height: 100}},   // center at 200,200 - inside
-		{Text: "CenterOutside", Bounds: core.Bounds{X: 350, Y: 350, Width: 100, Height: 100}},  // center at 400,400 - outside
-		{Text: "EdgeCase", Bounds: core.Bounds{X: 50, Y: 150, Width: 100, Height: 100}},        // center at 100,200 - on edge (included)
+		{Text: "CenterInside", Bounds: core.Bounds{X: 150, Y: 150, Width: 100, Height: 100}},  // center at 200,200 - inside
+		{Text: "CenterOutside", Bounds: core.Bounds{X: 350, Y: 350, Width: 100, Height: 100}}, // center at 400,400 - outside
+		{Text: "EdgeCase", Bounds: core.Bounds{X: 50, Y: 150, Width: 100, Height: 100}},       // center at 100,200 - on edge (included)
 	}
 
 	result := FilterInsideOf(elements, anchor)
@@ -433,10 +433,10 @@ func TestLooksLikeRegex(t *testing.T) {
 		expected bool
 	}{
 		{"hello", false},
-		{"hello.*world", true},          // .* is regex
-		{"hello.+world", true},          // .+ is regex
-		{"hello.?world", true},          // .? is regex
-		{"hello.world", false},          // standalone period is NOT regex (domain-like)
+		{"hello.*world", true}, // .* is regex
+		{"hello.+world", true}, // .+ is regex
+		{"hello.?world", true}, // .? is regex
+		{"hello.world", false}, // standalone period is NOT regex (domain-like)
 		{"[abc]", true},
 		{"a+b", true},
 		{"a?b", true},

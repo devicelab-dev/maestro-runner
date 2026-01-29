@@ -651,7 +651,6 @@ func TestExecuteAppiumPressKeyUnknown(t *testing.T) {
 	}
 }
 
-
 // TestScreenshot tests screenshot capture
 func TestAppiumScreenshot(t *testing.T) {
 	server := mockAppiumServerForDriver()
