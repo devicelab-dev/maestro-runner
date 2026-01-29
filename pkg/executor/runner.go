@@ -45,12 +45,15 @@ type RunnerConfig struct {
 	// Driver settings
 	WaitForIdleTimeout int // Global wait for idle timeout in ms
 
+	// Device information (set by executor)
+	DeviceInfo *report.Device
+
 	// Live progress callbacks
 	OnFlowStart       func(flowIdx, totalFlows int, name, file string)
 	OnStepComplete    func(idx int, desc string, passed bool, durationMs int64, err string)
 	OnNestedStep      func(depth int, desc string, passed bool, durationMs int64, err string)
 	OnNestedFlowStart func(depth int, desc string)
-	OnFlowEnd         func(name string, passed bool, durationMs int64)
+	OnFlowEnd         func(name string, passed bool, durationMs int64, errMsg string)
 }
 
 // RunResult contains the outcome of a test run.

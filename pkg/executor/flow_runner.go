@@ -114,15 +114,16 @@ func (fr *FlowRunner) Run() FlowResult {
 			if !result.Success && !step.IsOptional() {
 				// onFlowStart failed - fail the flow
 				fr.flowWriter.End(report.StatusFailed)
+				errMsg := fmt.Sprintf("onFlowStart failed: %v", result.Error)
 				if fr.config.OnFlowEnd != nil {
-					fr.config.OnFlowEnd(flowName, false, time.Since(flowStart).Milliseconds())
+					fr.config.OnFlowEnd(flowName, false, time.Since(flowStart).Milliseconds(), errMsg)
 				}
 				return FlowResult{
 					ID:           fr.detail.ID,
 					Name:         fr.detail.Name,
 					Status:       report.StatusFailed,
 					Duration:     time.Since(flowStart).Milliseconds(),
-					Error:        fmt.Sprintf("onFlowStart failed: %v", result.Error),
+					Error:        errMsg,
 					StepsTotal:   fr.stepsPassed + fr.stepsFailed + fr.stepsSkipped,
 					StepsPassed:  fr.stepsPassed,
 					StepsFailed:  fr.stepsFailed,
@@ -198,7 +199,7 @@ func (fr *FlowRunner) Run() FlowResult {
 
 	// Notify flow end
 	if fr.config.OnFlowEnd != nil {
-		fr.config.OnFlowEnd(flowName, flowStatus == report.StatusPassed, flowDuration)
+		fr.config.OnFlowEnd(flowName, flowStatus == report.StatusPassed, flowDuration, flowError)
 	}
 
 	return FlowResult{

@@ -96,27 +96,30 @@ func (pr *ParallelRunner) Run(ctx context.Context, flows []flow.Flow) (*RunResul
 		go func(w DeviceWorker) {
 			defer wg.Done()
 
-			// Create runner for this worker
-			// Each worker uses its own driver but shares the report
+			// Capture device info for this worker
+			platformInfo := w.Driver.GetPlatformInfo()
+			deviceInfo := &report.Device{
+				ID:          platformInfo.DeviceID,
+				Name:        platformInfo.DeviceName,
+				Platform:    platformInfo.Platform,
+				OSVersion:   platformInfo.OSVersion,
+				IsSimulator: platformInfo.IsSimulator,
+			}
+
+			// Create device-specific config with device info set
+			workerConfig := pr.config
+			workerConfig.DeviceInfo = deviceInfo
+
+			// Create runner for this worker with device-specific config
 			runner := &Runner{
-				config: pr.config,
+				config: workerConfig,
 				driver: w.Driver,
 			}
 
 			// Process flows from queue
 			for item := range workQueue {
-				// Capture actual device info for this flow
-				platformInfo := w.Driver.GetPlatformInfo()
-				actualDevice := &report.Device{
-					ID:          platformInfo.DeviceID,
-					Name:        platformInfo.DeviceName,
-					Platform:    platformInfo.Platform,
-					OSVersion:   platformInfo.OSVersion,
-					IsSimulator: platformInfo.IsSimulator,
-				}
-
 				// Update flow detail with actual device
-				flowDetails[item.index].Device = actualDevice
+				flowDetails[item.index].Device = deviceInfo
 
 				// Execute flow
 				result := runner.executeFlow(ctx, item.flow, &flowDetails[item.index], indexWriter, item.index, totalFlows)
