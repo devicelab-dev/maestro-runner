@@ -153,8 +153,8 @@ func (pr *ParallelRunner) Run(ctx context.Context, flows []flow.Flow) (*RunResul
 			workerConfig.OnFlowStart = func(flowIdx, totalFlows int, name, file string) {
 				pr.outputMutex.Lock()
 				defer pr.outputMutex.Unlock()
-				fmt.Printf("[%s] [%d/%d] %s (%s) - Started\n",
-					deviceLabel, flowIdx+1, totalFlows, name, file)
+				fmt.Printf("[%d/%d] %s (%s) - Started on %s\n",
+					flowIdx+1, totalFlows, name, file, deviceLabel)
 			}
 
 			workerConfig.OnFlowEnd = func(name string, passed bool, durationMs int64, errMsg string) {
@@ -168,8 +168,8 @@ func (pr *ParallelRunner) Run(ctx context.Context, flows []flow.Flow) (*RunResul
 					statusColor = color(colorRed)
 				}
 
-				fmt.Printf("[%s] %s - %s%s%s (%s)\n",
-					deviceLabel, name, statusColor, status, color(colorReset), formatDuration(durationMs))
+				fmt.Printf("%s - %s%s%s (%s) on %s\n",
+					name, statusColor, status, color(colorReset), formatDuration(durationMs), deviceLabel)
 
 				if !passed && errMsg != "" {
 					fmt.Printf("  Error: %s\n", errMsg)
