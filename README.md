@@ -13,9 +13,9 @@ go install github.com/devicelab-dev/maestro-runner@latest
 ### Run
 
 ```bash
-maestro-runner test flow.yaml                        # Android (default)
-maestro-runner test flow.yaml --platform ios          # iOS
-maestro-runner --driver appium test flow.yaml         # Appium (local or cloud)
+maestro-runner flow.yaml                              # Android (default)
+maestro-runner flow.yaml --platform ios               # iOS
+maestro-runner --driver appium flow.yaml              # Appium (local or cloud)
 ```
 
 ## Why maestro-runner?
@@ -63,8 +63,8 @@ waitForIdleTimeout: 3000    # Device idle wait (ms), 0 to disable
 Direct connection to Android devices via UIAutomator2. No external server needed.
 
 ```bash
-maestro-runner test flow.yaml
-maestro-runner test flow.yaml --device emulator-5554
+maestro-runner flow.yaml
+maestro-runner flow.yaml --device emulator-5554
 ```
 
 Automatically installs UIAutomator2 APKs from `./apks/` if present.
@@ -76,10 +76,10 @@ Connects to an Appium 2.x server. Supports local devices and cloud providers.
 ```bash
 # Local
 appium &
-maestro-runner --driver appium test flow.yaml
+maestro-runner --driver appium flow.yaml
 
 # With capabilities file
-maestro-runner --driver appium --caps caps.json test flow.yaml
+maestro-runner --driver appium --caps caps.json flow.yaml
 ```
 
 #### Capabilities file
@@ -97,31 +97,11 @@ CLI flags override capabilities: `--platform` overrides `platformName`, `--devic
 
 #### Cloud providers
 
-BrowserStack:
-
 ```bash
 maestro-runner --driver appium \
-  --appium-url "https://hub-cloud.browserstack.com/wd/hub" \
-  --caps browserstack.json \
-  test flow.yaml
-```
-
-Sauce Labs:
-
-```bash
-maestro-runner --driver appium \
-  --appium-url "https://ondemand.us-west-1.saucelabs.com:443/wd/hub" \
-  --caps saucelabs.json \
-  test flow.yaml
-```
-
-LambdaTest:
-
-```bash
-maestro-runner --driver appium \
-  --appium-url "https://mobile-hub.lambdatest.com/wd/hub" \
-  --caps lambdatest.json \
-  test flow.yaml
+  --appium-url "https://your-cloud-hub/wd/hub" \
+  --caps caps.json \
+  flow.yaml
 ```
 
 See [Appium capabilities docs](https://appium.io/docs/en/latest/guides/caps/) for the full list of options.
@@ -131,8 +111,8 @@ See [Appium capabilities docs](https://appium.io/docs/en/latest/guides/caps/) fo
 Uses WebDriverAgent for iOS simulators.
 
 ```bash
-maestro-runner --platform ios test flow.yaml
-maestro-runner --platform ios --device "iPhone 15" test flow.yaml
+maestro-runner --platform ios flow.yaml
+maestro-runner --platform ios --device "iPhone 15" flow.yaml
 ```
 
 ## CLI Flags (maestro-runner specific)
@@ -146,7 +126,7 @@ maestro-runner --platform ios --device "iPhone 15" test flow.yaml
 | `--wait-for-idle-timeout` | `5000` | Device idle wait in ms (0 to disable) |
 | `--team-id` | | Apple Development Team ID for WDA code signing (iOS) |
 
-All standard Maestro flags (`--platform`, `--device`, `--env`, `--include-tags`, `--exclude-tags`, etc.) are also supported. Run `maestro-runner test --help` for the full list.
+All standard Maestro flags (`--platform`, `--device`, `--env`, `--include-tags`, `--exclude-tags`, etc.) are also supported. Run `maestro-runner --help` for the full list.
 
 ## Architecture
 

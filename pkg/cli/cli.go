@@ -53,11 +53,6 @@ var GlobalFlags = []cli.Flag{
 		Usage:   "App binary (.apk, .app, .ipa) to install before testing",
 		EnvVars: []string{"MAESTRO_APP_FILE"},
 	},
-	&cli.IntFlag{
-		Name:  "driver-host-port",
-		Usage: "AndroidDriver host port",
-		Value: 7001,
-	},
 	&cli.BoolFlag{
 		Name:  "no-ansi",
 		Usage: "Disable ANSI colors",
@@ -71,32 +66,36 @@ var GlobalFlags = []cli.Flag{
 
 // Execute runs the CLI.
 func Execute() {
+	// Merge global flags and test command flags for root-level execution
+	allFlags := append(GlobalFlags, testCommand.Flags...)
+
 	app := &cli.App{
-		Name:    "maestro-runner",
-		Usage:   "Maestro test runner for mobile and web apps",
-		Version: Version,
+		Name:      "maestro-runner",
+		Usage:     "Maestro test runner for mobile and web apps",
+		Version:   Version,
+		ArgsUsage: "<flow-file-or-folder>...",
 		Description: `Maestro Runner executes Maestro flow files for automated testing
 of iOS, Android, and web applications.
 
 Examples:
   # Run with default UIAutomator2 driver
-  maestro-runner test flow.yaml
-  maestro-runner test flows/ -e USER=test
+  maestro-runner flow.yaml
+  maestro-runner flows/ -e USER=test
 
   # Run with Appium driver
-  maestro-runner --driver appium test flow.yaml
-  maestro-runner --driver appium --caps caps.json test flow.yaml
+  maestro-runner --driver appium flow.yaml
+  maestro-runner --driver appium --caps caps.json flow.yaml
 
-  # Run on cloud providers (BrowserStack, Sauce Labs, LambdaTest)
-  maestro-runner --driver appium --appium-url "https://hub.browserstack.com/wd/hub" --caps bstack.json test flow.yaml
+  # Run on cloud providers
+  maestro-runner --driver appium --appium-url "https://your-cloud-hub/wd/hub" --caps caps.json flow.yaml
 
-  # Start device
-  maestro-runner start-device --platform ios`,
-		Flags: GlobalFlags,
+  # Run in parallel on multiple devices
+  maestro-runner --platform android --parallel 2 flows/`,
+		Flags:  allFlags,
+		Action: testCommand.Action,
+		// Keep test command for backward compatibility
 		Commands: []*cli.Command{
 			testCommand,
-			startDeviceCommand,
-			hierarchyCommand,
 		},
 	}
 
