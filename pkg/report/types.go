@@ -101,6 +101,8 @@ type FlowEntry struct {
 	ID             string         `json:"id"`         // Unique flow ID
 	Name           string         `json:"name"`       // Display name
 	SourceFile     string         `json:"sourceFile"` // Path to YAML file
+	Tags           []string       `json:"tags,omitempty"` // Tags for filtering
+	Device         *Device        `json:"device,omitempty"` // Device that ran this flow (for multi-device runs)
 	DataFile       string         `json:"dataFile"`   // Path to flow detail JSON
 	AssetsDir      string         `json:"assetsDir"`  // Path to assets directory
 	Status         Status         `json:"status"`
@@ -248,4 +250,5 @@ type FlowUpdate struct {
 	Duration  *int64
 	Commands  CommandSummary
 	Error     *string
+	Device    *Device // Actual device that ran this flow (for parallel execution)
 }

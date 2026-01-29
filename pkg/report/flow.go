@@ -118,6 +118,7 @@ func (w *FlowWriter) End(status Status) {
 			Duration: &duration,
 			Commands: w.commandSummary(),
 			Error:    errMsg,
+			Device:   w.flow.Device, // Include actual device
 		})
 	}
 }
@@ -192,6 +193,7 @@ func (w *FlowWriter) updateIndex(status Status, startTime, endTime *time.Time, d
 		EndTime:   endTime,
 		Duration:  duration,
 		Commands:  w.commandSummary(),
+		Device:    w.flow.Device, // Include actual device that ran this flow
 	})
 }
 

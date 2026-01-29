@@ -215,7 +215,11 @@ func loadAsBase64(path string) string {
 }
 
 func renderHTML(data HTMLData) (string, error) {
-	tmpl, err := template.New("report").Parse(htmlTemplate)
+	funcMap := template.FuncMap{
+		"sub": func(a, b int) int { return a - b },
+	}
+
+	tmpl, err := template.New("report").Funcs(funcMap).Parse(htmlTemplate)
 	if err != nil {
 		return "", err
 	}
@@ -534,12 +538,32 @@ const htmlTemplate = `<!DOCTYPE html>
         .filters {
             padding: 8px 12px;
             display: flex;
+            flex-wrap: wrap;
             gap: 8px;
             border-bottom: 1px solid var(--border-color);
             background: var(--bg-secondary);
             position: sticky;
             top: 49px;
             z-index: 10;
+            max-height: 80px;
+            overflow-y: auto;
+        }
+
+        .filters::-webkit-scrollbar {
+            width: 4px;
+            height: 4px;
+        }
+
+        .filters::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 2px;
+        }
+
+        .filter-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            align-self: center;
+            white-space: nowrap;
         }
 
         .filter-btn {
@@ -656,6 +680,59 @@ const htmlTemplate = `<!DOCTYPE html>
             gap: 12px;
             font-size: 12px;
             color: var(--text-muted);
+        }
+
+        .flow-tags {
+            display: flex;
+            gap: 4px;
+            margin-top: 4px;
+            flex-wrap: wrap;
+            max-height: 20px;
+            overflow: hidden;
+        }
+
+        .flow-tag {
+            font-size: 10px;
+            padding: 2px 8px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
+
+        .flow-tag.more-tags {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            padding: 2px 4px;
+        }
+
+        .flow-device {
+            font-size: 10px;
+            padding: 2px 8px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            color: var(--text-secondary);
+            white-space: nowrap;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .device-icon {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        .device-icon.android {
+            background: #3DDC84;
+        }
+
+        .device-icon.ios {
+            background: #147EFB;
         }
 
         .duration-bar {
@@ -1008,11 +1085,11 @@ const htmlTemplate = `<!DOCTYPE html>
                 </div>
                 <div class="env-item">
                     <span class="env-label">Platform</span>
-                    <span class="env-value">{{.Index.Device.Platform}} {{.Index.Device.OSVersion}}</span>
+                    <span class="env-value">{{.Index.Device.Platform}}{{if .Index.Device.OSVersion}} {{.Index.Device.OSVersion}}{{end}}</span>
                 </div>
                 <div class="env-item">
                     <span class="env-label">App</span>
-                    <span class="env-value">{{if .Index.App.Name}}{{.Index.App.Name}}{{else}}{{.Index.App.ID}}{{end}}</span>
+                    <span class="env-value">{{if .Index.App.ID}}{{.Index.App.ID}}{{if .Index.App.Version}} v{{.Index.App.Version}}{{end}}{{else}}-{{end}}</span>
                 </div>
                 <div class="env-item">
                     <span class="env-label">Driver</span>
@@ -1034,16 +1111,46 @@ const htmlTemplate = `<!DOCTYPE html>
                 <button class="filter-btn failed" data-filter="failed">Failed ({{.Index.Summary.Failed}})</button>
                 <button class="filter-btn" data-filter="passed">Passed ({{.Index.Summary.Passed}})</button>
             </div>
+            <div class="filters" id="tag-filters" style="display: none;">
+                <!-- Tag filters populated dynamically -->
+            </div>
+            <div class="filters" id="device-filters" style="display: none;">
+                <!-- Device filters populated dynamically -->
+            </div>
             <div class="keyboard-hint">
                 <kbd>j</kbd>/<kbd>k</kbd> navigate &nbsp; <kbd>n</kbd> next failure &nbsp; <kbd>Enter</kbd> expand
             </div>
             <div class="flow-items" id="flow-items">
                 {{range $fi, $flow := .Flows}}
-                <div class="flow-item {{$flow.StatusClass}}" data-flow-index="{{$fi}}" data-status="{{$flow.StatusClass}}" data-name="{{$flow.Name}}">
+                <div class="flow-item {{$flow.StatusClass}}"
+                     data-flow-index="{{$fi}}"
+                     data-status="{{$flow.StatusClass}}"
+                     data-name="{{$flow.Name}}"
+                     data-tags="{{range $i, $tag := $flow.Tags}}{{if $i}},{{end}}{{$tag}}{{end}}"
+                     data-platform="{{if $flow.Device}}{{$flow.Device.Platform}}{{end}}"
+                     data-os-version="{{if $flow.Device}}{{$flow.Device.OSVersion}}{{end}}">
                     <div class="flow-item-header">
                         <span class="status-dot {{$flow.StatusClass}}"></span>
                         <span class="flow-name">{{$flow.Name}}</span>
                     </div>
+                    {{if or $flow.Tags $flow.Device}}
+                    <div class="flow-tags">
+                        {{if $flow.Device}}
+                        <span class="flow-device">
+                            <span class="device-icon {{$flow.Device.Platform}}"></span>
+                            {{$flow.Device.Name}}{{if $flow.Device.OSVersion}} ({{$flow.Device.OSVersion}}){{end}}
+                        </span>
+                        {{end}}
+                        {{range $i, $tag := $flow.Tags}}
+                        {{if lt $i 3}}
+                        <span class="flow-tag">{{$tag}}</span>
+                        {{end}}
+                        {{end}}
+                        {{if gt (len $flow.Tags) 3}}
+                        <span class="flow-tag more-tags">+{{sub (len $flow.Tags) 3}} more</span>
+                        {{end}}
+                    </div>
+                    {{end}}
                     <div class="flow-meta">
                         <span>{{len $flow.Commands}} steps</span>
                         <div class="duration-bar">
@@ -1089,6 +1196,153 @@ const htmlTemplate = `<!DOCTYPE html>
         reportData.index.flows.forEach(f => { lastFlowSeq[f.id] = f.updateSeq || 0; });
         let isPolling = true;
         const POLL_INTERVAL = 500; // ms
+
+        // Active filters
+        let activeFilters = {
+            status: 'all',
+            tags: new Set(),
+            platforms: new Set(),
+            osVersions: new Set()
+        };
+
+        // Initialize tag and device filters
+        function initializeFilters() {
+            const tags = new Set();
+            const platforms = new Set();
+            const osVersions = new Set();
+
+            reportData.index.flows.forEach(flow => {
+                // Collect tags
+                if (flow.tags && flow.tags.length > 0) {
+                    flow.tags.forEach(tag => tags.add(tag));
+                }
+
+                // Collect platforms
+                if (flow.device && flow.device.platform) {
+                    platforms.add(flow.device.platform);
+                }
+
+                // Collect OS versions
+                if (flow.device && flow.device.osVersion) {
+                    osVersions.add(flow.device.osVersion);
+                }
+            });
+
+            // Render tag filters
+            if (tags.size > 0) {
+                const tagFiltersDiv = document.getElementById('tag-filters');
+                tagFiltersDiv.style.display = 'flex';
+                const label = document.createElement('span');
+                label.className = 'filter-label';
+                label.textContent = 'Tags:';
+                tagFiltersDiv.appendChild(label);
+
+                Array.from(tags).sort().forEach(tag => {
+                    const btn = document.createElement('button');
+                    btn.className = 'filter-btn';
+                    btn.textContent = tag;
+                    btn.dataset.filterType = 'tag';
+                    btn.dataset.filterValue = tag;
+                    btn.addEventListener('click', () => toggleFilter('tags', tag, btn));
+                    tagFiltersDiv.appendChild(btn);
+                });
+            }
+
+            // Render device filters
+            if (platforms.size > 1 || osVersions.size > 1) {
+                const deviceFiltersDiv = document.getElementById('device-filters');
+                deviceFiltersDiv.style.display = 'flex';
+                const label = document.createElement('span');
+                label.className = 'filter-label';
+                label.textContent = 'Device:';
+                deviceFiltersDiv.appendChild(label);
+
+                // Platform filters
+                if (platforms.size > 1) {
+                    Array.from(platforms).sort().forEach(platform => {
+                        const btn = document.createElement('button');
+                        btn.className = 'filter-btn';
+                        btn.textContent = platform.charAt(0).toUpperCase() + platform.slice(1);
+                        btn.dataset.filterType = 'platform';
+                        btn.dataset.filterValue = platform;
+                        btn.addEventListener('click', () => toggleFilter('platforms', platform, btn));
+                        deviceFiltersDiv.appendChild(btn);
+                    });
+                }
+
+                // OS version filters
+                if (osVersions.size > 1) {
+                    Array.from(osVersions).sort().forEach(version => {
+                        const btn = document.createElement('button');
+                        btn.className = 'filter-btn';
+                        btn.textContent = version;
+                        btn.dataset.filterType = 'osVersion';
+                        btn.dataset.filterValue = version;
+                        btn.addEventListener('click', () => toggleFilter('osVersions', version, btn));
+                        deviceFiltersDiv.appendChild(btn);
+                    });
+                }
+            }
+        }
+
+        // Toggle filter on/off
+        function toggleFilter(filterType, value, button) {
+            const filterSet = activeFilters[filterType];
+            if (filterSet.has(value)) {
+                filterSet.delete(value);
+                button.classList.remove('active');
+            } else {
+                filterSet.add(value);
+                button.classList.add('active');
+            }
+            applyAllFilters();
+        }
+
+        // Apply all active filters
+        function applyAllFilters() {
+            const searchQuery = document.getElementById('search-input').value.toLowerCase();
+
+            document.querySelectorAll('.flow-item').forEach(item => {
+                let visible = true;
+
+                // Status filter
+                if (activeFilters.status !== 'all' && item.dataset.status !== activeFilters.status) {
+                    visible = false;
+                }
+
+                // Search filter
+                if (searchQuery && !item.dataset.name.toLowerCase().includes(searchQuery)) {
+                    visible = false;
+                }
+
+                // Tag filter (must have at least one selected tag, if any tags selected)
+                if (activeFilters.tags.size > 0) {
+                    const itemTags = item.dataset.tags ? item.dataset.tags.split(',') : [];
+                    const hasMatchingTag = itemTags.some(tag => activeFilters.tags.has(tag));
+                    if (!hasMatchingTag) {
+                        visible = false;
+                    }
+                }
+
+                // Platform filter
+                if (activeFilters.platforms.size > 0) {
+                    const platform = item.dataset.platform;
+                    if (!activeFilters.platforms.has(platform)) {
+                        visible = false;
+                    }
+                }
+
+                // OS version filter
+                if (activeFilters.osVersions.size > 0) {
+                    const osVersion = item.dataset.osVersion;
+                    if (!activeFilters.osVersions.has(osVersion)) {
+                        visible = false;
+                    }
+                }
+
+                item.style.display = visible ? '' : 'none';
+            });
+        }
 
         // Update pie chart and legend
         function updatePieChart() {
@@ -1266,22 +1520,22 @@ const htmlTemplate = `<!DOCTYPE html>
             item.addEventListener('click', () => selectFlow(parseInt(item.dataset.flowIndex)));
         });
 
-        // Filter buttons
-        document.querySelectorAll('.filter-btn').forEach(btn => {
+        // Initialize filters
+        initializeFilters();
+
+        // Status filter buttons
+        document.querySelectorAll('.filter-btn[data-filter]').forEach(btn => {
             btn.addEventListener('click', () => {
-                document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.filter-btn[data-filter]').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
-                filterFlows(btn.dataset.filter);
+                activeFilters.status = btn.dataset.filter;
+                applyAllFilters();
             });
         });
 
         // Search
         document.getElementById('search-input').addEventListener('input', (e) => {
-            const query = e.target.value.toLowerCase();
-            document.querySelectorAll('.flow-item').forEach(item => {
-                const name = item.dataset.name.toLowerCase();
-                item.style.display = name.includes(query) ? '' : 'none';
-            });
+            applyAllFilters();
         });
 
         // Keyboard navigation
@@ -1325,16 +1579,6 @@ const htmlTemplate = `<!DOCTYPE html>
             }
         });
 
-        function filterFlows(filter) {
-            document.querySelectorAll('.flow-item').forEach(item => {
-                if (filter === 'all') {
-                    item.style.display = '';
-                } else {
-                    item.style.display = item.dataset.status === filter ? '' : 'none';
-                }
-            });
-        }
-
         function selectFlow(index) {
             selectedFlowIndex = index;
             document.querySelectorAll('.flow-item').forEach(f => f.classList.remove('selected'));
@@ -1361,10 +1605,19 @@ const htmlTemplate = `<!DOCTYPE html>
             document.getElementById('detail-title').textContent = flow.name;
 
             // Info section
-            const infoHtml = '<div class="info-item"><span class="info-label">Status</span><span class="info-value">' + indexEntry.status + '</span></div>' +
+            let infoHtml = '<div class="info-item"><span class="info-label">Status</span><span class="info-value">' + indexEntry.status + '</span></div>' +
                 '<div class="info-item"><span class="info-label">Duration</span><span class="info-value">' + formatDuration(indexEntry.duration) + '</span></div>' +
-                '<div class="info-item"><span class="info-label">Steps</span><span class="info-value">' + flow.commands.length + '</span></div>' +
-                '<div class="info-item"><span class="info-label">Source</span><span class="info-value">' + flow.sourceFile + '</span></div>';
+                '<div class="info-item"><span class="info-label">Steps</span><span class="info-value">' + flow.commands.length + '</span></div>';
+
+            // Add device info if available (shows which device ran this flow in parallel mode)
+            if (flow.device && flow.device.name) {
+                infoHtml += '<div class="info-item"><span class="info-label">Device</span><span class="info-value">' +
+                    escapeHtml(flow.device.name) +
+                    (flow.device.osVersion ? ' (' + escapeHtml(flow.device.osVersion) + ')' : '') +
+                    '</span></div>';
+            }
+
+            infoHtml += '<div class="info-item"><span class="info-label">Source</span><span class="info-value">' + flow.sourceFile + '</span></div>';
             document.getElementById('detail-info').innerHTML = infoHtml;
 
             // Commands - compact format with sub-commands support

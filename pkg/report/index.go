@@ -166,6 +166,9 @@ func (w *IndexWriter) applyUpdate(flowID string, update *FlowUpdate) {
 			if update.Error != nil {
 				f.Error = update.Error
 			}
+			if update.Device != nil {
+				f.Device = update.Device
+			}
 			f.UpdateSeq++
 			now := time.Now()
 			f.LastUpdated = &now

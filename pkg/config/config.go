@@ -10,6 +10,9 @@ import (
 
 // Config represents the workspace configuration (config.yaml).
 type Config struct {
+	// App info
+	AppID string `yaml:"appId"` // App bundle ID or package name
+
 	// Flow selection
 	Flows       []string `yaml:"flows"`       // Glob patterns for flows
 	IncludeTags []string `yaml:"includeTags"` // Tags to include

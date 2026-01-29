@@ -99,6 +99,31 @@ func (d *AndroidDevice) Uninstall(pkg string) error {
 	return err
 }
 
+// GetAppVersion returns the version name of an installed app.
+// Returns empty string if app is not installed or version cannot be determined.
+func (d *AndroidDevice) GetAppVersion(packageName string) string {
+	if packageName == "" {
+		return ""
+	}
+
+	out, err := d.Shell(fmt.Sprintf("dumpsys package %s | grep versionName", packageName))
+	if err != nil {
+		return ""
+	}
+
+	// Parse output: "    versionName=2.2.0"
+	lines := strings.Split(out, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "versionName=") {
+			version := strings.TrimPrefix(line, "versionName=")
+			return strings.TrimSpace(version)
+		}
+	}
+
+	return ""
+}
+
 // IsInstalled checks if a package is installed.
 func (d *AndroidDevice) IsInstalled(pkg string) bool {
 	out, err := d.Shell("pm list packages " + pkg)

@@ -105,6 +105,19 @@ func (pr *ParallelRunner) Run(ctx context.Context, flows []flow.Flow) (*RunResul
 
 			// Process flows from queue
 			for item := range workQueue {
+				// Capture actual device info for this flow
+				platformInfo := w.Driver.GetPlatformInfo()
+				actualDevice := &report.Device{
+					ID:          platformInfo.DeviceID,
+					Name:        platformInfo.DeviceName,
+					Platform:    platformInfo.Platform,
+					OSVersion:   platformInfo.OSVersion,
+					IsSimulator: platformInfo.IsSimulator,
+				}
+
+				// Update flow detail with actual device
+				flowDetails[item.index].Device = actualDevice
+
 				// Execute flow
 				result := runner.executeFlow(ctx, item.flow, &flowDetails[item.index], indexWriter, item.index, totalFlows)
 

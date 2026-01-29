@@ -184,6 +184,7 @@ type RunConfig struct {
 	Devices  []string // Device UDIDs (can be comma-separated or multiple from --parallel)
 	Verbose  bool
 	AppFile  string // App binary to install before testing
+	AppID    string // App bundle ID or package name
 
 	// Driver
 	Driver       string                 // uiautomator2, appium
@@ -243,6 +244,12 @@ func runTest(c *cli.Context) error {
 		mergedEnv[k] = v // CLI overrides workspace config
 	}
 
+	// Get appId from workspace config or will be extracted from flows later
+	appID := ""
+	if workspaceConfig != nil && workspaceConfig.AppID != "" {
+		appID = workspaceConfig.AppID
+	}
+
 	// Build run configuration
 	cfg := &RunConfig{
 		FlowPaths:          c.Args().Slice(),
@@ -258,6 +265,7 @@ func runTest(c *cli.Context) error {
 		Devices:            parseDevices(c.String("device"), c.Int("parallel"), c.String("platform")),
 		Verbose:            c.Bool("verbose"),
 		AppFile:            c.String("app-file"),
+		AppID:              appID,
 		Driver:             c.String("driver"),
 		AppiumURL:          c.String("appium-url"),
 		CapsFile:           capsFile,
@@ -316,6 +324,11 @@ func executeTest(cfg *RunConfig) error {
 	flows, err := validateAndParseFlows(cfg)
 	if err != nil {
 		return err
+	}
+
+	// Extract appId from first flow if not in config
+	if cfg.AppID == "" && len(flows) > 0 && flows[0].Config.AppID != "" {
+		cfg.AppID = flows[0].Config.AppID
 	}
 
 	// 2. Determine execution mode and devices
@@ -452,13 +465,18 @@ func executeSingleDevice(cfg *RunConfig, flows []flow.Flow) (*executor.RunResult
 		Parallelism: 0,
 		Artifacts:   executor.ArtifactOnFailure,
 		Device: report.Device{
-			ID:       driver.GetPlatformInfo().DeviceID,
-			Platform: driver.GetPlatformInfo().Platform,
-			Name:     driver.GetPlatformInfo().DeviceName,
+			ID:          driver.GetPlatformInfo().DeviceID,
+			Platform:    driver.GetPlatformInfo().Platform,
+			Name:        driver.GetPlatformInfo().DeviceName,
+			OSVersion:   driver.GetPlatformInfo().OSVersion,
+			IsSimulator: driver.GetPlatformInfo().IsSimulator,
 		},
-		App:                report.App{ID: cfg.AppFile},
-		RunnerVersion:      "0.1.0",
-		DriverName:         driverName,
+		App: report.App{
+			ID:      driver.GetPlatformInfo().AppID,
+			Version: driver.GetPlatformInfo().AppVersion,
+		},
+		RunnerVersion: "0.1.0",
+		DriverName:    driverName,
 		Env:                cfg.Env,
 		WaitForIdleTimeout: cfg.WaitForIdleTimeout,
 		OnFlowStart:        onFlowStart,
@@ -781,12 +799,15 @@ func executeFlowsWithPerFlowSession(cfg *RunConfig, flows []flow.Flow) (*executo
 			Parallelism: 0,
 			Artifacts:   executor.ArtifactOnFailure,
 			Device: report.Device{
-				ID:       driver.GetPlatformInfo().DeviceID,
-				Platform: driver.GetPlatformInfo().Platform,
-				Name:     driver.GetPlatformInfo().DeviceName,
+				ID:          driver.GetPlatformInfo().DeviceID,
+				Platform:    driver.GetPlatformInfo().Platform,
+				Name:        driver.GetPlatformInfo().DeviceName,
+				OSVersion:   driver.GetPlatformInfo().OSVersion,
+				IsSimulator: driver.GetPlatformInfo().IsSimulator,
 			},
 			App: report.App{
-				ID: cfg.AppFile,
+				ID:      driver.GetPlatformInfo().AppID,
+				Version: driver.GetPlatformInfo().AppVersion,
 			},
 			RunnerVersion:      "0.1.0",
 			DriverName:         "appium",
@@ -1017,13 +1038,21 @@ func createUIAutomator2Driver(cfg *RunConfig, dev *device.AndroidDevice, info de
 		fmt.Printf("  %s⚠%s Warning: failed to set appium settings: %v\n", color(colorYellow), color(colorReset), err)
 	}
 
-	// 5. Create driver
+	// 5. Query app version from device if appId is known
+	appVersion := ""
+	if cfg.AppID != "" {
+		appVersion = dev.GetAppVersion(cfg.AppID)
+	}
+
+	// 6. Create driver
 	platformInfo := &core.PlatformInfo{
 		Platform:    "android",
 		DeviceID:    info.Serial,
 		DeviceName:  fmt.Sprintf("%s %s", info.Brand, info.Model),
 		OSVersion:   info.SDK,
 		IsSimulator: info.IsEmulator,
+		AppID:       cfg.AppID,
+		AppVersion:  appVersion,
 	}
 	driver := uia2driver.New(client, platformInfo, dev)
 
@@ -1173,15 +1202,23 @@ func createIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		return nil, nil, fmt.Errorf("get simulator info: %w", err)
 	}
 
+	// 7. Query app version from simulator if appId is known
+	appVersion := ""
+	if cfg.AppID != "" {
+		appVersion = getIOSAppVersion(udid, cfg.AppID)
+	}
+
 	platformInfo := &core.PlatformInfo{
 		Platform:    "ios",
 		OSVersion:   simInfo.OSVersion,
 		DeviceName:  simInfo.Name,
 		DeviceID:    udid,
 		IsSimulator: true,
+		AppID:       cfg.AppID,
+		AppVersion:  appVersion,
 	}
 
-	// 7. Create driver
+	// 8. Create driver
 	driver := wdadriver.NewDriver(client, platformInfo, udid)
 
 	// Cleanup function
@@ -1278,6 +1315,33 @@ func lookupSimulatorName(lines []string, udidLineIndex int) string {
 		}
 	}
 	return ""
+}
+
+// getIOSAppVersion queries the iOS simulator for an app's version.
+func getIOSAppVersion(udid, bundleID string) string {
+	if bundleID == "" {
+		return ""
+	}
+
+	// Get app container path
+	out, err := runCommand("xcrun", "simctl", "get_app_container", udid, bundleID)
+	if err != nil {
+		return ""
+	}
+
+	appPath := strings.TrimSpace(out)
+	if appPath == "" {
+		return ""
+	}
+
+	// Read Info.plist from app bundle
+	plistPath := filepath.Join(appPath, "Info.plist")
+	version, err := runCommand("/usr/libexec/PlistBuddy", "-c", "Print CFBundleShortVersionString", plistPath)
+	if err != nil {
+		return ""
+	}
+
+	return strings.TrimSpace(version)
 }
 
 // runCommand runs a command and returns stdout.
@@ -1590,13 +1654,18 @@ func createParallelRunner(cfg *RunConfig, workers []executor.DeviceWorker, platf
 		Parallelism: 0,
 		Artifacts:   executor.ArtifactOnFailure,
 		Device: report.Device{
-			ID:       firstDriver.GetPlatformInfo().DeviceID,
-			Platform: firstDriver.GetPlatformInfo().Platform,
-			Name:     fmt.Sprintf("%d devices", len(workers)),
+			ID:          firstDriver.GetPlatformInfo().DeviceID,
+			Platform:    firstDriver.GetPlatformInfo().Platform,
+			Name:        fmt.Sprintf("%d devices", len(workers)),
+			OSVersion:   firstDriver.GetPlatformInfo().OSVersion,
+			IsSimulator: firstDriver.GetPlatformInfo().IsSimulator,
 		},
-		App:                report.App{ID: cfg.AppFile},
-		RunnerVersion:      "0.1.0",
-		DriverName:         driverName,
+		App: report.App{
+			ID:      firstDriver.GetPlatformInfo().AppID,
+			Version: firstDriver.GetPlatformInfo().AppVersion,
+		},
+		RunnerVersion: "0.1.0",
+		DriverName:    driverName,
 		Env:                cfg.Env,
 		WaitForIdleTimeout: cfg.WaitForIdleTimeout,
 		OnFlowStart:        onFlowStart,
