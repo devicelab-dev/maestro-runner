@@ -650,6 +650,9 @@ func (c *Client) request(method, path string, body interface{}) (map[string]inte
 	if err != nil {
 		return nil, err
 	}
+	if resp == nil {
+		return nil, fmt.Errorf("nil response from server")
+	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)

@@ -313,11 +313,11 @@ func (d *Driver) findElementForTapWithContext(ctx context.Context, sel flow.Sele
 			// Step 4: Page source failed (e.g. quiescence error) — use the best predicate element.
 			// Exact match is preferred to avoid "Password" hitting "Forgot Password?" etc.
 			if fallbackElemID != "" {
-				if info, err := d.getElementInfo(fallbackElemID); err == nil {
+				info, err := d.getElementInfo(fallbackElemID)
+				if err == nil {
 					return info, nil
-				} else {
-					lastErr = err
 				}
+				lastErr = err
 			}
 		}
 	}

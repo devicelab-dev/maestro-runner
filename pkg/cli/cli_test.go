@@ -113,12 +113,11 @@ func TestRunConfig_Struct(t *testing.T) {
 		IncludeTags: []string{"smoke"},
 		ExcludeTags: []string{"wip"},
 		OutputDir:   "./reports/test",
-		ShardSplit:  2,
-		ShardAll:    0,
+		Parallel:    2,
 		Continuous:  true,
 		Headless:    false,
 		Platform:    "ios",
-		Device:      "iPhone-15",
+		Devices:     []string{"iPhone-15"},
 		Verbose:     true,
 		AppFile:     "app.ipa",
 	}
@@ -284,7 +283,7 @@ func TestExecuteTest(t *testing.T) {
 		FlowPaths: []string{flowFile},
 		OutputDir: dir + "/reports",
 		Platform:  "mock",
-		Device:    "test-device",
+		Devices:   []string{"test-device"},
 	}
 
 	err := executeTest(cfg)
@@ -353,7 +352,6 @@ func TestTestCommand_WithAllFlags(t *testing.T) {
 		"--include-tags", "smoke",
 		"--exclude-tags", "wip",
 		"--output", dir + "/reports",
-		"--shard-split", "2",
 		"--continuous",
 		flowFile,
 	})
@@ -601,7 +599,7 @@ func TestRunConfig_WithCapabilities(t *testing.T) {
 	cfg := &RunConfig{
 		FlowPaths:    []string{"flow.yaml"},
 		Platform:     "android",
-		Device:       "emulator-5554",
+		Devices:      []string{"emulator-5554"},
 		Driver:       "appium",
 		AppiumURL:    "http://localhost:4723",
 		CapsFile:     "caps.json",

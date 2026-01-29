@@ -1,3 +1,4 @@
+// Package jsengine provides JavaScript expression evaluation for Maestro flows.
 package jsengine
 
 import (

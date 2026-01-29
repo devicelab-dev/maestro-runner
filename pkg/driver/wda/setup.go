@@ -11,10 +11,12 @@ import (
 )
 
 const (
-	// WDA version pinned for stability
+	// WDAVersion is the pinned WebDriverAgent version for stability.
 	WDAVersion = "v8.0.0"
+	// WDARepoURL is the GitHub repository URL template for downloading WDA.
 	WDARepoURL = "https://github.com/appium/WebDriverAgent/archive/refs/tags/%s.zip"
-	WDADir     = ".maestro/wda"
+	// WDADir is the local directory where WDA is stored.
+	WDADir = ".maestro/wda"
 )
 
 // Setup ensures WDA is available (bundled in project).

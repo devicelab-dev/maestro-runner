@@ -1,3 +1,4 @@
+// Package wda provides WebDriverAgent client for iOS automation.
 package wda
 
 import (
@@ -35,9 +36,9 @@ func (c *Client) CreateSession(bundleID string) error {
 	caps := map[string]interface{}{
 		"capabilities": map[string]interface{}{
 			"alwaysMatch": map[string]interface{}{
-				"bundleId":                  bundleID,
-				"shouldWaitForQuiescence":   false,
-				"waitForIdleTimeout":        0,
+				"bundleId":                bundleID,
+				"shouldWaitForQuiescence": false,
+				"waitForIdleTimeout":      0,
 				"shouldUseTestManagerForVisibilityDetection": false,
 			},
 		},
@@ -77,8 +78,8 @@ func (c *Client) UpdateSettings(settings map[string]interface{}) error {
 // crash on certain Xcode/iOS version combinations.
 func (c *Client) DisableQuiescence() error {
 	return c.UpdateSettings(map[string]interface{}{
-		"shouldWaitForQuiescence":   false,
-		"waitForIdleTimeout":        0,
+		"shouldWaitForQuiescence": false,
+		"waitForIdleTimeout":      0,
 	})
 }
 

@@ -111,6 +111,10 @@ func (c *Client) request(method, path string, body interface{}) ([]byte, error) 
 		c.logger.Printf("%s %s [%v] ERROR: %v", method, path, elapsed, err)
 		return nil, fmt.Errorf("send request: %w", err)
 	}
+	if resp == nil {
+		c.logger.Printf("%s %s [%v] ERROR: nil response", method, path, elapsed)
+		return nil, fmt.Errorf("nil response from server")
+	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)

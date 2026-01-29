@@ -221,6 +221,9 @@ func checkHealthWithClient(client *http.Client, url string) bool {
 	if err != nil {
 		return false
 	}
+	if resp == nil {
+		return false
+	}
 	defer resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
 }

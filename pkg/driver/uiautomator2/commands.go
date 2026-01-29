@@ -27,9 +27,12 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Element not found: %v", err))
 	}
+	if info == nil {
+		return errorResult(fmt.Errorf("nil element info"), "Element info is nil")
+	}
 
 	// If Point is specified WITH selector, tap at relative position within element bounds
-	if step.Point != "" && info != nil && info.Bounds.Width > 0 {
+	if step.Point != "" && info.Bounds.Width > 0 {
 		xPct, yPct, parseErr := parsePercentageCoords(step.Point)
 		if parseErr != nil {
 			return errorResult(parseErr, fmt.Sprintf("Invalid point coordinates: %v", parseErr))
@@ -739,11 +742,9 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 	if len(permissions) == 0 {
 		permissions = map[string]string{"all": "allow"}
 	}
-	result := d.applyPermissions(appID, permissions)
-	if !result.Success {
-		// Log warning but don't fail - permission errors are common for non-runtime permissions
-		// Continue with launch
-	}
+	// Apply permissions - log warning but don't fail on errors
+	// Permission errors are common for non-runtime permissions
+	_ = d.applyPermissions(appID, permissions)
 
 	// Launch app - resolve launcher activity and use am start
 	// First, resolve the launcher activity using cmd package
@@ -1283,10 +1284,8 @@ func (d *Driver) stopRecording(_ *flow.StopRecordingStep) *core.CommandResult {
 		return errorResult(fmt.Errorf("device not configured"), "stopRecording requires device access")
 	}
 
-	// Kill screenrecord process
-	if _, err := d.device.Shell("pkill -INT screenrecord"); err != nil {
-		// Ignore error - process might have already stopped
-	}
+	// Kill screenrecord process (ignore error - process might have already stopped)
+	_, _ = d.device.Shell("pkill -INT screenrecord")
 
 	// Wait for file to be written
 	time.Sleep(500 * time.Millisecond)

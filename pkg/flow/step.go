@@ -509,30 +509,37 @@ func (s *UnsupportedStep) Describe() string {
 // Describe() implementations for detailed output
 // ============================================
 
+// Describe returns a human-readable description of the tap step.
 func (s *TapOnStep) Describe() string {
 	return "tapOn: " + s.Selector.DescribeQuoted()
 }
 
+// Describe returns a human-readable description of the double tap step.
 func (s *DoubleTapOnStep) Describe() string {
 	return "doubleTapOn: " + s.Selector.DescribeQuoted()
 }
 
+// Describe returns a human-readable description of the long press step.
 func (s *LongPressOnStep) Describe() string {
 	return "longPressOn: " + s.Selector.DescribeQuoted()
 }
 
+// Describe returns a human-readable description of the assert visible step.
 func (s *AssertVisibleStep) Describe() string {
 	return "assertVisible: " + s.Selector.DescribeQuoted()
 }
 
+// Describe returns a human-readable description of the assert not visible step.
 func (s *AssertNotVisibleStep) Describe() string {
 	return "assertNotVisible: " + s.Selector.DescribeQuoted()
 }
 
+// Describe returns a human-readable description of the input text step.
 func (s *InputTextStep) Describe() string {
 	return "inputText: \"" + s.Text + "\""
 }
 
+// Describe returns a human-readable description of the launch app step.
 func (s *LaunchAppStep) Describe() string {
 	if s.ClearState {
 		return "launchApp (clearState)"
@@ -540,6 +547,7 @@ func (s *LaunchAppStep) Describe() string {
 	return "launchApp"
 }
 
+// Describe returns a human-readable description of the wait until step.
 func (s *WaitUntilStep) Describe() string {
 	if s.Visible != nil {
 		return "extendedWaitUntil: visible " + s.Visible.DescribeQuoted()
@@ -550,14 +558,17 @@ func (s *WaitUntilStep) Describe() string {
 	return "extendedWaitUntil"
 }
 
+// Describe returns a human-readable description of the scroll until visible step.
 func (s *ScrollUntilVisibleStep) Describe() string {
 	return "scrollUntilVisible: " + s.Element.DescribeQuoted()
 }
 
+// Describe returns a human-readable description of the copy text step.
 func (s *CopyTextFromStep) Describe() string {
 	return "copyTextFrom: " + s.Selector.DescribeQuoted()
 }
 
+// Describe returns a human-readable description of the run flow step.
 func (s *RunFlowStep) Describe() string {
 	if s.File != "" {
 		return "runFlow: " + s.File
@@ -565,10 +576,12 @@ func (s *RunFlowStep) Describe() string {
 	return "runFlow"
 }
 
+// Describe returns a human-readable description of the press key step.
 func (s *PressKeyStep) Describe() string {
 	return "pressKey: " + s.Key
 }
 
+// Describe returns a human-readable description of the swipe step.
 func (s *SwipeStep) Describe() string {
 	if s.Direction != "" {
 		return "swipe: " + s.Direction
@@ -576,6 +589,7 @@ func (s *SwipeStep) Describe() string {
 	return "swipe"
 }
 
+// Describe returns a human-readable description of the scroll step.
 func (s *ScrollStep) Describe() string {
 	if s.Direction != "" {
 		return "scroll: " + s.Direction
@@ -583,6 +597,7 @@ func (s *ScrollStep) Describe() string {
 	return "scroll"
 }
 
+// Describe returns a human-readable description of the set permissions step.
 func (s *SetPermissionsStep) Describe() string {
 	return "setPermissions"
 }

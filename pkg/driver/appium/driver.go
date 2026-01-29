@@ -249,7 +249,7 @@ func (d *Driver) findElementDirect(sel flow.Selector) (*core.ElementInfo, error)
 			}
 		} else {
 			// Android: use UiAutomator for ID (faster than id strategy)
-			escaped := escapeUiAutomatorString(sel.ID)
+			escaped := escapeUIAutomatorString(sel.ID)
 			uiSelector := fmt.Sprintf(`new UiSelector().resourceIdMatches(".*%s.*")`, escaped)
 			if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
 				return d.getElementInfo(elemID)
@@ -272,7 +272,7 @@ func (d *Driver) findElementDirect(sel flow.Selector) (*core.ElementInfo, error)
 			}
 		} else {
 			// Android: use UiAutomator selectors (much faster than page source)
-			escaped := escapeUiAutomatorString(sel.Text)
+			escaped := escapeUIAutomatorString(sel.Text)
 
 			if looksLikeRegex(sel.Text) {
 				// Use textMatches for regex patterns
@@ -317,10 +317,10 @@ func (d *Driver) findElementDirect(sel flow.Selector) (*core.ElementInfo, error)
 	return d.findElementByPageSource(sel)
 }
 
-// escapeUiAutomatorString escapes only double quotes for UiAutomator string.
+// escapeUIAutomatorString escapes only double quotes for UiAutomator string.
 // Used when the text is already a regex pattern - backslashes are NOT escaped
 // to preserve regex metacharacters like \d, \w, etc.
-func escapeUiAutomatorString(s string) string {
+func escapeUIAutomatorString(s string) string {
 	return strings.ReplaceAll(s, `"`, `\"`)
 }
 
@@ -375,6 +375,7 @@ func (d *Driver) findElementByPageSource(sel flow.Selector) (*core.ElementInfo, 
 // For Android with text-based selectors:
 //  1. Try UiAutomator with .clickable(true) - fast if element itself is clickable
 //  2. If text exists but not clickable → page source with clickable parent lookup
+//
 // This handles React Native pattern where text nodes aren't clickable but parent containers are.
 func (d *Driver) findElementForTap(sel flow.Selector, timeout time.Duration) (*core.ElementInfo, error) {
 	if timeout <= 0 {
@@ -412,7 +413,7 @@ func (d *Driver) findElementForTap(sel flow.Selector, timeout time.Duration) (*c
 
 // findElementForTapDirect finds element for tap, trying clickable first then fallback to page source.
 func (d *Driver) findElementForTapDirect(sel flow.Selector) (*core.ElementInfo, error) {
-	escaped := escapeUiAutomatorString(sel.Text)
+	escaped := escapeUIAutomatorString(sel.Text)
 
 	// Step 1: Try clickable elements first (fast path)
 	// Try textContains with clickable filter
@@ -605,6 +606,9 @@ func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements 
 
 	// Prioritize and select
 	candidates = SortClickableFirst(candidates)
+	if candidates == nil || len(candidates) == 0 {
+		return nil, fmt.Errorf("no candidates after sorting")
+	}
 
 	var selected *ParsedElement
 	if sel.Index != "" {
@@ -620,6 +624,10 @@ func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements 
 		selected = candidates[idx]
 	} else {
 		selected = DeepestMatchingElement(candidates)
+	}
+
+	if selected == nil {
+		return nil, fmt.Errorf("no element selected")
 	}
 
 	// If element isn't clickable, try to find a clickable parent
@@ -740,6 +748,9 @@ func elementToInfo(elem *ParsedElement, platform string) *core.ElementInfo {
 // elementToInfoWithClickable creates ElementInfo using bounds from clickable element.
 // This allows tapping on the clickable parent while preserving the matched element's text.
 func elementToInfoWithClickable(matched, clickable *ParsedElement, platform string) *core.ElementInfo {
+	if matched == nil || clickable == nil {
+		return nil
+	}
 	info := &core.ElementInfo{
 		Bounds:  clickable.Bounds, // Use clickable element's bounds for tap
 		Enabled: matched.Enabled,

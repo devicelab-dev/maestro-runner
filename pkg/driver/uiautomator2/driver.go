@@ -1,3 +1,4 @@
+// Package uiautomator2 provides Android automation driver using UIAutomator2 server.
 package uiautomator2
 
 import (
@@ -257,6 +258,7 @@ func (d *Driver) findElementFast(sel flow.Selector, optional bool, stepTimeoutMs
 //  2. If fails, check if text exists at all
 //  3. If text exists but not clickable → page source with clickable parent lookup
 //  4. If text doesn't exist → keep polling
+//
 // This handles React Native pattern where text nodes aren't clickable but parent containers are.
 func (d *Driver) findElementForTap(sel flow.Selector, optional bool, stepTimeoutMs int) (*uiautomator2.Element, *core.ElementInfo, error) {
 	// For relative selectors (below, above, etc.), use page source which handles them correctly
@@ -346,23 +348,23 @@ func buildClickableOnlyStrategies(sel flow.Selector) ([]LocatorStrategy, error) 
 
 	if sel.Text != "" {
 		if looksLikeRegex(sel.Text) {
-			pattern := "(?is)" + escapeUiAutomatorString(sel.Text)
+			pattern := "(?is)" + escapeUIAutomatorString(sel.Text)
 			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUiAutomator,
+				Strategy: uiautomator2.StrategyUIAutomator,
 				Value:    `new UiSelector().textMatches("` + pattern + `").clickable(true)` + stateFilters,
 			})
 			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUiAutomator,
+				Strategy: uiautomator2.StrategyUIAutomator,
 				Value:    `new UiSelector().descriptionMatches("` + pattern + `").clickable(true)` + stateFilters,
 			})
 		} else {
-			escaped := escapeUiAutomatorString(sel.Text)
+			escaped := escapeUIAutomatorString(sel.Text)
 			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUiAutomator,
+				Strategy: uiautomator2.StrategyUIAutomator,
 				Value:    `new UiSelector().textContains("` + escaped + `").clickable(true)` + stateFilters,
 			})
 			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUiAutomator,
+				Strategy: uiautomator2.StrategyUIAutomator,
 				Value:    `new UiSelector().descriptionContains("` + escaped + `").clickable(true)` + stateFilters,
 			})
 		}
@@ -1040,16 +1042,16 @@ func buildSelectorsWithOptions(sel flow.Selector, timeoutMs int, preferClickable
 
 	// ID-based selector - use resourceIdMatches for partial matching
 	if sel.ID != "" {
-		escaped := escapeUiAutomator(sel.ID)
+		escaped := escapeUIAutomator(sel.ID)
 		if preferClickable {
 			// Try clickable first for tap commands
 			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUiAutomator,
+				Strategy: uiautomator2.StrategyUIAutomator,
 				Value:    `new UiSelector().resourceIdMatches(".*` + escaped + `.*").clickable(true)` + stateFilters,
 			})
 		}
 		strategies = append(strategies, LocatorStrategy{
-			Strategy: uiautomator2.StrategyUiAutomator,
+			Strategy: uiautomator2.StrategyUIAutomator,
 			Value:    `new UiSelector().resourceIdMatches(".*` + escaped + `.*")` + stateFilters,
 		})
 	}
@@ -1058,45 +1060,45 @@ func buildSelectorsWithOptions(sel flow.Selector, timeoutMs int, preferClickable
 	if sel.Text != "" {
 		if looksLikeRegex(sel.Text) {
 			// Use textMatches for regex patterns (case-insensitive)
-			pattern := "(?is)" + escapeUiAutomatorString(sel.Text)
+			pattern := "(?is)" + escapeUIAutomatorString(sel.Text)
 			if preferClickable {
 				strategies = append(strategies, LocatorStrategy{
-					Strategy: uiautomator2.StrategyUiAutomator,
+					Strategy: uiautomator2.StrategyUIAutomator,
 					Value:    `new UiSelector().textMatches("` + pattern + `").clickable(true)` + stateFilters,
 				})
 				strategies = append(strategies, LocatorStrategy{
-					Strategy: uiautomator2.StrategyUiAutomator,
+					Strategy: uiautomator2.StrategyUIAutomator,
 					Value:    `new UiSelector().descriptionMatches("` + pattern + `").clickable(true)` + stateFilters,
 				})
 			}
 			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUiAutomator,
+				Strategy: uiautomator2.StrategyUIAutomator,
 				Value:    `new UiSelector().textMatches("` + pattern + `")` + stateFilters,
 			})
 			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUiAutomator,
+				Strategy: uiautomator2.StrategyUIAutomator,
 				Value:    `new UiSelector().descriptionMatches("` + pattern + `")` + stateFilters,
 			})
 		} else {
 			// Use textContains for literal text (case-insensitive by default)
 			// Escape only quotes for the string value
-			escaped := escapeUiAutomatorString(sel.Text)
+			escaped := escapeUIAutomatorString(sel.Text)
 			if preferClickable {
 				strategies = append(strategies, LocatorStrategy{
-					Strategy: uiautomator2.StrategyUiAutomator,
+					Strategy: uiautomator2.StrategyUIAutomator,
 					Value:    `new UiSelector().textContains("` + escaped + `").clickable(true)` + stateFilters,
 				})
 				strategies = append(strategies, LocatorStrategy{
-					Strategy: uiautomator2.StrategyUiAutomator,
+					Strategy: uiautomator2.StrategyUIAutomator,
 					Value:    `new UiSelector().descriptionContains("` + escaped + `").clickable(true)` + stateFilters,
 				})
 			}
 			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUiAutomator,
+				Strategy: uiautomator2.StrategyUIAutomator,
 				Value:    `new UiSelector().textContains("` + escaped + `")` + stateFilters,
 			})
 			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUiAutomator,
+				Strategy: uiautomator2.StrategyUIAutomator,
 				Value:    `new UiSelector().descriptionContains("` + escaped + `")` + stateFilters,
 			})
 		}
@@ -1155,9 +1157,9 @@ func looksLikeRegex(text string) bool {
 	return false
 }
 
-// escapeUiAutomatorString escapes only the double quotes for UiAutomator string.
+// escapeUIAutomatorString escapes only the double quotes for UiAutomator string.
 // Used when the text is already a regex pattern.
-func escapeUiAutomatorString(s string) string {
+func escapeUIAutomatorString(s string) string {
 	return strings.ReplaceAll(s, `"`, `\"`)
 }
 
@@ -1182,8 +1184,8 @@ func buildStateFilters(sel flow.Selector) string {
 	return filters.String()
 }
 
-// escapeUiAutomator escapes special characters for UiAutomator selector strings.
-func escapeUiAutomator(s string) string {
+// escapeUIAutomator escapes special characters for UiAutomator selector strings.
+func escapeUIAutomator(s string) string {
 	var result strings.Builder
 	result.Grow(len(s) * 2)
 

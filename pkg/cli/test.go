@@ -312,128 +312,22 @@ func resolveOutputDir(output string, flatten bool) (string, error) {
 }
 
 func executeTest(cfg *RunConfig) error {
-	// 1. Validate all flows
-	v := validator.New(cfg.IncludeTags, cfg.ExcludeTags)
-	var allTestCases []string
-	var allErrors []error
-
-	for _, path := range cfg.FlowPaths {
-		result := v.Validate(path)
-		allTestCases = append(allTestCases, result.TestCases...)
-		allErrors = append(allErrors, result.Errors...)
+	// 1. Validate and parse flows
+	flows, err := validateAndParseFlows(cfg)
+	if err != nil {
+		return err
 	}
 
-	// Report validation errors
-	if len(allErrors) > 0 {
-		fmt.Fprintf(os.Stderr, "Validation errors:\n")
-		for _, err := range allErrors {
-			fmt.Fprintf(os.Stderr, "  - %v\n", err)
-		}
-		return fmt.Errorf("validation failed with %d error(s)", len(allErrors))
+	// 2. Determine execution mode and devices
+	needsParallel, deviceIDs, err := determineExecutionMode(cfg)
+	if err != nil {
+		return err
 	}
 
-	if len(allTestCases) == 0 {
-		return fmt.Errorf("no test flows found")
-	}
-
-	fmt.Printf("\n%sSetup%s\n", color(colorBold), color(colorReset))
-	fmt.Println(strings.Repeat("─", 40))
-	printSetupSuccess(fmt.Sprintf("Found %d test flow(s)", len(allTestCases)))
-
-	// 2. Parse all validated flows
-	var flows []flow.Flow
-	for _, path := range allTestCases {
-		f, err := flow.ParseFile(path)
-		if err != nil {
-			return fmt.Errorf("failed to parse %s: %w", path, err)
-		}
-		flows = append(flows, *f)
-	}
-
-	// 3. Determine execution mode: parallel or single device
-	needsParallelExecution := cfg.Parallel > 0 || len(cfg.Devices) > 1
-	driverType := strings.ToLower(cfg.Driver)
-
-	// 4. Auto-detect devices if needed for parallel execution
-	var deviceIDs []string
-	if needsParallelExecution {
-		if len(cfg.Devices) > 0 {
-			// Use explicitly specified devices
-			deviceIDs = cfg.Devices
-		} else if cfg.Parallel > 0 {
-			// Auto-detect devices
-			var err error
-			deviceIDs, err = autoDetectDevices(cfg.Platform, cfg.Parallel)
-			if err != nil {
-				return fmt.Errorf("failed to auto-detect devices: %w", err)
-			}
-		}
-		printSetupSuccess(fmt.Sprintf("Using %d device(s) for parallel execution", len(deviceIDs)))
-	}
-
-	printSetupSuccess(fmt.Sprintf("Output: %s", cfg.OutputDir))
-	fmt.Printf("\n%sExecution%s\n", color(colorBold), color(colorReset))
-	fmt.Println(strings.Repeat("─", 40))
-
-	var result *executor.RunResult
-	var runErr error
-
-	// 5. Execute flows
-	if driverType == "appium" {
-		// Appium: one session per flow (not yet supported for parallel)
-		if needsParallelExecution {
-			return fmt.Errorf("parallel execution not yet supported for Appium driver")
-		}
-		result, runErr = executeFlowsWithPerFlowSession(cfg, flows)
-		if runErr != nil {
-			return fmt.Errorf("execution failed: %w", runErr)
-		}
-	} else if needsParallelExecution {
-		// Parallel execution with multiple devices
-		result, runErr = executeParallel(cfg, deviceIDs, flows)
-		if runErr != nil {
-			return fmt.Errorf("parallel execution failed: %w", runErr)
-		}
-	} else {
-		// Single device execution
-		driver, cleanup, err := createDriver(cfg)
-		if err != nil {
-			return fmt.Errorf("failed to create driver: %w", err)
-		}
-		defer cleanup()
-
-		driverName := "uiautomator2"
-		if cfg.Platform == "mock" {
-			driverName = "mock"
-		}
-		runner := executor.New(driver, executor.RunnerConfig{
-			OutputDir:   cfg.OutputDir,
-			Parallelism: 0, // Sequential for now
-			Artifacts:   executor.ArtifactOnFailure,
-			Device: report.Device{
-				ID:       driver.GetPlatformInfo().DeviceID,
-				Platform: driver.GetPlatformInfo().Platform,
-				Name:     driver.GetPlatformInfo().DeviceName,
-			},
-			App: report.App{
-				ID: cfg.AppFile,
-			},
-			RunnerVersion:      "0.1.0",
-			DriverName:         driverName,
-			Env:                cfg.Env,
-			WaitForIdleTimeout: cfg.WaitForIdleTimeout,
-			// Live progress callbacks
-			OnFlowStart:       onFlowStart,
-			OnStepComplete:    onStepComplete,
-			OnNestedStep:      onNestedStep,
-			OnNestedFlowStart: onNestedFlowStart,
-			OnFlowEnd:         onFlowEnd,
-		})
-
-		result, runErr = runner.Run(context.Background(), flows)
-		if runErr != nil {
-			return fmt.Errorf("execution failed: %w", runErr)
-		}
+	// 3. Execute flows
+	result, err := executeFlowsWithMode(cfg, flows, needsParallel, deviceIDs)
+	if err != nil {
+		return err
 	}
 
 	// 5. Generate HTML report
@@ -457,6 +351,124 @@ func executeTest(cfg *RunConfig) error {
 	}
 
 	return nil
+}
+
+// validateAndParseFlows validates and parses all flow files.
+func validateAndParseFlows(cfg *RunConfig) ([]flow.Flow, error) {
+	v := validator.New(cfg.IncludeTags, cfg.ExcludeTags)
+	var allTestCases []string
+	var allErrors []error
+
+	for _, path := range cfg.FlowPaths {
+		result := v.Validate(path)
+		allTestCases = append(allTestCases, result.TestCases...)
+		allErrors = append(allErrors, result.Errors...)
+	}
+
+	if len(allErrors) > 0 {
+		fmt.Fprintf(os.Stderr, "Validation errors:\n")
+		for _, err := range allErrors {
+			fmt.Fprintf(os.Stderr, "  - %v\n", err)
+		}
+		return nil, fmt.Errorf("validation failed with %d error(s)", len(allErrors))
+	}
+
+	if len(allTestCases) == 0 {
+		return nil, fmt.Errorf("no test flows found")
+	}
+
+	fmt.Printf("\n%sSetup%s\n", color(colorBold), color(colorReset))
+	fmt.Println(strings.Repeat("─", 40))
+	printSetupSuccess(fmt.Sprintf("Found %d test flow(s)", len(allTestCases)))
+
+	var flows []flow.Flow
+	for _, path := range allTestCases {
+		f, err := flow.ParseFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse %s: %w", path, err)
+		}
+		flows = append(flows, *f)
+	}
+
+	return flows, nil
+}
+
+// determineExecutionMode decides whether to run in parallel and which devices to use.
+func determineExecutionMode(cfg *RunConfig) (needsParallel bool, deviceIDs []string, err error) {
+	needsParallel = cfg.Parallel > 0 || len(cfg.Devices) > 1
+
+	if needsParallel {
+		if len(cfg.Devices) > 0 {
+			deviceIDs = cfg.Devices
+		} else if cfg.Parallel > 0 {
+			deviceIDs, err = autoDetectDevices(cfg.Platform, cfg.Parallel)
+			if err != nil {
+				return false, nil, fmt.Errorf("failed to auto-detect devices: %w", err)
+			}
+		}
+		printSetupSuccess(fmt.Sprintf("Using %d device(s) for parallel execution", len(deviceIDs)))
+	}
+
+	printSetupSuccess(fmt.Sprintf("Output: %s", cfg.OutputDir))
+	fmt.Printf("\n%sExecution%s\n", color(colorBold), color(colorReset))
+	fmt.Println(strings.Repeat("─", 40))
+
+	return needsParallel, deviceIDs, nil
+}
+
+// executeFlowsWithMode executes flows using the appropriate execution mode.
+func executeFlowsWithMode(cfg *RunConfig, flows []flow.Flow, needsParallel bool, deviceIDs []string) (*executor.RunResult, error) {
+	driverType := strings.ToLower(cfg.Driver)
+
+	if driverType == "appium" {
+		if needsParallel {
+			return nil, fmt.Errorf("parallel execution not yet supported for Appium driver")
+		}
+		return executeFlowsWithPerFlowSession(cfg, flows)
+	}
+
+	if needsParallel {
+		return executeParallel(cfg, deviceIDs, flows)
+	}
+
+	return executeSingleDevice(cfg, flows)
+}
+
+// executeSingleDevice runs flows on a single device.
+func executeSingleDevice(cfg *RunConfig, flows []flow.Flow) (*executor.RunResult, error) {
+	driver, cleanup, err := createDriver(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create driver: %w", err)
+	}
+	defer cleanup()
+
+	driverName := "uiautomator2"
+	if cfg.Platform == "mock" {
+		driverName = "mock"
+	}
+
+	runner := executor.New(driver, executor.RunnerConfig{
+		OutputDir:   cfg.OutputDir,
+		Parallelism: 0,
+		Artifacts:   executor.ArtifactOnFailure,
+		Device: report.Device{
+			ID:       driver.GetPlatformInfo().DeviceID,
+			Platform: driver.GetPlatformInfo().Platform,
+			Name:     driver.GetPlatformInfo().DeviceName,
+		},
+		App:                report.App{ID: cfg.AppFile},
+		RunnerVersion:      "0.1.0",
+		DriverName:         driverName,
+		Env:                cfg.Env,
+		WaitForIdleTimeout: cfg.WaitForIdleTimeout,
+		OnFlowStart:        onFlowStart,
+		OnStepComplete:     onStepComplete,
+		OnNestedStep:       onNestedStep,
+		OnNestedFlowStart:  onNestedFlowStart,
+		OnFlowEnd:          onFlowEnd,
+	})
+
+	return runner.Run(context.Background(), flows)
 }
 
 // ANSI color codes
@@ -849,17 +861,11 @@ func createDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	platform := strings.ToLower(cfg.Platform)
 	driverType := strings.ToLower(cfg.Driver)
 
-	// Get device ID (first device if multiple specified)
-	deviceID := ""
-	if len(cfg.Devices) > 0 {
-		deviceID = cfg.Devices[0]
-	}
-
 	// Mock driver for testing
 	if platform == "mock" || driverType == "mock" {
 		driver := mock.New(mock.Config{
 			Platform: cfg.Platform,
-			DeviceID: deviceID,
+			DeviceID: getFirstDevice(cfg),
 		})
 		return driver, func() {}, nil
 	}
@@ -891,13 +897,8 @@ func createAndroidDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		driverType = "uiautomator2"
 	}
 
-	// Get device ID (first device if multiple specified)
-	deviceID := ""
-	if len(cfg.Devices) > 0 {
-		deviceID = cfg.Devices[0]
-	}
-
 	// 1. Connect to device
+	deviceID := getFirstDevice(cfg)
 	if deviceID != "" {
 		printSetupStep(fmt.Sprintf("Connecting to device %s...", deviceID))
 	} else {
@@ -1046,13 +1047,8 @@ func createAppiumDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		caps = make(map[string]interface{})
 	}
 
-	// Get device ID (first device if multiple specified)
-	deviceID := ""
-	if len(cfg.Devices) > 0 {
-		deviceID = cfg.Devices[0]
-	}
-
 	// CLI flags override caps file values
+	deviceID := getFirstDevice(cfg)
 	if cfg.Platform != "" {
 		caps["platformName"] = cfg.Platform
 	}
@@ -1104,11 +1100,7 @@ func createAppiumDriver(cfg *RunConfig) (core.Driver, func(), error) {
 
 // createIOSDriver creates an iOS driver using WebDriverAgent.
 func createIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
-	// Get device ID (first device if multiple specified)
-	udid := ""
-	if len(cfg.Devices) > 0 {
-		udid = cfg.Devices[0]
-	}
+	udid := getFirstDevice(cfg)
 
 	if udid == "" {
 		// Try to find booted simulator
@@ -1130,7 +1122,17 @@ func createIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 			"Hint: Wait for it to finish or use a different device with --device <UDID>", udid, port)
 	}
 
-	// 1. Check if WDA is installed
+	// 1. Install app if specified
+	if cfg.AppFile != "" {
+		printSetupStep(fmt.Sprintf("Installing app: %s", cfg.AppFile))
+		out, err := runCommand("xcrun", "simctl", "install", udid, cfg.AppFile)
+		if err != nil {
+			return nil, nil, fmt.Errorf("install app failed: %w\nOutput: %s", err, out)
+		}
+		printSetupSuccess("App installed")
+	}
+
+	// 2. Check if WDA is installed
 	printSetupStep("Checking WDA installation...")
 	if !wdadriver.IsWDAInstalled() {
 		printSetupStep("Downloading WDA...")
@@ -1142,7 +1144,7 @@ func createIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		printSetupSuccess("WDA already installed")
 	}
 
-	// 2. Create WDA runner
+	// 3. Create WDA runner
 	printSetupStep("Building WDA...")
 	runner := wdadriver.NewRunner(udid, cfg.TeamID)
 	ctx := context.Background()
@@ -1152,7 +1154,7 @@ func createIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	}
 	printSetupSuccess("WDA built")
 
-	// 3. Start WDA
+	// 4. Start WDA
 	printSetupStep("Starting WDA...")
 	if err := runner.Start(ctx); err != nil {
 		runner.Cleanup()
@@ -1160,11 +1162,11 @@ func createIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	}
 	printSetupSuccess("WDA started")
 
-	// 4. Create WDA client
+	// 5. Create WDA client
 	printSetupSuccess(fmt.Sprintf("WDA port: %d", runner.Port()))
 	client := wdadriver.NewClient(runner.Port())
 
-	// 5. Get device info
+	// 6. Get device info
 	simInfo, err := getSimulatorInfo(udid)
 	if err != nil {
 		runner.Cleanup()
@@ -1179,7 +1181,7 @@ func createIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		IsSimulator: true,
 	}
 
-	// 6. Create driver
+	// 7. Create driver
 	driver := wdadriver.NewDriver(client, platformInfo, udid)
 
 	// Cleanup function
@@ -1231,7 +1233,6 @@ func getSimulatorInfo(udid string) (*simulatorInfo, error) {
 		return nil, err
 	}
 
-	// Simple parsing - find device with matching UDID
 	lines := strings.Split(out, "\n")
 	var name, osVersion string
 	foundUDID := false
@@ -1245,20 +1246,13 @@ func getSimulatorInfo(udid string) (*simulatorInfo, error) {
 		}
 
 		// Look for our UDID
-		if strings.Contains(line, udid) {
-			foundUDID = true
-			// Look back for name
-			for j := i - 1; j >= 0 && j >= i-5; j-- {
-				if strings.Contains(lines[j], `"name"`) {
-					parts := strings.Split(lines[j], ":")
-					if len(parts) >= 2 {
-						name = strings.Trim(parts[1], ` ",`)
-						break
-					}
-				}
-			}
-			break
+		if !strings.Contains(line, udid) {
+			continue
 		}
+
+		foundUDID = true
+		name = lookupSimulatorName(lines, i)
+		break
 	}
 
 	if !foundUDID {
@@ -1269,6 +1263,21 @@ func getSimulatorInfo(udid string) (*simulatorInfo, error) {
 		Name:      name,
 		OSVersion: osVersion,
 	}, nil
+}
+
+// lookupSimulatorName finds the simulator name by looking back from the UDID line.
+func lookupSimulatorName(lines []string, udidLineIndex int) string {
+	// Look back up to 5 lines for the name field
+	for j := udidLineIndex - 1; j >= 0 && j >= udidLineIndex-5; j-- {
+		if !strings.Contains(lines[j], `"name"`) {
+			continue
+		}
+		parts := strings.Split(lines[j], ":")
+		if len(parts) >= 2 {
+			return strings.Trim(parts[1], ` ",`)
+		}
+	}
+	return ""
 }
 
 // runCommand runs a command and returns stdout.
@@ -1322,6 +1331,14 @@ func checkDeviceAvailable(deviceID, platform string) error {
 		}
 	}
 	return nil
+}
+
+// getFirstDevice returns the first device from config, or empty string if none.
+func getFirstDevice(cfg *RunConfig) string {
+	if len(cfg.Devices) > 0 {
+		return cfg.Devices[0]
+	}
+	return ""
 }
 
 // getDriversDir returns the absolute path to the drivers subdirectory.
@@ -1475,37 +1492,57 @@ func executeParallel(cfg *RunConfig, deviceIDs []string, flows []flow.Flow) (*ex
 		platform = "android"
 	}
 
-	// Pre-check: Validate all devices are available before starting any initialization
+	// 1. Validate devices
+	if err := validateDevicesAvailable(deviceIDs, platform); err != nil {
+		return nil, err
+	}
+
+	// 2. Create workers
+	workers, err := createDeviceWorkers(cfg, deviceIDs, platform)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. Run parallel
+	parallelRunner := createParallelRunner(cfg, workers, platform)
+	return parallelRunner.Run(context.Background(), flows)
+}
+
+// validateDevicesAvailable checks all devices before starting initialization.
+func validateDevicesAvailable(deviceIDs []string, platform string) error {
 	printSetupStep(fmt.Sprintf("Checking availability of %d device(s)...", len(deviceIDs)))
+
 	var unavailableDevices []string
 	for i, deviceID := range deviceIDs {
 		if err := checkDeviceAvailable(deviceID, platform); err != nil {
-			unavailableDevices = append(unavailableDevices, fmt.Sprintf("  Device %d/%d (%s): %v", i+1, len(deviceIDs), deviceID, err))
+			unavailableDevices = append(unavailableDevices,
+				fmt.Sprintf("  Device %d/%d (%s): %v", i+1, len(deviceIDs), deviceID, err))
 		}
 	}
-	if len(unavailableDevices) > 0 {
-		errMsg := fmt.Sprintf("%d device(s) not available:\n%s\n\nAll devices must be available to start parallel execution",
-			len(unavailableDevices), strings.Join(unavailableDevices, "\n"))
-		return nil, fmt.Errorf(errMsg)
-	}
-	printSetupSuccess(fmt.Sprintf("All %d device(s) available", len(deviceIDs)))
 
-	// Create device workers
+	if len(unavailableDevices) > 0 {
+		return fmt.Errorf("%d device(s) not available:\n%s\n\nAll devices must be available to start parallel execution",
+			len(unavailableDevices), strings.Join(unavailableDevices, "\n"))
+	}
+
+	printSetupSuccess(fmt.Sprintf("All %d device(s) available", len(deviceIDs)))
+	return nil
+}
+
+// createDeviceWorkers creates a worker for each device.
+func createDeviceWorkers(cfg *RunConfig, deviceIDs []string, platform string) ([]executor.DeviceWorker, error) {
 	var workers []executor.DeviceWorker
 	var cleanups []func()
 
-	// Track if we need to clean up on error
 	cleanupAll := func() {
 		for _, cleanup := range cleanups {
 			cleanup()
 		}
 	}
 
-	// Create a driver for each device
 	for i, deviceID := range deviceIDs {
 		printSetupStep(fmt.Sprintf("[Device %d/%d] Connecting to %s...", i+1, len(deviceIDs), deviceID))
 
-		// Create device-specific config
 		deviceCfg := *cfg
 		deviceCfg.Devices = []string{deviceID}
 
@@ -1535,7 +1572,11 @@ func executeParallel(cfg *RunConfig, deviceIDs []string, flows []flow.Flow) (*ex
 		cleanups = append(cleanups, cleanup)
 	}
 
-	// Create parallel runner
+	return workers, nil
+}
+
+// createParallelRunner builds the parallel runner with config.
+func createParallelRunner(cfg *RunConfig, workers []executor.DeviceWorker, platform string) *executor.ParallelRunner {
 	driverName := "uiautomator2"
 	if platform == "ios" {
 		driverName = "wda"
@@ -1543,7 +1584,6 @@ func executeParallel(cfg *RunConfig, deviceIDs []string, flows []flow.Flow) (*ex
 		driverName = "mock"
 	}
 
-	// Use first device's info for report (parallel report will show multiple devices)
 	firstDriver := workers[0].Driver
 	runnerConfig := executor.RunnerConfig{
 		OutputDir:   cfg.OutputDir,
@@ -1554,9 +1594,7 @@ func executeParallel(cfg *RunConfig, deviceIDs []string, flows []flow.Flow) (*ex
 			Platform: firstDriver.GetPlatformInfo().Platform,
 			Name:     fmt.Sprintf("%d devices", len(workers)),
 		},
-		App: report.App{
-			ID: cfg.AppFile,
-		},
+		App:                report.App{ID: cfg.AppFile},
 		RunnerVersion:      "0.1.0",
 		DriverName:         driverName,
 		Env:                cfg.Env,
@@ -1568,8 +1606,5 @@ func executeParallel(cfg *RunConfig, deviceIDs []string, flows []flow.Flow) (*ex
 		OnFlowEnd:          onFlowEnd,
 	}
 
-	parallelRunner := executor.NewParallelRunner(workers, runnerConfig)
-
-	// Run tests in parallel
-	return parallelRunner.Run(context.Background(), flows)
+	return executor.NewParallelRunner(workers, runnerConfig)
 }

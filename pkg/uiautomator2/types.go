@@ -190,7 +190,7 @@ const (
 	StrategyXPath           = "xpath"
 	StrategyClassName       = "class name"
 	StrategyText            = "text"
-	StrategyUiAutomator     = "-android uiautomator"
+	StrategyUIAutomator     = "-android uiautomator"
 )
 
 // Swipe/scroll directions.

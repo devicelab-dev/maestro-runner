@@ -3,10 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/signal"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
