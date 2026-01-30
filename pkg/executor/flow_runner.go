@@ -8,6 +8,7 @@ import (
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
+	"github.com/devicelab-dev/maestro-runner/pkg/logger"
 	"github.com/devicelab-dev/maestro-runner/pkg/report"
 )
 
@@ -35,6 +36,10 @@ type FlowRunner struct {
 // Run executes the flow and returns the result.
 func (fr *FlowRunner) Run() FlowResult {
 	flowStart := time.Now()
+
+	logger.Info("=== Starting flow: %s ===", fr.detail.Name)
+	logger.Info("Flow file: %s", fr.flow.SourcePath)
+	logger.Info("Total steps: %d", len(fr.flow.Steps))
 
 	// Create flow writer for this flow's updates
 	fr.flowWriter = report.NewFlowWriter(fr.detail, fr.config.OutputDir, fr.indexWriter)
@@ -202,6 +207,9 @@ func (fr *FlowRunner) Run() FlowResult {
 		fr.config.OnFlowEnd(flowName, flowStatus == report.StatusPassed, flowDuration, flowError)
 	}
 
+	logger.Info("=== Flow completed: %s (status: %s, duration: %dms, passed: %d, failed: %d, skipped: %d) ===",
+		flowName, flowStatus, flowDuration, fr.stepsPassed, fr.stepsFailed, fr.stepsSkipped)
+
 	return FlowResult{
 		ID:           fr.detail.ID,
 		Name:         fr.detail.Name,
@@ -219,6 +227,8 @@ func (fr *FlowRunner) Run() FlowResult {
 // Returns status, error message, and duration in milliseconds.
 func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, string, int64) {
 	stepStart := time.Now()
+
+	logger.Debug("Executing step %d: %s", idx, step.Describe())
 
 	// Mark step as started
 	fr.flowWriter.CommandStart(idx)
@@ -325,12 +335,14 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 
 	if result.Success {
 		status = report.StatusPassed
+		logger.Debug("Step %d completed successfully (%dms): %s", idx, stepDuration, step.Describe())
 	} else {
 		status = report.StatusFailed
 		errorInfo = commandResultToError(result)
 		if errorInfo != nil {
 			errorMsg = errorInfo.Message
 		}
+		logger.Error("Step %d failed (%dms): %s - Error: %s", idx, stepDuration, step.Describe(), errorMsg)
 	}
 
 	// Capture after screenshot (on failure or always)

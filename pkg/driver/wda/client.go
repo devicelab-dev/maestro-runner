@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/devicelab-dev/maestro-runner/pkg/logger"
 )
 
 // Client is an HTTP client for WebDriverAgent.
@@ -462,40 +464,67 @@ func (c *Client) sessionPath(path string) string {
 }
 
 func (c *Client) get(path string) (map[string]interface{}, error) {
+	start := time.Now()
+	logger.Debug("WDA GET %s", path)
+
 	resp, err := c.httpClient.Get(c.baseURL + path)
+	duration := time.Since(start).Milliseconds()
+
 	if err != nil {
+		logger.Error("WDA GET %s failed (%dms): %v", path, duration, err)
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	logger.Debug("WDA GET %s completed (%dms, status: %d)", path, duration, resp.StatusCode)
 	return c.parseResponse(resp)
 }
 
 func (c *Client) post(path string, body interface{}) (map[string]interface{}, error) {
+	start := time.Now()
 	var reqBody io.Reader
+	bodyStr := ""
 	if body != nil {
 		data, err := json.Marshal(body)
 		if err != nil {
 			return nil, err
 		}
 		reqBody = bytes.NewReader(data)
+		bodyStr = string(data)
+		if len(bodyStr) > 100 {
+			bodyStr = bodyStr[:100] + "..."
+		}
 	}
 
+	logger.Debug("WDA POST %s body=%s", path, bodyStr)
+
 	resp, err := c.httpClient.Post(c.baseURL+path, "application/json", reqBody)
+	duration := time.Since(start).Milliseconds()
+
 	if err != nil {
+		logger.Error("WDA POST %s failed (%dms): %v", path, duration, err)
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	logger.Debug("WDA POST %s completed (%dms, status: %d)", path, duration, resp.StatusCode)
 	return c.parseResponse(resp)
 }
 
 func (c *Client) delete(path string) (map[string]interface{}, error) {
+	start := time.Now()
+	logger.Debug("WDA DELETE %s", path)
+
 	req, err := http.NewRequest(http.MethodDelete, c.baseURL+path, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	resp, err := c.httpClient.Do(req)
+	duration := time.Since(start).Milliseconds()
+
 	if err != nil {
+		logger.Error("WDA DELETE %s failed (%dms): %v", path, duration, err)
 		return nil, err
 	}
 	defer resp.Body.Close()

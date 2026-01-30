@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/devicelab-dev/maestro-runner/pkg/logger"
 )
 
 // W3C WebDriver element identifier key (standard constant)
@@ -627,16 +629,24 @@ func (c *Client) delete(path string) (map[string]interface{}, error) {
 }
 
 func (c *Client) request(method, path string, body interface{}) (map[string]interface{}, error) {
+	start := time.Now()
 	url := c.serverURL + path
 
 	var bodyReader io.Reader
+	bodyStr := ""
 	if body != nil {
 		jsonBody, err := json.Marshal(body)
 		if err != nil {
 			return nil, err
 		}
 		bodyReader = bytes.NewReader(jsonBody)
+		bodyStr = string(jsonBody)
+		if len(bodyStr) > 100 {
+			bodyStr = bodyStr[:100] + "..."
+		}
 	}
+
+	logger.Debug("Appium %s %s body=%s", method, path, bodyStr)
 
 	req, err := http.NewRequest(method, url, bodyReader)
 	if err != nil {
@@ -647,7 +657,10 @@ func (c *Client) request(method, path string, body interface{}) (map[string]inte
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.client.Do(req)
+	duration := time.Since(start).Milliseconds()
+
 	if err != nil {
+		logger.Error("Appium %s %s failed (%dms): %v", method, path, duration, err)
 		return nil, err
 	}
 	if resp == nil {
@@ -669,11 +682,13 @@ func (c *Client) request(method, path string, body interface{}) (map[string]inte
 	if errValue, ok := result["value"].(map[string]interface{}); ok {
 		if errMsg, ok := errValue["message"].(string); ok {
 			if errType, ok := errValue["error"].(string); ok {
+				logger.Error("Appium %s %s returned error (%dms): %s: %s", method, path, duration, errType, errMsg)
 				return result, fmt.Errorf("%s: %s", errType, errMsg)
 			}
 		}
 	}
 
+	logger.Debug("Appium %s %s completed (%dms, status: %d)", method, path, duration, resp.StatusCode)
 	return result, nil
 }
 
