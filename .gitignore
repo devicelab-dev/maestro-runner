@@ -8,6 +8,7 @@ bin/
 dist/
 build-release.sh
 release.sh
+install.sh
 install-download.sh
 
 # Test coverage & profiling
