@@ -9,7 +9,7 @@ import (
 )
 
 // Version is set at build time.
-var Version = "dev"
+var Version = "1.0.1"
 
 // GlobalFlags are available to all commands.
 var GlobalFlags = []cli.Flag{

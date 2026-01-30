@@ -20,6 +20,7 @@ import (
 	wdadriver "github.com/devicelab-dev/maestro-runner/pkg/driver/wda"
 	"github.com/devicelab-dev/maestro-runner/pkg/executor"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
+	"github.com/devicelab-dev/maestro-runner/pkg/logger"
 	"github.com/devicelab-dev/maestro-runner/pkg/report"
 	"github.com/devicelab-dev/maestro-runner/pkg/uiautomator2"
 	"github.com/devicelab-dev/maestro-runner/pkg/validator"
@@ -38,7 +39,7 @@ Reports are generated in the output directory:
   - With --output and --flatten: <output>/ (no timestamp subfolder)
 
 Examples:
-  # Basic usage
+ Basic usage
   maestro-runner test flow.yaml
   maestro-runner test flows/
   maestro-runner test login.yaml checkout.yaml
@@ -197,10 +198,52 @@ type RunConfig struct {
 	TeamID             string // Apple Development Team ID for WDA code signing
 }
 
+func printBanner() {
+	// Make DeviceLab.dev clickable and colored (cyan)
+	// OSC 8 hyperlink format: ESC]8;;URL BEL TEXT ESC]8;; BEL
+	deviceLabLink := "\x1b]8;;https://devicelab.dev\x07" + color(colorCyan) + "DeviceLab.dev" + color(colorReset) + "\x1b]8;;\x07"
+
+	// Make GitHub link clickable
+	githubLink := "\x1b]8;;https://github.com/devicelab-dev/maestro-runner\x07Star us on GitHub\x1b]8;;\x07"
+
+	// Box width is 64 characters (between the ║ symbols)
+	// Calculate padding for version line
+	// Visible text: "  maestro-runner " + Version + " - by DeviceLab.dev"
+	versionLineVisible := 16 + len(Version) + 20 // "  maestro-runner " + version + " - by DeviceLab.dev"
+	versionPadding := strings.Repeat(" ", 64-versionLineVisible)
+
+	// Calculate padding for GitHub line
+	// Visible text: "  ⭐ Star us on GitHub"
+	githubLineVisible := 21 // "  ⭐ " + "Star us on GitHub" (⭐ is 3 bytes but 1 visual char)
+	githubPadding := strings.Repeat(" ", 64-githubLineVisible)
+
+	fmt.Println()
+	fmt.Println("╔═══════════════════════════════════════════════════════════════════╗")
+	fmt.Printf("║  maestro-runner %s - by %s%s   ║\n", Version, deviceLabLink, versionPadding)
+	fmt.Println("║  Fast, lightweight Maestro test runner                            ║")
+	fmt.Printf("║  ⭐ %s%s  ║\n", githubLink, githubPadding)
+	fmt.Println("╚═══════════════════════════════════════════════════════════════════╝")
+	fmt.Println()
+}
+
+func printFooter() {
+	// Make DeviceLab.dev clickable and colored (cyan)
+	deviceLabLink := "\x1b]8;;https://devicelab.dev\x07" + color(colorCyan) + "DeviceLab.dev" + color(colorReset) + "\x1b]8;;\x07"
+
+	fmt.Println()
+	fmt.Println("╔══════════════════════════════════════════════════════════════════════════╗")
+	fmt.Printf("║ Built by %s - Turn Your Devices Into a Distributed Device Lab ║\n", deviceLabLink)
+	fmt.Println("╚══════════════════════════════════════════════════════════════════════════╝")
+	fmt.Println()
+}
+
 func runTest(c *cli.Context) error {
 	if c.NArg() < 1 {
 		return fmt.Errorf("at least one flow file or folder is required")
 	}
+
+	// Print banner at start
+	printBanner()
 
 	// Helper to get flag value from current or parent context
 	// When run as subcommand, global flags are in parent context
@@ -359,40 +402,58 @@ func resolveOutputDir(output string, flatten bool) (string, error) {
 }
 
 func executeTest(cfg *RunConfig) error {
-	// 1. Validate and parse flows
+	// 1. Create output directory
+	if err := os.MkdirAll(cfg.OutputDir, 0755); err != nil {
+		return fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	// 2. Initialize logging
+	logPath := filepath.Join(cfg.OutputDir, "maestro-runner.log")
+	if err := logger.Init(logPath); err != nil {
+		fmt.Printf("Warning: Failed to initialize logger: %v\n", err)
+	}
+	defer logger.Close()
+
+	logger.Info("=== Test execution started ===")
+	logger.Info("Output directory: %s", cfg.OutputDir)
+	logger.Info("Platform: %s", cfg.Platform)
+	logger.Info("Driver: %s", cfg.Driver)
+
+	// 3. Validate and parse flows
 	flows, err := validateAndParseFlows(cfg)
 	if err != nil {
+		logger.Error("Flow validation failed: %v", err)
 		return err
 	}
+	logger.Info("Validated %d flow(s)", len(flows))
 
 	// Extract appId from first flow if not in config
 	if cfg.AppID == "" && len(flows) > 0 && flows[0].Config.AppID != "" {
 		cfg.AppID = flows[0].Config.AppID
 	}
 
-	// 2. Determine execution mode and devices
+	// 4. Determine execution mode and devices
 	needsParallel, deviceIDs, err := determineExecutionMode(cfg)
 	if err != nil {
+		logger.Error("Failed to determine execution mode: %v", err)
 		return err
 	}
 
-	// 3. Execute flows
+	if needsParallel {
+		logger.Info("Parallel execution mode: %d devices: %v", len(deviceIDs), deviceIDs)
+	} else {
+		logger.Info("Single device execution mode")
+	}
+
+	// 5. Execute flows
+	logger.Info("Starting flow execution (parallel: %v, devices: %v)", needsParallel, deviceIDs)
 	result, err := executeFlowsWithMode(cfg, flows, needsParallel, deviceIDs)
 	if err != nil {
+		logger.Error("Flow execution failed: %v", err)
 		return err
 	}
-
-	// 5. Generate HTML report
-	htmlPath := filepath.Join(cfg.OutputDir, "report.html")
-	if err := report.GenerateHTML(cfg.OutputDir, report.HTMLConfig{
-		OutputPath: htmlPath,
-		Title:      "Test Report",
-	}); err != nil {
-		// Non-fatal: print warning but continue
-		fmt.Printf("  %s⚠%s Warning: failed to generate HTML report: %v\n", color(colorYellow), color(colorReset), err)
-	} else {
-		printSetupSuccess(fmt.Sprintf("Report: %s", htmlPath))
-	}
+	logger.Info("Flow execution completed: %d passed, %d failed, %d skipped",
+		result.PassedFlows, result.FailedFlows, result.SkippedFlows)
 
 	// 6. Print unified output (works for both single and parallel)
 	if err := printUnifiedOutput(cfg.OutputDir, result); err != nil {
@@ -400,6 +461,34 @@ func executeTest(cfg *RunConfig) error {
 		// Fallback to basic summary
 		printSummary(result)
 	}
+
+	// 7. Generate and display reports
+	logger.Info("Generating reports...")
+	fmt.Println()
+	fmt.Printf("  %s⏳ Generating reports...%s\n", color(colorCyan), color(colorReset))
+	fmt.Println()
+
+	htmlPath := filepath.Join(cfg.OutputDir, "report.html")
+	jsonPath := filepath.Join(cfg.OutputDir, "report.json")
+
+	htmlGenerated := true
+	if err := report.GenerateHTML(cfg.OutputDir, report.HTMLConfig{
+		OutputPath: htmlPath,
+		Title:      "Test Report",
+	}); err != nil {
+		htmlGenerated = false
+		fmt.Printf("  %s⚠%s Warning: failed to generate HTML report: %v\n", color(colorYellow), color(colorReset), err)
+	}
+
+	// Display reports section
+	fmt.Println("  Reports:")
+	if htmlGenerated {
+		fmt.Printf("    HTML:   %s\n", htmlPath)
+	}
+	fmt.Printf("    JSON:   %s\n", jsonPath)
+
+	// 7. Print footer
+	printFooter()
 
 	// Exit with code 1 if any flows failed (summary already printed)
 	if result.Status != report.StatusPassed {
@@ -498,11 +587,15 @@ func executeFlowsWithMode(cfg *RunConfig, flows []flow.Flow, needsParallel bool,
 
 // executeSingleDevice runs flows on a single device.
 func executeSingleDevice(cfg *RunConfig, flows []flow.Flow) (*executor.RunResult, error) {
+	logger.Info("Creating driver for single device execution")
 	driver, cleanup, err := createDriver(cfg)
 	if err != nil {
+		logger.Error("Failed to create driver: %v", err)
 		return nil, fmt.Errorf("failed to create driver: %w", err)
 	}
 	defer cleanup()
+
+	logger.Info("Driver created: %s on %s", driver.GetPlatformInfo().Platform, driver.GetPlatformInfo().DeviceName)
 
 	driverName := "uiautomator2"
 	if cfg.Platform == "mock" {
@@ -976,19 +1069,25 @@ func createAndroidDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	deviceID := getFirstDevice(cfg)
 	if deviceID != "" {
 		printSetupStep(fmt.Sprintf("Connecting to device %s...", deviceID))
+		logger.Info("Connecting to Android device: %s", deviceID)
 	} else {
 		printSetupStep("Connecting to device...")
+		logger.Info("Auto-detecting Android device...")
 	}
 	dev, err := device.New(deviceID)
 	if err != nil {
+		logger.Error("Failed to connect to device: %v", err)
 		return nil, nil, fmt.Errorf("connect to device: %w", err)
 	}
 
 	// Get device info for reporting
 	info, err := dev.Info()
 	if err != nil {
+		logger.Error("Failed to get device info: %v", err)
 		return nil, nil, fmt.Errorf("get device info: %w", err)
 	}
+	logger.Info("Device info: %s %s, SDK %s, Serial %s, Emulator: %v",
+		info.Brand, info.Model, info.SDK, info.Serial, info.IsEmulator)
 	printSetupSuccess(fmt.Sprintf("Connected to %s %s (SDK %s)", info.Brand, info.Model, info.SDK))
 
 	// 2. Check if device is already in use (for UIAutomator2 driver)
@@ -1006,9 +1105,12 @@ func createAndroidDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	// 3. Install app if specified
 	if cfg.AppFile != "" {
 		printSetupStep(fmt.Sprintf("Installing app: %s", cfg.AppFile))
+		logger.Info("Installing app: %s", cfg.AppFile)
 		if err := dev.Install(cfg.AppFile); err != nil {
+			logger.Error("App installation failed: %v", err)
 			return nil, nil, fmt.Errorf("install app: %w", err)
 		}
+		logger.Info("App installed successfully")
 		printSetupSuccess("App installed")
 	}
 
@@ -1040,8 +1142,10 @@ func createUIAutomator2Driver(cfg *RunConfig, dev *device.AndroidDevice, info de
 
 	// 2. Start UIAutomator2 server
 	printSetupStep("Starting UIAutomator2 server...")
+	logger.Info("Starting UIAutomator2 server on device %s", dev.Serial())
 	uia2Cfg := device.DefaultUIAutomator2Config()
 	if err := dev.StartUIAutomator2(uia2Cfg); err != nil {
+		logger.Error("Failed to start UIAutomator2: %v", err)
 		return nil, nil, fmt.Errorf("start UIAutomator2: %w", err)
 	}
 
@@ -1073,14 +1177,17 @@ func createUIAutomator2Driver(cfg *RunConfig, dev *device.AndroidDevice, info de
 
 	// 4. Create session
 	printSetupStep("Creating session...")
+	logger.Info("Creating UIAutomator2 session with capabilities: Platform=Android, Device=%s", info.Model)
 	caps := uiautomator2.Capabilities{
 		PlatformName: "Android",
 		DeviceName:   info.Model,
 	}
 	if err := client.CreateSession(caps); err != nil {
+		logger.Error("Failed to create session: %v", err)
 		dev.StopUIAutomator2()
 		return nil, nil, fmt.Errorf("create session: %w", err)
 	}
+	logger.Info("Session created successfully: %s", client.SessionID())
 	printSetupSuccess("Session created")
 
 	// Set waitForIdle timeout - configurable via --wait-for-idle-timeout or config.yaml
@@ -1123,6 +1230,7 @@ func createUIAutomator2Driver(cfg *RunConfig, dev *device.AndroidDevice, info de
 // Uses capabilities from --caps file, with CLI flags taking precedence.
 func createAppiumDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	printSetupStep(fmt.Sprintf("Connecting to Appium server: %s", cfg.AppiumURL))
+	logger.Info("Creating Appium driver, server URL: %s", cfg.AppiumURL)
 
 	// Start with capabilities from file (or empty map)
 	caps := cfg.Capabilities
@@ -1167,10 +1275,13 @@ func createAppiumDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	}
 
 	printSetupStep("Creating Appium session...")
+	logger.Info("Creating Appium session with capabilities: %v", caps)
 	driver, err := appiumdriver.NewDriver(cfg.AppiumURL, caps)
 	if err != nil {
+		logger.Error("Failed to create Appium session: %v", err)
 		return nil, nil, fmt.Errorf("create Appium session: %w", err)
 	}
+	logger.Info("Appium session created successfully: %s", driver.GetPlatformInfo().DeviceID)
 	printSetupSuccess("Appium session created")
 
 	// Cleanup function
@@ -1188,13 +1299,18 @@ func createIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	if udid == "" {
 		// Try to find booted simulator
 		printSetupStep("Finding booted iOS simulator...")
+		logger.Info("Auto-detecting booted iOS simulator...")
 		var err error
 		udid, err = findBootedSimulator()
 		if err != nil {
+			logger.Error("No booted iOS simulator found")
 			return nil, nil, fmt.Errorf("no device found\n" +
 				"Hint: Specify a device with --device <UDID> or start a device/emulator")
 		}
+		logger.Info("Found booted simulator: %s", udid)
 		printSetupSuccess(fmt.Sprintf("Found simulator: %s", udid))
+	} else {
+		logger.Info("Using specified iOS device: %s", udid)
 	}
 
 	// Check if device port is already in use (another instance using this device)
@@ -1208,10 +1324,13 @@ func createIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	// 1. Install app if specified
 	if cfg.AppFile != "" {
 		printSetupStep(fmt.Sprintf("Installing app: %s", cfg.AppFile))
+		logger.Info("Installing iOS app: %s to device %s", cfg.AppFile, udid)
 		out, err := runCommand("xcrun", "simctl", "install", udid, cfg.AppFile)
 		if err != nil {
+			logger.Error("iOS app installation failed: %v, output: %s", err, out)
 			return nil, nil, fmt.Errorf("install app failed: %w\nOutput: %s", err, out)
 		}
+		logger.Info("iOS app installed successfully")
 		printSetupSuccess("App installed")
 	}
 
@@ -1229,20 +1348,26 @@ func createIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 
 	// 3. Create WDA runner
 	printSetupStep("Building WDA...")
+	logger.Info("Building WDA for device %s (team ID: %s)", udid, cfg.TeamID)
 	runner := wdadriver.NewRunner(udid, cfg.TeamID)
 	ctx := context.Background()
 
 	if err := runner.Build(ctx); err != nil {
+		logger.Error("WDA build failed: %v", err)
 		return nil, nil, fmt.Errorf("WDA build failed: %w", err)
 	}
+	logger.Info("WDA build completed successfully")
 	printSetupSuccess("WDA built")
 
 	// 4. Start WDA
 	printSetupStep("Starting WDA...")
+	logger.Info("Starting WDA on device %s (port: %d)", udid, runner.Port())
 	if err := runner.Start(ctx); err != nil {
+		logger.Error("WDA start failed: %v", err)
 		runner.Cleanup()
 		return nil, nil, fmt.Errorf("WDA start failed: %w", err)
 	}
+	logger.Info("WDA started successfully on port %d", runner.Port())
 	printSetupSuccess("WDA started")
 
 	// 5. Create WDA client
