@@ -156,21 +156,39 @@ func (m *Manager) Shutdown(serial string) error {
 	return nil
 }
 
-// ShutdownAll shuts down all emulators started by us
+// ShutdownAll shuts down all emulators started by us, in parallel.
 func (m *Manager) ShutdownAll() error {
 	logger.Info("Shutting down all tracked emulators")
 
-	var errors []error
-	m.started.Range(func(key, value interface{}) bool {
-		serial := key.(string)
-		if err := m.Shutdown(serial); err != nil {
-			errors = append(errors, fmt.Errorf("%s: %w", serial, err))
-		}
-		return true // Continue iteration
+	// Collect serials first
+	var serials []string
+	m.started.Range(func(key, _ interface{}) bool {
+		serials = append(serials, key.(string))
+		return true
 	})
 
-	if len(errors) > 0 {
-		return fmt.Errorf("errors during shutdown: %v", errors)
+	if len(serials) == 0 {
+		return nil
+	}
+
+	// Shutdown all in parallel
+	errCh := make(chan error, len(serials))
+	for _, serial := range serials {
+		go func(s string) {
+			errCh <- m.Shutdown(s)
+		}(serial)
+	}
+
+	// Collect results
+	var errs []error
+	for range serials {
+		if err := <-errCh; err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("errors during shutdown: %v", errs)
 	}
 
 	return nil

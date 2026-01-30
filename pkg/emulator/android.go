@@ -223,6 +223,7 @@ func StartEmulator(avdName string, consolePort int, timeout time.Duration) (stri
 		"-netspeed", "full",
 		"-no-boot-anim",
 		"-no-snapshot-load", // devicelab: always fresh boot
+		"-no-snapshot-save", // avoid save dialog on shutdown
 	)
 
 	logger.Debug("Emulator command: %s %v", emulatorPath, cmd.Args[1:])

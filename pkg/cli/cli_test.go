@@ -7,12 +7,27 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/device"
 	"github.com/devicelab-dev/maestro-runner/pkg/emulator"
 	"github.com/devicelab-dev/maestro-runner/pkg/executor"
+	"github.com/devicelab-dev/maestro-runner/pkg/flow"
 	"github.com/devicelab-dev/maestro-runner/pkg/report"
 	"github.com/urfave/cli/v2"
 )
+
+// mockDriver implements core.Driver for testing helpers that take a Driver.
+type mockDriver struct {
+	platformInfo *core.PlatformInfo
+}
+
+func (m *mockDriver) Execute(flow.Step) *core.CommandResult { return &core.CommandResult{} }
+func (m *mockDriver) Screenshot() ([]byte, error)           { return nil, nil }
+func (m *mockDriver) Hierarchy() ([]byte, error)            { return nil, nil }
+func (m *mockDriver) GetState() *core.StateSnapshot         { return nil }
+func (m *mockDriver) GetPlatformInfo() *core.PlatformInfo   { return m.platformInfo }
+func (m *mockDriver) SetFindTimeout(int)                    {}
+func (m *mockDriver) SetWaitForIdleTimeout(int) error       { return nil }
 
 func TestResolveOutputDir_Default(t *testing.T) {
 	dir, err := resolveOutputDir("", false)
@@ -906,14 +921,14 @@ func TestCloneCapabilities_WithValues(t *testing.T) {
 // Tests for parseDevices
 
 func TestParseDevices_SingleDevice(t *testing.T) {
-	devices := parseDevices("emulator-5554", 0, "android")
+	devices := parseDevices("emulator-5554")
 	if len(devices) != 1 || devices[0] != "emulator-5554" {
 		t.Errorf("parseDevices single device = %v, want [emulator-5554]", devices)
 	}
 }
 
 func TestParseDevices_MultipleDevices(t *testing.T) {
-	devices := parseDevices("emulator-5554, emulator-5556", 0, "android")
+	devices := parseDevices("emulator-5554, emulator-5556")
 	if len(devices) != 2 {
 		t.Fatalf("expected 2 devices, got %d", len(devices))
 	}
@@ -926,21 +941,21 @@ func TestParseDevices_MultipleDevices(t *testing.T) {
 }
 
 func TestParseDevices_EmptyFlag(t *testing.T) {
-	devices := parseDevices("", 2, "android")
+	devices := parseDevices("")
 	if devices != nil {
 		t.Errorf("parseDevices empty flag = %v, want nil", devices)
 	}
 }
 
 func TestParseDevices_NoFlagsSet(t *testing.T) {
-	devices := parseDevices("", 0, "")
+	devices := parseDevices("")
 	if devices != nil {
 		t.Errorf("parseDevices no flags = %v, want nil", devices)
 	}
 }
 
 func TestParseDevices_WhitespaceHandling(t *testing.T) {
-	devices := parseDevices("  device1  ,  device2  ", 0, "")
+	devices := parseDevices("  device1  ,  device2  ")
 	if len(devices) != 2 {
 		t.Fatalf("expected 2 devices, got %d", len(devices))
 	}
@@ -949,6 +964,87 @@ func TestParseDevices_WhitespaceHandling(t *testing.T) {
 	}
 	if devices[1] != "device2" {
 		t.Errorf("devices[1] = %q, want %q", devices[1], "device2")
+	}
+}
+
+// Tests for resolveDriverName
+
+func TestResolveDriverName(t *testing.T) {
+	tests := []struct {
+		name     string
+		driver   string
+		platform string
+		expected string
+	}{
+		{"default android", "", "android", "uiautomator2"},
+		{"default ios", "", "ios", "wda"},
+		{"explicit uiautomator2 android", "uiautomator2", "android", "uiautomator2"},
+		{"explicit uiautomator2 ios overrides to wda", "uiautomator2", "ios", "wda"},
+		{"appium android", "appium", "android", "appium"},
+		{"appium ios", "appium", "ios", "appium"},
+		{"mock platform", "", "mock", "mock"},
+		{"case insensitive ios", "", "iOS", "wda"},
+		{"case insensitive appium", "Appium", "android", "appium"},
+		{"empty both", "", "", "uiautomator2"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &RunConfig{Driver: tt.driver}
+			result := resolveDriverName(cfg, tt.platform)
+			if result != tt.expected {
+				t.Errorf("resolveDriverName(driver=%q, platform=%q) = %q, want %q",
+					tt.driver, tt.platform, result, tt.expected)
+			}
+		})
+	}
+}
+
+// Tests for buildDeviceReport and buildAppReport
+
+func TestBuildDeviceReport(t *testing.T) {
+	driver := &mockDriver{
+		platformInfo: &core.PlatformInfo{
+			DeviceID:    "test-device-123",
+			Platform:    "android",
+			DeviceName:  "Pixel 7",
+			OSVersion:   "33",
+			IsSimulator: false,
+		},
+	}
+
+	d := buildDeviceReport(driver)
+	if d.ID != "test-device-123" {
+		t.Errorf("ID = %q, want %q", d.ID, "test-device-123")
+	}
+	if d.Platform != "android" {
+		t.Errorf("Platform = %q, want %q", d.Platform, "android")
+	}
+	if d.Name != "Pixel 7" {
+		t.Errorf("Name = %q, want %q", d.Name, "Pixel 7")
+	}
+	if d.OSVersion != "33" {
+		t.Errorf("OSVersion = %q, want %q", d.OSVersion, "33")
+	}
+	if d.IsSimulator {
+		t.Error("IsSimulator should be false")
+	}
+}
+
+func TestBuildAppReport(t *testing.T) {
+	driver := &mockDriver{
+		platformInfo: &core.PlatformInfo{
+			AppID:      "com.example.app",
+			AppVersion: "2.1.0",
+		},
+	}
+
+	a := buildAppReport(driver)
+	if a.ID != "com.example.app" {
+		t.Errorf("ID = %q, want %q", a.ID, "com.example.app")
+	}
+	if a.Version != "2.1.0" {
+		t.Errorf("Version = %q, want %q", a.Version, "2.1.0")
 	}
 }
 

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -141,12 +142,9 @@ Examples:
 	Action: runTest,
 }
 
-// parseDevices parses device configuration from --device and --parallel flags.
-// Returns a slice of device UDIDs:
-// - If --device has comma-separated values: split and return them
-// - If --parallel N without --device: return nil (auto-detect handled later)
-// - If neither: return nil (single device mode, auto-detect)
-func parseDevices(deviceFlag string, parallelCount int, platform string) []string {
+// parseDevices parses the --device flag value into a slice of device UDIDs.
+// Returns nil if no devices specified (triggers auto-detection later).
+func parseDevices(deviceFlag string) []string {
 	if deviceFlag != "" {
 		// Split comma-separated devices
 		devices := strings.Split(deviceFlag, ",")
@@ -159,6 +157,43 @@ func parseDevices(deviceFlag string, parallelCount int, platform string) []strin
 	// --parallel without --device means auto-detect
 	// Return nil to trigger auto-detection in executeTest
 	return nil
+}
+
+// buildDeviceReport creates a report.Device from driver platform info.
+func buildDeviceReport(driver core.Driver) report.Device {
+	pi := driver.GetPlatformInfo()
+	return report.Device{
+		ID:          pi.DeviceID,
+		Platform:    pi.Platform,
+		Name:        pi.DeviceName,
+		OSVersion:   pi.OSVersion,
+		IsSimulator: pi.IsSimulator,
+	}
+}
+
+// buildAppReport creates a report.App from driver platform info.
+func buildAppReport(driver core.Driver) report.App {
+	pi := driver.GetPlatformInfo()
+	return report.App{
+		ID:      pi.AppID,
+		Version: pi.AppVersion,
+	}
+}
+
+// resolveDriverName returns the driver name for reports based on config and platform.
+func resolveDriverName(cfg *RunConfig, platform string) string {
+	driverName := strings.ToLower(cfg.Driver)
+	if driverName == "" || driverName == "uiautomator2" {
+		if strings.ToLower(platform) == "ios" {
+			driverName = "wda"
+		} else {
+			driverName = "uiautomator2"
+		}
+	}
+	if strings.ToLower(platform) == "mock" {
+		driverName = "mock"
+	}
+	return driverName
 }
 
 // bootTimeout returns the configured emulator boot timeout, defaulting to 180 seconds.
@@ -205,7 +240,8 @@ func handleEmulatorStartup(cfg *RunConfig, mgr *emulator.Manager) error {
 	}
 
 	// Case 2: Auto-start if --auto-start-emulator and no devices
-	if cfg.AutoStartEmulator {
+	// Skip if --parallel is set — determineExecutionMode handles parallel emulator starts
+	if cfg.AutoStartEmulator && cfg.Parallel <= 0 {
 		// Check if we already have devices
 		devices, _ := device.ListDevices()
 		if len(devices) > 0 {
@@ -440,7 +476,7 @@ func runTest(c *cli.Context) error {
 		Continuous:         getBool("continuous"),
 		Headless:           getBool("headless"),
 		Platform:           getString("platform"),
-		Devices:            parseDevices(getString("device"), getInt("parallel"), getString("platform")),
+		Devices:            parseDevices(getString("device")),
 		Verbose:            getBool("verbose"),
 		AppFile:            getString("app-file"),
 		AppID:              appID,
@@ -686,8 +722,8 @@ func determineExecutionMode(cfg *RunConfig, emulatorMgr *emulator.Manager) (need
 			// Try to auto-detect existing devices
 			existingDevices, detectErr := autoDetectDevices(cfg.Platform, cfg.Parallel)
 			if detectErr != nil && !cfg.AutoStartEmulator {
-				// No devices and auto-start disabled
-				return false, nil, fmt.Errorf("failed to auto-detect devices: %w", detectErr)
+				// No devices and auto-start disabled - show helpful error
+				return false, nil, buildParallelDeviceError(cfg, 0)
 			}
 
 			// Start with existing devices (may be empty if none found)
@@ -699,9 +735,8 @@ func determineExecutionMode(cfg *RunConfig, emulatorMgr *emulator.Manager) (need
 			needed := cfg.Parallel - len(deviceIDs)
 			if needed > 0 && cfg.AutoStartEmulator && (cfg.Platform == "" || cfg.Platform == "android") {
 				logger.Info("Need %d more devices for --parallel %d, starting emulators...", needed, cfg.Parallel)
-				fmt.Printf("  %s⏳ Starting %d emulator(s) for parallel execution...%s\n", color(colorCyan), needed, color(colorReset))
 
-				// List available AVDs
+				// List available AVDs and validate count before printing progress
 				avds, err := emulator.ListAVDs()
 				if err != nil {
 					return false, nil, fmt.Errorf("failed to list AVDs: %w", err)
@@ -709,11 +744,19 @@ func determineExecutionMode(cfg *RunConfig, emulatorMgr *emulator.Manager) (need
 				if len(avds) == 0 {
 					return false, nil, fmt.Errorf("need %d more devices but no AVDs available; create AVDs with: avdmanager create avd", needed)
 				}
+				// Require enough unique AVDs -- same AVD cannot run twice (lock conflict)
+				if len(avds) < needed {
+					fmt.Println()
+					return false, nil, buildNotEnoughAVDsError(cfg, len(deviceIDs), avds)
+				}
 
-				// Start emulators sequentially to avoid port conflicts
+				// Now we know we have enough AVDs -- print progress
+				fmt.Printf("  %s⏳ Starting %d emulator(s) for parallel execution...%s\n", color(colorCyan), needed, color(colorReset))
+
+				// Start emulators sequentially to avoid port conflicts.
 				timeout := bootTimeout(cfg)
 
-				for i := 0; i < needed && i < len(avds); i++ {
+				for i := 0; i < needed; i++ {
 					avdName := avds[i].Name
 					logger.Info("Starting emulator %d/%d: %s", i+1, needed, avdName)
 					fmt.Printf("  %s⏳ Starting emulator %d/%d: %s%s\n", color(colorCyan), i+1, needed, avdName, color(colorReset))
@@ -732,13 +775,9 @@ func determineExecutionMode(cfg *RunConfig, emulatorMgr *emulator.Manager) (need
 					logger.Info("Emulator started: %s (%d/%d)", serial, i+1, needed)
 					fmt.Printf("  %s✓ Emulator started: %s%s\n", color(colorGreen), serial, color(colorReset))
 				}
-
-				if len(deviceIDs) < cfg.Parallel {
-					return false, nil, fmt.Errorf("could only start %d/%d devices (found %d AVDs)", len(deviceIDs), cfg.Parallel, len(avds))
-				}
 			} else if needed > 0 {
-				// Need more devices but auto-start is disabled
-				return false, nil, fmt.Errorf("--parallel %d requires %d devices but only found %d. Use --auto-start-emulator to start additional emulators", cfg.Parallel, cfg.Parallel, len(deviceIDs))
+				// Need more devices but auto-start is disabled - build helpful error
+				return false, nil, buildParallelDeviceError(cfg, len(deviceIDs))
 			}
 		}
 		printSetupSuccess(fmt.Sprintf("Using %d device(s) for parallel execution", len(deviceIDs)))
@@ -781,39 +820,31 @@ func executeSingleDevice(cfg *RunConfig, flows []flow.Flow) (*executor.RunResult
 	driver, cleanup, err := createDriver(cfg)
 	if err != nil {
 		logger.Error("Failed to create driver: %v", err)
+		// Surface NoDevicesError directly so the helpful message isn't buried
+		var noDevErr *device.NoDevicesError
+		if errors.As(err, &noDevErr) {
+			return nil, noDevErr
+		}
 		return nil, fmt.Errorf("failed to create driver: %w", err)
 	}
 	defer cleanup()
 
 	logger.Info("Driver created: %s on %s", driver.GetPlatformInfo().Platform, driver.GetPlatformInfo().DeviceName)
 
-	driverName := "uiautomator2"
-	if cfg.Platform == "mock" {
-		driverName = "mock"
-	}
-
-	deviceInfo := &report.Device{
-		ID:          driver.GetPlatformInfo().DeviceID,
-		Platform:    driver.GetPlatformInfo().Platform,
-		Name:        driver.GetPlatformInfo().DeviceName,
-		OSVersion:   driver.GetPlatformInfo().OSVersion,
-		IsSimulator: driver.GetPlatformInfo().IsSimulator,
-	}
+	driverName := resolveDriverName(cfg, cfg.Platform)
+	deviceInfo := buildDeviceReport(driver)
 
 	runner := executor.New(driver, executor.RunnerConfig{
 		OutputDir:   cfg.OutputDir,
 		Parallelism: 0,
 		Artifacts:   executor.ArtifactOnFailure,
-		Device:      *deviceInfo,
-		App: report.App{
-			ID:      driver.GetPlatformInfo().AppID,
-			Version: driver.GetPlatformInfo().AppVersion,
-		},
-		RunnerVersion:      "0.1.0",
+		Device:      deviceInfo,
+		App:         buildAppReport(driver),
+		RunnerVersion:      Version,
 		DriverName:         driverName,
 		Env:                cfg.Env,
 		WaitForIdleTimeout: cfg.WaitForIdleTimeout,
-		DeviceInfo:         deviceInfo,
+		DeviceInfo:         &deviceInfo,
 		OnFlowStart:        onFlowStart,
 		OnStepComplete:     onStepComplete,
 		OnNestedStep:       onNestedStep,
@@ -1135,18 +1166,9 @@ func executeFlowsWithPerFlowSession(cfg *RunConfig, flows []flow.Flow) (*executo
 			OutputDir:   cfg.OutputDir,
 			Parallelism: 0,
 			Artifacts:   executor.ArtifactOnFailure,
-			Device: report.Device{
-				ID:          driver.GetPlatformInfo().DeviceID,
-				Platform:    driver.GetPlatformInfo().Platform,
-				Name:        driver.GetPlatformInfo().DeviceName,
-				OSVersion:   driver.GetPlatformInfo().OSVersion,
-				IsSimulator: driver.GetPlatformInfo().IsSimulator,
-			},
-			App: report.App{
-				ID:      driver.GetPlatformInfo().AppID,
-				Version: driver.GetPlatformInfo().AppVersion,
-			},
-			RunnerVersion:      "0.1.0",
+			Device:      buildDeviceReport(driver),
+			App:         buildAppReport(driver),
+			RunnerVersion:      Version,
 			DriverName:         "appium",
 			Env:                cfg.Env,
 			WaitForIdleTimeout: cfg.WaitForIdleTimeout,
@@ -1430,6 +1452,97 @@ func enhanceNoDevicesError(noDevErr *device.NoDevicesError, cfg *RunConfig) {
 	}
 }
 
+// buildParallelDeviceError creates a helpful error when --parallel needs more devices.
+func buildParallelDeviceError(cfg *RunConfig, found int) error {
+	msg := fmt.Sprintf("--parallel %d requires %d devices but only found %d\n", cfg.Parallel, cfg.Parallel, found)
+
+	// Try to list available AVDs
+	avds, _ := emulator.ListAVDs()
+	if len(avds) > 0 {
+		msg += "\nAvailable AVDs:\n"
+		for _, avd := range avds {
+			msg += fmt.Sprintf("  - %s\n", avd.Name)
+		}
+	}
+
+	msg += "\nOptions:\n"
+	optNum := 1
+
+	if found > 0 {
+		msg += fmt.Sprintf("  %d. Connect %d more device(s) via USB\n", optNum, cfg.Parallel-found)
+		optNum++
+	} else {
+		msg += fmt.Sprintf("  %d. Connect %d device(s) via USB (enable USB debugging)\n", optNum, cfg.Parallel)
+		optNum++
+	}
+
+	if len(avds) > 0 {
+		// Build the actual command the user would run
+		args := os.Args
+		globalPart := args[0]
+		testPart := ""
+		for i := 1; i < len(args); i++ {
+			if args[i] == "test" {
+				globalPart = strings.Join(args[:i], " ")
+				testPart = " " + strings.Join(args[i:], " ")
+				break
+			}
+		}
+		if testPart == "" {
+			globalPart = strings.Join(args, " ")
+		}
+
+		msg += fmt.Sprintf("  %d. Auto-start emulators: %s --auto-start-emulator%s\n", optNum, globalPart, testPart)
+		optNum++
+
+		msg += fmt.Sprintf("  %d. Start emulators manually:\n", optNum)
+		limit := cfg.Parallel
+		if limit > len(avds) {
+			limit = len(avds)
+		}
+		for i := 0; i < limit; i++ {
+			msg += fmt.Sprintf("     emulator -avd %s &\n", avds[i].Name)
+		}
+		if cfg.Parallel > len(avds) {
+			msg += fmt.Sprintf("     (need %d more AVD(s) — create with: avdmanager create avd)\n", cfg.Parallel-len(avds))
+		}
+	} else {
+		msg += fmt.Sprintf("  %d. Create AVDs: avdmanager create avd --name <name> --package <system-image>\n", optNum)
+	}
+
+	return fmt.Errorf("%s", msg)
+}
+
+// buildNotEnoughAVDsError creates a helpful error when --parallel N requires more
+// unique AVDs than are available. Each parallel emulator needs its own AVD because
+// Android locks the AVD directory at boot, preventing the same AVD from running twice.
+func buildNotEnoughAVDsError(cfg *RunConfig, existingDevices int, avds []emulator.AVDInfo) error {
+	needed := cfg.Parallel - existingDevices
+	msg := fmt.Sprintf("--parallel %d needs %d emulator(s) but only %d AVD(s) available\n", cfg.Parallel, needed, len(avds))
+	msg += "\nEach emulator requires a unique AVD (Android locks the AVD directory at boot).\n"
+
+	msg += "\nAvailable AVDs:\n"
+	for _, avd := range avds {
+		msg += fmt.Sprintf("  - %s\n", avd.Name)
+	}
+
+	msg += "\nOptions:\n"
+	optNum := 1
+
+	// Option: connect physical devices
+	shortfall := needed - len(avds)
+	msg += fmt.Sprintf("  %d. Connect %d more device(s) via USB (enable USB debugging)\n", optNum, shortfall)
+	optNum++
+
+	// Option: create more AVDs
+	msg += fmt.Sprintf("  %d. Create %d more AVD(s):\n", optNum, shortfall)
+	for i := len(avds); i < needed; i++ {
+		msg += fmt.Sprintf("     avdmanager create avd --name Device_%d --package \"system-images;android-34;google_apis;x86_64\"\n", i+1)
+	}
+
+	return fmt.Errorf("%s", msg)
+}
+
 // getFirstDevice returns the first device from config, or empty string if none.
 func getFirstDevice(cfg *RunConfig) string {
 	if len(cfg.Devices) > 0 {
@@ -1597,30 +1710,18 @@ func createDeviceWorkers(cfg *RunConfig, deviceIDs []string, platform string) ([
 
 // createParallelRunner builds the parallel runner with config.
 func createParallelRunner(cfg *RunConfig, workers []executor.DeviceWorker, platform string) *executor.ParallelRunner {
-	driverName := "uiautomator2"
-	if platform == "ios" {
-		driverName = "wda"
-	} else if cfg.Platform == "mock" {
-		driverName = "mock"
-	}
+	driverName := resolveDriverName(cfg, platform)
 
 	firstDriver := workers[0].Driver
+	deviceInfo := buildDeviceReport(firstDriver)
+	deviceInfo.Name = fmt.Sprintf("%d devices", len(workers))
 	runnerConfig := executor.RunnerConfig{
 		OutputDir:   cfg.OutputDir,
 		Parallelism: 0,
 		Artifacts:   executor.ArtifactOnFailure,
-		Device: report.Device{
-			ID:          firstDriver.GetPlatformInfo().DeviceID,
-			Platform:    firstDriver.GetPlatformInfo().Platform,
-			Name:        fmt.Sprintf("%d devices", len(workers)),
-			OSVersion:   firstDriver.GetPlatformInfo().OSVersion,
-			IsSimulator: firstDriver.GetPlatformInfo().IsSimulator,
-		},
-		App: report.App{
-			ID:      firstDriver.GetPlatformInfo().AppID,
-			Version: firstDriver.GetPlatformInfo().AppVersion,
-		},
-		RunnerVersion:      "0.1.0",
+		Device:      deviceInfo,
+		App:         buildAppReport(firstDriver),
+		RunnerVersion:      Version,
 		DriverName:         driverName,
 		Env:                cfg.Env,
 		WaitForIdleTimeout: cfg.WaitForIdleTimeout,
