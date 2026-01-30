@@ -84,11 +84,16 @@ func (r *Runner) Build(ctx context.Context) error {
 	// Check if already built by looking for xctestrun file
 	if _, err := r.findXctestrun(); err == nil {
 		// Build exists - skip rebuilding
-		fmt.Printf("WebDriverAgent already built (using cached build: %s)\n", filepath.Base(r.buildDir))
+		fmt.Printf("  ✓ Using cached WebDriverAgent build (%s)\n", filepath.Base(r.buildDir))
 		return nil
 	}
 
 	// Need to build
+	fmt.Println("\n  ⏳ Building WebDriverAgent for the first time...")
+	fmt.Println("     This may take 5-10 minutes depending on your machine.")
+	fmt.Println("     Next time it will be much faster (cached builds are reused).")
+	fmt.Println()
+
 	logPath := filepath.Join(r.buildDir, "logs", "build.log")
 	logFile, err := os.Create(logPath)
 	if err != nil {
@@ -112,8 +117,6 @@ func (r *Runner) Build(ctx context.Context) error {
 	)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-
-	fmt.Println("Building WebDriverAgent (up to 10 min)...")
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("build failed:\n%s\n\nFull log: %s", tailLog(logPath, 20), logPath)
