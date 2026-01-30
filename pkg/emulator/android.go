@@ -236,6 +236,7 @@ func StartEmulator(avdName string, consolePort int, timeout time.Duration) (stri
 	// Stage 1: Wait for device state (60s)
 	if err := WaitForDeviceState(serial, 60*time.Second); err != nil {
 		cmd.Process.Kill()
+		cmd.Wait() //nolint:errcheck // best-effort reap after kill
 		return "", nil, fmt.Errorf("device state check failed: %w", err)
 	}
 
@@ -248,6 +249,7 @@ func StartEmulator(avdName string, consolePort int, timeout time.Duration) (stri
 
 	if err := WaitForBootComplete(serial, remaining); err != nil {
 		cmd.Process.Kill()
+		cmd.Wait() //nolint:errcheck // best-effort reap after kill
 		return "", nil, err
 	}
 
@@ -256,8 +258,17 @@ func StartEmulator(avdName string, consolePort int, timeout time.Duration) (stri
 
 	// Warn if slow boot (>30s)
 	if bootDuration > 30*time.Second {
-		logger.Info("⚠️  Slow emulator boot detected (%v). Consider using snapshots or a faster system.", bootDuration)
+		logger.Info("Slow emulator boot detected (%v). Consider using snapshots or a faster system.", bootDuration)
 	}
+
+	// Reap the child process in the background to prevent zombies.
+	// cmd.Wait() collects the exit status so the OS can clean up the process entry.
+	// Started after boot verification to avoid racing with Kill() in error paths above.
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			logger.Debug("Emulator process exited: %v", err)
+		}
+	}()
 
 	return serial, cmd, nil
 }

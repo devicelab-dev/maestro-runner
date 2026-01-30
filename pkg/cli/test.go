@@ -7,12 +7,15 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/config"
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
+	"github.com/devicelab-dev/maestro-runner/pkg/device"
 	appiumdriver "github.com/devicelab-dev/maestro-runner/pkg/driver/appium"
 	"github.com/devicelab-dev/maestro-runner/pkg/driver/mock"
 	wdadriver "github.com/devicelab-dev/maestro-runner/pkg/driver/wda"
@@ -155,6 +158,15 @@ func parseDevices(deviceFlag string, parallelCount int, platform string) []strin
 	return nil
 }
 
+// bootTimeout returns the configured emulator boot timeout, defaulting to 180 seconds.
+func bootTimeout(cfg *RunConfig) time.Duration {
+	timeout := time.Duration(cfg.BootTimeout) * time.Second
+	if timeout == 0 {
+		timeout = 180 * time.Second
+	}
+	return timeout
+}
+
 // handleEmulatorStartup starts Android emulators if requested via CLI flags.
 // Handles two cases:
 // 1. --start-emulator: Explicitly start a specific AVD
@@ -165,10 +177,7 @@ func handleEmulatorStartup(cfg *RunConfig, mgr *emulator.Manager) error {
 		return nil
 	}
 
-	timeout := time.Duration(cfg.BootTimeout) * time.Second
-	if timeout == 0 {
-		timeout = 180 * time.Second // Default 3 minutes
-	}
+	timeout := bootTimeout(cfg)
 
 	// Case 1: Explicit --start-emulator flag
 	if cfg.StartEmulator != "" {
@@ -211,7 +220,7 @@ func handleEmulatorStartup(cfg *RunConfig, mgr *emulator.Manager) error {
 			return fmt.Errorf("failed to list AVDs: %w", err)
 		}
 		if len(avds) == 0 {
-			return fmt.Errorf("no devices and no AVDs available. Create an AVD with: avdmanager create avd ...")
+			return fmt.Errorf("no devices and no AVDs available; create an AVD with: avdmanager create avd")
 		}
 
 		// Start the first AVD
@@ -509,6 +518,8 @@ func executeTest(cfg *RunConfig) error {
 
 	// 2.5. Initialize emulator manager (for Android)
 	emulatorMgr := emulator.NewManager()
+
+	// Ensure emulators are cleaned up on normal exit
 	defer func() {
 		if cfg.ShutdownAfter {
 			logger.Info("Shutting down emulators started by maestro-runner...")
@@ -517,6 +528,22 @@ func executeTest(cfg *RunConfig) error {
 			}
 		}
 	}()
+
+	// Handle SIGINT/SIGTERM to clean up emulators on Ctrl+C or kill
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		logger.Info("Received signal %v, cleaning up emulators...", sig)
+		fmt.Fprintf(os.Stderr, "\nReceived %v, shutting down emulators...\n", sig)
+		if cfg.ShutdownAfter {
+			if err := emulatorMgr.ShutdownAll(); err != nil {
+				logger.Error("Failed to shutdown emulators on signal: %v", err)
+			}
+		}
+		os.Exit(1)
+	}()
+	defer signal.Stop(sigCh)
 
 	// 3. Validate and parse flows
 	flows, err := validateAndParseFlows(cfg)
@@ -677,14 +704,11 @@ func determineExecutionMode(cfg *RunConfig, emulatorMgr *emulator.Manager) (need
 					return false, nil, fmt.Errorf("failed to list AVDs: %w", err)
 				}
 				if len(avds) == 0 {
-					return false, nil, fmt.Errorf("need %d more devices but no AVDs available. Create AVDs with: avdmanager create avd ...", needed)
+					return false, nil, fmt.Errorf("need %d more devices but no AVDs available; create AVDs with: avdmanager create avd", needed)
 				}
 
 				// Start emulators sequentially to avoid port conflicts
-				timeout := time.Duration(cfg.BootTimeout) * time.Second
-				if timeout == 0 {
-					timeout = 180 * time.Second
-				}
+				timeout := bootTimeout(cfg)
 
 				for i := 0; i < needed && i < len(avds); i++ {
 					avdName := avds[i].Name
@@ -693,6 +717,11 @@ func determineExecutionMode(cfg *RunConfig, emulatorMgr *emulator.Manager) (need
 
 					serial, err := emulatorMgr.Start(avdName, timeout)
 					if err != nil {
+						// Clean up already-started emulators before returning
+						logger.Error("Emulator %s failed, cleaning up %d already-started emulator(s)", avdName, i)
+						if shutdownErr := emulatorMgr.ShutdownAll(); shutdownErr != nil {
+							logger.Error("Failed to cleanup emulators after partial start: %v", shutdownErr)
+						}
 						return false, nil, fmt.Errorf("failed to start emulator %s: %w", avdName, err)
 					}
 
@@ -1333,6 +1362,49 @@ func checkDeviceAvailable(deviceID, platform string) error {
 		}
 	}
 	return nil
+}
+
+// enhanceNoDevicesError enhances error suggestions with actual command context.
+func enhanceNoDevicesError(noDevErr *device.NoDevicesError, cfg *RunConfig) {
+	// Reconstruct the user's original command from os.Args
+	// Example: maestro-runner test flow.yaml --platform android -e USER=test
+	userCommand := strings.Join(os.Args, " ")
+
+	// Build suggestions with the actual command
+	for i, suggestion := range noDevErr.Suggestions {
+		// Replace generic placeholders with actual command + flag
+		if strings.Contains(suggestion, "--auto-start-emulator <flow>") {
+			noDevErr.Suggestions[i] = strings.ReplaceAll(suggestion,
+				"maestro-runner --auto-start-emulator <flow>",
+				userCommand+" --auto-start-emulator")
+		} else if strings.Contains(suggestion, "--start-emulator") && strings.Contains(suggestion, "<flow>") {
+			// Extract AVD name from the suggestion
+			parts := strings.Fields(suggestion)
+			var avdName string
+			for j, part := range parts {
+				if part == "--start-emulator" && j+1 < len(parts) {
+					avdName = parts[j+1]
+					break
+				}
+			}
+			noDevErr.Suggestions[i] = strings.ReplaceAll(suggestion,
+				"maestro-runner --start-emulator "+avdName+" <flow>",
+				userCommand+" --start-emulator "+avdName)
+		} else if strings.Contains(suggestion, "--parallel") && strings.Contains(suggestion, "<flows>") {
+			// Extract parallel count
+			parts := strings.Fields(suggestion)
+			var parallelCount string
+			for j, part := range parts {
+				if part == "--parallel" && j+1 < len(parts) {
+					parallelCount = parts[j+1]
+					break
+				}
+			}
+			noDevErr.Suggestions[i] = strings.ReplaceAll(suggestion,
+				"maestro-runner --parallel "+parallelCount+" --auto-start-emulator <flows>",
+				userCommand+" --parallel "+parallelCount+" --auto-start-emulator")
+		}
+	}
 }
 
 // getFirstDevice returns the first device from config, or empty string if none.

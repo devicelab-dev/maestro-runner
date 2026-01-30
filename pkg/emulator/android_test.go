@@ -194,7 +194,10 @@ func TestListAVDs_Integration(t *testing.T) {
 }
 
 func TestManager_AllocatePort(t *testing.T) {
-	mgr := NewManager()
+	// Create a clean manager without persistent port mapping
+	mgr := &Manager{
+		portMap: make(map[string]int),
+	}
 
 	// First allocation should start at 5554
 	port1 := mgr.AllocatePort("test-avd-1")
