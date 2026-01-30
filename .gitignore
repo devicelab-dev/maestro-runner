@@ -5,6 +5,10 @@ maestro-runner-*
 
 # Build artifacts
 bin/
+dist/
+build-release.sh
+release.sh
+install-download.sh
 
 # Test coverage & profiling
 coverage.out
