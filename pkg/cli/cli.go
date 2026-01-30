@@ -4,12 +4,17 @@ package cli
 import (
 	"fmt"
 	"os"
+	"runtime"
 
 	"github.com/urfave/cli/v2"
 )
 
-// Version is set at build time.
-var Version = "1.0.1"
+// Build info — set at build time via -ldflags.
+var (
+	Version   = "1.0.1"
+	Commit    = "unknown"
+	BuildDate = "unknown"
+)
 
 // GlobalFlags are available to all commands.
 var GlobalFlags = []cli.Flag{
@@ -89,6 +94,14 @@ var GlobalFlags = []cli.Flag{
 func Execute() {
 	// Merge global flags and test command flags for root-level execution
 	allFlags := append(GlobalFlags, testCommand.Flags...)
+
+	cli.VersionPrinter = func(c *cli.Context) {
+		fmt.Printf("maestro-runner %s\n", c.App.Version)
+		fmt.Printf("  Commit:  %s\n", Commit)
+		fmt.Printf("  Built:   %s\n", BuildDate)
+		fmt.Printf("  Go:      %s\n", runtime.Version())
+		fmt.Printf("  OS/Arch: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+	}
 
 	app := &cli.App{
 		Name:      "maestro-runner",

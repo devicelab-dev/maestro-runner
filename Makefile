@@ -5,7 +5,7 @@ BINARY_NAME=maestro-runner
 VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 COMMIT?=$(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
 BUILD_DATE?=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
-LDFLAGS=-ldflags "-X github.com/devicelab-dev/maestro-runner/cmd.Version=${VERSION} -X github.com/devicelab-dev/maestro-runner/cmd.Commit=${COMMIT} -X github.com/devicelab-dev/maestro-runner/cmd.BuildDate=${BUILD_DATE}"
+LDFLAGS=-ldflags "-X github.com/devicelab-dev/maestro-runner/pkg/cli.Version=${VERSION} -X github.com/devicelab-dev/maestro-runner/pkg/cli.Commit=${COMMIT} -X github.com/devicelab-dev/maestro-runner/pkg/cli.BuildDate=${BUILD_DATE}"
 
 # Install directory
 INSTALL_DIR=$(HOME)/.maestro
