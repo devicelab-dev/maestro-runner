@@ -16,8 +16,6 @@ const (
 	WDAGitHubAPI = "https://api.github.com/repos/appium/WebDriverAgent/releases/latest"
 	// WDARepoURL is the GitHub repository URL template for downloading WDA.
 	WDARepoURL = "https://github.com/appium/WebDriverAgent/archive/refs/tags/v%s.zip"
-	// WDADir is the local directory where WDA build cache is stored.
-	WDADir = ".maestro/wda"
 )
 
 // Setup ensures WDA is available. Downloads if missing.
@@ -44,15 +42,6 @@ func Setup() (string, error) {
 func GetWDAPath() (string, error) {
 	// Use bundled WDA in drivers/ios directory (version-agnostic path)
 	return filepath.Join(".", "drivers", "ios", "WebDriverAgent"), nil
-}
-
-// GetWDABasePath returns the base WDA directory for build cache.
-func GetWDABasePath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("failed to get home directory: %w", err)
-	}
-	return filepath.Join(home, WDADir), nil
 }
 
 // GetLocalWDAVersion reads the version from the bundled WDA's package.json.
