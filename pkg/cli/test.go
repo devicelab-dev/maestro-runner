@@ -772,7 +772,7 @@ func executeSingleDevice(cfg *RunConfig, flows []flow.Flow) (*executor.RunResult
 		OutputDir:   cfg.OutputDir,
 		Parallelism: 0,
 		Artifacts:   executor.ArtifactOnFailure,
-		Device: *deviceInfo,
+		Device:      *deviceInfo,
 		App: report.App{
 			ID:      driver.GetPlatformInfo().AppID,
 			Version: driver.GetPlatformInfo().AppVersion,

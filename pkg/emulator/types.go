@@ -30,17 +30,17 @@ type EmulatorInstance struct {
 
 // Manager manages emulator lifecycle and tracks started emulators
 type Manager struct {
-	started sync.Map        // serial -> *EmulatorInstance (thread-safe)
-	portMap map[string]int  // AVD name -> console port (persistent mapping)
-	mu      sync.Mutex      // Protects portMap
+	started sync.Map       // serial -> *EmulatorInstance (thread-safe)
+	portMap map[string]int // AVD name -> console port (persistent mapping)
+	mu      sync.Mutex     // Protects portMap
 }
 
 // BootStatus represents emulator boot state
 type BootStatus struct {
-	StateReady      bool // adb get-state == "device"
-	BootCompleted   bool // sys.boot_completed == "1"
-	SettingsReady   bool // settings list global succeeds
-	PackageManager  bool // pm get-max-users succeeds
+	StateReady     bool // adb get-state == "device"
+	BootCompleted  bool // sys.boot_completed == "1"
+	SettingsReady  bool // settings list global succeeds
+	PackageManager bool // pm get-max-users succeeds
 }
 
 // IsFullyReady returns true if all boot checks passed

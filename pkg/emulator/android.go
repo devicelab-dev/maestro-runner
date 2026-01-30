@@ -201,15 +201,15 @@ func WaitForDeviceState(serial string, timeout time.Duration) error {
 	return fmt.Errorf("timeout waiting for device state after %v", timeout)
 }
 
-// StartEmulator boots an Android emulator
-func StartEmulator(avdName string, consolePort int, timeout time.Duration) (string, error) {
+// StartEmulator boots an Android emulator and returns serial and process
+func StartEmulator(avdName string, consolePort int, timeout time.Duration) (string, *exec.Cmd, error) {
 	logger.Info("Starting emulator: %s on port %d", avdName, consolePort)
 	bootStart := time.Now()
 
 	// Find emulator binary
 	emulatorPath, err := FindEmulatorBinary()
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	// Build serial
@@ -228,7 +228,7 @@ func StartEmulator(avdName string, consolePort int, timeout time.Duration) (stri
 	logger.Debug("Emulator command: %s %v", emulatorPath, cmd.Args[1:])
 
 	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("failed to start emulator process: %w", err)
+		return "", nil, fmt.Errorf("failed to start emulator process: %w", err)
 	}
 
 	logger.Info("Emulator process started (PID: %d)", cmd.Process.Pid)
@@ -236,7 +236,7 @@ func StartEmulator(avdName string, consolePort int, timeout time.Duration) (stri
 	// Stage 1: Wait for device state (60s)
 	if err := WaitForDeviceState(serial, 60*time.Second); err != nil {
 		cmd.Process.Kill()
-		return "", fmt.Errorf("device state check failed: %w", err)
+		return "", nil, fmt.Errorf("device state check failed: %w", err)
 	}
 
 	// Stage 2 & 3: Wait for boot complete and services (remaining timeout)
@@ -248,7 +248,7 @@ func StartEmulator(avdName string, consolePort int, timeout time.Duration) (stri
 
 	if err := WaitForBootComplete(serial, remaining); err != nil {
 		cmd.Process.Kill()
-		return "", err
+		return "", nil, err
 	}
 
 	bootDuration := time.Since(bootStart)
@@ -259,7 +259,7 @@ func StartEmulator(avdName string, consolePort int, timeout time.Duration) (stri
 		logger.Info("⚠️  Slow emulator boot detected (%v). Consider using snapshots or a faster system.", bootDuration)
 	}
 
-	return serial, nil
+	return serial, cmd, nil
 }
 
 // ShutdownEmulator gracefully shuts down an emulator

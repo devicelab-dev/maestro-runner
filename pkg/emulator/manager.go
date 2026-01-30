@@ -45,7 +45,7 @@ func (m *Manager) StartWithRetry(avdName string, timeout time.Duration, maxAttem
 		logger.Info("Starting emulator attempt %d/%d: %s (port %d)", attempt, maxAttempts, avdName, port)
 
 		// Try to start emulator
-		startedSerial, err := StartEmulator(avdName, port, timeout)
+		startedSerial, cmd, err := StartEmulator(avdName, port, timeout)
 		if err == nil {
 			// Success! Track and save
 			instance := &EmulatorInstance{
@@ -53,6 +53,7 @@ func (m *Manager) StartWithRetry(avdName string, timeout time.Duration, maxAttem
 				Serial:      startedSerial,
 				ConsolePort: port,
 				ADBPort:     port + 1,
+				Process:     cmd,
 				StartedBy:   "maestro-runner",
 				BootStart:   time.Now(),
 			}
@@ -105,6 +106,8 @@ func (m *Manager) AllocatePort(avdName string) int {
 		}
 	}
 
+	// Save allocation immediately to prevent race conditions
+	m.portMap[avdName] = nextPort
 	logger.Debug("Allocated new port %d for AVD %s", nextPort, avdName)
 	return nextPort
 }
