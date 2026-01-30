@@ -1597,51 +1597,52 @@ func getSimulatorInfo(udid string) (*simulatorInfo, error) {
 		return nil, err
 	}
 
-	lines := strings.Split(out, "\n")
-	var name, osVersion string
-	foundUDID := false
-
-	for i, line := range lines {
-		line = strings.TrimSpace(line)
-
-		// Look for OS version headers like "iOS 18.6"
-		if strings.Contains(line, "iOS") && strings.Contains(line, ":") {
-			osVersion = strings.Trim(strings.Split(line, ":")[0], ` "`)
-		}
-
-		// Look for our UDID
-		if !strings.Contains(line, udid) {
-			continue
-		}
-
-		foundUDID = true
-		name = lookupSimulatorName(lines, i)
-		break
+	// Parse JSON properly
+	var data struct {
+		Devices map[string][]struct {
+			Name  string `json:"name"`
+			UDID  string `json:"udid"`
+			State string `json:"state"`
+		} `json:"devices"`
 	}
 
-	if !foundUDID {
-		return nil, fmt.Errorf("simulator %s not found", udid)
+	if err := json.Unmarshal([]byte(out), &data); err != nil {
+		return nil, fmt.Errorf("failed to parse simctl output: %w", err)
 	}
 
-	return &simulatorInfo{
-		Name:      name,
-		OSVersion: osVersion,
-	}, nil
+	// Search for the device by UDID
+	for runtime, devices := range data.Devices {
+		for _, device := range devices {
+			if device.UDID == udid {
+				// Extract iOS version from runtime string
+				// Example: "com.apple.CoreSimulator.SimRuntime.iOS-26-1" -> "26.1"
+				osVersion := extractIOSVersion(runtime)
+				return &simulatorInfo{
+					Name:      device.Name,
+					OSVersion: osVersion,
+					State:     device.State,
+				}, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("simulator %s not found", udid)
 }
 
-// lookupSimulatorName finds the simulator name by looking back from the UDID line.
-func lookupSimulatorName(lines []string, udidLineIndex int) string {
-	// Look back up to 5 lines for the name field
-	for j := udidLineIndex - 1; j >= 0 && j >= udidLineIndex-5; j-- {
-		if !strings.Contains(lines[j], `"name"`) {
-			continue
-		}
-		parts := strings.Split(lines[j], ":")
-		if len(parts) >= 2 {
-			return strings.Trim(parts[1], ` ",`)
+// extractIOSVersion extracts the iOS version from a runtime string.
+// Example: "com.apple.CoreSimulator.SimRuntime.iOS-26-1" -> "26.1"
+func extractIOSVersion(runtime string) string {
+	// Look for iOS version pattern
+	parts := strings.Split(runtime, ".")
+	if len(parts) > 0 {
+		lastPart := parts[len(parts)-1]
+		if strings.HasPrefix(lastPart, "iOS-") {
+			version := strings.TrimPrefix(lastPart, "iOS-")
+			version = strings.ReplaceAll(version, "-", ".")
+			return version
 		}
 	}
-	return ""
+	return runtime
 }
 
 // getIOSAppVersion queries the iOS simulator for an app's version.
