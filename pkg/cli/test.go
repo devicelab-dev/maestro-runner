@@ -468,6 +468,7 @@ func determineExecutionMode(cfg *RunConfig) (needsParallel bool, deviceIDs []str
 		fmt.Println("    During execution, only brief status updates will be shown to avoid")
 		fmt.Println("    messy interleaved output. Detailed results will be displayed after")
 		fmt.Println("    all tests complete.")
+		fmt.Println()
 	}
 
 	printSetupSuccess(fmt.Sprintf("Output: %s", cfg.OutputDir))
