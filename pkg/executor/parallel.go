@@ -150,11 +150,21 @@ func (pr *ParallelRunner) Run(ctx context.Context, flows []flow.Flow) (*RunResul
 			// Create device-specific callbacks that include device info in output
 			deviceLabel := formatDeviceLabel(deviceInfo)
 
+			// Store flow info for OnFlowEnd callback
+			var currentFlowIdx int
+			var currentTotalFlows int
+			var currentFlowFile string
+
 			workerConfig.OnFlowStart = func(flowIdx, totalFlows int, name, file string) {
+				// Store for OnFlowEnd
+				currentFlowIdx = flowIdx
+				currentTotalFlows = totalFlows
+				currentFlowFile = file
+
 				pr.outputMutex.Lock()
 				defer pr.outputMutex.Unlock()
-				fmt.Printf("[%d/%d] %s (%s) - Started on %s\n",
-					flowIdx+1, totalFlows, name, file, deviceLabel)
+				fmt.Printf("[%d/%d] %s (%s) - %s⚡ Started%s on %s\n",
+					flowIdx+1, totalFlows, name, file, color(colorCyan), color(colorReset), deviceLabel)
 			}
 
 			workerConfig.OnFlowEnd = func(name string, passed bool, durationMs int64, errMsg string) {
@@ -168,8 +178,9 @@ func (pr *ParallelRunner) Run(ctx context.Context, flows []flow.Flow) (*RunResul
 					statusColor = color(colorRed)
 				}
 
-				fmt.Printf("%s - %s%s%s (%s) on %s\n",
-					name, statusColor, status, color(colorReset), formatDuration(durationMs), deviceLabel)
+				fmt.Printf("[%d/%d] %s (%s) - %s%s%s on %s (%s)\n",
+					currentFlowIdx+1, currentTotalFlows, name, currentFlowFile,
+					statusColor, status, color(colorReset), deviceLabel, formatDuration(durationMs))
 
 				if !passed && errMsg != "" {
 					fmt.Printf("  Error: %s\n", errMsg)
