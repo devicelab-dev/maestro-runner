@@ -1,0 +1,30 @@
+name: Unit Tests
+
+on: [pull_request, push]
+
+
+jobs:
+  node_matrix:
+    uses: appium/appium-workflows/.github/workflows/node-lts-matrix.yml@main
+
+  node_test:
+    needs:
+    - node_matrix
+    strategy:
+      matrix:
+        node-version: ${{ fromJSON(needs.node_matrix.outputs.versions) }}
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions/setup-node@v6
+      with:
+        node-version: ${{ matrix.node-version }}
+    - uses: SocketDev/action@v1
+      with:
+        mode: firewall-free
+    - run: sfw npm install --no-package-lock
+      name: Install dev dependencies
+    - run: npm run lint
+      name: Run linter
+    - run: npm run test
+      name: Run unit tests

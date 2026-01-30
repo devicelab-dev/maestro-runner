@@ -1,0 +1,13 @@
+XC_PROJECT = File.absolute_path('../WebDriverAgent.xcodeproj')
+
+lane :test do
+  # https://docs.fastlane.tools/actions/scan/
+  run_tests(
+    project: XC_PROJECT,
+    fail_build: true,
+    scheme: ENV['SCHEME'],
+    sdk: ENV['SDK'],
+    device: ENV['DEVICE'],
+    number_of_retries: 3
+  )
+end
