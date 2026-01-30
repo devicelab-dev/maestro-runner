@@ -21,13 +21,15 @@ const (
 
 // Runner handles building and running WDA on iOS devices.
 type Runner struct {
-	deviceUDID string
-	teamID     string
-	port       uint16
-	wdaPath    string
-	buildDir   string
-	cmd        *exec.Cmd
-	logFile    *os.File
+	deviceUDID       string
+	teamID           string
+	port             uint16
+	wdaPath          string
+	buildDir         string
+	cmd              *exec.Cmd
+	logFile          *os.File
+	iproxyCmd        *exec.Cmd // Port forwarding for physical devices
+	isSimulatorCache bool      // Cached device type
 }
 
 // NewRunner creates a new WDA runner.
@@ -137,6 +139,9 @@ func (r *Runner) Start(ctx context.Context) error {
 		return err
 	}
 
+	// Check if this is a simulator or physical device
+	r.isSimulatorCache, _ = r.isSimulator()
+
 	// Inject USE_PORT into the xctestrun plist so the WDA process picks it up.
 	// Setting cmd.Env on xcodebuild does NOT propagate to the test runner;
 	// the runner reads env vars from the xctestrun plist's EnvironmentVariables.
@@ -170,7 +175,32 @@ func (r *Runner) Start(ctx context.Context) error {
 		return err
 	}
 
+	// For physical devices, start iproxy to forward the port from device to localhost
+	if !r.isSimulatorCache {
+		if err := r.startIProxy(ctx); err != nil {
+			r.Stop()
+			return fmt.Errorf("failed to start port forwarding: %w", err)
+		}
+	}
+
 	fmt.Println("WebDriverAgent started")
+	return nil
+}
+
+// startIProxy starts iproxy to forward the WDA port from a physical device to localhost.
+func (r *Runner) startIProxy(ctx context.Context) error {
+	portStr := strconv.Itoa(int(r.port))
+
+	// iproxy LOCAL_PORT:DEVICE_PORT -u UDID
+	r.iproxyCmd = exec.CommandContext(ctx, "iproxy", portStr+":"+portStr, "-u", r.deviceUDID)
+
+	if err := r.iproxyCmd.Start(); err != nil {
+		return fmt.Errorf("iproxy failed to start: %w\nHint: Install libimobiledevice with 'brew install libimobiledevice'", err)
+	}
+
+	// Give iproxy a moment to establish the connection
+	time.Sleep(500 * time.Millisecond)
+
 	return nil
 }
 
@@ -244,6 +274,11 @@ func setPortEnv(target interface{}, portStr string) {
 
 // Stop terminates the running WDA.
 func (r *Runner) Stop() {
+	// Stop iproxy if running (for physical devices)
+	if r.iproxyCmd != nil && r.iproxyCmd.Process != nil {
+		r.iproxyCmd.Process.Kill()
+		r.iproxyCmd = nil
+	}
 	if r.cmd != nil && r.cmd.Process != nil {
 		r.cmd.Process.Kill()
 		r.cmd = nil

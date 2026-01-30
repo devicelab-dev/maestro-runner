@@ -1297,18 +1297,18 @@ func createIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	udid := getFirstDevice(cfg)
 
 	if udid == "" {
-		// Try to find booted simulator
-		printSetupStep("Finding booted iOS simulator...")
-		logger.Info("Auto-detecting booted iOS simulator...")
+		// Try to find booted simulator or connected physical device
+		printSetupStep("Finding iOS device...")
+		logger.Info("Auto-detecting iOS device (simulator or physical)...")
 		var err error
-		udid, err = findBootedSimulator()
+		udid, err = findIOSDevice()
 		if err != nil {
-			logger.Error("No booted iOS simulator found")
+			logger.Error("No iOS device found")
 			return nil, nil, fmt.Errorf("no device found\n" +
-				"Hint: Specify a device with --device <UDID> or start a device/emulator")
+				"Hint: Specify a device with --device <UDID>, start a simulator, or connect a physical device")
 		}
-		logger.Info("Found booted simulator: %s", udid)
-		printSetupSuccess(fmt.Sprintf("Found simulator: %s", udid))
+		logger.Info("Found iOS device: %s", udid)
+		printSetupSuccess(fmt.Sprintf("Found device: %s", udid))
 	} else {
 		logger.Info("Using specified iOS device: %s", udid)
 	}
@@ -1321,14 +1321,21 @@ func createIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 			"Hint: Wait for it to finish or use a different device with --device <UDID>", udid, port)
 	}
 
+	// 0. Detect device type (simulator vs physical)
+	isSimulator := isIOSSimulator(udid)
+	if isSimulator {
+		logger.Info("Device %s is a simulator", udid)
+	} else {
+		logger.Info("Device %s is a physical device", udid)
+	}
+
 	// 1. Install app if specified
 	if cfg.AppFile != "" {
 		printSetupStep(fmt.Sprintf("Installing app: %s", cfg.AppFile))
-		logger.Info("Installing iOS app: %s to device %s", cfg.AppFile, udid)
-		out, err := runCommand("xcrun", "simctl", "install", udid, cfg.AppFile)
-		if err != nil {
-			logger.Error("iOS app installation failed: %v, output: %s", err, out)
-			return nil, nil, fmt.Errorf("install app failed: %w\nOutput: %s", err, out)
+		logger.Info("Installing iOS app: %s to device %s (simulator=%v)", cfg.AppFile, udid, isSimulator)
+		if err := installIOSApp(udid, cfg.AppFile, isSimulator); err != nil {
+			logger.Error("iOS app installation failed: %v", err)
+			return nil, nil, fmt.Errorf("install app failed: %w", err)
 		}
 		logger.Info("iOS app installed successfully")
 		printSetupSuccess("App installed")
@@ -1375,24 +1382,24 @@ func createIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	client := wdadriver.NewClient(runner.Port())
 
 	// 6. Get device info
-	simInfo, err := getSimulatorInfo(udid)
+	deviceInfo, err := getIOSDeviceInfo(udid)
 	if err != nil {
 		runner.Cleanup()
-		return nil, nil, fmt.Errorf("get simulator info: %w", err)
+		return nil, nil, fmt.Errorf("get device info: %w", err)
 	}
 
-	// 7. Query app version from simulator if appId is known
+	// 7. Query app version if appId is known (only works for simulators)
 	appVersion := ""
-	if cfg.AppID != "" {
+	if cfg.AppID != "" && isSimulator {
 		appVersion = getIOSAppVersion(udid, cfg.AppID)
 	}
 
 	platformInfo := &core.PlatformInfo{
 		Platform:    "ios",
-		OSVersion:   simInfo.OSVersion,
-		DeviceName:  simInfo.Name,
+		OSVersion:   deviceInfo.OSVersion,
+		DeviceName:  deviceInfo.Name,
 		DeviceID:    udid,
-		IsSimulator: true,
+		IsSimulator: deviceInfo.IsSimulator,
 		AppID:       cfg.AppID,
 		AppVersion:  appVersion,
 	}
@@ -1408,6 +1415,24 @@ func createIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	return driver, cleanup, nil
 }
 
+// findIOSDevice finds an available iOS device (booted simulator or connected physical device).
+// Prefers simulators over physical devices.
+func findIOSDevice() (string, error) {
+	// First, try to find a booted simulator
+	udid, err := findBootedSimulator()
+	if err == nil && udid != "" {
+		return udid, nil
+	}
+
+	// No simulator found, try to find a connected physical device
+	udid, err = findConnectedDevice()
+	if err == nil && udid != "" {
+		return udid, nil
+	}
+
+	return "", fmt.Errorf("no iOS device found (no booted simulator or connected physical device)")
+}
+
 // findBootedSimulator finds the UDID of a booted iOS simulator.
 func findBootedSimulator() (string, error) {
 	out, err := runCommand("xcrun", "simctl", "list", "devices", "booted", "-j")
@@ -1416,17 +1441,23 @@ func findBootedSimulator() (string, error) {
 	}
 
 	// Parse JSON to find booted device
-	// Simple parsing - look for "udid" field
-	lines := strings.Split(out, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.Contains(line, `"udid"`) {
-			// Extract UDID from "udid" : "XXXX-XXXX"
-			parts := strings.Split(line, ":")
-			if len(parts) >= 2 {
-				udid := strings.Trim(parts[1], ` ",`)
-				if udid != "" {
-					return udid, nil
+	var data map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &data); err != nil {
+		return "", err
+	}
+
+	devices, ok := data["devices"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("no devices in simctl output")
+	}
+
+	for _, deviceList := range devices {
+		if list, ok := deviceList.([]interface{}); ok {
+			for _, device := range list {
+				if deviceMap, ok := device.(map[string]interface{}); ok {
+					if udid, ok := deviceMap["udid"].(string); ok && udid != "" {
+						return udid, nil
+					}
 				}
 			}
 		}
@@ -1435,11 +1466,128 @@ func findBootedSimulator() (string, error) {
 	return "", fmt.Errorf("no booted simulator found")
 }
 
+// findConnectedDevice finds a connected physical iOS device using idevice_id.
+func findConnectedDevice() (string, error) {
+	out, err := runCommand("idevice_id", "-l")
+	if err != nil {
+		return "", fmt.Errorf("idevice_id failed: %w (is libimobiledevice installed?)", err)
+	}
+
+	// idevice_id -l outputs one UDID per line
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	for _, line := range lines {
+		udid := strings.TrimSpace(line)
+		if udid != "" {
+			return udid, nil
+		}
+	}
+
+	return "", fmt.Errorf("no connected physical device found")
+}
+
 // simulatorInfo holds iOS simulator information.
 type simulatorInfo struct {
 	Name      string
 	OSVersion string
 	State     string
+}
+
+// iosDeviceInfo holds iOS device information (simulator or physical).
+type iosDeviceInfo struct {
+	Name        string
+	OSVersion   string
+	IsSimulator bool
+}
+
+// isIOSSimulator checks if the given UDID is a simulator.
+func isIOSSimulator(udid string) bool {
+	cmd := exec.Command("xcrun", "simctl", "list", "devices", "-j")
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+
+	var data map[string]interface{}
+	if err := json.Unmarshal(output, &data); err != nil {
+		return false
+	}
+
+	devices, ok := data["devices"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+
+	for _, deviceList := range devices {
+		if list, ok := deviceList.([]interface{}); ok {
+			for _, device := range list {
+				if deviceMap, ok := device.(map[string]interface{}); ok {
+					if deviceUDID, ok := deviceMap["udid"].(string); ok && deviceUDID == udid {
+						return true
+					}
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+// getPhysicalDeviceInfo gets information about a physical iOS device using ideviceinfo.
+func getPhysicalDeviceInfo(udid string) (*iosDeviceInfo, error) {
+	// Get device name
+	nameOut, err := runCommand("ideviceinfo", "-u", udid, "-k", "DeviceName")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get device name: %w (is the device connected and trusted?)", err)
+	}
+	name := strings.TrimSpace(nameOut)
+
+	// Get iOS version
+	versionOut, err := runCommand("ideviceinfo", "-u", udid, "-k", "ProductVersion")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get device version: %w", err)
+	}
+	version := strings.TrimSpace(versionOut)
+
+	return &iosDeviceInfo{
+		Name:        name,
+		OSVersion:   version,
+		IsSimulator: false,
+	}, nil
+}
+
+// getIOSDeviceInfo gets information about an iOS device (simulator or physical).
+func getIOSDeviceInfo(udid string) (*iosDeviceInfo, error) {
+	if isIOSSimulator(udid) {
+		simInfo, err := getSimulatorInfo(udid)
+		if err != nil {
+			return nil, err
+		}
+		return &iosDeviceInfo{
+			Name:        simInfo.Name,
+			OSVersion:   simInfo.OSVersion,
+			IsSimulator: true,
+		}, nil
+	}
+
+	return getPhysicalDeviceInfo(udid)
+}
+
+// installIOSApp installs an app on an iOS device (simulator or physical).
+func installIOSApp(udid string, appPath string, isSimulator bool) error {
+	if isSimulator {
+		out, err := runCommand("xcrun", "simctl", "install", udid, appPath)
+		if err != nil {
+			return fmt.Errorf("simctl install failed: %w\nOutput: %s", err, out)
+		}
+		return nil
+	}
+
+	// Physical device - use ios-deploy
+	out, err := runCommand("ios-deploy", "--bundle", appPath, "--id", udid, "--no-wifi")
+	if err != nil {
+		return fmt.Errorf("ios-deploy failed: %w\nOutput: %s\nHint: Install ios-deploy with 'brew install ios-deploy'", err, out)
+	}
+	return nil
 }
 
 // getSimulatorInfo gets information about an iOS simulator.
