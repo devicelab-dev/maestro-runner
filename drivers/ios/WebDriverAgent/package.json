@@ -1,0 +1,102 @@
+{
+  "name": "appium-webdriveragent",
+  "version": "11.1.3",
+  "description": "Package bundling WebDriverAgent",
+  "main": "./build/index.js",
+  "types": "./build/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "npm run build -- --watch",
+    "clean": "npm run build -- --clean",
+    "lint": "eslint .",
+    "format": "prettier -w ./lib",
+    "lint:fix": "npm run lint -- --fix",
+    "prepare": "npm run build",
+    "version": "npm run sync-wda-version",
+    "test": "mocha --exit --timeout 1m \"./test/unit/**/*-specs.ts\"",
+    "e2e-test": "mocha --exit --timeout 10m \"./test/functional/**/*-specs.ts\"",
+    "bundle": "npm run bundle:ios && npm run bundle:tv",
+    "bundle:ios": "TARGET=runner SDK=sim node ./Scripts/build-webdriveragent.mjs",
+    "bundle:tv": "TARGET=tv_runner SDK=tv_sim node ./Scripts/build-webdriveragent.mjs",
+    "fetch-prebuilt-wda": "node ./Scripts/fetch-prebuilt-wda.mjs",
+    "sync-wda-version": "node ./Scripts/update-wda-version.mjs --package-version=${npm_package_version} && git add WebDriverAgentLib/Info.plist"
+  },
+  "engines": {
+    "node": "^20.19.0 || ^22.12.0 || >=24.0.0",
+    "npm": ">=10"
+  },
+  "prettier": {
+    "bracketSpacing": false,
+    "printWidth": 100,
+    "singleQuote": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/appium/WebDriverAgent.git"
+  },
+  "keywords": [
+    "Appium",
+    "iOS",
+    "WebDriver",
+    "Selenium",
+    "WebDriverAgent"
+  ],
+  "author": "Appium Contributors",
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/appium/WebDriverAgent/issues"
+  },
+  "homepage": "https://github.com/appium/WebDriverAgent#readme",
+  "devDependencies": {
+    "@appium/eslint-config-appium-ts": "^3.0.0",
+    "@appium/tsconfig": "^1.0.0-rc.1",
+    "@appium/types": "^1.0.0-rc.1",
+    "@semantic-release/changelog": "^6.0.1",
+    "@semantic-release/git": "^10.0.1",
+    "@types/bluebird": "^3.5.38",
+    "@types/lodash": "^4.14.196",
+    "@types/mocha": "^10.0.1",
+    "@types/node": "^25.0.0",
+    "appium-xcode": "^6.0.0",
+    "chai": "^6.0.0",
+    "chai-as-promised": "^8.0.0",
+    "conventional-changelog-conventionalcommits": "^9.0.0",
+    "node-simctl": "^8.0.0",
+    "mocha": "^11.0.1",
+    "prettier": "^3.0.0",
+    "semantic-release": "^25.0.2",
+    "semver": "^7.3.7",
+    "sinon": "^21.0.0",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.4.2"
+  },
+  "dependencies": {
+    "@appium/base-driver": "^10.0.0-rc.1",
+    "@appium/strongbox": "^1.0.0-rc.1",
+    "@appium/support": "^7.0.0-rc.1",
+    "appium-ios-device": "^3.0.0",
+    "appium-ios-simulator": "^8.0.0",
+    "async-lock": "^1.0.0",
+    "asyncbox": "^4.0.1",
+    "axios": "^1.4.0",
+    "bluebird": "^3.5.5",
+    "lodash": "^4.17.11",
+    "teen_process": "^4.0.7"
+  },
+  "files": [
+    "index.ts",
+    "lib",
+    "build",
+    "Scripts/build.sh",
+    "Scripts/*.mjs",
+    "Configurations",
+    "PrivateHeaders",
+    "WebDriverAgent.xcodeproj",
+    "WebDriverAgentLib",
+    "WebDriverAgentRunner",
+    "WebDriverAgentTests",
+    "XCTWebDriverAgentLib",
+    "CHANGELOG.md",
+    "!build/test"
+  ]
+}

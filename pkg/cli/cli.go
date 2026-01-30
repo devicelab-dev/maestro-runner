@@ -96,6 +96,7 @@ Examples:
 		// Keep test command for backward compatibility
 		Commands: []*cli.Command{
 			testCommand,
+			wdaCommand,
 		},
 	}
 

@@ -1,0 +1,221 @@
+name: WDA Tests
+
+on: [pull_request]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  MIN_VM_IMAGE: macos-14
+  MIN_XCODE_VERSION: "15.4"
+  MIN_PLATFORM_VERSION: "17.5"
+  MIN_TV_PLATFORM_VERSION: "17.5"
+  MIN_TV_DEVICE_NAME: "Apple TV 4K (3rd generation)"
+  MIN_IPHONE_DEVICE_NAME: "iPhone 15 Plus"
+  MIN_IPAD_DEVICE_NAME: "iPad Air 13-inch (M2)"
+  MAX_VM_IMAGE: macos-15
+  MAX_XCODE_VERSION: "26.1"
+  MAX_PLATFORM_VERSION: "26.1"
+  MAX_TV_PLATFORM_VERSION: "26.1"
+  MAX_IPHONE_DEVICE_NAME: "iPhone 17"
+  MAX_TV_DEVICE_NAME: "Apple TV 4K (3rd generation)"
+  MAX_IPAD_DEVICE_NAME: "iPad Air 11-inch (M2)"
+
+jobs:
+  build_matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          cat <<'MATRIX_JSON' | jq -c . > matrix.json
+          [
+            {"name": "Generic_iOS_Build_Max_Xcode", "vm_image": "${{ env.MAX_VM_IMAGE }}", "xcode_version": "${{ env.MAX_XCODE_VERSION }}", "action": "build", "target": "runner", "sdk": "sim", "dest": "generic", "code_sign": "no"},
+            {"name": "Generic_iOS_Build_Min_Xcode", "vm_image": "${{ env.MIN_VM_IMAGE }}", "xcode_version": "${{ env.MIN_XCODE_VERSION }}", "action": "build", "target": "runner", "sdk": "sim", "dest": "generic", "code_sign": "no"},
+            {"name": "Generic_tvOS_Build_Max_Xcode", "vm_image": "${{ env.MAX_VM_IMAGE }}", "xcode_version": "${{ env.MAX_XCODE_VERSION }}", "action": "build", "target": "tv_runner", "sdk": "tv_sim", "dest": "tv_generic", "code_sign": "no"},
+            {"name": "Generic_tvOS_Build_Min_Xcode", "vm_image": "${{ env.MIN_VM_IMAGE }}", "xcode_version": "${{ env.MIN_XCODE_VERSION }}", "action": "build", "target": "tv_runner", "sdk": "tv_sim", "dest": "tv_generic", "code_sign": "no"},
+            {"name": "iOS_Build_Max_Xcode", "vm_image": "${{ env.MAX_VM_IMAGE }}", "xcode_version": "${{ env.MAX_XCODE_VERSION }}", "action": "build", "target": "runner", "sdk": "sim", "iphone_model": "${{ env.MAX_IPHONE_DEVICE_NAME }}", "ipad_model": "${{ env.MAX_IPAD_DEVICE_NAME }}", "ios_version": "${{ env.MAX_PLATFORM_VERSION }}"},
+            {"name": "iOS_Build_Min_Xcode", "vm_image": "${{ env.MIN_VM_IMAGE }}", "xcode_version": "${{ env.MIN_XCODE_VERSION }}", "action": "build", "target": "runner", "sdk": "sim", "iphone_model": "${{ env.MIN_IPHONE_DEVICE_NAME }}", "ipad_model": "${{ env.MIN_IPAD_DEVICE_NAME }}", "ios_version": "${{ env.MIN_PLATFORM_VERSION }}"},
+            {"name": "tvOS_Build_Max_Xcode", "vm_image": "${{ env.MAX_VM_IMAGE }}", "xcode_version": "${{ env.MAX_XCODE_VERSION }}", "action": "build", "target": "tv_runner", "sdk": "tv_sim", "tv_model": "${{ env.MAX_TV_DEVICE_NAME }}", "tv_version": "${{ env.MAX_TV_PLATFORM_VERSION }}"},
+            {"name": "tvOS_Build_Min_Xcode", "vm_image": "${{ env.MIN_VM_IMAGE }}", "xcode_version": "${{ env.MIN_XCODE_VERSION }}", "action": "build", "target": "tv_runner", "sdk": "tv_sim", "dest": "tv", "tv_model": "${{ env.MIN_TV_DEVICE_NAME }}", "tv_version": "${{ env.MIN_TV_PLATFORM_VERSION }}"}
+          ]
+          MATRIX_JSON
+          echo "matrix=$(cat matrix.json)" >> $GITHUB_OUTPUT
+
+  analyze_matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          cat <<'MATRIX_JSON' | jq -c . > matrix.json
+          [
+            {"name": "iOS_Lib_Analyze_Max_Xcode", "vm_image": "${{ env.MAX_VM_IMAGE }}", "xcode_version": "${{ env.MAX_XCODE_VERSION }}", "target": "lib", "sdk": "sim", "iphone_model": "${{ env.MAX_IPHONE_DEVICE_NAME }}", "ipad_model": "${{ env.MAX_IPAD_DEVICE_NAME }}", "ios_version": "${{ env.MAX_PLATFORM_VERSION }}"},
+            {"name": "iOS_Lib_Analyze_Min_Xcode", "vm_image": "${{ env.MIN_VM_IMAGE }}", "xcode_version": "${{ env.MIN_XCODE_VERSION }}", "target": "lib", "sdk": "sim", "iphone_model": "${{ env.MIN_IPHONE_DEVICE_NAME }}", "ipad_model": "${{ env.MIN_IPAD_DEVICE_NAME }}", "ios_version": "${{ env.MIN_PLATFORM_VERSION }}"},
+            {"name": "iOS_Runner_Analyze_Max_Xcode", "vm_image": "${{ env.MAX_VM_IMAGE }}", "xcode_version": "${{ env.MAX_XCODE_VERSION }}", "target": "runner", "sdk": "sim", "iphone_model": "${{ env.MAX_IPHONE_DEVICE_NAME }}", "ipad_model": "${{ env.MAX_IPAD_DEVICE_NAME }}", "ios_version": "${{ env.MAX_PLATFORM_VERSION }}"},
+            {"name": "iOS_Runner_Analyze_Min_Xcode", "vm_image": "${{ env.MIN_VM_IMAGE }}", "xcode_version": "${{ env.MIN_XCODE_VERSION }}", "target": "runner", "sdk": "sim", "iphone_model": "${{ env.MIN_IPHONE_DEVICE_NAME }}", "ipad_model": "${{ env.MIN_IPAD_DEVICE_NAME }}", "ios_version": "${{ env.MIN_PLATFORM_VERSION }}"},
+            {"name": "tvOS_Lib_Analyze_Max_Xcode", "vm_image": "${{ env.MAX_VM_IMAGE }}", "xcode_version": "${{ env.MAX_XCODE_VERSION }}", "target": "tv_lib", "sdk": "tv_sim", "tv_model": "${{ env.MAX_TV_DEVICE_NAME }}", "tv_version": "${{ env.MAX_TV_PLATFORM_VERSION }}"},
+            {"name": "tvOS_Lib_Analyze_Min_Xcode", "vm_image": "${{ env.MIN_VM_IMAGE }}", "xcode_version": "${{ env.MIN_XCODE_VERSION }}", "target": "tv_lib", "sdk": "tv_sim", "tv_model": "${{ env.MIN_TV_DEVICE_NAME }}", "tv_version": "${{ env.MIN_TV_PLATFORM_VERSION }}"},
+            {"name": "tvOS_Runner_Analyze_Max_Xcode", "vm_image": "${{ env.MAX_VM_IMAGE }}", "xcode_version": "${{ env.MAX_XCODE_VERSION }}", "target": "tv_runner", "sdk": "tv_sim", "tv_model": "${{ env.MAX_TV_DEVICE_NAME }}", "tv_version": "${{ env.MAX_TV_PLATFORM_VERSION }}"},
+            {"name": "tvOS_Runner_Analyze_Min_Xcode", "vm_image": "${{ env.MIN_VM_IMAGE }}", "xcode_version": "${{ env.MIN_XCODE_VERSION }}", "target": "tv_runner", "sdk": "tv_sim", "tv_model": "${{ env.MIN_TV_DEVICE_NAME }}", "tv_version": "${{ env.MIN_TV_PLATFORM_VERSION }}"}
+          ]
+          MATRIX_JSON
+          echo "matrix=$(cat matrix.json)" >> $GITHUB_OUTPUT
+
+  unit_test_matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          cat <<'MATRIX_JSON' | jq -c . > matrix.json
+          [
+            {"name": "iPhone_Unit_Test_Max_Xcode", "vm_image": "${{ env.MAX_VM_IMAGE }}", "xcode_version": "${{ env.MAX_XCODE_VERSION }}", "iphone_model": "${{ env.MAX_IPHONE_DEVICE_NAME }}", "ipad_model": "${{ env.MAX_IPAD_DEVICE_NAME }}", "ios_version": "${{ env.MAX_PLATFORM_VERSION }}"},
+            {"name": "iPhone_Unit_Test_Min_Xcode", "vm_image": "${{ env.MIN_VM_IMAGE }}", "xcode_version": "${{ env.MIN_XCODE_VERSION }}", "iphone_model": "${{ env.MIN_IPHONE_DEVICE_NAME }}", "ipad_model": "${{ env.MIN_IPAD_DEVICE_NAME }}", "ios_version": "${{ env.MIN_PLATFORM_VERSION }}"}
+          ]
+          MATRIX_JSON
+          echo "matrix=$(cat matrix.json)" >> $GITHUB_OUTPUT
+
+  integration_test_matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          cat <<'MATRIX_JSON' | jq -c . > matrix.json
+          [
+            {"name": "iphone_int_test_1_Max_Xcode", "vm_image": "${{ env.MAX_VM_IMAGE }}", "xcode_version": "${{ env.MAX_XCODE_VERSION }}", "action": "int_test_1", "dest": "iphone", "iphone_model": "${{ env.MAX_IPHONE_DEVICE_NAME }}", "ipad_model": "${{ env.MAX_IPAD_DEVICE_NAME }}", "ios_version": "${{ env.MAX_PLATFORM_VERSION }}"},
+            {"name": "iphone_int_test_2_Max_Xcode", "vm_image": "${{ env.MAX_VM_IMAGE }}", "xcode_version": "${{ env.MAX_XCODE_VERSION }}", "action": "int_test_2", "dest": "iphone", "iphone_model": "${{ env.MAX_IPHONE_DEVICE_NAME }}", "ipad_model": "${{ env.MAX_IPAD_DEVICE_NAME }}", "ios_version": "${{ env.MAX_PLATFORM_VERSION }}"},
+            {"name": "iphone_int_test_3_Max_Xcode", "vm_image": "${{ env.MAX_VM_IMAGE }}", "xcode_version": "${{ env.MAX_XCODE_VERSION }}", "action": "int_test_3", "dest": "iphone", "iphone_model": "${{ env.MAX_IPHONE_DEVICE_NAME }}", "ipad_model": "${{ env.MAX_IPAD_DEVICE_NAME }}", "ios_version": "${{ env.MAX_PLATFORM_VERSION }}"},
+            {"name": "ipad_int_test_1_Max_Xcode", "vm_image": "${{ env.MAX_VM_IMAGE }}", "xcode_version": "${{ env.MAX_XCODE_VERSION }}", "action": "int_test_1", "dest": "ipad", "iphone_model": "${{ env.MAX_IPHONE_DEVICE_NAME }}", "ipad_model": "${{ env.MAX_IPAD_DEVICE_NAME }}", "ios_version": "${{ env.MAX_PLATFORM_VERSION }}"},
+            {"name": "ipad_int_test_2_Max_Xcode", "vm_image": "${{ env.MAX_VM_IMAGE }}", "xcode_version": "${{ env.MAX_XCODE_VERSION }}", "action": "int_test_2", "dest": "ipad", "iphone_model": "${{ env.MAX_IPHONE_DEVICE_NAME }}", "ipad_model": "${{ env.MAX_IPAD_DEVICE_NAME }}", "ios_version": "${{ env.MAX_PLATFORM_VERSION }}"},
+            {"name": "ipad_int_test_3_Max_Xcode", "vm_image": "${{ env.MAX_VM_IMAGE }}", "xcode_version": "${{ env.MAX_XCODE_VERSION }}", "action": "int_test_3", "dest": "ipad", "iphone_model": "${{ env.MAX_IPHONE_DEVICE_NAME }}", "ipad_model": "${{ env.MAX_IPAD_DEVICE_NAME }}", "ios_version": "${{ env.MAX_PLATFORM_VERSION }}"},
+            {"name": "iphone_int_test_1_Min_Xcode", "vm_image": "${{ env.MIN_VM_IMAGE }}", "xcode_version": "${{ env.MIN_XCODE_VERSION }}", "action": "int_test_1", "dest": "iphone", "iphone_model": "${{ env.MIN_IPHONE_DEVICE_NAME }}", "ipad_model": "${{ env.MIN_IPAD_DEVICE_NAME }}", "ios_version": "${{ env.MIN_PLATFORM_VERSION }}"},
+            {"name": "iphone_int_test_2_Min_Xcode", "vm_image": "${{ env.MIN_VM_IMAGE }}", "xcode_version": "${{ env.MIN_XCODE_VERSION }}", "action": "int_test_2", "dest": "iphone", "iphone_model": "${{ env.MIN_IPHONE_DEVICE_NAME }}", "ipad_model": "${{ env.MIN_IPAD_DEVICE_NAME }}", "ios_version": "${{ env.MIN_PLATFORM_VERSION }}"},
+            {"name": "iphone_int_test_3_Min_Xcode", "vm_image": "${{ env.MIN_VM_IMAGE }}", "xcode_version": "${{ env.MIN_XCODE_VERSION }}", "action": "int_test_3", "dest": "iphone", "iphone_model": "${{ env.MIN_IPHONE_DEVICE_NAME }}", "ipad_model": "${{ env.MIN_IPAD_DEVICE_NAME }}", "ios_version": "${{ env.MIN_PLATFORM_VERSION }}"},
+            {"name": "ipad_int_test_1_Min_Xcode", "vm_image": "${{ env.MIN_VM_IMAGE }}", "xcode_version": "${{ env.MIN_XCODE_VERSION }}", "action": "int_test_1", "dest": "ipad", "iphone_model": "${{ env.MIN_IPHONE_DEVICE_NAME }}", "ipad_model": "${{ env.MIN_IPAD_DEVICE_NAME }}", "ios_version": "${{ env.MIN_PLATFORM_VERSION }}"},
+            {"name": "ipad_int_test_2_Min_Xcode", "vm_image": "${{ env.MIN_VM_IMAGE }}", "xcode_version": "${{ env.MIN_XCODE_VERSION }}", "action": "int_test_2", "dest": "ipad", "iphone_model": "${{ env.MIN_IPHONE_DEVICE_NAME }}", "ipad_model": "${{ env.MIN_IPAD_DEVICE_NAME }}", "ios_version": "${{ env.MIN_PLATFORM_VERSION }}"},
+            {"name": "ipad_int_test_3_Min_Xcode", "vm_image": "${{ env.MIN_VM_IMAGE }}", "xcode_version": "${{ env.MIN_XCODE_VERSION }}", "action": "int_test_3", "dest": "ipad", "iphone_model": "${{ env.MIN_IPHONE_DEVICE_NAME }}", "ipad_model": "${{ env.MIN_IPAD_DEVICE_NAME }}", "ios_version": "${{ env.MIN_PLATFORM_VERSION }}"}
+          ]
+          MATRIX_JSON
+          echo "matrix=$(cat matrix.json)" >> $GITHUB_OUTPUT
+
+  build:
+    needs: build_matrix
+    name: ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.vm_image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config: ${{ fromJSON(needs.build_matrix.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/xcode-setup
+        with:
+          xcode_version: ${{ matrix.config.xcode_version }}
+      - name: Build
+        run: ./Scripts/build.sh
+        env:
+          ACTION: ${{ matrix.config.action }}
+          TARGET: ${{ matrix.config.target }}
+          SDK: ${{ matrix.config.sdk }}
+          DEST: ${{ matrix.config.dest }}
+          CODE_SIGN: ${{ matrix.config.code_sign }}
+          IPHONE_MODEL: ${{ matrix.config.iphone_model }}
+          IPAD_MODEL: ${{ matrix.config.ipad_model }}
+          IOS_VERSION: ${{ matrix.config.ios_version }}
+          TV_MODEL: ${{ matrix.config.tv_model }}
+          TV_VERSION: ${{ matrix.config.tv_version }}
+
+  analyze:
+    needs: analyze_matrix
+    name: ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.vm_image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config: ${{ fromJSON(needs.analyze_matrix.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/xcode-setup
+        with:
+          xcode_version: ${{ matrix.config.xcode_version }}
+      - name: Analyze
+        run: ./Scripts/build.sh
+        env:
+          ACTION: analyze
+          TARGET: ${{ matrix.config.target }}
+          SDK: ${{ matrix.config.sdk }}
+          IPHONE_MODEL: ${{ matrix.config.iphone_model }}
+          IPAD_MODEL: ${{ matrix.config.ipad_model }}
+          IOS_VERSION: ${{ matrix.config.ios_version }}
+          TV_MODEL: ${{ matrix.config.tv_model }}
+          TV_VERSION: ${{ matrix.config.tv_version }}
+
+  unit_test:
+    needs: unit_test_matrix
+    name: ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.vm_image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config: ${{ fromJSON(needs.unit_test_matrix.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/xcode-setup
+        with:
+          xcode_version: ${{ matrix.config.xcode_version }}
+      - name: Run unit tests
+        run: ./Scripts/build.sh
+        env:
+          ACTION: unit_test
+          DEST: iphone
+          TARGET: lib
+          SDK: sim
+          IPHONE_MODEL: ${{ matrix.config.iphone_model }}
+          IPAD_MODEL: ${{ matrix.config.ipad_model }}
+          IOS_VERSION: ${{ matrix.config.ios_version }}
+
+  integration_test:
+    needs: integration_test_matrix
+    name: ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.vm_image }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        config: ${{ fromJSON(needs.integration_test_matrix.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/xcode-setup
+        with:
+          xcode_version: ${{ matrix.config.xcode_version }}
+      # - name: Start iOS Simulator UI
+      #   run: open -Fn "$(xcode-select --print-path)/Applications/Simulator.app"
+      # - name: Prepare iOS simulator
+      #   id: prepareSimulator
+      #   uses: futureware-tech/simulator-action@v4
+      #   with:
+      #     model: "${{ matrix.config.dest == 'iphone' && matrix.config.iphone_model || matrix.config.ipad_model }}"
+      #     os_version: "${{ matrix.config.ios_version }}"
+      #     shutdown_after_job: false
+      #     wait_for_boot: true
+      # - name: Finalize iOS simulator boot
+      #   run: xcrun --sdk iphonesimulator --show-sdk-version
+      - name: Run integration test
+        run: ./Scripts/build.sh
+        env:
+          ACTION: ${{ matrix.config.action }}
+          DEST: ${{ matrix.config.dest }}
+          TARGET: lib
+          SDK: sim
+          IPHONE_MODEL: ${{ matrix.config.iphone_model }}
+          IPAD_MODEL: ${{ matrix.config.ipad_model }}
+          IOS_VERSION: ${{ matrix.config.ios_version }}
+          FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: 600
+          FASTLANE_XCODEBUILD_SETTINGS_RETRIES: 2
