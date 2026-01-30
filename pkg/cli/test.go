@@ -463,6 +463,11 @@ func determineExecutionMode(cfg *RunConfig) (needsParallel bool, deviceIDs []str
 			}
 		}
 		printSetupSuccess(fmt.Sprintf("Using %d device(s) for parallel execution", len(deviceIDs)))
+		fmt.Println()
+		fmt.Printf("  %sℹ Parallel Mode:%s\n", color(colorCyan), color(colorReset))
+		fmt.Println("    During execution, only brief status updates will be shown to avoid")
+		fmt.Println("    messy interleaved output. Detailed results will be displayed after")
+		fmt.Println("    all tests complete.")
 	}
 
 	printSetupSuccess(fmt.Sprintf("Output: %s", cfg.OutputDir))
