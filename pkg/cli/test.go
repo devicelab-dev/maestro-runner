@@ -560,7 +560,7 @@ func determineExecutionMode(cfg *RunConfig) (needsParallel bool, deviceIDs []str
 		fmt.Println()
 	}
 
-	printSetupSuccess(fmt.Sprintf("Output: %s", cfg.OutputDir))
+	printSetupSuccess(fmt.Sprintf("Report directory: %s", cfg.OutputDir))
 	fmt.Printf("\n%sExecution%s\n", color(colorBold), color(colorReset))
 	fmt.Println(strings.Repeat("─", 40))
 
