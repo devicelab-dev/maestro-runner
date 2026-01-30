@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -32,6 +33,13 @@ func createAndroidDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	dev, err := device.New(deviceID)
 	if err != nil {
 		logger.Error("Failed to connect to device: %v", err)
+
+		// Enhance NoDevicesError with actual command context
+		var noDevErr *device.NoDevicesError
+		if errors.As(err, &noDevErr) {
+			enhanceNoDevicesError(noDevErr, cfg)
+		}
+
 		return nil, nil, fmt.Errorf("connect to device: %w", err)
 	}
 
