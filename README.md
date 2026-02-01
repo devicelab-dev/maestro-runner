@@ -15,7 +15,11 @@
 [![codecov](https://codecov.io/gh/devicelab-dev/maestro-runner/branch/main/graph/badge.svg)](https://codecov.io/gh/devicelab-dev/maestro-runner)
 [![Go Report Card](https://goreportcard.com/badge/github.com/devicelab-dev/maestro-runner)](https://goreportcard.com/report/github.com/devicelab-dev/maestro-runner)
 
+<b><a href="https://devicelab.dev/open-source/maestro-runner">Documentation</a></b> | <b><a href="#install">Get Started</a></b> | <b><a href="docs/cli-reference.md">CLI Reference</a></b> | <b><a href="docs/flow-commands.md">Flow Commands</a></b> | <b><a href="CONTRIBUTING.md">Contributing</a></b>
+
 </div>
+
+---
 
 Runs your existing Maestro YAML flows as-is. Addresses [78% of the top 100 most-discussed open issues](docs/maestro-issues-analysis.md) on Maestro's GitHub.
 
@@ -87,12 +91,10 @@ waitForIdleTimeout: 3000    # Device idle wait (ms), 0 to disable
 
 ## Documentation
 
-| Document | Description |
-|----------|-------------|
-| **[CLI Reference](docs/cli-reference.md)** | Commands, flags, environment variables, tag filtering, parallel execution, emulator & simulator management |
-| **[Flow Commands](docs/flow-commands.md)** | Complete YAML command reference — selectors, tap & gesture, text input, assertions, app lifecycle, flow control, JavaScript scripting |
-| **[Technical Approach](docs/technical-approach.md)** | Driver architecture, element finding strategy, UIAutomator2 & WDA server lifecycles, report system |
-| **[Full Documentation](https://devicelab.dev/open-source/maestro-runner)** | Complete guide with examples, setup instructions, and advanced usage |
+- **[Full Documentation](https://devicelab.dev/open-source/maestro-runner)** — Complete guide with examples, setup instructions, and advanced usage
+- **[CLI Reference](docs/cli-reference.md)** — Commands, flags, environment variables, parallel execution
+- **[Flow Commands](docs/flow-commands.md)** — YAML command reference — selectors, gestures, assertions, scripting
+- **[Technical Approach](docs/technical-approach.md)** — Driver architecture, element finding, server lifecycles
 
 ## Contributing
 
