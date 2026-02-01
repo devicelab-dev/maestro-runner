@@ -97,14 +97,14 @@ type Summary struct {
 
 // FlowEntry is the index entry for a flow (minimal info).
 type FlowEntry struct {
-	Index          int            `json:"index"`      // Original position
-	ID             string         `json:"id"`         // Unique flow ID
-	Name           string         `json:"name"`       // Display name
-	SourceFile     string         `json:"sourceFile"` // Path to YAML file
-	Tags           []string       `json:"tags,omitempty"` // Tags for filtering
+	Index          int            `json:"index"`            // Original position
+	ID             string         `json:"id"`               // Unique flow ID
+	Name           string         `json:"name"`             // Display name
+	SourceFile     string         `json:"sourceFile"`       // Path to YAML file
+	Tags           []string       `json:"tags,omitempty"`   // Tags for filtering
 	Device         *Device        `json:"device,omitempty"` // Device that ran this flow (for multi-device runs)
-	DataFile       string         `json:"dataFile"`   // Path to flow detail JSON
-	AssetsDir      string         `json:"assetsDir"`  // Path to assets directory
+	DataFile       string         `json:"dataFile"`         // Path to flow detail JSON
+	AssetsDir      string         `json:"assetsDir"`        // Path to assets directory
 	Status         Status         `json:"status"`
 	UpdateSeq      uint64         `json:"updateSeq"`
 	StartTime      *time.Time     `json:"startTime,omitempty"`

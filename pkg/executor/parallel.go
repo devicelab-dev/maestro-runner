@@ -34,11 +34,11 @@ type ParallelRunner struct {
 
 // Terminal color codes for parallel output
 const (
-	colorReset  = "\033[0m"
-	colorGreen  = "\033[32m"
-	colorRed    = "\033[31m"
-	colorGray   = "\033[90m"
-	colorCyan   = "\033[36m"
+	colorReset = "\033[0m"
+	colorGreen = "\033[32m"
+	colorRed   = "\033[31m"
+	colorGray  = "\033[90m"
+	colorCyan  = "\033[36m"
 )
 
 func color(c string) string {

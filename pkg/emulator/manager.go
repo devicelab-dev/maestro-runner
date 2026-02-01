@@ -197,4 +197,3 @@ func (m *Manager) GetStartedEmulators() []string {
 	})
 	return serials
 }
-

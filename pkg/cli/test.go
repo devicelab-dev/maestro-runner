@@ -22,10 +22,10 @@ import (
 	wdadriver "github.com/devicelab-dev/maestro-runner/pkg/driver/wda"
 	"github.com/devicelab-dev/maestro-runner/pkg/emulator"
 	"github.com/devicelab-dev/maestro-runner/pkg/executor"
-	"github.com/devicelab-dev/maestro-runner/pkg/simulator"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
 	"github.com/devicelab-dev/maestro-runner/pkg/logger"
 	"github.com/devicelab-dev/maestro-runner/pkg/report"
+	"github.com/devicelab-dev/maestro-runner/pkg/simulator"
 	"github.com/devicelab-dev/maestro-runner/pkg/validator"
 	"github.com/urfave/cli/v2"
 )
@@ -291,11 +291,11 @@ func handleDeviceStartup(cfg *RunConfig, emulatorMgr *emulator.Manager, simulato
 
 	// Catch mismatched flags and suggest the right one
 	if platform == "ios" && cfg.StartEmulator != "" {
-		return fmt.Errorf("--start-emulator is for Android, but --platform is ios\n\n"+
-			"For iOS, use:\n"+
-			"  --start-simulator <name>     Start an iOS simulator (e.g., \"iPhone 15 Pro\")\n"+
-			"  --auto-start-emulator        Auto-start a simulator if none found\n\n"+
-			"Tip: If you're coming from Maestro CLI (start-device), use:\n"+
+		return fmt.Errorf("--start-emulator is for Android, but --platform is ios\n\n" +
+			"For iOS, use:\n" +
+			"  --start-simulator <name>     Start an iOS simulator (e.g., \"iPhone 15 Pro\")\n" +
+			"  --auto-start-emulator        Auto-start a simulator if none found\n\n" +
+			"Tip: If you're coming from Maestro CLI (start-device), use:\n" +
 			"  --start-simulator for iOS, --start-emulator for Android")
 	}
 	if (platform == "android" || platform == "") && cfg.StartSimulator != "" {
@@ -981,11 +981,11 @@ func executeSingleDevice(cfg *RunConfig, flows []flow.Flow) (*executor.RunResult
 	deviceInfo := buildDeviceReport(driver)
 
 	runner := executor.New(driver, executor.RunnerConfig{
-		OutputDir:   cfg.OutputDir,
-		Parallelism: 0,
-		Artifacts:   executor.ArtifactOnFailure,
-		Device:      deviceInfo,
-		App:         buildAppReport(driver),
+		OutputDir:          cfg.OutputDir,
+		Parallelism:        0,
+		Artifacts:          executor.ArtifactOnFailure,
+		Device:             deviceInfo,
+		App:                buildAppReport(driver),
 		RunnerVersion:      Version,
 		DriverName:         driverName,
 		Env:                cfg.Env,
@@ -1309,11 +1309,11 @@ func executeFlowsWithPerFlowSession(cfg *RunConfig, flows []flow.Flow) (*executo
 
 		// Create executor for single flow
 		runner := executor.New(driver, executor.RunnerConfig{
-			OutputDir:   cfg.OutputDir,
-			Parallelism: 0,
-			Artifacts:   executor.ArtifactOnFailure,
-			Device:      buildDeviceReport(driver),
-			App:         buildAppReport(driver),
+			OutputDir:          cfg.OutputDir,
+			Parallelism:        0,
+			Artifacts:          executor.ArtifactOnFailure,
+			Device:             buildDeviceReport(driver),
+			App:                buildAppReport(driver),
 			RunnerVersion:      Version,
 			DriverName:         "appium",
 			Env:                cfg.Env,
@@ -1855,11 +1855,11 @@ func createParallelRunner(cfg *RunConfig, workers []executor.DeviceWorker, platf
 	deviceInfo := buildDeviceReport(firstDriver)
 	deviceInfo.Name = fmt.Sprintf("%d devices", len(workers))
 	runnerConfig := executor.RunnerConfig{
-		OutputDir:   cfg.OutputDir,
-		Parallelism: 0,
-		Artifacts:   executor.ArtifactOnFailure,
-		Device:      deviceInfo,
-		App:         buildAppReport(firstDriver),
+		OutputDir:          cfg.OutputDir,
+		Parallelism:        0,
+		Artifacts:          executor.ArtifactOnFailure,
+		Device:             deviceInfo,
+		App:                buildAppReport(firstDriver),
 		RunnerVersion:      Version,
 		DriverName:         driverName,
 		Env:                cfg.Env,

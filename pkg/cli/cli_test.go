@@ -11,9 +11,9 @@ import (
 	"github.com/devicelab-dev/maestro-runner/pkg/device"
 	"github.com/devicelab-dev/maestro-runner/pkg/emulator"
 	"github.com/devicelab-dev/maestro-runner/pkg/executor"
-	"github.com/devicelab-dev/maestro-runner/pkg/simulator"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
 	"github.com/devicelab-dev/maestro-runner/pkg/report"
+	"github.com/devicelab-dev/maestro-runner/pkg/simulator"
 	"github.com/urfave/cli/v2"
 )
 
