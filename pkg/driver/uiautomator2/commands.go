@@ -327,11 +327,10 @@ func (d *Driver) eraseText(step *flow.EraseTextStep) *core.CommandResult {
 }
 
 func (d *Driver) hideKeyboard(_ *flow.HideKeyboardStep) *core.CommandResult {
-	// Press back to hide keyboard
-	if err := d.client.Back(); err != nil {
-		return errorResult(err, fmt.Sprintf("Failed to hide keyboard: %v", err))
+	if err := d.client.HideKeyboard(); err != nil {
+		// Don't fail - keyboard may not be visible
+		return successResult("Hide keyboard (may not have been visible)", nil)
 	}
-
 	return successResult("Keyboard hidden", nil)
 }
 

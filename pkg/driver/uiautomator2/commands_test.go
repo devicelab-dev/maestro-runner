@@ -1878,8 +1878,8 @@ func TestHideKeyboardSuccess(t *testing.T) {
 	if !result.Success {
 		t.Errorf("expected success, got error: %v", result.Error)
 	}
-	if client.backCalls != 1 {
-		t.Errorf("expected 1 back call, got %d", client.backCalls)
+	if client.hideKeyboardCalls != 1 {
+		t.Errorf("expected 1 hideKeyboard call, got %d", client.hideKeyboardCalls)
 	}
 }
 

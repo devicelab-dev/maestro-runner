@@ -40,6 +40,7 @@ type UIA2Client interface {
 
 	// Navigation
 	Back() error
+	HideKeyboard() error
 	PressKeyCode(keyCode int) error
 
 	// Device state

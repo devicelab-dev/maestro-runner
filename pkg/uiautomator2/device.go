@@ -12,6 +12,12 @@ func (c *Client) Back() error {
 	return err
 }
 
+// HideKeyboard hides the on-screen keyboard.
+func (c *Client) HideKeyboard() error {
+	_, err := c.request("POST", c.sessionPath("/appium/device/hide_keyboard"), nil)
+	return err
+}
+
 // PressKeyCode presses a key by key code.
 func (c *Client) PressKeyCode(keyCode int) error {
 	req := KeyCodeRequest{KeyCode: keyCode}

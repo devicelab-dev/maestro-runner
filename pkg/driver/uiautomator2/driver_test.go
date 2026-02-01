@@ -40,6 +40,7 @@ type MockUIA2Client struct {
 	swipeCalls          []uiautomator2.RectModel
 	pressKeyCalls       []int
 	backCalls           int
+	hideKeyboardCalls   int
 	setClipboardCalls   []string
 	setOrientationCalls []string
 
@@ -60,6 +61,7 @@ type MockUIA2Client struct {
 	swipeErr          error
 	pressKeyErr       error
 	backErr           error
+	hideKeyboardErr   error
 	setClipboardErr   error
 }
 
@@ -113,6 +115,11 @@ func (m *MockUIA2Client) SwipeInArea(area uiautomator2.RectModel, direction stri
 func (m *MockUIA2Client) Back() error {
 	m.backCalls++
 	return m.backErr
+}
+
+func (m *MockUIA2Client) HideKeyboard() error {
+	m.hideKeyboardCalls++
+	return m.hideKeyboardErr
 }
 
 func (m *MockUIA2Client) PressKeyCode(keyCode int) error {
@@ -699,8 +706,8 @@ func TestExecuteHideKeyboard(t *testing.T) {
 	if !result.Success {
 		t.Errorf("expected success, got error: %v", result.Error)
 	}
-	if client.backCalls != 1 {
-		t.Errorf("expected 1 back call (hide keyboard), got %d", client.backCalls)
+	if client.hideKeyboardCalls != 1 {
+		t.Errorf("expected 1 hideKeyboard call, got %d", client.hideKeyboardCalls)
 	}
 }
 
@@ -976,14 +983,15 @@ func TestEscapeUiAutomatorCarriageReturn(t *testing.T) {
 // ============================================================================
 
 func TestHideKeyboardError(t *testing.T) {
-	client := &MockUIA2Client{backErr: errors.New("back failed")}
+	// hideKeyboard swallows errors (keyboard may not be visible)
+	client := &MockUIA2Client{hideKeyboardErr: errors.New("hide keyboard failed")}
 	driver := New(client, nil, nil)
 
 	step := &flow.HideKeyboardStep{}
 	result := driver.Execute(step)
 
-	if result.Success {
-		t.Error("expected failure")
+	if !result.Success {
+		t.Error("expected success even when hideKeyboard fails (error is swallowed)")
 	}
 }
 
