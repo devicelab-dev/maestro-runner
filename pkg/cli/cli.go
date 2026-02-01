@@ -118,18 +118,18 @@ of iOS, Android, and web applications.
 
 Examples:
   # Run with default UIAutomator2 driver
-  maestro-runner flow.yaml
-  maestro-runner flows/ -e USER=test
+  maestro-runner test flow.yaml
+  maestro-runner test flows/ -e USER=test
 
   # Run with Appium driver
-  maestro-runner --driver appium flow.yaml
-  maestro-runner --driver appium --caps caps.json flow.yaml
+  maestro-runner --driver appium test flow.yaml
+  maestro-runner --driver appium --caps caps.json test flow.yaml
 
   # Run on cloud providers
-  maestro-runner --driver appium --appium-url "https://your-cloud-hub/wd/hub" --caps caps.json flow.yaml
+  maestro-runner --driver appium --appium-url "https://your-cloud-hub/wd/hub" --caps caps.json test flow.yaml
 
   # Run in parallel on multiple devices
-  maestro-runner --platform android --parallel 2 flows/`,
+  maestro-runner --platform android test --parallel 2 flows/`,
 		Flags:  allFlags,
 		Action: testCommand.Action,
 		// Keep test command for backward compatibility

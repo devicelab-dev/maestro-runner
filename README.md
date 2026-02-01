@@ -33,39 +33,44 @@
 ## Install
 
 ```bash
-go install github.com/devicelab-dev/maestro-runner@latest
+curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash
 ```
 
-Or download a pre-built binary from [releases](https://github.com/devicelab-dev/maestro-runner/releases).
+Or with Go:
+
+```bash
+go install github.com/devicelab-dev/maestro-runner@latest
+```
 
 ## Run Tests
 
 ```bash
-maestro-runner flow.yaml                              # Android (default)
-maestro-runner --platform ios flow.yaml               # iOS
-maestro-runner flows/                                 # All flows in a directory
-maestro-runner --driver appium --appium-url <server-url> flow.yaml  # Appium
-maestro-runner --parallel 3 flows/                    # Parallel on 3 devices
+maestro-runner test flow.yaml                                           # Android (default)
+maestro-runner --platform ios test flow.yaml                            # iOS
+maestro-runner --app-file app.apk test flows/                           # Install app and run
+maestro-runner --driver appium --appium-url <server-url> test flow.yaml # Appium
+maestro-runner test --parallel 3 flows/                                 # Parallel on 3 devices
 ```
 
 ## Key Features
 
 - **Zero migration** — Runs your existing Maestro YAML flows as-is, no changes needed
-- **Lightweight** — ~21 MB binary vs ~289 MB JVM footprint
-- **Parallel execution** — Dynamic work distribution across devices, not static sharding. Faster devices pick up more tests automatically, so no device sits idle
 - **Real iOS device testing** — Supports physical iOS devices, not just simulators
 - **Cloud testing** — BrowserStack, Sauce Labs, LambdaTest via Appium driver
 - **React Native & Flutter** — Smart element finding for RN testIDs and Flutter semantics
+- **Parallel execution** — Dynamic work distribution across devices, not static sharding. Faster devices pick up more tests automatically, so no device sits idle
+- **App install built-in** — `--app-file app.apk` installs the app before testing, so you always test the right build
+- **Wide OS compatibility** — Android 5.0+ (API 21+) and iOS 12.0+, no version restrictions
 - **Reports** — HTML, JUnit XML, and Allure-compatible reports out of the box
 - **Clear error messages** — `element not found: text="Login"` instead of `io.grpc.StatusRuntimeException: UNKNOWN`
 - **Pre-flight validation** — Catches flow errors, circular dependencies, and missing files before execution starts
 - **Fast element finding** — Native selectors, clickable parent traversal, regex matching, smarter visibility
 - **Reliable text input** — Direct ADB input with Unicode support, no dropped characters
-- **Configurable timeouts** — Per-command and per-flow timeouts, `--wait-for-idle-timeout 0` to disable
 - **scrollUntilVisible** — Native scroll implementation that reliably finds off-screen elements
 - **Relative selectors** — Find elements by position: below, above, leftOf, rightOf, childOf
 - **JavaScript scripting** — Embedded JS runtime with HTTP client for dynamic test logic, no external dependencies
-- **Wide OS compatibility** — Android 5.0+ (API 21+) and iOS 12.0+, no version restrictions
+- **Configurable timeouts** — Per-command and per-flow timeouts, `--wait-for-idle-timeout 0` to disable
+- **Lightweight** — Single binary, no JVM required
 
 ## Supported Platforms & Drivers
 
