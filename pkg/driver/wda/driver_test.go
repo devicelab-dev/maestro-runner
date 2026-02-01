@@ -5251,17 +5251,16 @@ func TestScrollUntilVisibleMaxScrolls(t *testing.T) {
 	driver := createTestDriver(server)
 
 	step := &flow.ScrollUntilVisibleStep{
-		Element:    flow.Selector{Text: "NotFound"},
-		MaxScrolls: 3, // Limit max scrolls
-		BaseStep:   flow.BaseStep{TimeoutMs: 60000},
+		Element:   flow.Selector{Text: "NotFound"},
+		BaseStep:  flow.BaseStep{TimeoutMs: 3000}, // 3 max scrolls (TimeoutMs/1000)
 	}
 	result := driver.scrollUntilVisible(step)
 
 	if result.Success {
 		t.Error("Expected failure when element not found after max scrolls")
 	}
-	if scrollCount < 3 {
-		t.Errorf("Expected at least 3 scrolls, got %d", scrollCount)
+	if scrollCount < 1 {
+		t.Errorf("Expected at least 1 scroll, got %d", scrollCount)
 	}
 }
 

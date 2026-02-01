@@ -1345,3 +1345,1766 @@ func TestBackNotSupportedMessage(t *testing.T) {
 		t.Errorf("Expected message about back button, got: %s", result.Message)
 	}
 }
+
+// =============================================================================
+// setPermissions tests
+// =============================================================================
+
+// TestSetPermissionsEmptyAppID tests setPermissions with empty appID.
+func TestSetPermissionsEmptyAppID(t *testing.T) {
+	driver := &Driver{
+		client: &Client{},
+		info:   &core.PlatformInfo{Platform: "ios"},
+	}
+
+	step := &flow.SetPermissionsStep{
+		AppID:       "",
+		Permissions: map[string]string{"camera": "allow"},
+	}
+	result := driver.setPermissions(step)
+
+	if result.Success {
+		t.Fatalf("Expected failure for empty appID, got success: %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "No app ID") {
+		t.Errorf("Expected 'No app ID' in message, got: %s", result.Message)
+	}
+}
+
+// TestSetPermissionsNoUDID tests setPermissions with no UDID (skipped).
+func TestSetPermissionsNoUDID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server) // createTestDriver uses udid=""
+
+	step := &flow.SetPermissionsStep{
+		AppID:       "com.test.app",
+		Permissions: map[string]string{"camera": "allow"},
+	}
+	result := driver.setPermissions(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success (skipped) for no UDID, got: %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "skipped") {
+		t.Errorf("Expected 'skipped' in message, got: %s", result.Message)
+	}
+}
+
+// TestSetPermissionsEmptyPermissions tests setPermissions with empty permissions map.
+func TestSetPermissionsEmptyPermissions(t *testing.T) {
+	driver := &Driver{
+		client: &Client{baseURL: "http://localhost:0", httpClient: http.DefaultClient, sessionID: "test-session"},
+		info:   &core.PlatformInfo{Platform: "ios"},
+		udid:   "FAKE-UDID-12345",
+	}
+
+	step := &flow.SetPermissionsStep{
+		AppID:       "com.test.app",
+		Permissions: map[string]string{},
+	}
+	result := driver.setPermissions(step)
+
+	if result.Success {
+		t.Fatalf("Expected failure for empty permissions, got success: %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "No permissions") {
+		t.Errorf("Expected 'No permissions' in message, got: %s", result.Message)
+	}
+}
+
+// TestSetPermissionsAllAllow tests setPermissions with "all" permission and "allow" value.
+// Since exec.Command("xcrun",...) will fail in test, the code handles errors gracefully.
+func TestSetPermissionsAllAllow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+
+	driver := &Driver{
+		client: &Client{baseURL: server.URL, httpClient: http.DefaultClient, sessionID: "test-session"},
+		info:   &core.PlatformInfo{Platform: "ios"},
+		udid:   "FAKE-UDID-12345",
+	}
+
+	step := &flow.SetPermissionsStep{
+		AppID:       "com.test.app",
+		Permissions: map[string]string{"all": "allow"},
+	}
+	result := driver.setPermissions(step)
+
+	// The function always returns success; xcrun failures are counted as errors
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	// Should mention errors since xcrun will fail in test environment
+	if !strings.Contains(result.Message, "errors") && !strings.Contains(result.Message, "granted") {
+		t.Errorf("Expected message about errors or granted, got: %s", result.Message)
+	}
+}
+
+// TestSetPermissionsSpecificAllow tests setPermissions with a specific permission.
+func TestSetPermissionsSpecificAllow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+
+	driver := &Driver{
+		client: &Client{baseURL: server.URL, httpClient: http.DefaultClient, sessionID: "test-session"},
+		info:   &core.PlatformInfo{Platform: "ios"},
+		udid:   "FAKE-UDID-12345",
+	}
+
+	step := &flow.SetPermissionsStep{
+		AppID:       "com.test.app",
+		Permissions: map[string]string{"camera": "allow"},
+	}
+	result := driver.setPermissions(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+}
+
+// TestSetPermissionsSpecificDeny tests setPermissions with "deny" value.
+func TestSetPermissionsSpecificDeny(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+
+	driver := &Driver{
+		client: &Client{baseURL: server.URL, httpClient: http.DefaultClient, sessionID: "test-session"},
+		info:   &core.PlatformInfo{Platform: "ios"},
+		udid:   "FAKE-UDID-12345",
+	}
+
+	step := &flow.SetPermissionsStep{
+		AppID:       "com.test.app",
+		Permissions: map[string]string{"photos": "deny"},
+	}
+	result := driver.setPermissions(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+}
+
+// =============================================================================
+// applyIOSPermission tests
+// =============================================================================
+
+// TestApplyIOSPermissionInvalidValue tests applyIOSPermission with an invalid value.
+func TestApplyIOSPermissionInvalidValue(t *testing.T) {
+	driver := &Driver{
+		client: &Client{},
+		info:   &core.PlatformInfo{Platform: "ios"},
+		udid:   "FAKE-UDID-12345",
+	}
+
+	err := driver.applyIOSPermission("com.test.app", "camera", "invalid")
+	if err == nil {
+		t.Fatalf("Expected error for invalid permission value")
+	}
+	if !strings.Contains(err.Error(), "invalid permission value") {
+		t.Errorf("Expected 'invalid permission value' in error, got: %v", err)
+	}
+}
+
+// TestApplyIOSPermissionAllow tests applyIOSPermission with "allow" value.
+// xcrun will fail in test but the function returns the exec error.
+func TestApplyIOSPermissionAllow(t *testing.T) {
+	driver := &Driver{
+		client: &Client{},
+		info:   &core.PlatformInfo{Platform: "ios"},
+		udid:   "FAKE-UDID-12345",
+	}
+
+	err := driver.applyIOSPermission("com.test.app", "camera", "allow")
+	// xcrun will fail in test environment, but the function should not panic
+	if err == nil {
+		// If xcrun happens to be available (e.g., on macOS), that's fine too
+		return
+	}
+	// Verify the error is from exec, not from invalid value parsing
+	if strings.Contains(err.Error(), "invalid permission value") {
+		t.Errorf("Expected exec error, not validation error: %v", err)
+	}
+}
+
+// TestApplyIOSPermissionDeny tests applyIOSPermission with "deny" value.
+func TestApplyIOSPermissionDeny(t *testing.T) {
+	driver := &Driver{
+		client: &Client{},
+		info:   &core.PlatformInfo{Platform: "ios"},
+		udid:   "FAKE-UDID-12345",
+	}
+
+	err := driver.applyIOSPermission("com.test.app", "camera", "deny")
+	if err == nil {
+		return // xcrun might be available on macOS
+	}
+	if strings.Contains(err.Error(), "invalid permission value") {
+		t.Errorf("Expected exec error, not validation error: %v", err)
+	}
+}
+
+// TestApplyIOSPermissionUnset tests applyIOSPermission with "unset" value.
+func TestApplyIOSPermissionUnset(t *testing.T) {
+	driver := &Driver{
+		client: &Client{},
+		info:   &core.PlatformInfo{Platform: "ios"},
+		udid:   "FAKE-UDID-12345",
+	}
+
+	err := driver.applyIOSPermission("com.test.app", "camera", "unset")
+	if err == nil {
+		return // xcrun might be available on macOS
+	}
+	if strings.Contains(err.Error(), "invalid permission value") {
+		t.Errorf("Expected exec error, not validation error: %v", err)
+	}
+}
+
+// =============================================================================
+// SetWaitForIdleTimeout test
+// =============================================================================
+
+// TestSetWaitForIdleTimeoutNoOp tests that SetWaitForIdleTimeout is a no-op.
+func TestSetWaitForIdleTimeoutNoOp(t *testing.T) {
+	driver := &Driver{
+		client: &Client{},
+		info:   &core.PlatformInfo{Platform: "ios"},
+	}
+
+	err := driver.SetWaitForIdleTimeout(5000)
+	if err != nil {
+		t.Fatalf("Expected nil error from no-op SetWaitForIdleTimeout, got: %v", err)
+	}
+}
+
+// =============================================================================
+// launchApp tests
+// =============================================================================
+
+// TestLaunchAppNoBundleID tests launchApp with empty bundle ID returns error.
+func TestLaunchAppNoBundleID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.LaunchAppStep{AppID: ""}
+	result := driver.launchApp(step)
+
+	if result.Success {
+		t.Fatalf("Expected failure for empty bundleID")
+	}
+	if !strings.Contains(result.Message, "Bundle ID") {
+		t.Errorf("Expected message about Bundle ID, got: %s", result.Message)
+	}
+}
+
+// TestLaunchAppNoSessionCreatesSession tests launchApp when no session exists.
+func TestLaunchAppNoSessionCreatesSession(t *testing.T) {
+	var sessionCreated bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		if path == "/session" && r.Method == "POST" {
+			sessionCreated = true
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"sessionId": "new-session-123"},
+			})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+
+	// Create client without sessionID to simulate no session
+	client := &Client{baseURL: server.URL, httpClient: http.DefaultClient}
+	driver := &Driver{
+		client: client,
+		info:   &core.PlatformInfo{Platform: "ios"},
+	}
+
+	step := &flow.LaunchAppStep{AppID: "com.test.app"}
+	result := driver.launchApp(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	if !sessionCreated {
+		t.Errorf("Expected CreateSession to be called")
+	}
+}
+
+// TestLaunchAppWithArguments tests launchApp with various argument types.
+func TestLaunchAppWithArguments(t *testing.T) {
+	var launchBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		if strings.Contains(path, "/wda/apps/launch") {
+			body, readErr := io.ReadAll(r.Body)
+			if readErr != nil {
+				t.Fatalf("Failed to read request body: %v", readErr)
+			}
+			launchBody = string(body)
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.LaunchAppStep{
+		AppID: "com.test.app",
+		Arguments: map[string]interface{}{
+			"debug":   "true",
+			"verbose": true,
+			"level":   42,
+			"quiet":   false,
+		},
+	}
+	result := driver.launchApp(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	if launchBody == "" {
+		t.Errorf("Expected LaunchAppWithArgs to be called with body")
+	}
+}
+
+// TestLaunchAppWithUDIDDefaultPermissions tests launchApp with UDID applies default permissions.
+func TestLaunchAppWithUDIDDefaultPermissions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		if strings.Contains(path, "/wda/apps/launch") {
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+
+	driver := &Driver{
+		client: &Client{baseURL: server.URL, httpClient: http.DefaultClient, sessionID: "test-session"},
+		info:   &core.PlatformInfo{Platform: "ios"},
+		udid:   "FAKE-UDID-12345",
+	}
+
+	// No explicit permissions -- should default to "all"/"allow"
+	step := &flow.LaunchAppStep{AppID: "com.test.app"}
+	result := driver.launchApp(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+}
+
+// TestLaunchAppWithUDIDExplicitPermissions tests launchApp with explicit permissions.
+func TestLaunchAppWithUDIDExplicitPermissions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		if strings.Contains(path, "/wda/apps/launch") {
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+
+	driver := &Driver{
+		client: &Client{baseURL: server.URL, httpClient: http.DefaultClient, sessionID: "test-session"},
+		info:   &core.PlatformInfo{Platform: "ios"},
+		udid:   "FAKE-UDID-12345",
+	}
+
+	step := &flow.LaunchAppStep{
+		AppID: "com.test.app",
+		Permissions: map[string]string{
+			"camera":   "allow",
+			"location": "deny",
+		},
+	}
+	result := driver.launchApp(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+}
+
+// =============================================================================
+// tapOn additional tests
+// =============================================================================
+
+// TestTapOnOptionalElementNotFound tests tapOn with optional=true when element not found.
+func TestTapOnOptionalElementNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		// Element finding fails
+		if strings.HasSuffix(path, "/element") && r.Method == "POST" {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"error": "no such element"},
+			})
+			return
+		}
+		// Source returns empty page (no matching elements)
+		if strings.HasSuffix(path, "/source") {
+			jsonResponse(w, map[string]interface{}{
+				"value": `<?xml version="1.0" encoding="UTF-8"?>
+<AppiumAUT>
+  <XCUIElementTypeApplication type="XCUIElementTypeApplication" name="TestApp" enabled="true" visible="true" x="0" y="0" width="390" height="844">
+  </XCUIElementTypeApplication>
+</AppiumAUT>`,
+			})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.TapOnStep{
+		BaseStep: flow.BaseStep{Optional: true, TimeoutMs: 500},
+		Selector: flow.Selector{Text: "NonExistent"},
+	}
+	result := driver.tapOn(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success for optional tap, got: %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "Optional") {
+		t.Errorf("Expected 'Optional' in message, got: %s", result.Message)
+	}
+}
+
+// TestTapOnPointWithSelectorRelativeTap tests tapOn with a Point and selector for relative tap.
+func TestTapOnPointWithSelectorRelativeTap(t *testing.T) {
+	var tapX, tapY float64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		if strings.HasSuffix(path, "/source") {
+			jsonResponse(w, map[string]interface{}{
+				"value": `<?xml version="1.0" encoding="UTF-8"?>
+<AppiumAUT>
+  <XCUIElementTypeApplication type="XCUIElementTypeApplication" name="TestApp" enabled="true" visible="true" x="0" y="0" width="390" height="844">
+    <XCUIElementTypeButton type="XCUIElementTypeButton" name="target" label="MyButton" enabled="true" visible="true" x="100" y="200" width="200" height="100"/>
+  </XCUIElementTypeApplication>
+</AppiumAUT>`,
+			})
+			return
+		}
+		if strings.HasSuffix(path, "/element") && r.Method == "POST" {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"error": "not found"},
+			})
+			return
+		}
+		if strings.Contains(path, "/wda/tap") {
+			body, readErr := io.ReadAll(r.Body)
+			if readErr != nil {
+				t.Fatalf("Failed to read body: %v", readErr)
+			}
+			var payload map[string]interface{}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatalf("Failed to unmarshal body: %v", err)
+			}
+			tapX, _ = payload["x"].(float64)
+			tapY, _ = payload["y"].(float64)
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.TapOnStep{
+		BaseStep: flow.BaseStep{TimeoutMs: 1000},
+		Selector: flow.Selector{Text: "MyButton"},
+		Point:    "50%, 50%",
+	}
+	result := driver.tapOn(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	// Relative tap at 50%,50% of element (100,200,200,100) = (200, 250)
+	if tapX < 190 || tapX > 210 {
+		t.Errorf("Expected tapX near 200, got: %.0f", tapX)
+	}
+	if tapY < 240 || tapY > 260 {
+		t.Errorf("Expected tapY near 250, got: %.0f", tapY)
+	}
+}
+
+// TestTapOnPointInvalidCoords tests tapOn with invalid point coordinates.
+func TestTapOnPointInvalidCoords(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		if strings.HasSuffix(path, "/source") {
+			jsonResponse(w, map[string]interface{}{
+				"value": `<?xml version="1.0" encoding="UTF-8"?>
+<AppiumAUT>
+  <XCUIElementTypeApplication type="XCUIElementTypeApplication" name="TestApp" enabled="true" visible="true" x="0" y="0" width="390" height="844">
+    <XCUIElementTypeButton type="XCUIElementTypeButton" name="btn" label="Btn" enabled="true" visible="true" x="50" y="100" width="200" height="50"/>
+  </XCUIElementTypeApplication>
+</AppiumAUT>`,
+			})
+			return
+		}
+		if strings.HasSuffix(path, "/element") && r.Method == "POST" {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"error": "not found"},
+			})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.TapOnStep{
+		BaseStep: flow.BaseStep{TimeoutMs: 1000},
+		Selector: flow.Selector{Text: "Btn"},
+		Point:    "invalid-coords",
+	}
+	result := driver.tapOn(step)
+
+	if result.Success {
+		t.Fatalf("Expected failure for invalid point coordinates, got success")
+	}
+	if !strings.Contains(result.Message, "Invalid point") {
+		t.Errorf("Expected 'Invalid point' in message, got: %s", result.Message)
+	}
+}
+
+// =============================================================================
+// swipe tests
+// =============================================================================
+
+// TestSwipeStartEndCoordinates tests swipe with percentage-based start/end coordinates.
+func TestSwipeStartEndCoordinates(t *testing.T) {
+	var fromX, fromY, toX, toY float64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		if strings.Contains(path, "/window/size") {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 390.0, "height": 844.0},
+			})
+			return
+		}
+		if strings.Contains(path, "/dragfromtoforduration") {
+			body, readErr := io.ReadAll(r.Body)
+			if readErr != nil {
+				t.Fatalf("Failed to read body: %v", readErr)
+			}
+			var payload map[string]interface{}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatalf("Failed to unmarshal body: %v", err)
+			}
+			fromX, _ = payload["fromX"].(float64)
+			fromY, _ = payload["fromY"].(float64)
+			toX, _ = payload["toX"].(float64)
+			toY, _ = payload["toY"].(float64)
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.SwipeStep{
+		Start: "50%, 80%",
+		End:   "50%, 20%",
+	}
+	result := driver.swipe(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	// fromX = 390 * 0.50 = 195
+	if fromX < 194 || fromX > 196 {
+		t.Errorf("Expected fromX near 195, got: %.0f", fromX)
+	}
+	// fromY = 844 * 0.80 = 675.2
+	if fromY < 674 || fromY > 676 {
+		t.Errorf("Expected fromY near 675, got: %.0f", fromY)
+	}
+	// toY = 844 * 0.20 = 168.8
+	if toY < 167 || toY > 170 {
+		t.Errorf("Expected toY near 169, got: %.0f", toY)
+	}
+	// toX = 390 * 0.50 = 195
+	if toX < 194 || toX > 196 {
+		t.Errorf("Expected toX near 195, got: %.0f", toX)
+	}
+}
+
+// TestSwipeDirectPixelCoordinates tests swipe with direct pixel coordinates.
+func TestSwipeDirectPixelCoordinates(t *testing.T) {
+	var fromX, fromY, toX, toY float64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		if strings.Contains(path, "/window/size") {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 390.0, "height": 844.0},
+			})
+			return
+		}
+		if strings.Contains(path, "/dragfromtoforduration") {
+			body, readErr := io.ReadAll(r.Body)
+			if readErr != nil {
+				t.Fatalf("Failed to read body: %v", readErr)
+			}
+			var payload map[string]interface{}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatalf("Failed to unmarshal body: %v", err)
+			}
+			fromX, _ = payload["fromX"].(float64)
+			fromY, _ = payload["fromY"].(float64)
+			toX, _ = payload["toX"].(float64)
+			toY, _ = payload["toY"].(float64)
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.SwipeStep{
+		StartX: 100,
+		StartY: 500,
+		EndX:   100,
+		EndY:   200,
+	}
+	result := driver.swipe(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	if fromX != 100 {
+		t.Errorf("Expected fromX=100, got: %.0f", fromX)
+	}
+	if fromY != 500 {
+		t.Errorf("Expected fromY=500, got: %.0f", fromY)
+	}
+	if toX != 100 {
+		t.Errorf("Expected toX=100, got: %.0f", toX)
+	}
+	if toY != 200 {
+		t.Errorf("Expected toY=200, got: %.0f", toY)
+	}
+}
+
+// TestSwipeDirectionLeftCoords tests swipe with "left" direction verifies coordinate values.
+func TestSwipeDirectionLeftCoords(t *testing.T) {
+	var fromX, toX float64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		if strings.Contains(path, "/window/size") {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 390.0, "height": 844.0},
+			})
+			return
+		}
+		if strings.Contains(path, "/dragfromtoforduration") {
+			body, readErr := io.ReadAll(r.Body)
+			if readErr != nil {
+				t.Fatalf("Failed to read body: %v", readErr)
+			}
+			var payload map[string]interface{}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatalf("Failed to unmarshal body: %v", err)
+			}
+			fromX, _ = payload["fromX"].(float64)
+			toX, _ = payload["toX"].(float64)
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.SwipeStep{Direction: "left"}
+	result := driver.swipe(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	// Swipe left: fromX should be > toX
+	if fromX <= toX {
+		t.Errorf("Swipe left should have fromX > toX, got fromX=%.0f, toX=%.0f", fromX, toX)
+	}
+}
+
+// TestSwipeDirectionRightCoords tests swipe with "right" direction verifies coordinate values.
+func TestSwipeDirectionRightCoords(t *testing.T) {
+	var fromX, toX float64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		if strings.Contains(path, "/window/size") {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 390.0, "height": 844.0},
+			})
+			return
+		}
+		if strings.Contains(path, "/dragfromtoforduration") {
+			body, readErr := io.ReadAll(r.Body)
+			if readErr != nil {
+				t.Fatalf("Failed to read body: %v", readErr)
+			}
+			var payload map[string]interface{}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatalf("Failed to unmarshal body: %v", err)
+			}
+			fromX, _ = payload["fromX"].(float64)
+			toX, _ = payload["toX"].(float64)
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.SwipeStep{Direction: "right"}
+	result := driver.swipe(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	// Swipe right: fromX should be < toX
+	if fromX >= toX {
+		t.Errorf("Swipe right should have fromX < toX, got fromX=%.0f, toX=%.0f", fromX, toX)
+	}
+}
+
+// TestSwipeInvalidDirectionError tests swipe with invalid direction returns error.
+func TestSwipeInvalidDirectionError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/window/size") {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 390.0, "height": 844.0},
+			})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.SwipeStep{Direction: "diagonal"}
+	result := driver.swipe(step)
+
+	if result.Success {
+		t.Fatalf("Expected failure for invalid direction")
+	}
+	if !strings.Contains(result.Message, "Invalid swipe direction") {
+		t.Errorf("Expected 'Invalid swipe direction' in message, got: %s", result.Message)
+	}
+}
+
+// TestSwipeCustomDuration tests swipe with custom duration.
+func TestSwipeCustomDuration(t *testing.T) {
+	var sentDuration float64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		if strings.Contains(path, "/window/size") {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 390.0, "height": 844.0},
+			})
+			return
+		}
+		if strings.Contains(path, "/dragfromtoforduration") {
+			body, readErr := io.ReadAll(r.Body)
+			if readErr != nil {
+				t.Fatalf("Failed to read body: %v", readErr)
+			}
+			var payload map[string]interface{}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatalf("Failed to unmarshal body: %v", err)
+			}
+			sentDuration, _ = payload["duration"].(float64)
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.SwipeStep{
+		Direction: "up",
+		Duration:  2000, // 2000ms = 2.0 seconds
+	}
+	result := driver.swipe(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	// duration = 2000 / 1000.0 = 2.0
+	if sentDuration < 1.9 || sentDuration > 2.1 {
+		t.Errorf("Expected duration near 2.0, got: %.2f", sentDuration)
+	}
+}
+
+// TestSwipeWithSelector tests swipe with direction and selector (element bounds).
+func TestSwipeWithSelector(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		if strings.Contains(path, "/window/size") {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 390.0, "height": 844.0},
+			})
+			return
+		}
+		if strings.HasSuffix(path, "/source") {
+			jsonResponse(w, map[string]interface{}{
+				"value": `<?xml version="1.0" encoding="UTF-8"?>
+<AppiumAUT>
+  <XCUIElementTypeApplication type="XCUIElementTypeApplication" name="TestApp" enabled="true" visible="true" x="0" y="0" width="390" height="844">
+    <XCUIElementTypeScrollView type="XCUIElementTypeScrollView" name="scrollView" label="MyScroll" enabled="true" visible="true" x="20" y="100" width="350" height="600"/>
+  </XCUIElementTypeApplication>
+</AppiumAUT>`,
+			})
+			return
+		}
+		if strings.HasSuffix(path, "/element") && r.Method == "POST" {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"error": "not found"},
+			})
+			return
+		}
+		if strings.Contains(path, "/dragfromtoforduration") {
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	sel := &flow.Selector{Text: "MyScroll"}
+	step := &flow.SwipeStep{
+		Direction: "down",
+		Selector:  sel,
+		BaseStep:  flow.BaseStep{TimeoutMs: 2000},
+	}
+	result := driver.swipe(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+}
+
+// =============================================================================
+// pressKey additional tests
+// =============================================================================
+
+// TestPressKeyUnknownKeyError tests pressKey with an unknown key returns error.
+func TestPressKeyUnknownKeyError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.PressKeyStep{Key: "nonexistent_key"}
+	result := driver.pressKey(step)
+
+	if result.Success {
+		t.Fatalf("Expected failure for unknown key")
+	}
+	if !strings.Contains(result.Message, "Unknown key") {
+		t.Errorf("Expected 'Unknown key' in message, got: %s", result.Message)
+	}
+}
+
+// TestPressKeyHomeButton tests pressKey with "home" key sends correct button name.
+func TestPressKeyHomeButton(t *testing.T) {
+	var pressedButton string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/wda/pressButton") {
+			body, readErr := io.ReadAll(r.Body)
+			if readErr != nil {
+				t.Fatalf("Failed to read body: %v", readErr)
+			}
+			var payload map[string]interface{}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatalf("Failed to unmarshal body: %v", err)
+			}
+			pressedButton, _ = payload["name"].(string)
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.PressKeyStep{Key: "home"}
+	result := driver.pressKey(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	if pressedButton != "home" {
+		t.Errorf("Expected button 'home', got: %s", pressedButton)
+	}
+}
+
+// =============================================================================
+// tapOnPoint additional tests
+// =============================================================================
+
+// TestTapOnPointDirectPixelCoordinates tests tapOnPoint with direct pixel coordinates.
+func TestTapOnPointDirectPixelCoordinates(t *testing.T) {
+	var tapX, tapY float64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/wda/tap") {
+			body, readErr := io.ReadAll(r.Body)
+			if readErr != nil {
+				t.Fatalf("Failed to read body: %v", readErr)
+			}
+			var payload map[string]interface{}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatalf("Failed to unmarshal body: %v", err)
+			}
+			tapX, _ = payload["x"].(float64)
+			tapY, _ = payload["y"].(float64)
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.TapOnPointStep{
+		X: 150,
+		Y: 300,
+	}
+	result := driver.tapOnPoint(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	if tapX != 150 {
+		t.Errorf("Expected tapX=150, got: %.0f", tapX)
+	}
+	if tapY != 300 {
+		t.Errorf("Expected tapY=300, got: %.0f", tapY)
+	}
+}
+
+// =============================================================================
+// tapOnPointWithPercentage additional tests
+// =============================================================================
+
+// TestTapOnPointPercentageWindowSizeFails tests tapOnPointWithPercentage when WindowSize fails.
+func TestTapOnPointPercentageWindowSizeFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/window/size") {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{
+					"error":   "window size failed",
+					"message": "Cannot get window size",
+				},
+			})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	result := driver.tapOnPointWithPercentage("50%, 50%")
+
+	if result.Success {
+		t.Fatalf("Expected failure when WindowSize fails")
+	}
+	if !strings.Contains(result.Message, "screen size") {
+		t.Errorf("Expected 'screen size' in message, got: %s", result.Message)
+	}
+}
+
+// TestTapOnPointPercentageInvalidFormat tests tapOnPointWithPercentage with invalid format.
+func TestTapOnPointPercentageInvalidFormat(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/window/size") {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 390.0, "height": 844.0},
+			})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	result := driver.tapOnPointWithPercentage("abc, xyz")
+
+	if result.Success {
+		t.Fatalf("Expected failure for invalid coordinates")
+	}
+	if !strings.Contains(result.Message, "Invalid point") {
+		t.Errorf("Expected 'Invalid point' in message, got: %s", result.Message)
+	}
+}
+
+// =============================================================================
+// inputText additional tests
+// =============================================================================
+
+// TestInputTextEmpty tests inputText with empty text.
+func TestInputTextEmpty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.InputTextStep{Text: ""}
+	result := driver.inputText(step)
+
+	if result.Success {
+		t.Fatalf("Expected failure for empty text")
+	}
+	if !strings.Contains(result.Message, "No text") {
+		t.Errorf("Expected 'No text' in message, got: %s", result.Message)
+	}
+}
+
+// TestInputTextNonASCII tests inputText with non-ASCII characters includes warning.
+func TestInputTextNonASCII(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		if strings.Contains(path, "/element/active") {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"ELEMENT": "active-elem"},
+			})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.InputTextStep{Text: "Bonjour \u00e0 tous"}
+	result := driver.inputText(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "non-ASCII") {
+		t.Errorf("Expected 'non-ASCII' warning in message, got: %s", result.Message)
+	}
+}
+
+// =============================================================================
+// inputRandom additional tests
+// =============================================================================
+
+// TestInputRandomEmail tests inputRandom with EMAIL type.
+func TestInputRandomEmail(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.InputRandomStep{DataType: "EMAIL"}
+	result := driver.inputRandom(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "EMAIL") {
+		t.Errorf("Expected 'EMAIL' in message, got: %s", result.Message)
+	}
+	data, ok := result.Data.(string)
+	if !ok {
+		t.Fatalf("Expected Data to be string, got: %T", result.Data)
+	}
+	if !strings.Contains(data, "@") {
+		t.Errorf("Expected email with '@', got: %s", data)
+	}
+}
+
+// TestInputRandomNumberDigits tests inputRandom with NUMBER type returns only digits.
+func TestInputRandomNumberDigits(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.InputRandomStep{DataType: "NUMBER", Length: 6}
+	result := driver.inputRandom(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	data, ok := result.Data.(string)
+	if !ok {
+		t.Fatalf("Expected Data to be string, got: %T", result.Data)
+	}
+	if len(data) != 6 {
+		t.Errorf("Expected 6 digit number, got length %d: %s", len(data), data)
+	}
+	for _, c := range data {
+		if c < '0' || c > '9' {
+			t.Errorf("Expected only digits, got char: %c in %s", c, data)
+			break
+		}
+	}
+}
+
+// TestInputRandomPersonNameFormat tests inputRandom with PERSON_NAME type returns first and last name.
+func TestInputRandomPersonNameFormat(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.InputRandomStep{DataType: "PERSON_NAME"}
+	result := driver.inputRandom(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	data, ok := result.Data.(string)
+	if !ok {
+		t.Fatalf("Expected Data to be string, got: %T", result.Data)
+	}
+	// Person name should have a space between first and last name
+	if !strings.Contains(data, " ") {
+		t.Errorf("Expected person name with space, got: %s", data)
+	}
+}
+
+// TestInputRandomDefaultText tests inputRandom with empty DataType (defaults to TEXT).
+func TestInputRandomDefaultText(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.InputRandomStep{DataType: "", Length: 12}
+	result := driver.inputRandom(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	data, ok := result.Data.(string)
+	if !ok {
+		t.Fatalf("Expected Data to be string, got: %T", result.Data)
+	}
+	if len(data) != 12 {
+		t.Errorf("Expected 12 char text, got length %d: %s", len(data), data)
+	}
+}
+
+// =============================================================================
+// killApp / stopApp / clearState additional tests
+// =============================================================================
+
+// TestKillAppNoBundleID tests killApp with empty bundleID returns error.
+func TestKillAppNoBundleID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.KillAppStep{AppID: ""}
+	result := driver.killApp(step)
+
+	if result.Success {
+		t.Fatalf("Expected failure for empty bundleID")
+	}
+	if !strings.Contains(result.Message, "Bundle ID") {
+		t.Errorf("Expected 'Bundle ID' in message, got: %s", result.Message)
+	}
+}
+
+// TestStopAppNoBundleID tests stopApp with empty bundleID returns error.
+func TestStopAppNoBundleID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.StopAppStep{AppID: ""}
+	result := driver.stopApp(step)
+
+	if result.Success {
+		t.Fatalf("Expected failure for empty bundleID")
+	}
+	if !strings.Contains(result.Message, "Bundle ID") {
+		t.Errorf("Expected 'Bundle ID' in message, got: %s", result.Message)
+	}
+}
+
+// TestClearStateNoBundleID tests clearState with empty bundleID returns error.
+func TestClearStateNoBundleID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.ClearStateStep{AppID: ""}
+	result := driver.clearState(step)
+
+	if result.Success {
+		t.Fatalf("Expected failure for empty bundleID")
+	}
+	if !strings.Contains(result.Message, "Bundle ID") {
+		t.Errorf("Expected 'Bundle ID' in message, got: %s", result.Message)
+	}
+}
+
+// =============================================================================
+// openLink additional tests
+// =============================================================================
+
+// TestOpenLinkEmpty tests openLink with empty link.
+func TestOpenLinkEmpty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.OpenLinkStep{Link: ""}
+	result := driver.openLink(step)
+
+	if result.Success {
+		t.Fatalf("Expected failure for empty link")
+	}
+	if !strings.Contains(result.Message, "No link") {
+		t.Errorf("Expected 'No link' in message, got: %s", result.Message)
+	}
+}
+
+// =============================================================================
+// waitForAnimationToEnd test
+// =============================================================================
+
+// TestWaitForAnimationToEndReturnsWarning tests that waitForAnimationToEnd returns success with WARNING.
+func TestWaitForAnimationToEndReturnsWarning(t *testing.T) {
+	driver := &Driver{
+		client: &Client{},
+		info:   &core.PlatformInfo{Platform: "ios"},
+	}
+
+	step := &flow.WaitForAnimationToEndStep{}
+	result := driver.waitForAnimationToEnd(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "WARNING") {
+		t.Errorf("Expected 'WARNING' in message, got: %s", result.Message)
+	}
+}
+
+// =============================================================================
+// takeScreenshot tests
+// =============================================================================
+
+// TestTakeScreenshotClientError tests takeScreenshot when the client returns an error.
+func TestTakeScreenshotClientError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/screenshot") {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{
+					"error":   "screenshot failed",
+					"message": "Could not capture screenshot",
+				},
+			})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.TakeScreenshotStep{}
+	result := driver.takeScreenshot(step)
+
+	if result.Success {
+		t.Fatalf("Expected failure when screenshot fails")
+	}
+	if !strings.Contains(result.Message, "Screenshot failed") {
+		t.Errorf("Expected 'Screenshot failed' in message, got: %s", result.Message)
+	}
+}
+
+// =============================================================================
+// ElementName non-string response test
+// =============================================================================
+
+// TestElementNameNonStringResponse tests ElementName when the response value is not a string.
+func TestElementNameNonStringResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		jsonResponse(w, map[string]interface{}{"value": 12345})
+	}))
+	defer server.Close()
+
+	client := &Client{
+		baseURL:    server.URL,
+		httpClient: http.DefaultClient,
+		sessionID:  "test-session",
+	}
+
+	_, err := client.ElementName("elem-1")
+	if err == nil {
+		t.Fatalf("Expected error for non-string element name response")
+	}
+	if !strings.Contains(err.Error(), "invalid element name response") {
+		t.Errorf("Expected 'invalid element name response' in error, got: %v", err)
+	}
+}
+
+// =============================================================================
+// scroll additional direction tests
+// =============================================================================
+
+// TestScrollLeftDirection tests scroll with "left" direction.
+func TestScrollLeftDirection(t *testing.T) {
+	var fromX, toX float64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/window/size") {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 390.0, "height": 844.0},
+			})
+			return
+		}
+		if strings.Contains(r.URL.Path, "/dragfromtoforduration") {
+			body, readErr := io.ReadAll(r.Body)
+			if readErr != nil {
+				t.Fatalf("Failed to read body: %v", readErr)
+			}
+			var payload map[string]interface{}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatalf("Failed to unmarshal body: %v", err)
+			}
+			fromX, _ = payload["fromX"].(float64)
+			toX, _ = payload["toX"].(float64)
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.ScrollStep{Direction: "left"}
+	result := driver.scroll(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	// Scroll left = reveal left content = swipe RIGHT (fromX < toX)
+	if fromX >= toX {
+		t.Errorf("Scroll left should swipe RIGHT (fromX < toX), got fromX=%.0f, toX=%.0f", fromX, toX)
+	}
+}
+
+// TestScrollRightDirection tests scroll with "right" direction.
+func TestScrollRightDirection(t *testing.T) {
+	var fromX, toX float64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/window/size") {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 390.0, "height": 844.0},
+			})
+			return
+		}
+		if strings.Contains(r.URL.Path, "/dragfromtoforduration") {
+			body, readErr := io.ReadAll(r.Body)
+			if readErr != nil {
+				t.Fatalf("Failed to read body: %v", readErr)
+			}
+			var payload map[string]interface{}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatalf("Failed to unmarshal body: %v", err)
+			}
+			fromX, _ = payload["fromX"].(float64)
+			toX, _ = payload["toX"].(float64)
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.ScrollStep{Direction: "right"}
+	result := driver.scroll(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	// Scroll right = reveal right content = swipe LEFT (fromX > toX)
+	if fromX <= toX {
+		t.Errorf("Scroll right should swipe LEFT (fromX > toX), got fromX=%.0f, toX=%.0f", fromX, toX)
+	}
+}
+
+// TestScrollInvalidDirection tests scroll with invalid direction.
+func TestScrollInvalidDirection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/window/size") {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 390.0, "height": 844.0},
+			})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.ScrollStep{Direction: "diagonal"}
+	result := driver.scroll(step)
+
+	if result.Success {
+		t.Fatalf("Expected failure for invalid scroll direction")
+	}
+	if !strings.Contains(result.Message, "Invalid scroll direction") {
+		t.Errorf("Expected 'Invalid scroll direction' in message, got: %s", result.Message)
+	}
+}
+
+// =============================================================================
+// stopApp / killApp success tests
+// =============================================================================
+
+// TestStopAppTerminatesApp tests stopApp with valid bundleID calls TerminateApp.
+func TestStopAppTerminatesApp(t *testing.T) {
+	var terminated bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/wda/apps/terminate") {
+			terminated = true
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.StopAppStep{AppID: "com.test.app"}
+	result := driver.stopApp(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	if !terminated {
+		t.Errorf("Expected TerminateApp to be called")
+	}
+}
+
+// TestKillAppTerminatesApp tests killApp with valid bundleID calls TerminateApp.
+func TestKillAppTerminatesApp(t *testing.T) {
+	var terminated bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/wda/apps/terminate") {
+			terminated = true
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.KillAppStep{AppID: "com.test.app"}
+	result := driver.killApp(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	if !terminated {
+		t.Errorf("Expected TerminateApp to be called")
+	}
+}
+
+// =============================================================================
+// openBrowser success test
+// =============================================================================
+
+// TestOpenBrowserValidURL tests openBrowser with a valid URL calls DeepLink.
+func TestOpenBrowserValidURL(t *testing.T) {
+	var deepLinkCalled bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/url") {
+			deepLinkCalled = true
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.OpenBrowserStep{URL: "https://example.com"}
+	result := driver.openBrowser(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	if !deepLinkCalled {
+		t.Errorf("Expected DeepLink to be called")
+	}
+	if !strings.Contains(result.Message, "https://example.com") {
+		t.Errorf("Expected URL in message, got: %s", result.Message)
+	}
+}
+
+// =============================================================================
+// tapOnPoint percentage with Point field test
+// =============================================================================
+
+// TestTapOnPointPercentageCoords tests tapOnPoint with percentage-based coordinates via Point field.
+func TestTapOnPointPercentageCoords(t *testing.T) {
+	var tapX, tapY float64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/window/size") {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 390.0, "height": 844.0},
+			})
+			return
+		}
+		if strings.Contains(r.URL.Path, "/wda/tap") {
+			body, readErr := io.ReadAll(r.Body)
+			if readErr != nil {
+				t.Fatalf("Failed to read body: %v", readErr)
+			}
+			var payload map[string]interface{}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatalf("Failed to unmarshal body: %v", err)
+			}
+			tapX, _ = payload["x"].(float64)
+			tapY, _ = payload["y"].(float64)
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.TapOnPointStep{Point: "25%, 75%"}
+	result := driver.tapOnPoint(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	// x = 390 * 0.25 = 97.5
+	if tapX < 96 || tapX > 99 {
+		t.Errorf("Expected tapX near 97.5, got: %.1f", tapX)
+	}
+	// y = 844 * 0.75 = 633
+	if tapY < 632 || tapY > 634 {
+		t.Errorf("Expected tapY near 633, got: %.1f", tapY)
+	}
+}
+
+// =============================================================================
+// parsePercentageCoords tests
+// =============================================================================
+
+// TestParsePercentageCoordsTableDriven tests the parsePercentageCoords helper function with table-driven cases.
+func TestParsePercentageCoordsTableDriven(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantX   float64
+		wantY   float64
+		wantErr bool
+	}{
+		{name: "standard", input: "50%, 50%", wantX: 0.5, wantY: 0.5},
+		{name: "no spaces", input: "25%,75%", wantX: 0.25, wantY: 0.75},
+		{name: "without percent", input: "10,20", wantX: 0.1, wantY: 0.2},
+		{name: "single value", input: "50%", wantErr: true},
+		{name: "three values", input: "50%,50%,50%", wantErr: true},
+		{name: "invalid x", input: "abc,50%", wantErr: true},
+		{name: "invalid y", input: "50%,xyz", wantErr: true},
+		{name: "empty", input: "", wantErr: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			x, y, err := parsePercentageCoords(tc.input)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("Expected error for input %q", tc.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Unexpected error for input %q: %v", tc.input, err)
+			}
+			if x < tc.wantX-0.001 || x > tc.wantX+0.001 {
+				t.Errorf("Expected x=%.3f, got %.3f for input %q", tc.wantX, x, tc.input)
+			}
+			if y < tc.wantY-0.001 || y > tc.wantY+0.001 {
+				t.Errorf("Expected y=%.3f, got %.3f for input %q", tc.wantY, y, tc.input)
+			}
+		})
+	}
+}
+
+// =============================================================================
+// selectorDesc tests
+// =============================================================================
+
+// TestSelectorDescTableDriven tests the selectorDesc helper function with table-driven cases.
+func TestSelectorDescTableDriven(t *testing.T) {
+	tests := []struct {
+		name     string
+		sel      flow.Selector
+		expected string
+	}{
+		{name: "text selector", sel: flow.Selector{Text: "Login"}, expected: "text='Login'"},
+		{name: "id selector", sel: flow.Selector{ID: "loginBtn"}, expected: "id='loginBtn'"},
+		{name: "empty selector", sel: flow.Selector{}, expected: "selector"},
+		{name: "text takes precedence", sel: flow.Selector{Text: "Login", ID: "btn"}, expected: "text='Login'"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := selectorDesc(tc.sel)
+			if result != tc.expected {
+				t.Errorf("selectorDesc() = %q, want %q", result, tc.expected)
+			}
+		})
+	}
+}
+
+// =============================================================================
+// randomString / randomEmail / randomNumber / randomPersonName tests
+// =============================================================================
+
+// TestRandomStringLength tests that randomString returns the correct length.
+func TestRandomStringLength(t *testing.T) {
+	for _, length := range []int{0, 1, 5, 20, 100} {
+		result := randomString(length)
+		if len(result) != length {
+			t.Errorf("randomString(%d) returned length %d", length, len(result))
+		}
+	}
+}
+
+// TestRandomEmailFormat tests that randomEmail returns a valid email format.
+func TestRandomEmailFormat(t *testing.T) {
+	email := randomEmail()
+	if !strings.Contains(email, "@") {
+		t.Errorf("Expected email with '@', got: %s", email)
+	}
+	parts := strings.Split(email, "@")
+	if len(parts) != 2 {
+		t.Errorf("Expected exactly one '@' in email, got: %s", email)
+	}
+	if len(parts[0]) == 0 || len(parts[1]) == 0 {
+		t.Errorf("Expected non-empty user and domain, got: %s", email)
+	}
+}
+
+// TestRandomNumberDigitsOnly tests that randomNumber returns only digits.
+func TestRandomNumberDigitsOnly(t *testing.T) {
+	result := randomNumber(10)
+	if len(result) != 10 {
+		t.Errorf("Expected length 10, got %d", len(result))
+	}
+	for _, c := range result {
+		if c < '0' || c > '9' {
+			t.Errorf("Expected only digits, found '%c' in %s", c, result)
+		}
+	}
+}
+
+// TestRandomPersonNameHasSpace tests that randomPersonName returns first and last name.
+func TestRandomPersonNameHasSpace(t *testing.T) {
+	name := randomPersonName()
+	if !strings.Contains(name, " ") {
+		t.Errorf("Expected name with space, got: %s", name)
+	}
+	parts := strings.Split(name, " ")
+	if len(parts) < 2 {
+		t.Errorf("Expected at least first and last name, got: %s", name)
+	}
+}

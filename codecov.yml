@@ -5,3 +5,5 @@ ignore:
   - "pkg/simulator/**"
   - "pkg/jsengine/**"
   - "pkg/logger/**"
+  - "pkg/driver/wda/runner.go"
+  - "pkg/driver/wda/setup.go"
