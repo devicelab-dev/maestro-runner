@@ -6,10 +6,12 @@
 
 **Fast mobile UI test automation for Android & iOS**
 <br>
-*Open-source Maestro alternative — single Go binary, no JVM, 3.6x faster with 14x less memory*
+*Open-source Maestro alternative — single binary, no JVM. 100% free, no features behind a paywall.*
 
-[![license](https://img.shields.io/badge/license-Apache_2.0-blue.svg)](LICENSE)
-[![by](https://img.shields.io/badge/by-DeviceLab.dev-17a2b8.svg)](https://devicelab.dev)
+![3.6x faster](https://img.shields.io/badge/3.6x_faster-brightgreen?style=for-the-badge) ![14x less memory](https://img.shields.io/badge/14x_less_memory-brightgreen?style=for-the-badge)
+
+[![license](https://img.shields.io/badge/license-Apache_2.0-blue.svg?style=for-the-badge)](LICENSE)
+[![by](https://img.shields.io/badge/by-DeviceLab.dev-17a2b8.svg?style=for-the-badge)](https://devicelab.dev)
 
 [![CI](https://github.com/devicelab-dev/maestro-runner/actions/workflows/ci.yml/badge.svg)](https://github.com/devicelab-dev/maestro-runner/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/devicelab-dev/maestro-runner/branch/main/graph/badge.svg)](https://codecov.io/gh/devicelab-dev/maestro-runner)
@@ -21,7 +23,10 @@
 
 ---
 
-Runs your existing Maestro YAML flows as-is. Addresses [78% of the top 100 most-discussed open issues](docs/maestro-issues-analysis.md) on Maestro's GitHub.
+- Runs Maestro YAML flows on real devices, emulators, and simulators
+- Supports Android (UIAutomator2), iOS (WebDriverAgent), and cloud (Appium)
+- Built-in parallel execution, HTML/JUnit/Allure reports, and JavaScript scripting
+- Addresses [78% of the top 100 most-discussed open issues](docs/maestro-issues-analysis.md) on Maestro's GitHub
 
 ## Install
 
@@ -35,23 +40,21 @@ Or download a pre-built binary from [releases](https://devicelab.dev/open-source
 
 ```bash
 maestro-runner flow.yaml                              # Android (default)
-maestro-runner flow.yaml --platform ios               # iOS
+maestro-runner --platform ios flow.yaml               # iOS
 maestro-runner flows/                                 # All flows in a directory
 maestro-runner --driver appium flow.yaml              # Appium (local or cloud)
 maestro-runner --parallel 3 flows/                    # Parallel on 3 devices
 ```
 
-## Why Switch from Maestro?
+## Key Features
 
-| Problem with Maestro | maestro-runner fix |
-|---|---|
-| `inputText` drops characters | Direct ADB input, reliable Unicode support |
-| Tests are slow | Native element selectors, no polling, configurable idle timeouts |
-| Can't configure timeouts | Per-command and per-flow timeouts, `--wait-for-idle-timeout 0` to disable |
-| No parallel test execution | Dynamic ports, multiple device instances on one machine |
-| JVM eats memory in CI/CD | ~21 MB Go binary vs ~289 MB JVM footprint |
-| No cloud provider support | BrowserStack, Sauce Labs, LambdaTest via Appium driver |
-| Elements not found reliably | Clickable parent traversal, native regex matching, smarter visibility |
+- **Reliable text input** — Direct ADB input with Unicode support, no dropped characters
+- **Fast element finding** — Native selectors, clickable parent traversal, regex matching, smarter visibility
+- **Configurable timeouts** — Per-command and per-flow timeouts, `--wait-for-idle-timeout 0` to disable
+- **Parallel execution** — Dynamic ports, multiple device instances on one machine
+- **Lightweight** — ~21 MB binary vs ~289 MB JVM footprint
+- **Cloud testing** — BrowserStack, Sauce Labs, LambdaTest via Appium driver
+- **Reports** — HTML, JUnit XML, and Allure-compatible reports out of the box
 
 ## Supported Platforms & Drivers
 
@@ -88,13 +91,6 @@ waitForIdleTimeout: 3000    # Device idle wait (ms), 0 to disable
 - **Android testing:** `adb` (Android SDK Platform-Tools)
 - **iOS testing:** Xcode command-line tools (`xcrun`)
 - **Cloud testing:** Appium server 2.x (`npm i -g appium`)
-
-## Documentation
-
-- **[Full Documentation](https://devicelab.dev/open-source/maestro-runner)** — Complete guide with examples, setup instructions, and advanced usage
-- **[CLI Reference](docs/cli-reference.md)** — Commands, flags, environment variables, parallel execution
-- **[Flow Commands](docs/flow-commands.md)** — YAML command reference — selectors, gestures, assertions, scripting
-- **[Technical Approach](docs/technical-approach.md)** — Driver architecture, element finding, server lifecycles
 
 ## Contributing
 
