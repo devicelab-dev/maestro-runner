@@ -151,6 +151,16 @@ func (w *IndexWriter) flushLocked() {
 	}); err != nil {
 		logger.Warn("failed to regenerate HTML report: %v", err)
 	}
+
+	// Regenerate JUnit XML for live CI consumption
+	if err := GenerateJUnit(w.outputDir); err != nil {
+		logger.Warn("failed to regenerate JUnit report: %v", err)
+	}
+
+	// Regenerate Allure results for live availability
+	if err := GenerateAllure(w.outputDir); err != nil {
+		logger.Warn("failed to regenerate Allure report: %v", err)
+	}
 }
 
 // applyUpdate applies a FlowUpdate to the index.

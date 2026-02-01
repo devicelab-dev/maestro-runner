@@ -747,11 +747,12 @@ func executeTest(cfg *RunConfig) error {
 	// 7. Generate and display reports
 	logger.Info("Generating reports...")
 	fmt.Println()
-	fmt.Printf("  %s⏳ Generating reports...%s\n", color(colorCyan), color(colorReset))
+	fmt.Printf("  %s✓ Tests completed. Generating reports...%s\n", color(colorGreen), color(colorReset))
 	fmt.Println()
 
 	htmlPath := filepath.Join(cfg.OutputDir, "report.html")
 	jsonPath := filepath.Join(cfg.OutputDir, "report.json")
+	junitPath := filepath.Join(cfg.OutputDir, "junit-report.xml")
 
 	htmlGenerated := true
 	if err := report.GenerateHTML(cfg.OutputDir, report.HTMLConfig{
@@ -762,12 +763,43 @@ func executeTest(cfg *RunConfig) error {
 		fmt.Printf("  %s⚠%s Warning: failed to generate HTML report: %v\n", color(colorYellow), color(colorReset), err)
 	}
 
-	// Display reports section
-	fmt.Println("  Reports:")
+	junitGenerated := true
+	if err := report.GenerateJUnit(cfg.OutputDir); err != nil {
+		junitGenerated = false
+		fmt.Printf("  %s⚠%s Warning: failed to generate JUnit report: %v\n", color(colorYellow), color(colorReset), err)
+	}
+
+	allurePath := filepath.Join(cfg.OutputDir, "allure-results")
+	allureGenerated := true
+	if err := report.GenerateAllure(cfg.OutputDir); err != nil {
+		allureGenerated = false
+		fmt.Printf("  %s⚠%s Warning: failed to generate Allure report: %v\n", color(colorYellow), color(colorReset), err)
+	}
+
+	// Display reports section as a directory tree
+	fmt.Printf("  %sReports:%s %s\n", color(colorBold), color(colorReset), cfg.OutputDir)
+	fmt.Printf("    ├── report.json\n")
+	if htmlGenerated {
+		fmt.Printf("    ├── report.html\n")
+	}
+	if junitGenerated {
+		fmt.Printf("    ├── junit-report.xml\n")
+	}
+	if allureGenerated {
+		fmt.Printf("    └── allure-results/\n")
+	}
+	fmt.Println()
+	fmt.Println("  Paths:")
 	if htmlGenerated {
 		fmt.Printf("    HTML:   %s\n", htmlPath)
 	}
 	fmt.Printf("    JSON:   %s\n", jsonPath)
+	if junitGenerated {
+		fmt.Printf("    JUnit:  %s\n", junitPath)
+	}
+	if allureGenerated {
+		fmt.Printf("    Allure: %s\n", allurePath)
+	}
 
 	// 7. Print update notice if available
 	printUpdateNotice()
