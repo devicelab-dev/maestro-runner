@@ -36,6 +36,9 @@ apks/
 CLAUDE.md
 .claude/
 
+# Cache (WDA builds, etc.)
+cache/
+
 # Local-only files
 BUILD_INSTRUCTIONS.md
 testdata/

@@ -36,12 +36,6 @@
 curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash
 ```
 
-Or with Go:
-
-```bash
-go install github.com/devicelab-dev/maestro-runner@latest
-```
-
 ## Run Tests
 
 ```bash
