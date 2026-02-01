@@ -242,6 +242,477 @@ func TestExtractFlowName(t *testing.T) {
 	}
 }
 
+func TestGetBaseStep(t *testing.T) {
+	tests := []struct {
+		name      string
+		step      flow.Step
+		wantNil   bool
+		wantTO    int // expected TimeoutMs if non-nil
+	}{
+		{
+			name:    "TapOnStep",
+			step:    &flow.TapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepTapOn, TimeoutMs: 100}},
+			wantNil: false,
+			wantTO:  100,
+		},
+		{
+			name:    "DoubleTapOnStep",
+			step:    &flow.DoubleTapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepDoubleTapOn, TimeoutMs: 200}},
+			wantNil: false,
+			wantTO:  200,
+		},
+		{
+			name:    "LongPressOnStep",
+			step:    &flow.LongPressOnStep{BaseStep: flow.BaseStep{StepType: flow.StepLongPressOn, TimeoutMs: 300}},
+			wantNil: false,
+			wantTO:  300,
+		},
+		{
+			name:    "AssertVisibleStep",
+			step:    &flow.AssertVisibleStep{BaseStep: flow.BaseStep{StepType: flow.StepAssertVisible, TimeoutMs: 400}},
+			wantNil: false,
+			wantTO:  400,
+		},
+		{
+			name:    "AssertNotVisibleStep",
+			step:    &flow.AssertNotVisibleStep{BaseStep: flow.BaseStep{StepType: flow.StepAssertNotVisible, TimeoutMs: 500}},
+			wantNil: false,
+			wantTO:  500,
+		},
+		{
+			name:    "InputTextStep",
+			step:    &flow.InputTextStep{BaseStep: flow.BaseStep{StepType: flow.StepInputText, TimeoutMs: 600}},
+			wantNil: false,
+			wantTO:  600,
+		},
+		{
+			name:    "SwipeStep",
+			step:    &flow.SwipeStep{BaseStep: flow.BaseStep{StepType: flow.StepSwipe, TimeoutMs: 700}},
+			wantNil: false,
+			wantTO:  700,
+		},
+		{
+			name:    "ScrollStep",
+			step:    &flow.ScrollStep{BaseStep: flow.BaseStep{StepType: flow.StepScroll, TimeoutMs: 800}},
+			wantNil: false,
+			wantTO:  800,
+		},
+		{
+			name:    "ScrollUntilVisibleStep",
+			step:    &flow.ScrollUntilVisibleStep{BaseStep: flow.BaseStep{StepType: flow.StepScrollUntilVisible, TimeoutMs: 900}},
+			wantNil: false,
+			wantTO:  900,
+		},
+		{
+			name:    "LaunchAppStep",
+			step:    &flow.LaunchAppStep{BaseStep: flow.BaseStep{StepType: flow.StepLaunchApp, TimeoutMs: 1000}},
+			wantNil: false,
+			wantTO:  1000,
+		},
+		{
+			name:    "BackStep returns nil",
+			step:    &flow.BackStep{BaseStep: flow.BaseStep{StepType: flow.StepBack, TimeoutMs: 50}},
+			wantNil: true,
+		},
+		{
+			name:    "HideKeyboardStep returns nil",
+			step:    &flow.HideKeyboardStep{BaseStep: flow.BaseStep{StepType: flow.StepHideKeyboard}},
+			wantNil: true,
+		},
+		{
+			name:    "RunFlowStep returns nil",
+			step:    &flow.RunFlowStep{BaseStep: flow.BaseStep{StepType: flow.StepRunFlow}},
+			wantNil: true,
+		},
+		{
+			name:    "RunScriptStep returns nil",
+			step:    &flow.RunScriptStep{BaseStep: flow.BaseStep{StepType: flow.StepRunScript}},
+			wantNil: true,
+		},
+		{
+			name:    "UnsupportedStep returns nil",
+			step:    &flow.UnsupportedStep{BaseStep: flow.BaseStep{StepType: "unknown"}, Reason: "test"},
+			wantNil: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := getBaseStep(tt.step)
+			if tt.wantNil {
+				if got != nil {
+					t.Errorf("getBaseStep() = %v, want nil", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatal("getBaseStep() = nil, want non-nil")
+			}
+			if got.TimeoutMs != tt.wantTO {
+				t.Errorf("getBaseStep().TimeoutMs = %d, want %d", got.TimeoutMs, tt.wantTO)
+			}
+		})
+	}
+}
+
+func TestExtractSelector(t *testing.T) {
+	tests := []struct {
+		name     string
+		step     flow.Step
+		wantNil  bool
+		wantType string
+		wantVal  string
+	}{
+		{
+			name:     "TapOnStep with ID",
+			step:     &flow.TapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepTapOn}, Selector: flow.Selector{ID: "btn"}},
+			wantType: "id",
+			wantVal:  "btn",
+		},
+		{
+			name:     "DoubleTapOnStep with text",
+			step:     &flow.DoubleTapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepDoubleTapOn}, Selector: flow.Selector{Text: "Submit"}},
+			wantType: "text",
+			wantVal:  "Submit",
+		},
+		{
+			name:     "LongPressOnStep with CSS",
+			step:     &flow.LongPressOnStep{BaseStep: flow.BaseStep{StepType: flow.StepLongPressOn}, Selector: flow.Selector{CSS: ".item"}},
+			wantType: "css",
+			wantVal:  ".item",
+		},
+		{
+			name:     "AssertVisibleStep with text",
+			step:     &flow.AssertVisibleStep{BaseStep: flow.BaseStep{StepType: flow.StepAssertVisible}, Selector: flow.Selector{Text: "Welcome"}},
+			wantType: "text",
+			wantVal:  "Welcome",
+		},
+		{
+			name:     "AssertNotVisibleStep with ID",
+			step:     &flow.AssertNotVisibleStep{BaseStep: flow.BaseStep{StepType: flow.StepAssertNotVisible}, Selector: flow.Selector{ID: "error_msg"}},
+			wantType: "id",
+			wantVal:  "error_msg",
+		},
+		{
+			name:     "ScrollUntilVisibleStep uses Element field",
+			step:     &flow.ScrollUntilVisibleStep{BaseStep: flow.BaseStep{StepType: flow.StepScrollUntilVisible}, Element: flow.Selector{Text: "End"}},
+			wantType: "text",
+			wantVal:  "End",
+		},
+		{
+			name:     "InputTextStep with selector",
+			step:     &flow.InputTextStep{BaseStep: flow.BaseStep{StepType: flow.StepInputText}, Selector: flow.Selector{ID: "input_field"}},
+			wantType: "id",
+			wantVal:  "input_field",
+		},
+		{
+			name:     "CopyTextFromStep with text",
+			step:     &flow.CopyTextFromStep{BaseStep: flow.BaseStep{StepType: flow.StepCopyTextFrom}, Selector: flow.Selector{Text: "Price"}},
+			wantType: "text",
+			wantVal:  "Price",
+		},
+		{
+			name:    "TapOnStep with empty selector",
+			step:    &flow.TapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepTapOn}, Selector: flow.Selector{}},
+			wantNil: true,
+		},
+		{
+			name:    "BackStep has no selector",
+			step:    &flow.BackStep{BaseStep: flow.BaseStep{StepType: flow.StepBack}},
+			wantNil: true,
+		},
+		{
+			name:    "SwipeStep has no selector via extractSelector",
+			step:    &flow.SwipeStep{BaseStep: flow.BaseStep{StepType: flow.StepSwipe}, Direction: "UP"},
+			wantNil: true,
+		},
+		{
+			name:    "LaunchAppStep has no selector",
+			step:    &flow.LaunchAppStep{BaseStep: flow.BaseStep{StepType: flow.StepLaunchApp}},
+			wantNil: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractSelector(tt.step)
+			if tt.wantNil {
+				if got != nil {
+					t.Errorf("extractSelector() = %v, want nil", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatal("extractSelector() = nil, want non-nil")
+			}
+			if got.Type != tt.wantType {
+				t.Errorf("extractSelector().Type = %q, want %q", got.Type, tt.wantType)
+			}
+			if got.Value != tt.wantVal {
+				t.Errorf("extractSelector().Value = %q, want %q", got.Value, tt.wantVal)
+			}
+		})
+	}
+}
+
+func TestExtractParams(t *testing.T) {
+	tests := []struct {
+		name    string
+		step    flow.Step
+		wantNil bool
+		check   func(t *testing.T, p *CommandParams)
+	}{
+		{
+			name:    "step with no params returns nil",
+			step:    &flow.BackStep{BaseStep: flow.BaseStep{StepType: flow.StepBack}},
+			wantNil: true,
+		},
+		{
+			name: "tapOn with selector",
+			step: &flow.TapOnStep{
+				BaseStep: flow.BaseStep{StepType: flow.StepTapOn},
+				Selector: flow.Selector{ID: "btn"},
+			},
+			check: func(t *testing.T, p *CommandParams) {
+				if p.Selector == nil {
+					t.Fatal("expected Selector")
+				}
+				if p.Selector.Type != "id" || p.Selector.Value != "btn" {
+					t.Errorf("Selector = {%q, %q}, want {id, btn}", p.Selector.Type, p.Selector.Value)
+				}
+			},
+		},
+		{
+			name: "inputText with text and selector",
+			step: &flow.InputTextStep{
+				BaseStep: flow.BaseStep{StepType: flow.StepInputText},
+				Text:     "hello world",
+				Selector: flow.Selector{ID: "field"},
+			},
+			check: func(t *testing.T, p *CommandParams) {
+				if p.Text != "hello world" {
+					t.Errorf("Text = %q, want %q", p.Text, "hello world")
+				}
+				if p.Selector == nil || p.Selector.Type != "id" {
+					t.Error("expected selector with type=id")
+				}
+			},
+		},
+		{
+			name: "inputText with empty text but selector",
+			step: &flow.InputTextStep{
+				BaseStep: flow.BaseStep{StepType: flow.StepInputText},
+				Text:     "",
+				Selector: flow.Selector{ID: "field"},
+			},
+			check: func(t *testing.T, p *CommandParams) {
+				if p.Text != "" {
+					t.Errorf("Text = %q, want empty", p.Text)
+				}
+				if p.Selector == nil {
+					t.Error("expected selector")
+				}
+			},
+		},
+		{
+			name: "swipe with direction",
+			step: &flow.SwipeStep{
+				BaseStep:  flow.BaseStep{StepType: flow.StepSwipe},
+				Direction: "DOWN",
+			},
+			check: func(t *testing.T, p *CommandParams) {
+				if p.Direction != "DOWN" {
+					t.Errorf("Direction = %q, want %q", p.Direction, "DOWN")
+				}
+			},
+		},
+		{
+			name: "scroll with direction",
+			step: &flow.ScrollStep{
+				BaseStep:  flow.BaseStep{StepType: flow.StepScroll},
+				Direction: "LEFT",
+			},
+			check: func(t *testing.T, p *CommandParams) {
+				if p.Direction != "LEFT" {
+					t.Errorf("Direction = %q, want %q", p.Direction, "LEFT")
+				}
+			},
+		},
+		{
+			name: "scrollUntilVisible with direction and element",
+			step: &flow.ScrollUntilVisibleStep{
+				BaseStep:  flow.BaseStep{StepType: flow.StepScrollUntilVisible},
+				Direction: "RIGHT",
+				Element:   flow.Selector{Text: "Footer"},
+			},
+			check: func(t *testing.T, p *CommandParams) {
+				if p.Direction != "RIGHT" {
+					t.Errorf("Direction = %q, want %q", p.Direction, "RIGHT")
+				}
+				if p.Selector == nil || p.Selector.Value != "Footer" {
+					t.Error("expected selector with value=Footer")
+				}
+			},
+		},
+		{
+			name: "step with timeout only",
+			step: &flow.LaunchAppStep{
+				BaseStep: flow.BaseStep{StepType: flow.StepLaunchApp, TimeoutMs: 30000},
+			},
+			check: func(t *testing.T, p *CommandParams) {
+				if p.Timeout != 30000 {
+					t.Errorf("Timeout = %d, want 30000", p.Timeout)
+				}
+			},
+		},
+		{
+			name: "swipe with no direction returns nil",
+			step: &flow.SwipeStep{
+				BaseStep: flow.BaseStep{StepType: flow.StepSwipe},
+			},
+			wantNil: true,
+		},
+		{
+			name: "scroll with no direction returns nil",
+			step: &flow.ScrollStep{
+				BaseStep: flow.BaseStep{StepType: flow.StepScroll},
+			},
+			wantNil: true,
+		},
+		{
+			name: "selector with optional flag",
+			step: &flow.TapOnStep{
+				BaseStep: flow.BaseStep{StepType: flow.StepTapOn},
+				Selector: flow.Selector{ID: "btn", Optional: boolPtr(true)},
+			},
+			check: func(t *testing.T, p *CommandParams) {
+				if p.Selector == nil {
+					t.Fatal("expected Selector")
+				}
+				if !p.Selector.Optional {
+					t.Error("expected Selector.Optional = true")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractParams(tt.step)
+			if tt.wantNil {
+				if got != nil {
+					t.Errorf("extractParams() = %v, want nil", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatal("extractParams() = nil, want non-nil")
+			}
+			if tt.check != nil {
+				tt.check(t, got)
+			}
+		})
+	}
+}
+
+func boolPtr(b bool) *bool {
+	return &b
+}
+
+func TestWriteSkeleton_MultipleFlows(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test1.yaml",
+			Config:     flow.Config{Name: "Test One"},
+			Steps: []flow.Step{
+				&flow.LaunchAppStep{BaseStep: flow.BaseStep{StepType: flow.StepLaunchApp}},
+				&flow.TapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepTapOn}, Selector: flow.Selector{ID: "btn"}},
+			},
+		},
+		{
+			SourcePath: "test2.yaml",
+			Config:     flow.Config{Name: "Test Two"},
+			Steps: []flow.Step{
+				&flow.AssertVisibleStep{BaseStep: flow.BaseStep{StepType: flow.StepAssertVisible}, Selector: flow.Selector{Text: "Hello"}},
+			},
+		},
+	}
+
+	cfg := BuilderConfig{
+		OutputDir: tmpDir,
+		Device:    Device{ID: "test", Platform: "android"},
+		App:       App{ID: "com.test"},
+	}
+
+	index, flowDetails, err := BuildSkeleton(flows, cfg)
+	if err != nil {
+		t.Fatalf("BuildSkeleton() error = %v", err)
+	}
+
+	err = WriteSkeleton(tmpDir, index, flowDetails)
+	if err != nil {
+		t.Fatalf("WriteSkeleton() error = %v", err)
+	}
+
+	// Check all files exist
+	for _, path := range []string{
+		filepath.Join(tmpDir, "report.json"),
+		filepath.Join(tmpDir, "report.html"),
+		filepath.Join(tmpDir, "flows", "flow-000.json"),
+		filepath.Join(tmpDir, "flows", "flow-001.json"),
+		filepath.Join(tmpDir, "assets", "flow-000"),
+		filepath.Join(tmpDir, "assets", "flow-001"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("expected path %q to exist: %v", path, err)
+		}
+	}
+
+	// Read back and verify structure
+	readIndex, err := ReadIndex(filepath.Join(tmpDir, "report.json"))
+	if err != nil {
+		t.Fatalf("ReadIndex() error = %v", err)
+	}
+	if len(readIndex.Flows) != 2 {
+		t.Errorf("len(readIndex.Flows) = %d, want 2", len(readIndex.Flows))
+	}
+	if readIndex.Flows[0].Commands.Total != 2 {
+		t.Errorf("Flows[0].Commands.Total = %d, want 2", readIndex.Flows[0].Commands.Total)
+	}
+	if readIndex.Flows[1].Commands.Total != 1 {
+		t.Errorf("Flows[1].Commands.Total = %d, want 1", readIndex.Flows[1].Commands.Total)
+	}
+}
+
+func TestWriteSkeleton_EmptyFlows(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	index := &Index{
+		Version: Version,
+		Status:  StatusPending,
+		Device:  Device{ID: "test", Platform: "android"},
+		App:     App{ID: "com.test"},
+		Summary: Summary{},
+		Flows:   []FlowEntry{},
+	}
+
+	err := WriteSkeleton(tmpDir, index, []FlowDetail{})
+	if err != nil {
+		t.Fatalf("WriteSkeleton() error = %v", err)
+	}
+
+	// report.json should still exist
+	if _, err := os.Stat(filepath.Join(tmpDir, "report.json")); err != nil {
+		t.Errorf("report.json not created: %v", err)
+	}
+	// report.html should still exist
+	if _, err := os.Stat(filepath.Join(tmpDir, "report.html")); err != nil {
+		t.Errorf("report.html not created: %v", err)
+	}
+}
+
 func TestConvertSelector(t *testing.T) {
 	tests := []struct {
 		name     string

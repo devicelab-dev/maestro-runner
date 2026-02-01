@@ -327,6 +327,345 @@ func ptr(i int64) *int64 {
 	return &i
 }
 
+func TestBuildHTMLData(t *testing.T) {
+	now := time.Now()
+	endTime := now.Add(10 * time.Second)
+	d1 := int64(5000)
+	d2 := int64(10000)
+	cmdDuration := int64(2500)
+
+	index := &Index{
+		Version:     Version,
+		Status:      StatusFailed,
+		StartTime:   now,
+		EndTime:     &endTime,
+		LastUpdated: now,
+		Device: Device{
+			ID:       "emulator-5554",
+			Name:     "Pixel 7",
+			Platform: "android",
+		},
+		App: App{ID: "com.example.app", Version: "2.0"},
+		MaestroRunner: RunnerInfo{
+			Version: "0.2.0",
+			Driver:  "appium",
+		},
+		Summary: Summary{
+			Total:  2,
+			Passed: 1,
+			Failed: 1,
+		},
+		Flows: []FlowEntry{
+			{
+				Index:    0,
+				ID:       "flow-000",
+				Name:     "Login",
+				Status:   StatusPassed,
+				Duration: &d1,
+				Commands: CommandSummary{Total: 1, Passed: 1},
+			},
+			{
+				Index:    1,
+				ID:       "flow-001",
+				Name:     "Checkout",
+				Status:   StatusFailed,
+				Duration: &d2,
+				Commands: CommandSummary{Total: 1, Failed: 1},
+			},
+		},
+	}
+
+	flows := []FlowDetail{
+		{
+			ID:   "flow-000",
+			Name: "Login",
+			Commands: []Command{
+				{
+					ID:       "cmd-000",
+					Type:     "launchApp",
+					Status:   StatusPassed,
+					Duration: &cmdDuration,
+				},
+			},
+		},
+		{
+			ID:   "flow-001",
+			Name: "Checkout",
+			Commands: []Command{
+				{
+					ID:       "cmd-000",
+					Type:     "tapOn",
+					Status:   StatusFailed,
+					Duration: &cmdDuration,
+					Error: &Error{
+						Type:    "element_not_found",
+						Message: "button not found",
+					},
+				},
+			},
+		},
+	}
+
+	cfg := HTMLConfig{
+		Title:     "Build Test Report",
+		ReportDir: "/tmp/test-report",
+	}
+
+	data := buildHTMLData(index, flows, cfg)
+
+	// Check title
+	if data.Title != "Build Test Report" {
+		t.Errorf("Title = %q, want %q", data.Title, "Build Test Report")
+	}
+
+	// Check pass rate
+	expectedPassRate := 50.0
+	if data.PassRate != expectedPassRate {
+		t.Errorf("PassRate = %.1f, want %.1f", data.PassRate, expectedPassRate)
+	}
+
+	// Check max duration
+	if data.MaxDuration != 10000 {
+		t.Errorf("MaxDuration = %d, want 10000", data.MaxDuration)
+	}
+
+	// Check flows data
+	if len(data.Flows) != 2 {
+		t.Fatalf("len(Flows) = %d, want 2", len(data.Flows))
+	}
+	if data.Flows[0].StatusClass != "passed" {
+		t.Errorf("Flows[0].StatusClass = %q, want %q", data.Flows[0].StatusClass, "passed")
+	}
+	if data.Flows[1].StatusClass != "failed" {
+		t.Errorf("Flows[1].StatusClass = %q, want %q", data.Flows[1].StatusClass, "failed")
+	}
+
+	// Check duration percentage
+	if data.Flows[0].DurationPct != 50.0 {
+		t.Errorf("Flows[0].DurationPct = %.1f, want 50.0", data.Flows[0].DurationPct)
+	}
+	if data.Flows[1].DurationPct != 100.0 {
+		t.Errorf("Flows[1].DurationPct = %.1f, want 100.0", data.Flows[1].DurationPct)
+	}
+
+	// Check status class map
+	if data.StatusClass[StatusPassed] != "passed" {
+		t.Errorf("StatusClass[passed] = %q, want %q", data.StatusClass[StatusPassed], "passed")
+	}
+	if data.StatusClass[StatusFailed] != "failed" {
+		t.Errorf("StatusClass[failed] = %q, want %q", data.StatusClass[StatusFailed], "failed")
+	}
+
+	// Check JSON data is populated
+	if len(data.JSONData) == 0 {
+		t.Error("JSONData should not be empty")
+	}
+
+	// Check command HTML data
+	if len(data.Flows[1].Commands) != 1 {
+		t.Fatalf("len(Flows[1].Commands) = %d, want 1", len(data.Flows[1].Commands))
+	}
+	if data.Flows[1].Commands[0].StatusClass != "failed" {
+		t.Errorf("Flows[1].Commands[0].StatusClass = %q, want %q", data.Flows[1].Commands[0].StatusClass, "failed")
+	}
+}
+
+func TestBuildHTMLData_ZeroPassRate(t *testing.T) {
+	now := time.Now()
+	index := &Index{
+		Version:     Version,
+		Status:      StatusPending,
+		StartTime:   now,
+		LastUpdated: now,
+		Device:      Device{ID: "test", Platform: "android"},
+		App:         App{ID: "com.test"},
+		MaestroRunner: RunnerInfo{
+			Version: "0.1.0",
+			Driver:  "test",
+		},
+		Summary: Summary{Total: 0},
+		Flows:   []FlowEntry{},
+	}
+
+	data := buildHTMLData(index, []FlowDetail{}, HTMLConfig{Title: "Empty"})
+
+	if data.PassRate != 0 {
+		t.Errorf("PassRate = %.1f, want 0", data.PassRate)
+	}
+	if data.MaxDuration != 0 {
+		t.Errorf("MaxDuration = %d, want 0", data.MaxDuration)
+	}
+}
+
+func TestBuildHTMLData_WithScreenshots(t *testing.T) {
+	now := time.Now()
+	d := int64(1000)
+	index := &Index{
+		Version:     Version,
+		Status:      StatusPassed,
+		StartTime:   now,
+		LastUpdated: now,
+		Device:      Device{ID: "test", Platform: "ios"},
+		App:         App{ID: "com.test"},
+		MaestroRunner: RunnerInfo{
+			Version: "0.1.0",
+			Driver:  "test",
+		},
+		Summary: Summary{Total: 1, Passed: 1},
+		Flows: []FlowEntry{
+			{Index: 0, ID: "flow-000", Status: StatusPassed, Duration: &d, Commands: CommandSummary{Total: 1, Passed: 1}},
+		},
+	}
+
+	flows := []FlowDetail{
+		{
+			ID: "flow-000",
+			Commands: []Command{
+				{
+					ID:     "cmd-000",
+					Type:   "tapOn",
+					Status: StatusPassed,
+					Artifacts: CommandArtifacts{
+						ScreenshotBefore: "assets/flow-000/cmd-000-before.png",
+						ScreenshotAfter:  "assets/flow-000/cmd-000-after.png",
+					},
+				},
+			},
+		},
+	}
+
+	// Without embed, paths are used directly
+	data := buildHTMLData(index, flows, HTMLConfig{
+		Title:       "Screenshot Test",
+		EmbedAssets: false,
+	})
+
+	cmd := data.Flows[0].Commands[0]
+	if !cmd.HasScreenshots {
+		t.Error("expected HasScreenshots = true")
+	}
+	if cmd.ScreenshotBefore != "assets/flow-000/cmd-000-before.png" {
+		t.Errorf("ScreenshotBefore = %q, want path", cmd.ScreenshotBefore)
+	}
+	if cmd.ScreenshotAfter != "assets/flow-000/cmd-000-after.png" {
+		t.Errorf("ScreenshotAfter = %q, want path", cmd.ScreenshotAfter)
+	}
+}
+
+func TestRenderHTML(t *testing.T) {
+	data := HTMLData{
+		Title:       "Render Test",
+		GeneratedAt: "2025-01-01 12:00:00",
+		Index: &Index{
+			Version:     Version,
+			Status:      StatusPassed,
+			Device:      Device{ID: "test", Name: "TestDevice", Platform: "android"},
+			App:         App{ID: "com.test"},
+			MaestroRunner: RunnerInfo{Version: "0.1.0", Driver: "appium"},
+			Summary:     Summary{Total: 1, Passed: 1},
+			Flows:       []FlowEntry{},
+		},
+		Flows:         []FlowHTMLData{},
+		TotalDuration: "5.0s",
+		PassRate:      100.0,
+		StatusClass: map[Status]string{
+			StatusPassed:  "passed",
+			StatusFailed:  "failed",
+			StatusSkipped: "skipped",
+			StatusRunning: "running",
+			StatusPending: "pending",
+		},
+		JSONData: `{"index":{},"flows":[]}`,
+	}
+
+	html, err := renderHTML(data)
+	if err != nil {
+		t.Fatalf("renderHTML() error = %v", err)
+	}
+
+	// Verify HTML structure
+	checks := []string{
+		"<!DOCTYPE html>",
+		"<title>Render Test</title>",
+		"2025-01-01 12:00:00",
+		"TestDevice",
+		"android",
+		"appium",
+	}
+
+	for _, check := range checks {
+		if !strings.Contains(html, check) {
+			t.Errorf("rendered HTML missing content: %q", check)
+		}
+	}
+}
+
+func TestRenderHTML_WithFlows(t *testing.T) {
+	d := int64(3000)
+	data := HTMLData{
+		Title:       "Flow Render Test",
+		GeneratedAt: "2025-01-01 12:00:00",
+		Index: &Index{
+			Version:     Version,
+			Status:      StatusPassed,
+			Device:      Device{ID: "test", Name: "Device", Platform: "android"},
+			App:         App{ID: "com.test"},
+			MaestroRunner: RunnerInfo{Version: "0.1.0", Driver: "test"},
+			Summary:     Summary{Total: 1, Passed: 1},
+			Flows: []FlowEntry{
+				{Index: 0, ID: "flow-000", Name: "TestFlow", Status: StatusPassed, Duration: &d, Commands: CommandSummary{Total: 1, Passed: 1}},
+			},
+		},
+		Flows: []FlowHTMLData{
+			{
+				FlowDetail: FlowDetail{
+					ID:   "flow-000",
+					Name: "TestFlow",
+					Tags: []string{"smoke"},
+				},
+				StatusClass: "passed",
+				DurationStr: "3.0s",
+				DurationMs:  3000,
+				DurationPct: 100.0,
+				Commands: []CommandHTMLData{
+					{
+						Command:     Command{ID: "cmd-000", Type: "launchApp", Status: StatusPassed},
+						StatusClass: "passed",
+						DurationStr: "3.0s",
+					},
+				},
+			},
+		},
+		TotalDuration: "3.0s",
+		PassRate:      100.0,
+		MaxDuration:   3000,
+		StatusClass: map[Status]string{
+			StatusPassed:  "passed",
+			StatusFailed:  "failed",
+			StatusSkipped: "skipped",
+			StatusRunning: "running",
+			StatusPending: "pending",
+		},
+		JSONData: `{"index":{},"flows":[]}`,
+	}
+
+	html, err := renderHTML(data)
+	if err != nil {
+		t.Fatalf("renderHTML() error = %v", err)
+	}
+
+	checks := []string{
+		"TestFlow",
+		"smoke",
+		"Flow Render Test",
+	}
+	for _, check := range checks {
+		if !strings.Contains(html, check) {
+			t.Errorf("rendered HTML missing content: %q", check)
+		}
+	}
+}
+
 func TestLoadAsBase64(t *testing.T) {
 	// Test with non-existent file
 	result := loadAsBase64("/nonexistent/file.png")

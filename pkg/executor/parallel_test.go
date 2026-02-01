@@ -6,6 +6,31 @@ import (
 	"github.com/devicelab-dev/maestro-runner/pkg/report"
 )
 
+func TestColor(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"reset", colorReset, colorReset},
+		{"green", colorGreen, colorGreen},
+		{"red", colorRed, colorRed},
+		{"gray", colorGray, colorGray},
+		{"cyan", colorCyan, colorCyan},
+		{"empty string", "", ""},
+		{"arbitrary string", "hello", "hello"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := color(tt.input)
+			if got != tt.want {
+				t.Errorf("color(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFormatDuration(t *testing.T) {
 	tests := []struct {
 		name     string

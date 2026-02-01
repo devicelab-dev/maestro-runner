@@ -1284,3 +1284,329 @@ func TestScriptEngine_ExpandVariables_MixedSyntax(t *testing.T) {
 		t.Errorf("ExpandVariables() = %q, want %q", got, "Hello World and World")
 	}
 }
+
+// ===========================================
+// GetCopiedText tests (0% coverage)
+// ===========================================
+
+func TestScriptEngine_GetCopiedText_Empty(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	// Before setting anything, copied text should be empty
+	got := se.GetCopiedText()
+	if got != "" {
+		t.Errorf("GetCopiedText() = %q, want empty string", got)
+	}
+}
+
+func TestScriptEngine_GetCopiedText_AfterSet(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetCopiedText("hello clipboard")
+	got := se.GetCopiedText()
+	if got != "hello clipboard" {
+		t.Errorf("GetCopiedText() = %q, want %q", got, "hello clipboard")
+	}
+}
+
+func TestScriptEngine_GetCopiedText_Overwrite(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetCopiedText("first")
+	se.SetCopiedText("second")
+	got := se.GetCopiedText()
+	if got != "second" {
+		t.Errorf("GetCopiedText() = %q, want %q", got, "second")
+	}
+}
+
+func TestScriptEngine_GetCopiedText_SpecialCharacters(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetCopiedText("line1\nline2\ttab")
+	got := se.GetCopiedText()
+	if got != "line1\nline2\ttab" {
+		t.Errorf("GetCopiedText() = %q, want %q", got, "line1\nline2\ttab")
+	}
+}
+
+// ===========================================
+// CheckCondition uncovered branches
+// ===========================================
+
+func TestScriptEngine_CheckCondition_NotVisible_Success(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	cond := flow.Condition{NotVisible: &flow.Selector{Text: "Loading"}}
+	if !se.CheckCondition(context.Background(), cond, driver) {
+		t.Error("CheckCondition() with notVisible success should return true")
+	}
+}
+
+func TestScriptEngine_CheckCondition_NotVisible_Failure(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			return &core.CommandResult{Success: false, Error: &testError{msg: "element is visible"}}
+		},
+	}
+
+	cond := flow.Condition{NotVisible: &flow.Selector{Text: "Loading"}}
+	if se.CheckCondition(context.Background(), cond, driver) {
+		t.Error("CheckCondition() with notVisible failure should return false")
+	}
+}
+
+func TestScriptEngine_CheckCondition_Visible_Failure(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			return &core.CommandResult{Success: false, Error: &testError{msg: "not found"}}
+		},
+	}
+
+	cond := flow.Condition{Visible: &flow.Selector{Text: "Missing"}}
+	if se.CheckCondition(context.Background(), cond, driver) {
+		t.Error("CheckCondition() with visible failure should return false")
+	}
+}
+
+func TestScriptEngine_CheckCondition_ScriptError(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	driver := &mockDriver{}
+
+	// Script that causes an evaluation error
+	cond := flow.Condition{Script: "undefined_var.property"}
+	if se.CheckCondition(context.Background(), cond, driver) {
+		t.Error("CheckCondition() with script error should return false")
+	}
+}
+
+func TestScriptEngine_CheckCondition_EmptyCondition(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	driver := &mockDriver{}
+
+	// Empty condition with no fields set should return true
+	cond := flow.Condition{}
+	if !se.CheckCondition(context.Background(), cond, driver) {
+		t.Error("CheckCondition() with empty condition should return true")
+	}
+}
+
+func TestScriptEngine_CheckCondition_AllConditionsMet(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("flag", "true")
+
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	// Condition with visible, notVisible, and script all set
+	cond := flow.Condition{
+		Visible:    &flow.Selector{Text: "Present"},
+		NotVisible: &flow.Selector{Text: "Absent"},
+		Script:     "flag == 'true'",
+	}
+	if !se.CheckCondition(context.Background(), cond, driver) {
+		t.Error("CheckCondition() with all conditions met should return true")
+	}
+}
+
+// ===========================================
+// ExecuteAssertCondition uncovered branches
+// ===========================================
+
+func TestScriptEngine_ExecuteAssertCondition_NotVisible_Success(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	step := &flow.AssertConditionStep{
+		Condition: flow.Condition{
+			NotVisible: &flow.Selector{Text: "Loading"},
+		},
+	}
+
+	result := se.ExecuteAssertCondition(context.Background(), step, driver)
+	if !result.Success {
+		t.Errorf("ExecuteAssertCondition() with notVisible success = false, error = %v", result.Error)
+	}
+}
+
+func TestScriptEngine_ExecuteAssertCondition_NotVisible_Failure(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			return &core.CommandResult{Success: false, Error: &testError{msg: "still visible"}}
+		},
+	}
+
+	step := &flow.AssertConditionStep{
+		Condition: flow.Condition{
+			NotVisible: &flow.Selector{Text: "Loading"},
+		},
+	}
+
+	result := se.ExecuteAssertCondition(context.Background(), step, driver)
+	if result.Success {
+		t.Error("ExecuteAssertCondition() with notVisible failure should fail")
+	}
+	if result.Message != "assertCondition: element is still visible" {
+		t.Errorf("Message = %q, want %q", result.Message, "assertCondition: element is still visible")
+	}
+}
+
+func TestScriptEngine_ExecuteAssertCondition_ScriptError(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	driver := &mockDriver{}
+
+	step := &flow.AssertConditionStep{
+		Condition: flow.Condition{
+			Script: "undefined_var.property",
+		},
+	}
+
+	result := se.ExecuteAssertCondition(context.Background(), step, driver)
+	if result.Success {
+		t.Error("ExecuteAssertCondition() with script error should fail")
+	}
+	if result.Error == nil {
+		t.Error("ExecuteAssertCondition() with script error should set Error")
+	}
+}
+
+func TestScriptEngine_ExecuteAssertCondition_PlatformNilInfo(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	// Driver that returns nil platform info
+	driver := &mockDriver{
+		platformFunc: func() *core.PlatformInfo {
+			return nil
+		},
+	}
+
+	step := &flow.AssertConditionStep{
+		Condition: flow.Condition{
+			Platform: "android",
+		},
+	}
+
+	// When info is nil, the platform check is skipped (not a skip condition)
+	// and it falls through to the end, returning "Condition passed"
+	result := se.ExecuteAssertCondition(context.Background(), step, driver)
+	if !result.Success {
+		t.Errorf("ExecuteAssertCondition() with nil platform info should pass, error = %v", result.Error)
+	}
+}
+
+func TestScriptEngine_ExecuteAssertCondition_EmptyCondition(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	driver := &mockDriver{}
+
+	step := &flow.AssertConditionStep{
+		Condition: flow.Condition{},
+	}
+
+	result := se.ExecuteAssertCondition(context.Background(), step, driver)
+	if !result.Success {
+		t.Error("ExecuteAssertCondition() with empty condition should pass")
+	}
+	if result.Message != "Condition passed" {
+		t.Errorf("Message = %q, want %q", result.Message, "Condition passed")
+	}
+}
+
+// ===========================================
+// EvalCondition additional branch coverage
+// ===========================================
+
+func TestScriptEngine_EvalCondition_Float64NonZero(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	// 3.14 returns float64 from JS
+	got, err := se.EvalCondition("3.14")
+	if err != nil {
+		t.Fatalf("EvalCondition() error = %v", err)
+	}
+	if !got {
+		t.Error("EvalCondition(3.14) should return true for non-zero float")
+	}
+}
+
+func TestScriptEngine_EvalCondition_Float64Zero(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	// 0.0 returns float64 from JS
+	got, err := se.EvalCondition("0.0")
+	if err != nil {
+		t.Fatalf("EvalCondition() error = %v", err)
+	}
+	if got {
+		t.Error("EvalCondition(0.0) should return false for zero float")
+	}
+}
+
+func TestScriptEngine_EvalCondition_NullResult(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	// null in JS should return false (default case, result == nil)
+	got, err := se.EvalCondition("null")
+	if err != nil {
+		t.Fatalf("EvalCondition() error = %v", err)
+	}
+	if got {
+		t.Error("EvalCondition(null) should return false")
+	}
+}
+
+func TestScriptEngine_EvalCondition_UndefinedVariable(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	// Undefined env var should be pre-defined as undefined (falsy)
+	got, err := se.EvalCondition("SOME_UNDEFINED_VAR")
+	if err != nil {
+		t.Fatalf("EvalCondition() error = %v", err)
+	}
+	if got {
+		t.Error("EvalCondition(SOME_UNDEFINED_VAR) should return false for undefined variable")
+	}
+}

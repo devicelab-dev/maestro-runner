@@ -342,6 +342,87 @@ func TestFlowWriter_SkipRemainingCommands(t *testing.T) {
 	}
 }
 
+func TestFlowWriter_flush_writesJSON(t *testing.T) {
+	fw, iw, tmpDir := createTestFlowWriter(t)
+	defer iw.Close()
+
+	// Start triggers a flush
+	fw.Start()
+
+	// Verify that the flow detail JSON file was written
+	flowPath := filepath.Join(tmpDir, "flows", "flow-000.json")
+	data, err := os.ReadFile(flowPath)
+	if err != nil {
+		t.Fatalf("failed to read flow detail file: %v", err)
+	}
+
+	if len(data) == 0 {
+		t.Error("flow detail file should not be empty after flush")
+	}
+
+	// The file should contain valid JSON with the flow ID
+	content := string(data)
+	if !contains(content, "flow-000") {
+		t.Error("flow detail file should contain the flow ID")
+	}
+}
+
+func TestFlowWriter_flush_afterCommandEnd(t *testing.T) {
+	fw, iw, tmpDir := createTestFlowWriter(t)
+	defer iw.Close()
+
+	fw.Start()
+	fw.CommandStart(0)
+	fw.CommandEnd(0, StatusPassed, nil, nil, CommandArtifacts{})
+
+	// Read the flushed file and verify command status
+	flowPath := filepath.Join(tmpDir, "flows", "flow-000.json")
+	data, err := os.ReadFile(flowPath)
+	if err != nil {
+		t.Fatalf("failed to read flow detail file: %v", err)
+	}
+
+	content := string(data)
+	if !contains(content, `"passed"`) {
+		t.Error("flushed file should contain passed status")
+	}
+}
+
+func TestFlowWriter_flush_afterSkipRemaining(t *testing.T) {
+	fw, iw, tmpDir := createTestFlowWriter(t)
+	defer iw.Close()
+
+	fw.Start()
+	fw.CommandStart(0)
+	fw.CommandEnd(0, StatusFailed, nil, &Error{Message: "fail"}, CommandArtifacts{})
+	fw.SkipRemainingCommands(1)
+
+	// Read the flushed file and verify skipped commands
+	flowPath := filepath.Join(tmpDir, "flows", "flow-000.json")
+	data, err := os.ReadFile(flowPath)
+	if err != nil {
+		t.Fatalf("failed to read flow detail file: %v", err)
+	}
+
+	content := string(data)
+	if !contains(content, `"skipped"`) {
+		t.Error("flushed file should contain skipped status")
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstring(s, substr))
+}
+
+func containsSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
 func TestFlowWriter_commandSummary(t *testing.T) {
 	fw, iw, _ := createTestFlowWriter(t)
 	defer iw.Close()

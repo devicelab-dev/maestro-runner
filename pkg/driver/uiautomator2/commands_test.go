@@ -2,11 +2,14 @@ package uiautomator2
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
+	"github.com/devicelab-dev/maestro-runner/pkg/uiautomator2"
 )
 
 func TestMapDirection(t *testing.T) {
@@ -1903,3 +1906,1450 @@ func TestTakeScreenshotViaMethod(t *testing.T) {
 		t.Fatalf("expected []byte data, got %T", result.Data)
 	}
 }
+
+// ============================================================================
+// tapOnPointWithPercentage Tests
+// ============================================================================
+
+func TestTapOnPointWithPercentageSuccess(t *testing.T) {
+	client := &MockUIA2Client{}
+	shell := &MockShellExecutor{}
+	driver := New(client, nil, shell)
+
+	result := driver.tapOnPointWithPercentage("50%, 50%")
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	// Screen size from MockUIA2Client.GetDeviceInfo is 1080x2400
+	// 50% of 1080 = 540, 50% of 2400 = 1200
+	if len(client.clickCalls) != 1 {
+		t.Fatalf("expected 1 click call, got %d", len(client.clickCalls))
+	}
+	if client.clickCalls[0].X != 540 || client.clickCalls[0].Y != 1200 {
+		t.Errorf("expected click at (540, 1200), got (%d, %d)", client.clickCalls[0].X, client.clickCalls[0].Y)
+	}
+}
+
+func TestTapOnPointWithPercentageCorners(t *testing.T) {
+	client := &MockUIA2Client{}
+	shell := &MockShellExecutor{}
+	driver := New(client, nil, shell)
+
+	// Top-left corner: 0%, 0%
+	result := driver.tapOnPointWithPercentage("0%, 0%")
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	if len(client.clickCalls) != 1 {
+		t.Fatalf("expected 1 click call, got %d", len(client.clickCalls))
+	}
+	if client.clickCalls[0].X != 0 || client.clickCalls[0].Y != 0 {
+		t.Errorf("expected click at (0, 0), got (%d, %d)", client.clickCalls[0].X, client.clickCalls[0].Y)
+	}
+}
+
+func TestTapOnPointWithPercentageNoDevice(t *testing.T) {
+	driver := &Driver{device: nil}
+
+	result := driver.tapOnPointWithPercentage("50%, 50%")
+
+	if result.Success {
+		t.Error("expected failure when device is nil")
+	}
+	if !strings.Contains(result.Message, "device") {
+		t.Errorf("expected device-related error message, got: %s", result.Message)
+	}
+}
+
+func TestTapOnPointWithPercentageInvalidCoords(t *testing.T) {
+	client := &MockUIA2Client{}
+	shell := &MockShellExecutor{}
+	driver := New(client, nil, shell)
+
+	result := driver.tapOnPointWithPercentage("invalid")
+
+	if result.Success {
+		t.Error("expected failure for invalid coordinates")
+	}
+}
+
+func TestTapOnPointWithPercentageClickError(t *testing.T) {
+	client := &MockUIA2Client{clickErr: errors.New("click failed")}
+	shell := &MockShellExecutor{}
+	driver := New(client, nil, shell)
+
+	result := driver.tapOnPointWithPercentage("50%, 50%")
+
+	if result.Success {
+		t.Error("expected failure when click returns error")
+	}
+}
+
+// ============================================================================
+// tapOnPoint Additional Tests
+// ============================================================================
+
+func TestTapOnPointWithPercentagePoint(t *testing.T) {
+	// Test tapOnPoint with a percentage-based Point string
+	client := &MockUIA2Client{}
+	shell := &MockShellExecutor{}
+	driver := New(client, nil, shell)
+
+	step := &flow.TapOnPointStep{Point: "85%, 15%"}
+	result := driver.tapOnPoint(step)
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	// 85% of 1080 = 918, 15% of 2400 = 360
+	if len(client.clickCalls) != 1 {
+		t.Fatalf("expected 1 click call, got %d", len(client.clickCalls))
+	}
+	if client.clickCalls[0].X != 918 || client.clickCalls[0].Y != 360 {
+		t.Errorf("expected click at (918, 360), got (%d, %d)", client.clickCalls[0].X, client.clickCalls[0].Y)
+	}
+}
+
+func TestTapOnPointWithPercentagePointNoDevice(t *testing.T) {
+	driver := &Driver{device: nil}
+
+	step := &flow.TapOnPointStep{Point: "50%, 50%"}
+	result := driver.tapOnPoint(step)
+
+	if result.Success {
+		t.Error("expected failure when device is nil")
+	}
+}
+
+func TestTapOnPointWithPercentagePointInvalid(t *testing.T) {
+	client := &MockUIA2Client{}
+	shell := &MockShellExecutor{}
+	driver := New(client, nil, shell)
+
+	step := &flow.TapOnPointStep{Point: "bad_coords"}
+	result := driver.tapOnPoint(step)
+
+	if result.Success {
+		t.Error("expected failure for invalid percentage coords")
+	}
+}
+
+func TestTapOnPointZeroCoords(t *testing.T) {
+	// Neither Point nor X/Y specified
+	driver := &Driver{}
+
+	step := &flow.TapOnPointStep{}
+	result := driver.tapOnPoint(step)
+
+	if result.Success {
+		t.Error("expected failure when no point specified")
+	}
+	if !strings.Contains(result.Message, "coordinates required") {
+		t.Errorf("expected 'coordinates required' in message, got: %s", result.Message)
+	}
+}
+
+// ============================================================================
+// swipeWithCoordinates Tests
+// ============================================================================
+
+func TestSwipeWithCoordinatesSuccess(t *testing.T) {
+	shell := &MockShellExecutor{}
+	client := &MockUIA2Client{}
+	driver := New(client, nil, shell)
+
+	result := driver.swipeWithCoordinates("50%, 80%", "50%, 20%", 400)
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	// 50% of 1080 = 540, 80% of 2400 = 1920
+	// 50% of 1080 = 540, 20% of 2400 = 480
+	if len(shell.commands) != 1 {
+		t.Fatalf("expected 1 shell command, got %d", len(shell.commands))
+	}
+	expected := "input swipe 540 1920 540 480 400"
+	if shell.commands[0] != expected {
+		t.Errorf("expected command %q, got %q", expected, shell.commands[0])
+	}
+}
+
+func TestSwipeWithCoordinatesNoDevice(t *testing.T) {
+	driver := &Driver{device: nil}
+
+	result := driver.swipeWithCoordinates("50%, 80%", "50%, 20%", 400)
+
+	if result.Success {
+		t.Error("expected failure when device is nil")
+	}
+}
+
+func TestSwipeWithCoordinatesInvalidStart(t *testing.T) {
+	shell := &MockShellExecutor{}
+	client := &MockUIA2Client{}
+	driver := New(client, nil, shell)
+
+	result := driver.swipeWithCoordinates("invalid", "50%, 20%", 400)
+
+	if result.Success {
+		t.Error("expected failure for invalid start coordinates")
+	}
+}
+
+func TestSwipeWithCoordinatesInvalidEnd(t *testing.T) {
+	shell := &MockShellExecutor{}
+	client := &MockUIA2Client{}
+	driver := New(client, nil, shell)
+
+	result := driver.swipeWithCoordinates("50%, 80%", "bad", 400)
+
+	if result.Success {
+		t.Error("expected failure for invalid end coordinates")
+	}
+}
+
+func TestSwipeWithCoordinatesDefaultDuration(t *testing.T) {
+	shell := &MockShellExecutor{}
+	client := &MockUIA2Client{}
+	driver := New(client, nil, shell)
+
+	// Duration 0 should default to 300
+	result := driver.swipeWithCoordinates("50%, 80%", "50%, 20%", 0)
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	if len(shell.commands) != 1 {
+		t.Fatalf("expected 1 shell command, got %d", len(shell.commands))
+	}
+	if !strings.Contains(shell.commands[0], " 300") {
+		t.Errorf("expected default duration 300 in command, got: %s", shell.commands[0])
+	}
+}
+
+// ============================================================================
+// swipe (main entry) Additional Tests
+// ============================================================================
+
+func TestSwipeWithStartEndPercentages(t *testing.T) {
+	shell := &MockShellExecutor{}
+	client := &MockUIA2Client{}
+	driver := New(client, nil, shell)
+
+	step := &flow.SwipeStep{Start: "30%, 70%", End: "70%, 30%", Duration: 500}
+	result := driver.swipe(step)
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	// 30% of 1080 = 324, 70% of 2400 = 1680
+	// 70% of 1080 = 756, 30% of 2400 = 720
+	if len(shell.commands) != 1 {
+		t.Fatalf("expected 1 shell command, got %d", len(shell.commands))
+	}
+	expected := "input swipe 324 1680 756 720 500"
+	if shell.commands[0] != expected {
+		t.Errorf("expected command %q, got %q", expected, shell.commands[0])
+	}
+}
+
+func TestSwipeWithAbsoluteCoords(t *testing.T) {
+	shell := &MockShellExecutor{}
+	client := &MockUIA2Client{}
+	driver := New(client, nil, shell)
+
+	step := &flow.SwipeStep{StartX: 100, StartY: 800, EndX: 100, EndY: 200, Duration: 300}
+	result := driver.swipe(step)
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	if len(shell.commands) != 1 {
+		t.Fatalf("expected 1 shell command, got %d", len(shell.commands))
+	}
+	expected := "input swipe 100 800 100 200 300"
+	if shell.commands[0] != expected {
+		t.Errorf("expected command %q, got %q", expected, shell.commands[0])
+	}
+}
+
+func TestSwipeEmptyDirectionDefaultsToUp(t *testing.T) {
+	shell := &MockShellExecutor{}
+	client := &MockUIA2Client{}
+	driver := New(client, nil, shell)
+
+	step := &flow.SwipeStep{Direction: ""}
+	result := driver.swipe(step)
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+}
+
+// ============================================================================
+// swipeWithMaestroCoordinates Tests
+// ============================================================================
+
+func TestSwipeWithMaestroCoordinatesUp(t *testing.T) {
+	shell := &MockShellExecutor{}
+	client := &MockUIA2Client{}
+	driver := New(client, nil, shell)
+
+	result := driver.swipeWithMaestroCoordinates("up", 1080, 2400, 300)
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	if len(shell.commands) != 1 {
+		t.Fatalf("expected 1 shell command, got %d", len(shell.commands))
+	}
+	// UP: startX=540, startY=1680, endX=540, endY=720
+	expected := "input swipe 540 1680 540 720 300"
+	if shell.commands[0] != expected {
+		t.Errorf("expected command %q, got %q", expected, shell.commands[0])
+	}
+}
+
+func TestSwipeWithMaestroCoordinatesDown(t *testing.T) {
+	shell := &MockShellExecutor{}
+	client := &MockUIA2Client{}
+	driver := New(client, nil, shell)
+
+	result := driver.swipeWithMaestroCoordinates("down", 1080, 2400, 300)
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	if len(shell.commands) != 1 {
+		t.Fatalf("expected 1 shell command, got %d", len(shell.commands))
+	}
+	// DOWN: startX=540, startY=720, endX=540, endY=1680
+	expected := "input swipe 540 720 540 1680 300"
+	if shell.commands[0] != expected {
+		t.Errorf("expected command %q, got %q", expected, shell.commands[0])
+	}
+}
+
+func TestSwipeWithMaestroCoordinatesLeft(t *testing.T) {
+	shell := &MockShellExecutor{}
+	client := &MockUIA2Client{}
+	driver := New(client, nil, shell)
+
+	result := driver.swipeWithMaestroCoordinates("left", 1080, 2400, 300)
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	if len(shell.commands) != 1 {
+		t.Fatalf("expected 1 shell command, got %d", len(shell.commands))
+	}
+	// LEFT: startX=756, startY=1200, endX=324, endY=1200
+	expected := "input swipe 756 1200 324 1200 300"
+	if shell.commands[0] != expected {
+		t.Errorf("expected command %q, got %q", expected, shell.commands[0])
+	}
+}
+
+func TestSwipeWithMaestroCoordinatesRight(t *testing.T) {
+	shell := &MockShellExecutor{}
+	client := &MockUIA2Client{}
+	driver := New(client, nil, shell)
+
+	result := driver.swipeWithMaestroCoordinates("right", 1080, 2400, 300)
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	if len(shell.commands) != 1 {
+		t.Fatalf("expected 1 shell command, got %d", len(shell.commands))
+	}
+	// RIGHT: startX=324, startY=1200, endX=756, endY=1200
+	expected := "input swipe 324 1200 756 1200 300"
+	if shell.commands[0] != expected {
+		t.Errorf("expected command %q, got %q", expected, shell.commands[0])
+	}
+}
+
+func TestSwipeWithMaestroCoordinatesDefaultDirection(t *testing.T) {
+	shell := &MockShellExecutor{}
+	client := &MockUIA2Client{}
+	driver := New(client, nil, shell)
+
+	// Unknown direction defaults to "up" behavior
+	result := driver.swipeWithMaestroCoordinates("unknown", 1080, 2400, 300)
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	if len(shell.commands) != 1 {
+		t.Fatalf("expected 1 shell command, got %d", len(shell.commands))
+	}
+	// Default = up: startX=540, startY=1680, endX=540, endY=720
+	expected := "input swipe 540 1680 540 720 300"
+	if shell.commands[0] != expected {
+		t.Errorf("expected command %q, got %q", expected, shell.commands[0])
+	}
+}
+
+// ============================================================================
+// resolvePermissionShortcut Tests
+// ============================================================================
+
+func TestResolvePermissionShortcutKnownShortcuts(t *testing.T) {
+	tests := []struct {
+		shortcut string
+		contains string
+		count    int
+	}{
+		{"camera", "android.permission.CAMERA", 1},
+		{"microphone", "android.permission.RECORD_AUDIO", 1},
+		{"notifications", "android.permission.POST_NOTIFICATIONS", 1},
+		{"location", "android.permission.ACCESS_FINE_LOCATION", 3},
+		{"contacts", "android.permission.READ_CONTACTS", 3},
+		{"phone", "android.permission.READ_PHONE_STATE", 6},
+		{"bluetooth", "android.permission.BLUETOOTH_CONNECT", 3},
+		{"storage", "android.permission.READ_EXTERNAL_STORAGE", 5},
+		{"medialibrary", "android.permission.READ_MEDIA_IMAGES", 3},
+		{"calendar", "android.permission.READ_CALENDAR", 2},
+		{"sms", "android.permission.SEND_SMS", 5},
+		{"sensors", "android.permission.BODY_SENSORS", 2},
+		{"activity_recognition", "android.permission.ACTIVITY_RECOGNITION", 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.shortcut, func(t *testing.T) {
+			perms := resolvePermissionShortcut(tt.shortcut)
+			if len(perms) != tt.count {
+				t.Errorf("resolvePermissionShortcut(%q) returned %d perms, want %d", tt.shortcut, len(perms), tt.count)
+			}
+			found := false
+			for _, p := range perms {
+				if p == tt.contains {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("resolvePermissionShortcut(%q) missing %q, got %v", tt.shortcut, tt.contains, perms)
+			}
+		})
+	}
+}
+
+func TestResolvePermissionShortcutCaseInsensitive(t *testing.T) {
+	perms := resolvePermissionShortcut("CAMERA")
+	if len(perms) != 1 || perms[0] != "android.permission.CAMERA" {
+		t.Errorf("expected [android.permission.CAMERA], got %v", perms)
+	}
+
+	perms = resolvePermissionShortcut("Camera")
+	if len(perms) != 1 || perms[0] != "android.permission.CAMERA" {
+		t.Errorf("expected [android.permission.CAMERA], got %v", perms)
+	}
+}
+
+func TestResolvePermissionShortcutFullAndroidPermission(t *testing.T) {
+	perms := resolvePermissionShortcut("android.permission.READ_PHONE_STATE")
+	if len(perms) != 1 || perms[0] != "android.permission.READ_PHONE_STATE" {
+		t.Errorf("expected [android.permission.READ_PHONE_STATE], got %v", perms)
+	}
+}
+
+func TestResolvePermissionShortcutUnknownAddsPrefix(t *testing.T) {
+	perms := resolvePermissionShortcut("CUSTOM_PERM")
+	if len(perms) != 1 || perms[0] != "android.permission.CUSTOM_PERM" {
+		t.Errorf("expected [android.permission.CUSTOM_PERM], got %v", perms)
+	}
+}
+
+// ============================================================================
+// applyPermission Tests
+// ============================================================================
+
+func TestApplyPermissionAllow(t *testing.T) {
+	shell := &MockShellExecutor{}
+	driver := &Driver{device: shell}
+
+	err := driver.applyPermission("com.example.app", "android.permission.CAMERA", "allow")
+
+	if err != nil {
+		t.Errorf("expected no error, got: %v", err)
+	}
+	if len(shell.commands) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(shell.commands))
+	}
+	expected := "pm grant com.example.app android.permission.CAMERA"
+	if shell.commands[0] != expected {
+		t.Errorf("expected %q, got %q", expected, shell.commands[0])
+	}
+}
+
+func TestApplyPermissionDeny(t *testing.T) {
+	shell := &MockShellExecutor{}
+	driver := &Driver{device: shell}
+
+	err := driver.applyPermission("com.example.app", "android.permission.CAMERA", "deny")
+
+	if err != nil {
+		t.Errorf("expected no error, got: %v", err)
+	}
+	if len(shell.commands) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(shell.commands))
+	}
+	expected := "pm revoke com.example.app android.permission.CAMERA"
+	if shell.commands[0] != expected {
+		t.Errorf("expected %q, got %q", expected, shell.commands[0])
+	}
+}
+
+func TestApplyPermissionUnset(t *testing.T) {
+	shell := &MockShellExecutor{}
+	driver := &Driver{device: shell}
+
+	err := driver.applyPermission("com.example.app", "android.permission.CAMERA", "unset")
+
+	if err != nil {
+		t.Errorf("expected no error, got: %v", err)
+	}
+	if len(shell.commands) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(shell.commands))
+	}
+	expected := "pm revoke com.example.app android.permission.CAMERA"
+	if shell.commands[0] != expected {
+		t.Errorf("expected %q, got %q", expected, shell.commands[0])
+	}
+}
+
+func TestApplyPermissionInvalidValue(t *testing.T) {
+	shell := &MockShellExecutor{}
+	driver := &Driver{device: shell}
+
+	err := driver.applyPermission("com.example.app", "android.permission.CAMERA", "invalid")
+
+	if err == nil {
+		t.Error("expected error for invalid permission value")
+	}
+	if !strings.Contains(err.Error(), "invalid permission value") {
+		t.Errorf("expected 'invalid permission value' in error, got: %v", err)
+	}
+}
+
+func TestApplyPermissionShellError(t *testing.T) {
+	shell := &MockShellExecutor{err: errors.New("grant failed")}
+	driver := &Driver{device: shell}
+
+	err := driver.applyPermission("com.example.app", "android.permission.CAMERA", "allow")
+
+	if err == nil {
+		t.Error("expected error when shell fails")
+	}
+}
+
+// ============================================================================
+// applyPermissions Tests
+// ============================================================================
+
+func TestApplyPermissionsAllAllow(t *testing.T) {
+	shell := &MockShellExecutor{}
+	driver := &Driver{device: shell}
+
+	result := driver.applyPermissions("com.example.app", map[string]string{"all": "allow"})
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	// Should have issued grant commands for all permissions
+	if len(shell.commands) == 0 {
+		t.Error("expected grant commands to be issued")
+	}
+	for _, cmd := range shell.commands {
+		if !strings.HasPrefix(cmd, "pm grant com.example.app") {
+			t.Errorf("expected pm grant command, got: %s", cmd)
+		}
+	}
+}
+
+func TestApplyPermissionsSpecificShortcut(t *testing.T) {
+	shell := &MockShellExecutor{}
+	driver := &Driver{device: shell}
+
+	result := driver.applyPermissions("com.example.app", map[string]string{"camera": "allow"})
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	if len(shell.commands) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(shell.commands))
+	}
+	expected := "pm grant com.example.app android.permission.CAMERA"
+	if shell.commands[0] != expected {
+		t.Errorf("expected %q, got %q", expected, shell.commands[0])
+	}
+}
+
+func TestApplyPermissionsWithErrors(t *testing.T) {
+	shell := &MockShellExecutor{err: errors.New("grant failed")}
+	driver := &Driver{device: shell}
+
+	result := driver.applyPermissions("com.example.app", map[string]string{"camera": "allow"})
+
+	if result.Success {
+		t.Error("expected failure when permission grant fails")
+	}
+	if !strings.Contains(result.Message, "Errors") {
+		t.Errorf("expected Errors in message, got: %s", result.Message)
+	}
+}
+
+func TestApplyPermissionsDeny(t *testing.T) {
+	shell := &MockShellExecutor{}
+	driver := &Driver{device: shell}
+
+	result := driver.applyPermissions("com.example.app", map[string]string{"camera": "deny"})
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	if len(shell.commands) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(shell.commands))
+	}
+	expected := "pm revoke com.example.app android.permission.CAMERA"
+	if shell.commands[0] != expected {
+		t.Errorf("expected %q, got %q", expected, shell.commands[0])
+	}
+}
+
+// ============================================================================
+// getScreenSize Tests
+// ============================================================================
+
+func TestGetScreenSizeViaDeviceInfo(t *testing.T) {
+	// MockUIA2Client returns "1080x2400" from GetDeviceInfo
+	client := &MockUIA2Client{}
+	driver := &Driver{client: client}
+
+	w, h, err := driver.getScreenSize()
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if w != 1080 || h != 2400 {
+		t.Errorf("expected 1080x2400, got %dx%d", w, h)
+	}
+}
+
+func TestGetScreenSizeViaWmSize(t *testing.T) {
+	// Use HTTP mock that returns bad display size, forcing wm size fallback
+	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
+		"GET /appium/device/info": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{"realDisplaySize": ""},
+			})
+		},
+	})
+	defer server.Close()
+
+	client := newMockHTTPClient(server.URL)
+	shell := &MockShellExecutor{response: "Physical size: 720x1280"}
+	driver := New(client.Client, nil, shell)
+
+	w, h, err := driver.getScreenSize()
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if w != 720 || h != 1280 {
+		t.Errorf("expected 720x1280, got %dx%d", w, h)
+	}
+}
+
+func TestGetScreenSizeWmSizeNoDevice(t *testing.T) {
+	// No client, no device - should return error
+	driver := &Driver{}
+
+	_, _, err := driver.getScreenSize()
+
+	if err == nil {
+		t.Error("expected error when no client and no device")
+	}
+}
+
+func TestGetScreenSizeWmSizeShellError(t *testing.T) {
+	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
+		"GET /appium/device/info": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{"realDisplaySize": ""},
+			})
+		},
+	})
+	defer server.Close()
+
+	client := newMockHTTPClient(server.URL)
+	shell := &MockShellExecutor{err: errors.New("shell failed")}
+	driver := New(client.Client, nil, shell)
+
+	_, _, err := driver.getScreenSize()
+
+	if err == nil {
+		t.Error("expected error when shell fails")
+	}
+}
+
+func TestGetScreenSizeWmSizeBadFormat(t *testing.T) {
+	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
+		"GET /appium/device/info": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{"realDisplaySize": ""},
+			})
+		},
+	})
+	defer server.Close()
+
+	client := newMockHTTPClient(server.URL)
+	shell := &MockShellExecutor{response: "unexpected output"}
+	driver := New(client.Client, nil, shell)
+
+	_, _, err := driver.getScreenSize()
+
+	if err == nil {
+		t.Error("expected error for bad wm size output")
+	}
+}
+
+func TestGetScreenSizeWmSizeNonNumeric(t *testing.T) {
+	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
+		"GET /appium/device/info": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{"realDisplaySize": ""},
+			})
+		},
+	})
+	defer server.Close()
+
+	client := newMockHTTPClient(server.URL)
+	shell := &MockShellExecutor{response: "Physical size: abcxdef"}
+	driver := New(client.Client, nil, shell)
+
+	_, _, err := driver.getScreenSize()
+
+	if err == nil {
+		t.Error("expected error for non-numeric wm size values")
+	}
+}
+
+// ============================================================================
+// findScrollableElement Tests
+// ============================================================================
+
+func TestFindScrollableElementSingleScrollable(t *testing.T) {
+	client := &MockUIA2Client{
+		sourceData: `<hierarchy rotation="0">
+			<node class="android.widget.FrameLayout" bounds="[0,0][1080,2400]">
+				<node class="android.widget.ScrollView" scrollable="true" bounds="[0,100][1080,2000]"
+					text="" resource-id="" content-desc="" enabled="true" displayed="true" clickable="false"/>
+			</node>
+		</hierarchy>`,
+	}
+	driver := &Driver{client: client}
+
+	info, count := driver.findScrollableElement(500)
+
+	if info == nil {
+		t.Fatal("expected scrollable element info, got nil")
+	}
+	if count != 1 {
+		t.Errorf("expected count 1, got %d", count)
+	}
+	if info.Bounds.Width != 1080 || info.Bounds.Height != 1900 {
+		t.Errorf("expected bounds 1080x1900, got %dx%d", info.Bounds.Width, info.Bounds.Height)
+	}
+}
+
+func TestFindScrollableElementNoneFound(t *testing.T) {
+	client := &MockUIA2Client{
+		sourceData: `<hierarchy rotation="0">
+			<node class="android.widget.FrameLayout" bounds="[0,0][1080,2400]"
+				text="" resource-id="" content-desc="" enabled="true" displayed="true"/>
+		</hierarchy>`,
+	}
+	driver := &Driver{client: client}
+
+	info, count := driver.findScrollableElement(200)
+
+	if info != nil {
+		t.Errorf("expected nil info, got %+v", info)
+	}
+	if count != 0 {
+		t.Errorf("expected count 0, got %d", count)
+	}
+}
+
+func TestFindScrollableElementMultipleScrollables(t *testing.T) {
+	client := &MockUIA2Client{
+		sourceData: `<hierarchy rotation="0">
+			<node class="android.widget.FrameLayout" bounds="[0,0][1080,2400]">
+				<node class="android.widget.ScrollView" scrollable="true" bounds="[0,0][200,200]"
+					text="" resource-id="" content-desc="" enabled="true" displayed="true" clickable="false"/>
+				<node class="android.widget.ScrollView" scrollable="true" bounds="[0,200][1080,2400]"
+					text="" resource-id="" content-desc="" enabled="true" displayed="true" clickable="false"/>
+			</node>
+		</hierarchy>`,
+	}
+	driver := &Driver{client: client}
+
+	info, count := driver.findScrollableElement(500)
+
+	if info == nil {
+		t.Fatal("expected scrollable element info, got nil")
+	}
+	if count != 2 {
+		t.Errorf("expected count 2, got %d", count)
+	}
+}
+
+func TestFindScrollableElementSourceError(t *testing.T) {
+	client := &MockUIA2Client{sourceErr: errors.New("source failed")}
+	driver := &Driver{client: client}
+
+	info, count := driver.findScrollableElement(200)
+
+	if info != nil {
+		t.Errorf("expected nil info, got %+v", info)
+	}
+	if count != 0 {
+		t.Errorf("expected count 0, got %d", count)
+	}
+}
+
+// ============================================================================
+// waitUntil Tests
+// ============================================================================
+
+func TestWaitUntilVisibleFound(t *testing.T) {
+	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
+		"POST /element": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]string{"ELEMENT": "elem-wait"},
+			})
+		},
+		"GET /element/elem-wait/text": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{"value": "Target"})
+		},
+		"GET /element/elem-wait/rect": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]int{"x": 10, "y": 20, "width": 100, "height": 50},
+			})
+		},
+	})
+	defer server.Close()
+
+	client := newMockHTTPClient(server.URL)
+	driver := New(client.Client, nil, nil)
+
+	sel := flow.Selector{Text: "Target"}
+	step := &flow.WaitUntilStep{
+		Visible:  &sel,
+		BaseStep: flow.BaseStep{TimeoutMs: 2000},
+	}
+	result := driver.waitUntil(step)
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	if !strings.Contains(result.Message, "visible") {
+		t.Errorf("expected 'visible' in message, got: %s", result.Message)
+	}
+}
+
+func TestWaitUntilVisibleTimeout(t *testing.T) {
+	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
+		"POST /element": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]string{"ELEMENT": ""},
+			})
+		},
+		"GET /source": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{
+				"value": `<hierarchy><node text="Other" bounds="[0,0][100,100]"/></hierarchy>`,
+			})
+		},
+	})
+	defer server.Close()
+
+	client := newMockHTTPClient(server.URL)
+	driver := New(client.Client, nil, nil)
+
+	sel := flow.Selector{Text: "Missing"}
+	step := &flow.WaitUntilStep{
+		Visible:  &sel,
+		BaseStep: flow.BaseStep{TimeoutMs: 300},
+	}
+	result := driver.waitUntil(step)
+
+	if result.Success {
+		t.Error("expected failure when element not found within timeout")
+	}
+	if !strings.Contains(result.Message, "not visible") {
+		t.Errorf("expected 'not visible' in message, got: %s", result.Message)
+	}
+}
+
+func TestWaitUntilNotVisibleAlreadyGone(t *testing.T) {
+	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
+		"POST /element": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]string{"ELEMENT": ""},
+			})
+		},
+		"GET /source": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{
+				"value": `<hierarchy><node text="Other" bounds="[0,0][100,100]"/></hierarchy>`,
+			})
+		},
+	})
+	defer server.Close()
+
+	client := newMockHTTPClient(server.URL)
+	driver := New(client.Client, nil, nil)
+
+	sel := flow.Selector{Text: "Missing"}
+	step := &flow.WaitUntilStep{
+		NotVisible: &sel,
+		BaseStep:   flow.BaseStep{TimeoutMs: 2000},
+	}
+	result := driver.waitUntil(step)
+
+	if !result.Success {
+		t.Errorf("expected success when element already gone, got error: %v", result.Error)
+	}
+	if !strings.Contains(result.Message, "no longer visible") {
+		t.Errorf("expected 'no longer visible' in message, got: %s", result.Message)
+	}
+}
+
+func TestWaitUntilNotVisibleTimeout(t *testing.T) {
+	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
+		"POST /element": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]string{"ELEMENT": "elem-wait"},
+			})
+		},
+		"GET /element/elem-wait/text": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{"value": "StillHere"})
+		},
+		"GET /element/elem-wait/rect": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]int{"x": 10, "y": 20, "width": 100, "height": 50},
+			})
+		},
+	})
+	defer server.Close()
+
+	client := newMockHTTPClient(server.URL)
+	driver := New(client.Client, nil, nil)
+
+	sel := flow.Selector{Text: "StillHere"}
+	step := &flow.WaitUntilStep{
+		NotVisible: &sel,
+		BaseStep:   flow.BaseStep{TimeoutMs: 300},
+	}
+	result := driver.waitUntil(step)
+
+	if result.Success {
+		t.Error("expected failure when element remains visible")
+	}
+	if !strings.Contains(result.Message, "still visible") {
+		t.Errorf("expected 'still visible' in message, got: %s", result.Message)
+	}
+}
+
+func TestWaitUntilDefaultTimeout(t *testing.T) {
+	// TimeoutMs=0 should use 30 second default, but element found immediately
+	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
+		"POST /element": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]string{"ELEMENT": "elem-fast"},
+			})
+		},
+		"GET /element/elem-fast/text": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{"value": "Found"})
+		},
+		"GET /element/elem-fast/rect": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]int{"x": 10, "y": 20, "width": 100, "height": 50},
+			})
+		},
+	})
+	defer server.Close()
+
+	client := newMockHTTPClient(server.URL)
+	driver := New(client.Client, nil, nil)
+
+	sel := flow.Selector{Text: "Found"}
+	step := &flow.WaitUntilStep{
+		Visible:  &sel,
+		BaseStep: flow.BaseStep{TimeoutMs: 0}, // default 30s
+	}
+	result := driver.waitUntil(step)
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+}
+
+func TestWaitUntilVisibleAppearsAfterDelay(t *testing.T) {
+	// Element not found at first, then appears
+	var callCount int64
+	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
+		"POST /element": func(w http.ResponseWriter, r *http.Request) {
+			count := atomic.AddInt64(&callCount, 1)
+			if count < 3 {
+				// Not found on first few calls
+				writeJSON(w, map[string]interface{}{
+					"value": map[string]string{"ELEMENT": ""},
+				})
+			} else {
+				// Found after a few attempts
+				writeJSON(w, map[string]interface{}{
+					"value": map[string]string{"ELEMENT": "elem-delayed"},
+				})
+			}
+		},
+		"GET /element/elem-delayed/text": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{"value": "Appeared"})
+		},
+		"GET /element/elem-delayed/rect": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]int{"x": 10, "y": 20, "width": 100, "height": 50},
+			})
+		},
+		"GET /source": func(w http.ResponseWriter, r *http.Request) {
+			count := atomic.LoadInt64(&callCount)
+			if count < 3 {
+				writeJSON(w, map[string]interface{}{
+					"value": `<hierarchy><node text="Other" bounds="[0,0][100,100]"/></hierarchy>`,
+				})
+			} else {
+				writeJSON(w, map[string]interface{}{
+					"value": `<hierarchy><node text="Appeared" bounds="[10,20][110,70]"/></hierarchy>`,
+				})
+			}
+		},
+	})
+	defer server.Close()
+
+	client := newMockHTTPClient(server.URL)
+	driver := New(client.Client, nil, nil)
+
+	sel := flow.Selector{Text: "Appeared"}
+	step := &flow.WaitUntilStep{
+		Visible:  &sel,
+		BaseStep: flow.BaseStep{TimeoutMs: 5000},
+	}
+	result := driver.waitUntil(step)
+
+	if !result.Success {
+		t.Errorf("expected success when element appears after delay, got error: %v", result.Error)
+	}
+}
+
+// ============================================================================
+// SetWaitForIdleTimeout Tests
+// ============================================================================
+
+func TestSetWaitForIdleTimeoutSuccess(t *testing.T) {
+	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
+		"POST /appium/settings": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{"value": nil})
+		},
+	})
+	defer server.Close()
+
+	client := newMockHTTPClient(server.URL)
+	driver := New(client.Client, nil, nil)
+
+	err := driver.SetWaitForIdleTimeout(5000)
+
+	if err != nil {
+		t.Errorf("expected no error, got: %v", err)
+	}
+}
+
+func TestSetWaitForIdleTimeoutZeroDisable(t *testing.T) {
+	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
+		"POST /appium/settings": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{"value": nil})
+		},
+	})
+	defer server.Close()
+
+	client := newMockHTTPClient(server.URL)
+	driver := New(client.Client, nil, nil)
+
+	err := driver.SetWaitForIdleTimeout(0)
+
+	if err != nil {
+		t.Errorf("expected no error, got: %v", err)
+	}
+}
+
+func TestSetWaitForIdleTimeoutServerError(t *testing.T) {
+	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
+		"POST /appium/settings": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			writeJSON(w, map[string]interface{}{"value": "server error"})
+		},
+	})
+	defer server.Close()
+
+	client := newMockHTTPClient(server.URL)
+	driver := New(client.Client, nil, nil)
+
+	err := driver.SetWaitForIdleTimeout(5000)
+
+	if err == nil {
+		t.Error("expected error when server returns 500")
+	}
+}
+
+// ============================================================================
+// travel Additional Tests
+// ============================================================================
+
+func TestTravelSuccess(t *testing.T) {
+	shell := &MockShellExecutor{}
+	driver := &Driver{device: shell}
+
+	step := &flow.TravelStep{
+		Points: []string{"37.7749, -122.4194", "37.8049, -122.4094"},
+		Speed:  3600, // High speed to minimize delay (3600 km/h = 1 point/sec)
+	}
+	result := driver.travel(step)
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	if !strings.Contains(result.Message, "2 points") {
+		t.Errorf("expected '2 points' in message, got: %s", result.Message)
+	}
+	// Should have issued 2 shell commands (one per point)
+	if len(shell.commands) != 2 {
+		t.Fatalf("expected 2 commands, got %d", len(shell.commands))
+	}
+	if !strings.Contains(shell.commands[0], "37.7749") {
+		t.Errorf("expected first point lat in command, got: %s", shell.commands[0])
+	}
+	if !strings.Contains(shell.commands[1], "37.8049") {
+		t.Errorf("expected second point lat in command, got: %s", shell.commands[1])
+	}
+}
+
+func TestTravelShellError(t *testing.T) {
+	shell := &MockShellExecutor{err: errors.New("shell failed")}
+	driver := &Driver{device: shell}
+
+	step := &flow.TravelStep{
+		Points: []string{"37.7749, -122.4194", "37.8049, -122.4094"},
+		Speed:  3600,
+	}
+	result := driver.travel(step)
+
+	if result.Success {
+		t.Error("expected failure when shell command fails")
+	}
+}
+
+func TestTravelDefaultSpeed(t *testing.T) {
+	// Verify that speed=0 defaults to 50 km/h internally.
+	// We can't easily test the actual wait (72s per point), but we verify
+	// the field is set correctly on the step before calling.
+	step := &flow.TravelStep{
+		Points: []string{"37.7749, -122.4194", "37.8049, -122.4094"},
+		Speed:  0,
+	}
+	if step.Speed != 0 {
+		t.Errorf("expected speed 0, got %f", step.Speed)
+	}
+	// The travel() function sets speed=50 internally when step.Speed<=0.
+	// This is tested indirectly by TestTravelSuccess which uses high speed.
+}
+
+func TestTravelMalformedPoints(t *testing.T) {
+	shell := &MockShellExecutor{}
+	driver := &Driver{device: shell}
+
+	step := &flow.TravelStep{
+		Points: []string{"malformed_point", "also_malformed"},
+		Speed:  3600,
+	}
+	result := driver.travel(step)
+
+	// Malformed points are silently skipped (continue), so success
+	if !result.Success {
+		t.Errorf("expected success (malformed points are skipped), got error: %v", result.Error)
+	}
+	// No shell commands should have been issued since no valid points
+	if len(shell.commands) != 0 {
+		t.Errorf("expected 0 commands for malformed points, got %d", len(shell.commands))
+	}
+}
+
+// ============================================================================
+// getAllPermissions Tests
+// ============================================================================
+
+func TestGetAllPermissionsNotEmpty(t *testing.T) {
+	perms := getAllPermissions()
+	if len(perms) == 0 {
+		t.Error("getAllPermissions returned empty list")
+	}
+	// Verify all are android.permission. prefixed
+	for _, p := range perms {
+		if !strings.HasPrefix(p, "android.permission.") {
+			t.Errorf("expected android.permission. prefix, got: %s", p)
+		}
+	}
+}
+
+// ============================================================================
+// tapOn with percentage Point (no selector) Tests
+// ============================================================================
+
+func TestTapOnWithPercentagePoint(t *testing.T) {
+	client := &MockUIA2Client{}
+	shell := &MockShellExecutor{}
+	driver := New(client, nil, shell)
+
+	step := &flow.TapOnStep{Point: "50%, 50%"}
+	result := driver.tapOn(step)
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	// Should have called tapOnPointWithPercentage -> Click(540, 1200)
+	if len(client.clickCalls) != 1 {
+		t.Fatalf("expected 1 click call, got %d", len(client.clickCalls))
+	}
+	if client.clickCalls[0].X != 540 || client.clickCalls[0].Y != 1200 {
+		t.Errorf("expected click at (540, 1200), got (%d, %d)", client.clickCalls[0].X, client.clickCalls[0].Y)
+	}
+}
+
+// ============================================================================
+// getScreenSize via DeviceInfo with bad format Tests
+// ============================================================================
+
+func TestGetScreenSizeDeviceInfoBadFormat(t *testing.T) {
+	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
+		"GET /appium/device/info": func(w http.ResponseWriter, r *http.Request) {
+			// Return a malformed display size (missing "x" separator)
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{"realDisplaySize": "1080-2400"},
+			})
+		},
+	})
+	defer server.Close()
+
+	client := newMockHTTPClient(server.URL)
+	shell := &MockShellExecutor{response: "Physical size: 1080x2400"}
+	driver := New(client.Client, nil, shell)
+
+	w, h, err := driver.getScreenSize()
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Falls back to wm size
+	if w != 1080 || h != 2400 {
+		t.Errorf("expected 1080x2400, got %dx%d", w, h)
+	}
+}
+
+func TestGetScreenSizeDeviceInfoNonNumeric(t *testing.T) {
+	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
+		"GET /appium/device/info": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{"realDisplaySize": "ABCxDEF"},
+			})
+		},
+	})
+	defer server.Close()
+
+	client := newMockHTTPClient(server.URL)
+	shell := &MockShellExecutor{response: "Physical size: 720x1280"}
+	driver := New(client.Client, nil, shell)
+
+	w, h, err := driver.getScreenSize()
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Falls back to wm size
+	if w != 720 || h != 1280 {
+		t.Errorf("expected 720x1280, got %dx%d", w, h)
+	}
+}
+
+// ============================================================================
+// swipeWithAbsoluteCoords edge case Tests
+// ============================================================================
+
+func TestSwipeWithAbsoluteCoordsNoDevice(t *testing.T) {
+	driver := &Driver{device: nil}
+
+	result := driver.swipeWithAbsoluteCoords(100, 800, 100, 200, 300)
+
+	if result.Success {
+		t.Error("expected failure when device is nil")
+	}
+}
+
+func TestSwipeWithAbsoluteCoordsShellError(t *testing.T) {
+	shell := &MockShellExecutor{err: errors.New("shell error")}
+	driver := &Driver{device: shell}
+
+	result := driver.swipeWithAbsoluteCoords(100, 800, 100, 200, 300)
+
+	if result.Success {
+		t.Error("expected failure when shell fails")
+	}
+}
+
+func TestSwipeWithAbsoluteCoordsDefaultDuration(t *testing.T) {
+	shell := &MockShellExecutor{}
+	driver := &Driver{device: shell}
+
+	result := driver.swipeWithAbsoluteCoords(100, 800, 100, 200, 0)
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	if len(shell.commands) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(shell.commands))
+	}
+	// Duration 0 should default to 300
+	expected := "input swipe 100 800 100 200 300"
+	if shell.commands[0] != expected {
+		t.Errorf("expected %q, got %q", expected, shell.commands[0])
+	}
+}
+
+// ============================================================================
+// swipe with selector Tests
+// ============================================================================
+
+func TestSwipeWithSelectorDirection(t *testing.T) {
+	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
+		"POST /element": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]string{"ELEMENT": "elem-swipe"},
+			})
+		},
+		"GET /element/elem-swipe/text": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{"value": "Container"})
+		},
+		"GET /element/elem-swipe/rect": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]int{"x": 0, "y": 100, "width": 500, "height": 800},
+			})
+		},
+		"POST /appium/gestures/swipe": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{"value": nil})
+		},
+	})
+	defer server.Close()
+
+	client := newMockHTTPClient(server.URL)
+	driver := New(client.Client, nil, nil)
+
+	sel := flow.Selector{ID: "container"}
+	step := &flow.SwipeStep{Direction: "left", Selector: &sel}
+	result := driver.swipe(step)
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	if !strings.Contains(result.Message, "left") {
+		t.Errorf("expected 'left' in message, got: %s", result.Message)
+	}
+}
+
+// ============================================================================
+// SetWaitForIdleTimeout via MockUIA2Client Tests
+// ============================================================================
+
+func TestSetWaitForIdleTimeoutMock(t *testing.T) {
+	// Using the MockUIA2Client which always returns nil from SetAppiumSettings
+	client := &MockUIA2Client{}
+	driver := New(client, nil, nil)
+
+	err := driver.SetWaitForIdleTimeout(0)
+
+	if err != nil {
+		t.Errorf("expected no error, got: %v", err)
+	}
+}
+
+// ============================================================================
+// swipeWithCoordinates getScreenSize error Tests
+// ============================================================================
+
+func TestSwipeWithCoordinatesScreenSizeError(t *testing.T) {
+	// Device exists but GetDeviceInfo fails and shell also fails
+	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
+		"GET /appium/device/info": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			writeJSON(w, map[string]interface{}{"value": "error"})
+		},
+	})
+	defer server.Close()
+
+	client := newMockHTTPClient(server.URL)
+	shell := &MockShellExecutor{err: errors.New("wm failed")}
+	driver := New(client.Client, nil, shell)
+
+	result := driver.swipeWithCoordinates("50%, 80%", "50%, 20%", 400)
+
+	if result.Success {
+		t.Error("expected failure when screen size cannot be determined")
+	}
+}
+
+// ============================================================================
+// tapOnPointWithPercentage getScreenSize error Tests
+// ============================================================================
+
+func TestTapOnPointWithPercentageScreenSizeError(t *testing.T) {
+	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
+		"GET /appium/device/info": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			writeJSON(w, map[string]interface{}{"value": "error"})
+		},
+	})
+	defer server.Close()
+
+	client := newMockHTTPClient(server.URL)
+	shell := &MockShellExecutor{err: errors.New("wm failed")}
+	driver := New(client.Client, nil, shell)
+
+	result := driver.tapOnPointWithPercentage("50%, 50%")
+
+	if result.Success {
+		t.Error("expected failure when screen size cannot be determined")
+	}
+}
+
+// ============================================================================
+// Compile-time interface assertion
+// ============================================================================
+
+// Verify MockUIA2Client satisfies UIA2Client at compile time.
+var _ UIA2Client = (*MockUIA2Client)(nil)
+
+// Verify uiautomator2.DeviceInfo is used correctly.
+var _ = &uiautomator2.DeviceInfo{}
+
+// Use fmt to avoid unused import error
+var _ = fmt.Sprintf

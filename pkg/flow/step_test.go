@@ -434,6 +434,333 @@ func TestOpenLinkStep_Fields(t *testing.T) {
 	}
 }
 
+func TestRunScriptStep_ScriptPath(t *testing.T) {
+	tests := []struct {
+		name     string
+		step     RunScriptStep
+		expected string
+	}{
+		{
+			name: "file field takes precedence",
+			step: RunScriptStep{
+				BaseStep: BaseStep{StepType: StepRunScript},
+				Script:   "inline-script.js",
+				File:     "scripts/run.sh",
+			},
+			expected: "scripts/run.sh",
+		},
+		{
+			name: "falls back to script field",
+			step: RunScriptStep{
+				BaseStep: BaseStep{StepType: StepRunScript},
+				Script:   "scripts/test.js",
+			},
+			expected: "scripts/test.js",
+		},
+		{
+			name: "both empty returns empty",
+			step: RunScriptStep{
+				BaseStep: BaseStep{StepType: StepRunScript},
+			},
+			expected: "",
+		},
+		{
+			name: "file only",
+			step: RunScriptStep{
+				BaseStep: BaseStep{StepType: StepRunScript},
+				File:     "run-tests.sh",
+			},
+			expected: "run-tests.sh",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.step.ScriptPath()
+			if got != tt.expected {
+				t.Errorf("ScriptPath() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestTapOnStep_Describe(t *testing.T) {
+	s := TapOnStep{
+		BaseStep: BaseStep{StepType: StepTapOn},
+		Selector: Selector{Text: "Login"},
+	}
+	expected := `tapOn: text="Login"`
+	if got := s.Describe(); got != expected {
+		t.Errorf("Describe() = %q, want %q", got, expected)
+	}
+}
+
+func TestDoubleTapOnStep_Describe(t *testing.T) {
+	s := DoubleTapOnStep{
+		BaseStep: BaseStep{StepType: StepDoubleTapOn},
+		Selector: Selector{ID: "btn"},
+	}
+	expected := `doubleTapOn: id="btn"`
+	if got := s.Describe(); got != expected {
+		t.Errorf("Describe() = %q, want %q", got, expected)
+	}
+}
+
+func TestLongPressOnStep_Describe(t *testing.T) {
+	s := LongPressOnStep{
+		BaseStep: BaseStep{StepType: StepLongPressOn},
+		Selector: Selector{CSS: ".menu-item"},
+	}
+	expected := `longPressOn: css=".menu-item"`
+	if got := s.Describe(); got != expected {
+		t.Errorf("Describe() = %q, want %q", got, expected)
+	}
+}
+
+func TestAssertVisibleStep_Describe(t *testing.T) {
+	s := AssertVisibleStep{
+		BaseStep: BaseStep{StepType: StepAssertVisible},
+		Selector: Selector{Text: "Welcome"},
+	}
+	expected := `assertVisible: text="Welcome"`
+	if got := s.Describe(); got != expected {
+		t.Errorf("Describe() = %q, want %q", got, expected)
+	}
+}
+
+func TestAssertNotVisibleStep_Describe(t *testing.T) {
+	s := AssertNotVisibleStep{
+		BaseStep: BaseStep{StepType: StepAssertNotVisible},
+		Selector: Selector{ID: "error"},
+	}
+	expected := `assertNotVisible: id="error"`
+	if got := s.Describe(); got != expected {
+		t.Errorf("Describe() = %q, want %q", got, expected)
+	}
+}
+
+func TestInputTextStep_Describe(t *testing.T) {
+	s := InputTextStep{
+		BaseStep: BaseStep{StepType: StepInputText},
+		Text:     "user@example.com",
+	}
+	expected := `inputText: "user@example.com"`
+	if got := s.Describe(); got != expected {
+		t.Errorf("Describe() = %q, want %q", got, expected)
+	}
+}
+
+func TestLaunchAppStep_Describe(t *testing.T) {
+	tests := []struct {
+		name       string
+		clearState bool
+		expected   string
+	}{
+		{
+			name:       "without clearState",
+			clearState: false,
+			expected:   "launchApp",
+		},
+		{
+			name:       "with clearState",
+			clearState: true,
+			expected:   "launchApp (clearState)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := LaunchAppStep{
+				BaseStep:   BaseStep{StepType: StepLaunchApp},
+				ClearState: tt.clearState,
+			}
+			if got := s.Describe(); got != tt.expected {
+				t.Errorf("Describe() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestWaitUntilStep_Describe(t *testing.T) {
+	tests := []struct {
+		name     string
+		step     WaitUntilStep
+		expected string
+	}{
+		{
+			name: "with visible",
+			step: WaitUntilStep{
+				BaseStep: BaseStep{StepType: StepWaitUntil},
+				Visible:  &Selector{Text: "Done"},
+			},
+			expected: `extendedWaitUntil: visible text="Done"`,
+		},
+		{
+			name: "with notVisible",
+			step: WaitUntilStep{
+				BaseStep:   BaseStep{StepType: StepWaitUntil},
+				NotVisible: &Selector{ID: "spinner"},
+			},
+			expected: `extendedWaitUntil: notVisible id="spinner"`,
+		},
+		{
+			name: "neither visible nor notVisible",
+			step: WaitUntilStep{
+				BaseStep: BaseStep{StepType: StepWaitUntil},
+			},
+			expected: "extendedWaitUntil",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.step.Describe(); got != tt.expected {
+				t.Errorf("Describe() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestScrollUntilVisibleStep_Describe(t *testing.T) {
+	s := ScrollUntilVisibleStep{
+		BaseStep: BaseStep{StepType: StepScrollUntilVisible},
+		Element:  Selector{Text: "End of list"},
+	}
+	expected := `scrollUntilVisible: text="End of list"`
+	if got := s.Describe(); got != expected {
+		t.Errorf("Describe() = %q, want %q", got, expected)
+	}
+}
+
+func TestCopyTextFromStep_Describe(t *testing.T) {
+	s := CopyTextFromStep{
+		BaseStep: BaseStep{StepType: StepCopyTextFrom},
+		Selector: Selector{ID: "price_label"},
+	}
+	expected := `copyTextFrom: id="price_label"`
+	if got := s.Describe(); got != expected {
+		t.Errorf("Describe() = %q, want %q", got, expected)
+	}
+}
+
+func TestRunFlowStep_Describe(t *testing.T) {
+	tests := []struct {
+		name     string
+		step     RunFlowStep
+		expected string
+	}{
+		{
+			name: "with file",
+			step: RunFlowStep{
+				BaseStep: BaseStep{StepType: StepRunFlow},
+				File:     "login.yaml",
+			},
+			expected: "runFlow: login.yaml",
+		},
+		{
+			name: "without file",
+			step: RunFlowStep{
+				BaseStep: BaseStep{StepType: StepRunFlow},
+			},
+			expected: "runFlow",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.step.Describe(); got != tt.expected {
+				t.Errorf("Describe() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestPressKeyStep_Describe(t *testing.T) {
+	s := PressKeyStep{
+		BaseStep: BaseStep{StepType: StepPressKey},
+		Key:      "Enter",
+	}
+	expected := "pressKey: Enter"
+	if got := s.Describe(); got != expected {
+		t.Errorf("Describe() = %q, want %q", got, expected)
+	}
+}
+
+func TestSwipeStep_Describe(t *testing.T) {
+	tests := []struct {
+		name     string
+		step     SwipeStep
+		expected string
+	}{
+		{
+			name: "with direction",
+			step: SwipeStep{
+				BaseStep:  BaseStep{StepType: StepSwipe},
+				Direction: "UP",
+			},
+			expected: "swipe: UP",
+		},
+		{
+			name: "without direction",
+			step: SwipeStep{
+				BaseStep: BaseStep{StepType: StepSwipe},
+			},
+			expected: "swipe",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.step.Describe(); got != tt.expected {
+				t.Errorf("Describe() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestScrollStep_Describe(t *testing.T) {
+	tests := []struct {
+		name     string
+		step     ScrollStep
+		expected string
+	}{
+		{
+			name: "with direction",
+			step: ScrollStep{
+				BaseStep:  BaseStep{StepType: StepScroll},
+				Direction: "DOWN",
+			},
+			expected: "scroll: DOWN",
+		},
+		{
+			name: "without direction",
+			step: ScrollStep{
+				BaseStep: BaseStep{StepType: StepScroll},
+			},
+			expected: "scroll",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.step.Describe(); got != tt.expected {
+				t.Errorf("Describe() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSetPermissionsStep_Describe(t *testing.T) {
+	s := SetPermissionsStep{
+		BaseStep:    BaseStep{StepType: StepSetPermissions},
+		Permissions: map[string]string{"camera": "allow"},
+	}
+	expected := "setPermissions"
+	if got := s.Describe(); got != expected {
+		t.Errorf("Describe() = %q, want %q", got, expected)
+	}
+}
+
 func TestStepTypeConstants(t *testing.T) {
 	// Verify step type constants have correct values
 	expectedTypes := map[StepType]string{

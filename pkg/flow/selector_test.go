@@ -537,6 +537,68 @@ func TestSelector_Describe(t *testing.T) {
 	}
 }
 
+func TestSelector_DescribeQuoted(t *testing.T) {
+	tests := []struct {
+		name     string
+		selector Selector
+		expected string
+	}{
+		{
+			name:     "empty selector",
+			selector: Selector{},
+			expected: "",
+		},
+		{
+			name:     "text selector",
+			selector: Selector{Text: "Login"},
+			expected: `text="Login"`,
+		},
+		{
+			name:     "id selector",
+			selector: Selector{ID: "login-btn"},
+			expected: `id="login-btn"`,
+		},
+		{
+			name:     "css selector",
+			selector: Selector{CSS: "#form input"},
+			expected: `css="#form input"`,
+		},
+		{
+			name:     "text takes precedence over id",
+			selector: Selector{Text: "Submit", ID: "submit-btn"},
+			expected: `text="Submit"`,
+		},
+		{
+			name:     "id takes precedence over css",
+			selector: Selector{ID: "btn", CSS: "#btn"},
+			expected: `id="btn"`,
+		},
+		{
+			name:     "text with special characters",
+			selector: Selector{Text: `Hello "World"`},
+			expected: `text="Hello "World""`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.selector.DescribeQuoted()
+			if got != tt.expected {
+				t.Errorf("DescribeQuoted() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSelector_DescribeQuoted_InsideOf(t *testing.T) {
+	s := Selector{InsideOf: &Selector{ID: "container"}}
+	// InsideOf alone does not set text/id/css, so IsEmpty is false but DescribeQuoted returns ""
+	got := s.DescribeQuoted()
+	if got != "" {
+		t.Errorf("DescribeQuoted() = %q, want empty for insideOf-only selector", got)
+	}
+}
+
 func TestSelector_UnmarshalYAML_Invalid(t *testing.T) {
 	invalidYAML := `
 text: valid
