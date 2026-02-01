@@ -4,7 +4,7 @@
 
 ---
 
-**Fast mobile UI test automation for Android & iOS**
+**Fast mobile UI test automation for Android, iOS, React Native, Flutter & Expo**
 <br>
 *Open-source Maestro alternative — single binary, no JVM. 100% free, no features behind a paywall.*
 <br>
@@ -50,15 +50,22 @@ maestro-runner --parallel 3 flows/                    # Parallel on 3 devices
 
 ## Key Features
 
-- **Real iOS device testing** — Supports physical iOS devices, not just simulators
-- **Wide OS compatibility** — Works across Android and iOS versions without version restrictions
-- **Reliable text input** — Direct ADB input with Unicode support, no dropped characters
-- **Fast element finding** — Native selectors, clickable parent traversal, regex matching, smarter visibility
-- **Configurable timeouts** — Per-command and per-flow timeouts, `--wait-for-idle-timeout 0` to disable
-- **Parallel execution** — Dynamic ports, multiple device instances on one machine
+- **Zero migration** — Runs your existing Maestro YAML flows as-is, no changes needed
 - **Lightweight** — ~21 MB binary vs ~289 MB JVM footprint
+- **Parallel execution** — Dynamic work distribution across devices, not static sharding. Faster devices pick up more tests automatically, so no device sits idle
+- **Real iOS device testing** — Supports physical iOS devices, not just simulators
 - **Cloud testing** — BrowserStack, Sauce Labs, LambdaTest via Appium driver
+- **React Native & Flutter** — Smart element finding for RN testIDs and Flutter semantics
 - **Reports** — HTML, JUnit XML, and Allure-compatible reports out of the box
+- **Clear error messages** — `element not found: text="Login"` instead of `io.grpc.StatusRuntimeException: UNKNOWN`
+- **Pre-flight validation** — Catches flow errors, circular dependencies, and missing files before execution starts
+- **Fast element finding** — Native selectors, clickable parent traversal, regex matching, smarter visibility
+- **Reliable text input** — Direct ADB input with Unicode support, no dropped characters
+- **Configurable timeouts** — Per-command and per-flow timeouts, `--wait-for-idle-timeout 0` to disable
+- **scrollUntilVisible** — Native scroll implementation that reliably finds off-screen elements
+- **Relative selectors** — Find elements by position: below, above, leftOf, rightOf, childOf
+- **JavaScript scripting** — Embedded JS runtime with HTTP client for dynamic test logic, no external dependencies
+- **Wide OS compatibility** — Android 5.0+ (API 21+) and iOS 12.0+, no version restrictions
 
 ## Supported Platforms & Drivers
 
