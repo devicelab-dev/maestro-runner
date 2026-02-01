@@ -50,7 +50,7 @@ func startUpdateCheck() {
 		}
 
 		if result.LatestVersion != "" && result.LatestVersion != Version {
-			ch <- fmt.Sprintf("\n  Update available: %s → %s\n  Run: curl -fsSL https://open.devicelab.dev/install/maestro-runner.sh | bash\n", Version, result.LatestVersion)
+			ch <- fmt.Sprintf("\n  Update available: %s → %s\n  Run: curl -fsSL https://open.devicelab.dev/maestro-runner/install | bash\n", Version, result.LatestVersion)
 		} else {
 			ch <- ""
 		}
