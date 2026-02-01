@@ -477,8 +477,8 @@ func runTest(c *cli.Context) error {
 	// Print banner at start
 	printBanner()
 
-	// Check for updates (non-blocking, 3s timeout)
-	checkForUpdate()
+	// Check for updates in background (prints at end)
+	startUpdateCheck()
 
 	// Helper to get flag value from current or parent context
 	// When run as subcommand, global flags are in parent context
@@ -769,7 +769,10 @@ func executeTest(cfg *RunConfig) error {
 	}
 	fmt.Printf("    JSON:   %s\n", jsonPath)
 
-	// 7. Print footer
+	// 7. Print update notice if available
+	printUpdateNotice()
+
+	// 8. Print footer
 	printFooter()
 
 	// Exit with code 1 if any flows failed (summary already printed)

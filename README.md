@@ -19,7 +19,7 @@
 [![codecov](https://codecov.io/gh/devicelab-dev/maestro-runner/branch/main/graph/badge.svg)](https://codecov.io/gh/devicelab-dev/maestro-runner)
 [![Go Report Card](https://goreportcard.com/badge/github.com/devicelab-dev/maestro-runner?v=2)](https://goreportcard.com/report/github.com/devicelab-dev/maestro-runner)
 
-<b><a href="https://devicelab.dev/open-source/maestro-runner">Documentation</a></b> | <b><a href="#install">Get Started</a></b> | <b><a href="https://devicelab.dev/open-source/maestro-runner/docs/cli-reference">CLI Reference</a></b> | <b><a href="https://devicelab.dev/open-source/maestro-runner/docs/flow-commands">Flow Commands</a></b> | <b><a href="CONTRIBUTING.md">Contributing</a></b>
+<b><a href="https://open.devicelab.dev/maestro-runner">Documentation</a></b> | <b><a href="#install">Get Started</a></b> | <b><a href="https://open.devicelab.dev/maestro-runner/docs/cli-reference">CLI Reference</a></b> | <b><a href="https://open.devicelab.dev/maestro-runner/docs/flow-commands">Flow Commands</a></b> | <b><a href="CONTRIBUTING.md">Contributing</a></b>
 
 </div>
 
@@ -36,7 +36,7 @@
 go install github.com/devicelab-dev/maestro-runner@latest
 ```
 
-Or download a pre-built binary from [releases](https://devicelab.dev/open-source/maestro-runner).
+Or download a pre-built binary from [releases](https://github.com/devicelab-dev/maestro-runner/releases).
 
 ## Run Tests
 
