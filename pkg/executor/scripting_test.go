@@ -619,3 +619,668 @@ func TestScriptEngine_CheckCondition(t *testing.T) {
 		t.Error("CheckCondition() with false script should return false")
 	}
 }
+
+// ===========================================
+// extractJS tests
+// ===========================================
+
+func TestExtractJS(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"plain script", "true", "true"},
+		{"wrapped expression", "${x > 5}", "x > 5"},
+		{"wrapped with spaces", "  ${1 + 2}  ", "1 + 2"},
+		{"no wrapping", "count > 3", "count > 3"},
+		{"partial prefix", "${incomplete", "${incomplete"},
+		{"partial suffix", "incomplete}", "incomplete}"},
+		{"empty wrapped", "${}", ""},
+		{"nested braces", "${obj = {a: 1}}", "obj = {a: 1}"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractJS(tt.input)
+			if got != tt.expected {
+				t.Errorf("extractJS(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+// ===========================================
+// EvalCondition with ${...} wrapper tests
+// ===========================================
+
+func TestScriptEngine_EvalCondition_WithDollarBraceWrapper(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("count", "10")
+
+	tests := []struct {
+		name     string
+		script   string
+		expected bool
+	}{
+		{"wrapped true", "${true}", true},
+		{"wrapped false", "${false}", false},
+		{"wrapped comparison", "${count > 5}", true},
+		{"wrapped math", "${1 + 1 == 2}", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := se.EvalCondition(tt.script)
+			if err != nil {
+				t.Fatalf("EvalCondition(%q) error = %v", tt.script, err)
+			}
+			if got != tt.expected {
+				t.Errorf("EvalCondition(%q) = %v, want %v", tt.script, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestScriptEngine_EvalCondition_WithDollarVarExpansion(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("MY_COUNT", "10")
+
+	// $MY_COUNT expands to literal "10" in the script, so "10 > 5" evaluates to true
+	got, err := se.EvalCondition("$MY_COUNT > 5")
+	if err != nil {
+		t.Fatalf("EvalCondition() error = %v", err)
+	}
+	if !got {
+		t.Error("EvalCondition with $VAR expansion should return true")
+	}
+}
+
+// ===========================================
+// ExecuteDefineVariables edge cases
+// ===========================================
+
+func TestScriptEngine_ExecuteDefineVariables_WithExpansion(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("BASE_URL", "https://example.com")
+
+	step := &flow.DefineVariablesStep{
+		Env: map[string]string{
+			"API_URL": "${BASE_URL}/api",
+		},
+	}
+
+	result := se.ExecuteDefineVariables(step)
+	if !result.Success {
+		t.Errorf("ExecuteDefineVariables() success = false")
+	}
+
+	if got := se.GetVariable("API_URL"); got != "https://example.com/api" {
+		t.Errorf("API_URL = %q, want %q", got, "https://example.com/api")
+	}
+}
+
+func TestScriptEngine_ExecuteDefineVariables_EmptyEnv(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	step := &flow.DefineVariablesStep{
+		Env: map[string]string{},
+	}
+
+	result := se.ExecuteDefineVariables(step)
+	if !result.Success {
+		t.Errorf("ExecuteDefineVariables() with empty env success = false")
+	}
+}
+
+func TestScriptEngine_ExecuteDefineVariables_MessageFormat(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	step := &flow.DefineVariablesStep{
+		Env: map[string]string{
+			"A": "1",
+			"B": "2",
+			"C": "3",
+		},
+	}
+
+	result := se.ExecuteDefineVariables(step)
+	if result.Message != "Defined 3 variable(s)" {
+		t.Errorf("Message = %q, want %q", result.Message, "Defined 3 variable(s)")
+	}
+}
+
+// ===========================================
+// ExecuteAssertTrue edge cases
+// ===========================================
+
+func TestScriptEngine_ExecuteAssertTrue_ErrorMessage(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	step := &flow.AssertTrueStep{Script: "false"}
+	result := se.ExecuteAssertTrue(step)
+
+	if result.Success {
+		t.Error("ExecuteAssertTrue(false) should fail")
+	}
+	if result.Error == nil {
+		t.Error("ExecuteAssertTrue(false) should set Error")
+	}
+	expected := "assertTrue failed: false"
+	if result.Message != expected {
+		t.Errorf("Message = %q, want %q", result.Message, expected)
+	}
+}
+
+func TestScriptEngine_ExecuteAssertTrue_InvalidScript(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	step := &flow.AssertTrueStep{Script: "invalid {{{{"}
+	result := se.ExecuteAssertTrue(step)
+
+	if result.Success {
+		t.Error("ExecuteAssertTrue with invalid script should fail")
+	}
+	if result.Error == nil {
+		t.Error("ExecuteAssertTrue with invalid script should set Error")
+	}
+}
+
+func TestScriptEngine_ExecuteAssertTrue_WithWrappedExpression(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("count", "10")
+
+	step := &flow.AssertTrueStep{Script: "${count > 5}"}
+	result := se.ExecuteAssertTrue(step)
+
+	if !result.Success {
+		t.Errorf("ExecuteAssertTrue(${count > 5}) success = false, error = %v", result.Error)
+	}
+}
+
+// ===========================================
+// ExpandStep tests
+// ===========================================
+
+func TestScriptEngine_ExpandStep_InputTextStep(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("USERNAME", "john")
+
+	step := &flow.InputTextStep{
+		Text:     "Hello ${USERNAME}",
+		Selector: flow.Selector{Text: "${USERNAME}", ID: "input_${USERNAME}"},
+	}
+
+	se.ExpandStep(step)
+
+	if step.Text != "Hello john" {
+		t.Errorf("Text = %q, want %q", step.Text, "Hello john")
+	}
+	if step.Selector.Text != "john" {
+		t.Errorf("Selector.Text = %q, want %q", step.Selector.Text, "john")
+	}
+	if step.Selector.ID != "input_john" {
+		t.Errorf("Selector.ID = %q, want %q", step.Selector.ID, "input_john")
+	}
+}
+
+func TestScriptEngine_ExpandStep_TapOnStep(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("BUTTON", "Login")
+
+	step := &flow.TapOnStep{
+		Selector: flow.Selector{Text: "${BUTTON}"},
+	}
+
+	se.ExpandStep(step)
+
+	if step.Selector.Text != "Login" {
+		t.Errorf("Selector.Text = %q, want %q", step.Selector.Text, "Login")
+	}
+}
+
+func TestScriptEngine_ExpandStep_DoubleTapOnStep(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("ELEM", "icon")
+
+	step := &flow.DoubleTapOnStep{
+		Selector: flow.Selector{Text: "${ELEM}"},
+	}
+
+	se.ExpandStep(step)
+
+	if step.Selector.Text != "icon" {
+		t.Errorf("Selector.Text = %q, want %q", step.Selector.Text, "icon")
+	}
+}
+
+func TestScriptEngine_ExpandStep_LongPressOnStep(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("ITEM", "Delete")
+
+	step := &flow.LongPressOnStep{
+		Selector: flow.Selector{Text: "${ITEM}"},
+	}
+
+	se.ExpandStep(step)
+
+	if step.Selector.Text != "Delete" {
+		t.Errorf("Selector.Text = %q, want %q", step.Selector.Text, "Delete")
+	}
+}
+
+func TestScriptEngine_ExpandStep_AssertVisibleStep(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("LABEL", "Welcome")
+
+	step := &flow.AssertVisibleStep{
+		Selector: flow.Selector{Text: "${LABEL}"},
+	}
+
+	se.ExpandStep(step)
+
+	if step.Selector.Text != "Welcome" {
+		t.Errorf("Selector.Text = %q, want %q", step.Selector.Text, "Welcome")
+	}
+}
+
+func TestScriptEngine_ExpandStep_AssertNotVisibleStep(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("MSG", "Error")
+
+	step := &flow.AssertNotVisibleStep{
+		Selector: flow.Selector{Text: "${MSG}"},
+	}
+
+	se.ExpandStep(step)
+
+	if step.Selector.Text != "Error" {
+		t.Errorf("Selector.Text = %q, want %q", step.Selector.Text, "Error")
+	}
+}
+
+func TestScriptEngine_ExpandStep_LaunchAppStep(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("APP_ID", "com.example.app")
+
+	step := &flow.LaunchAppStep{
+		AppID: "${APP_ID}",
+	}
+
+	se.ExpandStep(step)
+
+	if step.AppID != "com.example.app" {
+		t.Errorf("AppID = %q, want %q", step.AppID, "com.example.app")
+	}
+}
+
+func TestScriptEngine_ExpandStep_StopAppStep(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("APP_ID", "com.example.app")
+
+	step := &flow.StopAppStep{
+		AppID: "${APP_ID}",
+	}
+
+	se.ExpandStep(step)
+
+	if step.AppID != "com.example.app" {
+		t.Errorf("AppID = %q, want %q", step.AppID, "com.example.app")
+	}
+}
+
+func TestScriptEngine_ExpandStep_KillAppStep(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("APP_ID", "com.example.app")
+
+	step := &flow.KillAppStep{
+		AppID: "${APP_ID}",
+	}
+
+	se.ExpandStep(step)
+
+	if step.AppID != "com.example.app" {
+		t.Errorf("AppID = %q, want %q", step.AppID, "com.example.app")
+	}
+}
+
+func TestScriptEngine_ExpandStep_ClearStateStep(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("APP_ID", "com.example.app")
+
+	step := &flow.ClearStateStep{
+		AppID: "${APP_ID}",
+	}
+
+	se.ExpandStep(step)
+
+	if step.AppID != "com.example.app" {
+		t.Errorf("AppID = %q, want %q", step.AppID, "com.example.app")
+	}
+}
+
+func TestScriptEngine_ExpandStep_OpenLinkStep(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("URL", "https://example.com")
+
+	step := &flow.OpenLinkStep{
+		Link: "${URL}/path",
+	}
+
+	se.ExpandStep(step)
+
+	if step.Link != "https://example.com/path" {
+		t.Errorf("Link = %q, want %q", step.Link, "https://example.com/path")
+	}
+}
+
+func TestScriptEngine_ExpandStep_PressKeyStep(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("KEY_NAME", "Enter")
+
+	step := &flow.PressKeyStep{
+		Key: "${KEY_NAME}",
+	}
+
+	se.ExpandStep(step)
+
+	if step.Key != "Enter" {
+		t.Errorf("Key = %q, want %q", step.Key, "Enter")
+	}
+}
+
+func TestScriptEngine_ExpandStep_WaitUntilStep(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("ELEM", "Loaded")
+
+	step := &flow.WaitUntilStep{
+		Visible:    &flow.Selector{Text: "${ELEM}"},
+		NotVisible: &flow.Selector{Text: "Loading ${ELEM}"},
+	}
+
+	se.ExpandStep(step)
+
+	if step.Visible.Text != "Loaded" {
+		t.Errorf("Visible.Text = %q, want %q", step.Visible.Text, "Loaded")
+	}
+	if step.NotVisible.Text != "Loading Loaded" {
+		t.Errorf("NotVisible.Text = %q, want %q", step.NotVisible.Text, "Loading Loaded")
+	}
+}
+
+func TestScriptEngine_ExpandStep_WaitUntilStep_NilSelectors(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	step := &flow.WaitUntilStep{
+		Visible:    nil,
+		NotVisible: nil,
+	}
+
+	// Should not panic with nil selectors
+	se.ExpandStep(step)
+
+	if step.Visible != nil {
+		t.Error("Visible should remain nil")
+	}
+	if step.NotVisible != nil {
+		t.Error("NotVisible should remain nil")
+	}
+}
+
+func TestScriptEngine_ExpandStep_ScrollUntilVisibleStep(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("TARGET", "Submit")
+
+	step := &flow.ScrollUntilVisibleStep{
+		Element: flow.Selector{Text: "${TARGET}"},
+	}
+
+	se.ExpandStep(step)
+
+	if step.Element.Text != "Submit" {
+		t.Errorf("Element.Text = %q, want %q", step.Element.Text, "Submit")
+	}
+}
+
+func TestScriptEngine_ExpandStep_CopyTextFromStep(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("FIELD", "price_label")
+
+	step := &flow.CopyTextFromStep{
+		Selector: flow.Selector{ID: "${FIELD}"},
+	}
+
+	se.ExpandStep(step)
+
+	if step.Selector.ID != "price_label" {
+		t.Errorf("Selector.ID = %q, want %q", step.Selector.ID, "price_label")
+	}
+}
+
+func TestScriptEngine_ExpandStep_UnhandledStepType(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	// BackStep is not handled in ExpandStep switch - should not panic
+	step := &flow.BackStep{}
+	se.ExpandStep(step)
+}
+
+// ===========================================
+// expandSelector with relative selectors
+// ===========================================
+
+func TestScriptEngine_ExpandSelector_WithRelativeSelectors(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("PARENT", "Container")
+	se.SetVariable("CHILD", "Button")
+	se.SetVariable("REF", "Header")
+
+	step := &flow.TapOnStep{
+		Selector: flow.Selector{
+			Text:    "${CHILD}",
+			ChildOf: &flow.Selector{Text: "${PARENT}"},
+			Below:   &flow.Selector{Text: "${REF}"},
+		},
+	}
+
+	se.ExpandStep(step)
+
+	if step.Selector.Text != "Button" {
+		t.Errorf("Selector.Text = %q, want %q", step.Selector.Text, "Button")
+	}
+	if step.Selector.ChildOf == nil {
+		t.Fatal("ChildOf should not be nil")
+	}
+	if step.Selector.ChildOf.Text != "Container" {
+		t.Errorf("ChildOf.Text = %q, want %q", step.Selector.ChildOf.Text, "Container")
+	}
+	if step.Selector.Below == nil {
+		t.Fatal("Below should not be nil")
+	}
+	if step.Selector.Below.Text != "Header" {
+		t.Errorf("Below.Text = %q, want %q", step.Selector.Below.Text, "Header")
+	}
+}
+
+func TestScriptEngine_ExpandSelector_AllRelativeTypes(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("VAR", "expanded")
+
+	step := &flow.TapOnStep{
+		Selector: flow.Selector{
+			Text:          "${VAR}",
+			Above:         &flow.Selector{Text: "${VAR}"},
+			LeftOf:        &flow.Selector{Text: "${VAR}"},
+			RightOf:       &flow.Selector{Text: "${VAR}"},
+			ContainsChild: &flow.Selector{Text: "${VAR}"},
+			ContainsDescendants: []*flow.Selector{
+				{Text: "${VAR}"},
+				{ID: "${VAR}"},
+			},
+		},
+	}
+
+	se.ExpandStep(step)
+
+	if step.Selector.Text != "expanded" {
+		t.Errorf("Text = %q, want %q", step.Selector.Text, "expanded")
+	}
+	if step.Selector.Above.Text != "expanded" {
+		t.Errorf("Above.Text = %q, want %q", step.Selector.Above.Text, "expanded")
+	}
+	if step.Selector.LeftOf.Text != "expanded" {
+		t.Errorf("LeftOf.Text = %q, want %q", step.Selector.LeftOf.Text, "expanded")
+	}
+	if step.Selector.RightOf.Text != "expanded" {
+		t.Errorf("RightOf.Text = %q, want %q", step.Selector.RightOf.Text, "expanded")
+	}
+	if step.Selector.ContainsChild.Text != "expanded" {
+		t.Errorf("ContainsChild.Text = %q, want %q", step.Selector.ContainsChild.Text, "expanded")
+	}
+	if len(step.Selector.ContainsDescendants) != 2 {
+		t.Fatalf("ContainsDescendants length = %d, want 2", len(step.Selector.ContainsDescendants))
+	}
+	if step.Selector.ContainsDescendants[0].Text != "expanded" {
+		t.Errorf("ContainsDescendants[0].Text = %q, want %q", step.Selector.ContainsDescendants[0].Text, "expanded")
+	}
+	if step.Selector.ContainsDescendants[1].ID != "expanded" {
+		t.Errorf("ContainsDescendants[1].ID = %q, want %q", step.Selector.ContainsDescendants[1].ID, "expanded")
+	}
+}
+
+func TestScriptEngine_ExpandSelector_AllStringFields(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("VAL", "test")
+
+	step := &flow.TapOnStep{
+		Selector: flow.Selector{
+			Text:   "${VAL}",
+			ID:     "${VAL}_id",
+			CSS:    ".${VAL}",
+			Index:  "${VAL}",
+			Traits: "${VAL}",
+			Point:  "${VAL}",
+			Start:  "${VAL}",
+			End:    "${VAL}",
+			Label:  "${VAL}_label",
+		},
+	}
+
+	se.ExpandStep(step)
+
+	if step.Selector.Text != "test" {
+		t.Errorf("Text = %q, want %q", step.Selector.Text, "test")
+	}
+	if step.Selector.ID != "test_id" {
+		t.Errorf("ID = %q, want %q", step.Selector.ID, "test_id")
+	}
+	if step.Selector.CSS != ".test" {
+		t.Errorf("CSS = %q, want %q", step.Selector.CSS, ".test")
+	}
+	if step.Selector.Index != "test" {
+		t.Errorf("Index = %q, want %q", step.Selector.Index, "test")
+	}
+	if step.Selector.Traits != "test" {
+		t.Errorf("Traits = %q, want %q", step.Selector.Traits, "test")
+	}
+	if step.Selector.Point != "test" {
+		t.Errorf("Point = %q, want %q", step.Selector.Point, "test")
+	}
+	if step.Selector.Start != "test" {
+		t.Errorf("Start = %q, want %q", step.Selector.Start, "test")
+	}
+	if step.Selector.End != "test" {
+		t.Errorf("End = %q, want %q", step.Selector.End, "test")
+	}
+	if step.Selector.Label != "test_label" {
+		t.Errorf("Label = %q, want %q", step.Selector.Label, "test_label")
+	}
+}
+
+// ===========================================
+// ExpandVariables edge cases
+// ===========================================
+
+func TestScriptEngine_ExpandVariables_EmptyString(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	got := se.ExpandVariables("")
+	if got != "" {
+		t.Errorf("ExpandVariables(%q) = %q, want %q", "", got, "")
+	}
+}
+
+func TestScriptEngine_ExpandVariables_NoVariables(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	input := "plain text without any variables"
+	got := se.ExpandVariables(input)
+	if got != input {
+		t.Errorf("ExpandVariables(%q) = %q, want %q", input, got, input)
+	}
+}
+
+func TestScriptEngine_ExpandVariables_MixedSyntax(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("NAME", "World")
+
+	// Both ${...} and $VAR syntax in the same string
+	got := se.ExpandVariables("Hello ${NAME} and $NAME")
+	if got != "Hello World and World" {
+		t.Errorf("ExpandVariables() = %q, want %q", got, "Hello World and World")
+	}
+}
