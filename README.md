@@ -1,5 +1,11 @@
 # maestro-runner — Fast Mobile UI Test Automation for Android & iOS
 
+[![CI](https://github.com/devicelab-dev/maestro-runner/actions/workflows/ci.yml/badge.svg)](https://github.com/devicelab-dev/maestro-runner/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/devicelab-dev/maestro-runner/branch/main/graph/badge.svg)](https://codecov.io/gh/devicelab-dev/maestro-runner)
+[![Go Report Card](https://goreportcard.com/badge/github.com/devicelab-dev/maestro-runner)](https://goreportcard.com/report/github.com/devicelab-dev/maestro-runner)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/devicelab-dev/maestro-runner)](go.mod)
+
 A lightweight, open-source alternative to [Maestro](https://maestro.mobile.dev/) for mobile UI testing. Single Go binary — no JVM, no Maestro Cloud dependency. Runs your existing Maestro YAML flows as-is, **3.6x faster** with **14x less memory**.
 
 Addresses [78% of the top 100 most-discussed open issues](docs/maestro-issues-analysis.md) on Maestro's GitHub.
