@@ -3,6 +3,7 @@ package executor
 
 import (
 	"context"
+	"path/filepath"
 	"sync"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
@@ -96,6 +97,9 @@ func New(driver core.Driver, cfg RunnerConfig) *Runner {
 
 // Run executes all flows and generates reports.
 func (r *Runner) Run(ctx context.Context, flows []flow.Flow) (*RunResult, error) {
+	// Expand suites into individual test case flows
+	expandedFlows := expandSuites(flows)
+
 	// Build report skeleton
 	builderCfg := report.BuilderConfig{
 		OutputDir:     r.config.OutputDir,
@@ -106,7 +110,7 @@ func (r *Runner) Run(ctx context.Context, flows []flow.Flow) (*RunResult, error)
 		DriverName:    r.config.DriverName,
 	}
 
-	index, flowDetails, err := report.BuildSkeleton(flows, builderCfg)
+	index, flowDetails, err := report.BuildSkeleton(expandedFlows, builderCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +128,7 @@ func (r *Runner) Run(ctx context.Context, flows []flow.Flow) (*RunResult, error)
 	indexWriter.Start()
 
 	// Execute flows
-	results := r.executeFlows(ctx, flows, flowDetails, indexWriter)
+	results := r.executeFlows(ctx, expandedFlows, flowDetails, indexWriter)
 
 	// Mark run as complete
 	indexWriter.End()
@@ -242,4 +246,84 @@ func (r *Runner) buildRunResult(flowResults []FlowResult) *RunResult {
 	}
 
 	return result
+}
+
+// expandSuites expands suite files into individual test case flows.
+// A suite is a flow that only contains runFlow steps - each runFlow becomes a separate flow.
+// Non-suite flows pass through unchanged.
+func expandSuites(flows []flow.Flow) []flow.Flow {
+	var expanded []flow.Flow
+
+	for _, f := range flows {
+		if !f.IsSuite() {
+			// Not a suite, keep as-is
+			expanded = append(expanded, f)
+			continue
+		}
+
+		// Suite detected - expand each runFlow into a separate flow
+		testCases := f.GetTestCases()
+		suiteDir := ""
+		if f.SourcePath != "" {
+			suiteDir = filepath.Dir(f.SourcePath)
+		}
+
+		for _, tc := range testCases {
+			if tc.File == "" {
+				// Inline runFlow (no file), skip expansion
+				continue
+			}
+
+			// Resolve the file path relative to suite location
+			tcPath := tc.File
+			if suiteDir != "" && !filepath.IsAbs(tcPath) {
+				tcPath = filepath.Join(suiteDir, tcPath)
+			}
+
+			// Parse the test case flow
+			tcFlow, err := flow.ParseFile(tcPath)
+			if err != nil {
+				// If we can't parse, create a placeholder that will fail
+				expanded = append(expanded, flow.Flow{
+					SourcePath: tcPath,
+					Config: flow.Config{
+						Name: tc.File,
+					},
+					Steps: []flow.Step{},
+				})
+				continue
+			}
+
+			// Inherit appId from suite if not set in test case
+			if tcFlow.Config.AppID == "" && f.Config.AppID != "" {
+				tcFlow.Config.AppID = f.Config.AppID
+			}
+
+			// Merge suite env with test case env (test case takes precedence)
+			if len(f.Config.Env) > 0 {
+				if tcFlow.Config.Env == nil {
+					tcFlow.Config.Env = make(map[string]string)
+				}
+				for k, v := range f.Config.Env {
+					if _, exists := tcFlow.Config.Env[k]; !exists {
+						tcFlow.Config.Env[k] = v
+					}
+				}
+			}
+
+			// Merge runFlow-level env (highest precedence)
+			if len(tc.Env) > 0 {
+				if tcFlow.Config.Env == nil {
+					tcFlow.Config.Env = make(map[string]string)
+				}
+				for k, v := range tc.Env {
+					tcFlow.Config.Env[k] = v
+				}
+			}
+
+			expanded = append(expanded, *tcFlow)
+		}
+	}
+
+	return expanded
 }

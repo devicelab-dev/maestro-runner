@@ -1473,3 +1473,131 @@ appId: [invalid yaml
 		t.Error("expected error for invalid config YAML")
 	}
 }
+
+func TestFlow_IsSuite(t *testing.T) {
+	tests := []struct {
+		name     string
+		flow     Flow
+		expected bool
+	}{
+		{
+			name:     "empty flow",
+			flow:     Flow{},
+			expected: false,
+		},
+		{
+			name: "single test step",
+			flow: Flow{
+				Steps: []Step{
+					&TapOnStep{BaseStep: BaseStep{StepType: StepTapOn}},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "mixed steps",
+			flow: Flow{
+				Steps: []Step{
+					&LaunchAppStep{BaseStep: BaseStep{StepType: StepLaunchApp}},
+					&RunFlowStep{BaseStep: BaseStep{StepType: StepRunFlow}, File: "test.yaml"},
+					&TapOnStep{BaseStep: BaseStep{StepType: StepTapOn}},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "single runFlow with file - not a suite",
+			flow: Flow{
+				Steps: []Step{
+					&RunFlowStep{BaseStep: BaseStep{StepType: StepRunFlow}, File: "test.yaml"},
+				},
+			},
+			expected: false, // Need at least 2 runFlows
+		},
+		{
+			name: "single runFlow inline - not a suite",
+			flow: Flow{
+				Steps: []Step{
+					&RunFlowStep{
+						BaseStep: BaseStep{StepType: StepRunFlow},
+						Steps:    []Step{&TapOnStep{BaseStep: BaseStep{StepType: StepTapOn}}},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "two runFlows with files - is a suite",
+			flow: Flow{
+				Steps: []Step{
+					&RunFlowStep{BaseStep: BaseStep{StepType: StepRunFlow}, File: "login.yaml"},
+					&RunFlowStep{BaseStep: BaseStep{StepType: StepRunFlow}, File: "checkout.yaml"},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "three runFlows with files - is a suite",
+			flow: Flow{
+				Steps: []Step{
+					&RunFlowStep{BaseStep: BaseStep{StepType: StepRunFlow}, File: "login.yaml"},
+					&RunFlowStep{BaseStep: BaseStep{StepType: StepRunFlow}, File: "checkout.yaml"},
+					&RunFlowStep{BaseStep: BaseStep{StepType: StepRunFlow}, File: "profile.yaml"},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "two runFlows but one is inline - not a suite",
+			flow: Flow{
+				Steps: []Step{
+					&RunFlowStep{BaseStep: BaseStep{StepType: StepRunFlow}, File: "login.yaml"},
+					&RunFlowStep{
+						BaseStep: BaseStep{StepType: StepRunFlow},
+						Steps:    []Step{&TapOnStep{BaseStep: BaseStep{StepType: StepTapOn}}},
+					},
+				},
+			},
+			expected: false, // Only 1 runFlow with file
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.flow.IsSuite()
+			if got != tt.expected {
+				t.Errorf("IsSuite() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestFlow_GetTestCases(t *testing.T) {
+	// Non-suite should return nil
+	nonSuite := Flow{
+		Steps: []Step{
+			&TapOnStep{BaseStep: BaseStep{StepType: StepTapOn}},
+		},
+	}
+	if nonSuite.GetTestCases() != nil {
+		t.Error("GetTestCases() should return nil for non-suite")
+	}
+
+	// Suite should return runFlow steps
+	suite := Flow{
+		Steps: []Step{
+			&RunFlowStep{BaseStep: BaseStep{StepType: StepRunFlow}, File: "login.yaml"},
+			&RunFlowStep{BaseStep: BaseStep{StepType: StepRunFlow}, File: "checkout.yaml"},
+		},
+	}
+	testCases := suite.GetTestCases()
+	if len(testCases) != 2 {
+		t.Errorf("GetTestCases() = %d, want 2", len(testCases))
+	}
+	if testCases[0].File != "login.yaml" {
+		t.Errorf("testCases[0].File = %q, want 'login.yaml'", testCases[0].File)
+	}
+	if testCases[1].File != "checkout.yaml" {
+		t.Errorf("testCases[1].File = %q, want 'checkout.yaml'", testCases[1].File)
+	}
+}
