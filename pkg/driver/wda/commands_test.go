@@ -1303,8 +1303,8 @@ func TestPasteTextNotSupported(t *testing.T) {
 // clearState tests
 // =============================================================================
 
-// TestClearStateWithBundleID tests clearState always returns error even with valid bundle ID.
-func TestClearStateWithBundleID(t *testing.T) {
+// TestClearStateNoAppFile tests clearState without appFile returns error requiring --app-file.
+func TestClearStateNoAppFile(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		jsonResponse(w, map[string]interface{}{"status": 0})
@@ -1315,12 +1315,11 @@ func TestClearStateWithBundleID(t *testing.T) {
 	step := &flow.ClearStateStep{AppID: "com.example.app"}
 	result := driver.clearState(step)
 
-	// clearState always fails on iOS (requires reinstall)
 	if result.Success {
-		t.Error("Expected failure for clearState on iOS")
+		t.Error("Expected failure for clearState without appFile")
 	}
-	if !strings.Contains(result.Message, "reinstall") {
-		t.Errorf("Expected message about reinstall, got: %s", result.Message)
+	if !strings.Contains(result.Message, "--app-file") {
+		t.Errorf("Expected message about --app-file, got: %s", result.Message)
 	}
 }
 

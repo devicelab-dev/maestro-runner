@@ -1877,3 +1877,63 @@ func TestCreateDriver_WithDeviceID(t *testing.T) {
 		t.Errorf("expected DeviceID='specific-device-id', got %q", info.DeviceID)
 	}
 }
+
+func TestFlowsUseClearState(t *testing.T) {
+	tests := []struct {
+		name   string
+		flows  []flow.Flow
+		expect bool
+	}{
+		{
+			name:   "no flows",
+			flows:  nil,
+			expect: false,
+		},
+		{
+			name: "no clearState",
+			flows: []flow.Flow{{
+				Steps: []flow.Step{&flow.TapOnStep{}},
+			}},
+			expect: false,
+		},
+		{
+			name: "standalone clearState step",
+			flows: []flow.Flow{{
+				Steps: []flow.Step{&flow.ClearStateStep{AppID: "com.test"}},
+			}},
+			expect: true,
+		},
+		{
+			name: "launchApp with clearState true",
+			flows: []flow.Flow{{
+				Steps: []flow.Step{&flow.LaunchAppStep{AppID: "com.test", ClearState: true}},
+			}},
+			expect: true,
+		},
+		{
+			name: "launchApp without clearState",
+			flows: []flow.Flow{{
+				Steps: []flow.Step{&flow.LaunchAppStep{AppID: "com.test", ClearState: false}},
+			}},
+			expect: false,
+		},
+		{
+			name: "clearState in onFlowStart",
+			flows: []flow.Flow{{
+				Config: flow.Config{
+					OnFlowStart: []flow.Step{&flow.ClearStateStep{AppID: "com.test"}},
+				},
+			}},
+			expect: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := flowsUseClearState(tt.flows)
+			if got != tt.expect {
+				t.Errorf("flowsUseClearState() = %v, want %v", got, tt.expect)
+			}
+		})
+	}
+}

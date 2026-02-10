@@ -703,6 +703,12 @@ func executeTest(cfg *RunConfig) error {
 	}
 	logger.Info("Validated %d flow(s)", len(flows))
 
+	// Pre-check: iOS clearState requires --app-file
+	if strings.EqualFold(cfg.Platform, "ios") && cfg.AppFile == "" && flowsUseClearState(flows) {
+		return fmt.Errorf("clearState on iOS requires --app-file to reinstall the app after uninstalling\n" +
+			"Hint: Add --app-file <path-to-ipa-or-app> to your command")
+	}
+
 	// Extract appId from first flow if not in config
 	if cfg.AppID == "" && len(flows) > 0 && flows[0].Config.AppID != "" {
 		cfg.AppID = flows[0].Config.AppID
@@ -853,6 +859,34 @@ func validateAndParseFlows(cfg *RunConfig) ([]flow.Flow, error) {
 	}
 
 	return flows, nil
+}
+
+// flowsUseClearState checks if any flow uses clearState (standalone or via launchApp).
+func flowsUseClearState(flows []flow.Flow) bool {
+	for _, f := range flows {
+		for _, step := range f.Steps {
+			switch s := step.(type) {
+			case *flow.ClearStateStep:
+				return true
+			case *flow.LaunchAppStep:
+				if s.ClearState {
+					return true
+				}
+			}
+		}
+		// Also check onFlowStart hooks
+		for _, step := range f.Config.OnFlowStart {
+			switch s := step.(type) {
+			case *flow.ClearStateStep:
+				return true
+			case *flow.LaunchAppStep:
+				if s.ClearState {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // determineExecutionMode decides whether to run in parallel and which devices to use.

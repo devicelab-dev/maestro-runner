@@ -161,6 +161,15 @@ func TestSetOptionalFindTimeout(t *testing.T) {
 	}
 }
 
+// TestSetAppFile tests app file path setting
+func TestSetAppFile(t *testing.T) {
+	driver := &Driver{}
+	driver.SetAppFile("/path/to/app.ipa")
+	if driver.appFile != "/path/to/app.ipa" {
+		t.Errorf("Expected /path/to/app.ipa, got %s", driver.appFile)
+	}
+}
+
 // TestExecuteTapOn tests tap on element
 func TestExecuteTapOn(t *testing.T) {
 	server := mockWDAServerForDriver()
@@ -562,6 +571,26 @@ func TestExecuteLaunchApp(t *testing.T) {
 	}
 }
 
+// TestExecuteLaunchAppWithClearStateNoAppFile tests launchApp with clearState but no appFile
+func TestExecuteLaunchAppWithClearStateNoAppFile(t *testing.T) {
+	server := mockWDAServerForDriver()
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.LaunchAppStep{
+		AppID:      "com.example.app",
+		ClearState: true,
+	}
+	result := driver.Execute(step)
+
+	if result.Success {
+		t.Error("Expected failure for launchApp with clearState but no appFile")
+	}
+	if !strings.Contains(result.Message, "--app-file") {
+		t.Errorf("Expected message about --app-file, got: %s", result.Message)
+	}
+}
+
 // TestExecuteLaunchAppNoID tests launch without app ID
 func TestExecuteLaunchAppNoID(t *testing.T) {
 	server := mockWDAServerForDriver()
@@ -608,20 +637,23 @@ func TestExecuteKillApp(t *testing.T) {
 	}
 }
 
-// TestExecuteClearState tests clear state (not fully supported on iOS)
+// TestExecuteClearState tests clear state on physical device without appFile (expects error)
 func TestExecuteClearState(t *testing.T) {
 	server := mockWDAServerForDriver()
 	defer server.Close()
 	driver := createTestDriver(server)
+	// Default test driver has no appFile and IsSimulator=false → should fail
 
 	step := &flow.ClearStateStep{
 		AppID: "com.example.app",
 	}
 	result := driver.Execute(step)
 
-	// iOS doesn't fully support clear state
 	if result.Success {
-		t.Error("Expected failure for clearState on iOS")
+		t.Error("Expected failure for clearState on physical device without appFile")
+	}
+	if !strings.Contains(result.Message, "--app-file") {
+		t.Errorf("Expected message about --app-file, got: %s", result.Message)
 	}
 }
 
@@ -2007,6 +2039,9 @@ func TestClearStateNoAppID(t *testing.T) {
 	if result.Success {
 		t.Error("Expected failure without app ID")
 	}
+	if !strings.Contains(result.Message, "Bundle ID") {
+		t.Errorf("Expected message about Bundle ID, got: %s", result.Message)
+	}
 }
 
 // TestSwipeWithStartEnd tests swipe with start/end coordinates
@@ -2611,6 +2646,9 @@ func TestClearStateEmptyBundleID(t *testing.T) {
 
 	if result.Success {
 		t.Error("Expected failure for empty bundle ID")
+	}
+	if !strings.Contains(result.Message, "Bundle ID") {
+		t.Errorf("Expected message about Bundle ID, got: %s", result.Message)
 	}
 }
 

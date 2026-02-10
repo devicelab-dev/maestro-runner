@@ -144,6 +144,7 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 
 	// 8. Create driver
 	driver := wdadriver.NewDriver(client, platformInfo, udid)
+	driver.SetAppFile(cfg.AppFile)
 
 	// Cleanup function
 	cleanup := func() {

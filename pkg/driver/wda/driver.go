@@ -17,6 +17,9 @@ type Driver struct {
 	info   *core.PlatformInfo
 	udid   string // Device UDID for simctl commands
 
+	// App file path for clearState (uninstall+reinstall)
+	appFile string
+
 	// Timeouts (0 = use defaults)
 	findTimeout         int // ms, for required elements
 	optionalFindTimeout int // ms, for optional elements
@@ -39,6 +42,11 @@ func (d *Driver) SetFindTimeout(ms int) {
 // SetOptionalFindTimeout sets the timeout for finding optional elements.
 func (d *Driver) SetOptionalFindTimeout(ms int) {
 	d.optionalFindTimeout = ms
+}
+
+// SetAppFile sets the app file path used for clearState (uninstall+reinstall).
+func (d *Driver) SetAppFile(path string) {
+	d.appFile = path
 }
 
 // SetWaitForIdleTimeout sets the wait for idle timeout.

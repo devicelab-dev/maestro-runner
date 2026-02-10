@@ -9,6 +9,9 @@ import (
 	"strings"
 	"time"
 
+	goios "github.com/danielpaulus/go-ios/ios"
+	"github.com/danielpaulus/go-ios/ios/installationproxy"
+	"github.com/danielpaulus/go-ios/ios/zipconduit"
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
 )
@@ -565,6 +568,14 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 		return errorResult(fmt.Errorf("bundleID required"), "Bundle ID is required for launchApp")
 	}
 
+	// Clear state if requested (uninstall + reinstall)
+	if step.ClearState {
+		_ = d.client.TerminateApp(bundleID)
+		if result := d.clearAppState(bundleID); !result.Success {
+			return result
+		}
+	}
+
 	// Apply permissions (default: all allow, like Maestro)
 	// Only works on simulators with UDID
 	if d.udid != "" {
@@ -656,9 +667,6 @@ func (d *Driver) killApp(step *flow.KillAppStep) *core.CommandResult {
 }
 
 func (d *Driver) clearState(step *flow.ClearStateStep) *core.CommandResult {
-	// iOS doesn't have a direct way to clear app state via WDA
-	// Options: 1) Uninstall/reinstall app, 2) Use simctl for simulator
-	// For now, terminate the app - caller should handle reinstall if needed
 	bundleID := step.AppID
 	if bundleID == "" {
 		return errorResult(fmt.Errorf("bundleID required"), "Bundle ID is required for clearState")
@@ -667,8 +675,70 @@ func (d *Driver) clearState(step *flow.ClearStateStep) *core.CommandResult {
 	// Terminate app first
 	_ = d.client.TerminateApp(bundleID)
 
-	return errorResult(fmt.Errorf("clearState requires app reinstall on iOS"),
-		"iOS doesn't support clearing app state directly. App must be uninstalled and reinstalled.")
+	return d.clearAppState(bundleID)
+}
+
+// clearAppState uninstalls and reinstalls an app to clear its state.
+// Requires --app-file for both simulators and real devices.
+// On simulators, uses simctl. On physical devices, uses go-ios.
+func (d *Driver) clearAppState(bundleID string) *core.CommandResult {
+	if d.appFile == "" {
+		return errorResult(fmt.Errorf("clearState on iOS requires --app-file for reinstall"),
+			"clearState on iOS requires --app-file to reinstall the app after uninstalling")
+	}
+
+	if d.info.IsSimulator {
+		return d.clearAppStateSimulator(bundleID)
+	}
+	return d.clearAppStateDevice(bundleID)
+}
+
+func (d *Driver) clearAppStateSimulator(bundleID string) *core.CommandResult {
+	cmd := exec.Command("xcrun", "simctl", "uninstall", d.udid, bundleID)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return errorResult(fmt.Errorf("simctl uninstall failed: %w: %s", err, string(output)),
+			"Failed to uninstall app on simulator")
+	}
+
+	cmd = exec.Command("xcrun", "simctl", "install", d.udid, d.appFile)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return errorResult(fmt.Errorf("simctl install failed: %w: %s", err, string(output)),
+			"Failed to reinstall app on simulator")
+	}
+
+	return successResult(fmt.Sprintf("Cleared state for %s (uninstall+reinstall)", bundleID), nil)
+}
+
+func (d *Driver) clearAppStateDevice(bundleID string) *core.CommandResult {
+	entry, err := goios.GetDevice(d.udid)
+	if err != nil {
+		return errorResult(fmt.Errorf("device %s not found: %w", d.udid, err),
+			"Failed to connect to device for uninstall")
+	}
+
+	conn, err := installationproxy.New(entry)
+	if err != nil {
+		return errorResult(fmt.Errorf("failed to connect to installation service: %w", err),
+			"Failed to connect to device installation service")
+	}
+	defer conn.Close()
+
+	if err := conn.Uninstall(bundleID); err != nil {
+		return errorResult(fmt.Errorf("failed to uninstall %s: %w", bundleID, err),
+			"Failed to uninstall app")
+	}
+
+	zcConn, err := zipconduit.New(entry)
+	if err != nil {
+		return errorResult(fmt.Errorf("failed to connect to install service: %w", err),
+			"Failed to connect to device for reinstall")
+	}
+	if err := zcConn.SendFile(d.appFile); err != nil {
+		return errorResult(fmt.Errorf("failed to reinstall app: %w", err),
+			"Failed to reinstall app after uninstall")
+	}
+
+	return successResult(fmt.Sprintf("Cleared state for %s (uninstall+reinstall)", bundleID), nil)
 }
 
 // Clipboard
