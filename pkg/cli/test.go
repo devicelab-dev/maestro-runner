@@ -706,7 +706,7 @@ func executeTest(cfg *RunConfig) error {
 	// Pre-check: iOS clearState requires --app-file
 	if strings.EqualFold(cfg.Platform, "ios") && cfg.AppFile == "" && flowsUseClearState(flows) {
 		return fmt.Errorf("clearState on iOS requires --app-file to reinstall the app after uninstalling\n" +
-			"Hint: Add --app-file <path-to-ipa-or-app> to your command")
+			"Usage: maestro-runner --app-file <path-to-ipa-or-app> --platform ios test <flow-files>")
 	}
 
 	// Extract appId from first flow if not in config

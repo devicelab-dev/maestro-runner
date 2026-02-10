@@ -5679,3 +5679,24 @@ func TestFindElementByWDAWithIDNotFound(t *testing.T) {
 		t.Error("Expected failure when ID not found")
 	}
 }
+
+// TestDriverAlertActionField tests that alertAction field can be set on Driver.
+func TestDriverAlertActionField(t *testing.T) {
+	client := &Client{}
+	info := &core.PlatformInfo{Platform: "ios"}
+	driver := NewDriver(client, info, "test-udid")
+
+	if driver.alertAction != "" {
+		t.Errorf("Expected empty alertAction initially, got '%s'", driver.alertAction)
+	}
+
+	driver.alertAction = "accept"
+	if driver.alertAction != "accept" {
+		t.Errorf("Expected 'accept', got '%s'", driver.alertAction)
+	}
+
+	driver.alertAction = "dismiss"
+	if driver.alertAction != "dismiss" {
+		t.Errorf("Expected 'dismiss', got '%s'", driver.alertAction)
+	}
+}

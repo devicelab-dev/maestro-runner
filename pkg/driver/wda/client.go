@@ -34,15 +34,21 @@ func NewClient(port uint16) *Client {
 // Session management
 
 // CreateSession creates a new WDA session.
-func (c *Client) CreateSession(bundleID string) error {
+// If alertAction is non-empty ("accept" or "dismiss"), it sets defaultAlertAction
+// in the session capabilities, enabling WDA's auto alert handling for permission dialogs.
+func (c *Client) CreateSession(bundleID string, alertAction string) error {
+	alwaysMatch := map[string]interface{}{
+		"bundleId":                bundleID,
+		"shouldWaitForQuiescence": false,
+		"waitForIdleTimeout":      0,
+		"shouldUseTestManagerForVisibilityDetection": false,
+	}
+	if alertAction != "" {
+		alwaysMatch["defaultAlertAction"] = alertAction
+	}
 	caps := map[string]interface{}{
 		"capabilities": map[string]interface{}{
-			"alwaysMatch": map[string]interface{}{
-				"bundleId":                bundleID,
-				"shouldWaitForQuiescence": false,
-				"waitForIdleTimeout":      0,
-				"shouldUseTestManagerForVisibilityDetection": false,
-			},
+			"alwaysMatch": alwaysMatch,
 		},
 	}
 

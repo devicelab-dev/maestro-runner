@@ -3,6 +3,7 @@ package wda
 import (
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -55,7 +56,7 @@ func TestCreateSession(t *testing.T) {
 		httpClient: http.DefaultClient,
 	}
 
-	err := client.CreateSession("com.example.app")
+	err := client.CreateSession("com.example.app", "")
 	if err != nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}
@@ -79,13 +80,81 @@ func TestCreateSessionAlternateFormat(t *testing.T) {
 		httpClient: http.DefaultClient,
 	}
 
-	err := client.CreateSession("com.example.app")
+	err := client.CreateSession("com.example.app", "")
 	if err != nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}
 
 	if client.sessionID != "alternate-session-456" {
 		t.Errorf("Expected sessionID 'alternate-session-456', got '%s'", client.sessionID)
+	}
+}
+
+// TestCreateSessionWithAlertAction tests that alertAction is included in session caps
+func TestCreateSessionWithAlertAction(t *testing.T) {
+	var receivedBody map[string]interface{}
+	server := mockWDAServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && r.URL.Path == "/session" {
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &receivedBody)
+		}
+		jsonResponse(w, map[string]interface{}{
+			"value": map[string]interface{}{
+				"sessionId": "test-session-alert",
+			},
+		})
+	})
+	defer server.Close()
+
+	client := &Client{
+		baseURL:    server.URL,
+		httpClient: http.DefaultClient,
+	}
+
+	err := client.CreateSession("com.example.app", "accept")
+	if err != nil {
+		t.Fatalf("CreateSession failed: %v", err)
+	}
+
+	// Verify defaultAlertAction was sent
+	caps, _ := receivedBody["capabilities"].(map[string]interface{})
+	alwaysMatch, _ := caps["alwaysMatch"].(map[string]interface{})
+	if alwaysMatch["defaultAlertAction"] != "accept" {
+		t.Errorf("Expected defaultAlertAction 'accept', got '%v'", alwaysMatch["defaultAlertAction"])
+	}
+}
+
+// TestCreateSessionWithoutAlertAction tests that no alertAction omits the key
+func TestCreateSessionWithoutAlertAction(t *testing.T) {
+	var receivedBody map[string]interface{}
+	server := mockWDAServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && r.URL.Path == "/session" {
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &receivedBody)
+		}
+		jsonResponse(w, map[string]interface{}{
+			"value": map[string]interface{}{
+				"sessionId": "test-session-no-alert",
+			},
+		})
+	})
+	defer server.Close()
+
+	client := &Client{
+		baseURL:    server.URL,
+		httpClient: http.DefaultClient,
+	}
+
+	err := client.CreateSession("com.example.app", "")
+	if err != nil {
+		t.Fatalf("CreateSession failed: %v", err)
+	}
+
+	// Verify defaultAlertAction was NOT sent
+	caps, _ := receivedBody["capabilities"].(map[string]interface{})
+	alwaysMatch, _ := caps["alwaysMatch"].(map[string]interface{})
+	if _, exists := alwaysMatch["defaultAlertAction"]; exists {
+		t.Error("Expected defaultAlertAction to be absent when alertAction is empty")
 	}
 }
 

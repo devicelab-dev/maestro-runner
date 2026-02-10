@@ -1397,7 +1397,7 @@ func TestSetPermissionsNoUDID(t *testing.T) {
 func TestSetPermissionsEmptyPermissions(t *testing.T) {
 	driver := &Driver{
 		client: &Client{baseURL: "http://localhost:0", httpClient: http.DefaultClient, sessionID: "test-session"},
-		info:   &core.PlatformInfo{Platform: "ios"},
+		info:   &core.PlatformInfo{Platform: "ios", IsSimulator: true},
 		udid:   "FAKE-UDID-12345",
 	}
 
@@ -1426,7 +1426,7 @@ func TestSetPermissionsAllAllow(t *testing.T) {
 
 	driver := &Driver{
 		client: &Client{baseURL: server.URL, httpClient: http.DefaultClient, sessionID: "test-session"},
-		info:   &core.PlatformInfo{Platform: "ios"},
+		info:   &core.PlatformInfo{Platform: "ios", IsSimulator: true},
 		udid:   "FAKE-UDID-12345",
 	}
 
@@ -1456,7 +1456,7 @@ func TestSetPermissionsSpecificAllow(t *testing.T) {
 
 	driver := &Driver{
 		client: &Client{baseURL: server.URL, httpClient: http.DefaultClient, sessionID: "test-session"},
-		info:   &core.PlatformInfo{Platform: "ios"},
+		info:   &core.PlatformInfo{Platform: "ios", IsSimulator: true},
 		udid:   "FAKE-UDID-12345",
 	}
 
@@ -1481,7 +1481,7 @@ func TestSetPermissionsSpecificDeny(t *testing.T) {
 
 	driver := &Driver{
 		client: &Client{baseURL: server.URL, httpClient: http.DefaultClient, sessionID: "test-session"},
-		info:   &core.PlatformInfo{Platform: "ios"},
+		info:   &core.PlatformInfo{Platform: "ios", IsSimulator: true},
 		udid:   "FAKE-UDID-12345",
 	}
 
@@ -1704,7 +1704,7 @@ func TestLaunchAppWithUDIDDefaultPermissions(t *testing.T) {
 
 	driver := &Driver{
 		client: &Client{baseURL: server.URL, httpClient: http.DefaultClient, sessionID: "test-session"},
-		info:   &core.PlatformInfo{Platform: "ios"},
+		info:   &core.PlatformInfo{Platform: "ios", IsSimulator: true},
 		udid:   "FAKE-UDID-12345",
 	}
 
@@ -1732,7 +1732,7 @@ func TestLaunchAppWithUDIDExplicitPermissions(t *testing.T) {
 
 	driver := &Driver{
 		client: &Client{baseURL: server.URL, httpClient: http.DefaultClient, sessionID: "test-session"},
-		info:   &core.PlatformInfo{Platform: "ios"},
+		info:   &core.PlatformInfo{Platform: "ios", IsSimulator: true},
 		udid:   "FAKE-UDID-12345",
 	}
 
@@ -3105,5 +3105,235 @@ func TestRandomPersonNameHasSpace(t *testing.T) {
 	parts := strings.Split(name, " ")
 	if len(parts) < 2 {
 		t.Errorf("Expected at least first and last name, got: %s", name)
+	}
+}
+
+// =============================================================================
+// resolveAlertAction tests
+// =============================================================================
+
+func TestResolveAlertActionEmpty(t *testing.T) {
+	result := resolveAlertAction(map[string]string{})
+	if result != "accept" {
+		t.Errorf("Expected 'accept' for empty permissions, got '%s'", result)
+	}
+}
+
+func TestResolveAlertActionAllAllow(t *testing.T) {
+	result := resolveAlertAction(map[string]string{"all": "allow"})
+	if result != "accept" {
+		t.Errorf("Expected 'accept', got '%s'", result)
+	}
+}
+
+func TestResolveAlertActionAllDeny(t *testing.T) {
+	result := resolveAlertAction(map[string]string{"all": "deny"})
+	if result != "dismiss" {
+		t.Errorf("Expected 'dismiss', got '%s'", result)
+	}
+}
+
+func TestResolveAlertActionMixed(t *testing.T) {
+	result := resolveAlertAction(map[string]string{"camera": "allow", "location": "deny"})
+	if result != "" {
+		t.Errorf("Expected empty string for mixed permissions, got '%s'", result)
+	}
+}
+
+func TestResolveAlertActionAllSameAllow(t *testing.T) {
+	result := resolveAlertAction(map[string]string{"camera": "allow", "location": "allow"})
+	if result != "accept" {
+		t.Errorf("Expected 'accept' for all-allow, got '%s'", result)
+	}
+}
+
+func TestResolveAlertActionAllSameDeny(t *testing.T) {
+	result := resolveAlertAction(map[string]string{"camera": "deny", "location": "deny"})
+	if result != "dismiss" {
+		t.Errorf("Expected 'dismiss' for all-deny, got '%s'", result)
+	}
+}
+
+func TestResolveAlertActionUnsetValue(t *testing.T) {
+	result := resolveAlertAction(map[string]string{"camera": "unset"})
+	if result != "" {
+		t.Errorf("Expected empty string for 'unset' value, got '%s'", result)
+	}
+}
+
+func TestResolveAlertActionAllKeyUnsetValue(t *testing.T) {
+	result := resolveAlertAction(map[string]string{"all": "unset"})
+	if result != "" {
+		t.Errorf("Expected empty string for 'all: unset', got '%s'", result)
+	}
+}
+
+// =============================================================================
+// setPermissions real device tests
+// =============================================================================
+
+func TestSetPermissionsRealDeviceAllAllow(t *testing.T) {
+	driver := &Driver{
+		client: &Client{},
+		info:   &core.PlatformInfo{Platform: "ios", IsSimulator: false},
+		udid:   "REAL-DEVICE-UDID",
+	}
+
+	step := &flow.SetPermissionsStep{
+		AppID:       "com.test.app",
+		Permissions: map[string]string{"all": "allow"},
+	}
+	result := driver.setPermissions(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "WDA alert monitor") {
+		t.Errorf("Expected message about WDA alert monitor, got: %s", result.Message)
+	}
+}
+
+func TestSetPermissionsRealDeviceMixed(t *testing.T) {
+	driver := &Driver{
+		client: &Client{},
+		info:   &core.PlatformInfo{Platform: "ios", IsSimulator: false},
+		udid:   "REAL-DEVICE-UDID",
+	}
+
+	step := &flow.SetPermissionsStep{
+		AppID:       "com.test.app",
+		Permissions: map[string]string{"camera": "allow", "location": "deny"},
+	}
+	result := driver.setPermissions(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+}
+
+// =============================================================================
+// launchApp real device alert action tests
+// =============================================================================
+
+func TestLaunchAppRealDeviceDefaultAlertAction(t *testing.T) {
+	var sessionBody map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		if path == "/session" && r.Method == "POST" {
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &sessionBody)
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"sessionId": "new-session"},
+			})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+
+	driver := &Driver{
+		client: &Client{baseURL: server.URL, httpClient: http.DefaultClient},
+		info:   &core.PlatformInfo{Platform: "ios", IsSimulator: false},
+		udid:   "REAL-DEVICE-UDID",
+	}
+
+	// No permissions → defaults to {all: allow} → alertAction = "accept"
+	step := &flow.LaunchAppStep{AppID: "com.test.app"}
+	result := driver.launchApp(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+
+	// Verify defaultAlertAction was sent in session caps
+	caps, _ := sessionBody["capabilities"].(map[string]interface{})
+	alwaysMatch, _ := caps["alwaysMatch"].(map[string]interface{})
+	if alwaysMatch["defaultAlertAction"] != "accept" {
+		t.Errorf("Expected defaultAlertAction 'accept', got '%v'", alwaysMatch["defaultAlertAction"])
+	}
+}
+
+func TestLaunchAppRealDeviceDenyPermissions(t *testing.T) {
+	var sessionBody map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		if path == "/session" && r.Method == "POST" {
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &sessionBody)
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"sessionId": "new-session"},
+			})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+
+	driver := &Driver{
+		client: &Client{baseURL: server.URL, httpClient: http.DefaultClient},
+		info:   &core.PlatformInfo{Platform: "ios", IsSimulator: false},
+		udid:   "REAL-DEVICE-UDID",
+	}
+
+	step := &flow.LaunchAppStep{
+		AppID:       "com.test.app",
+		Permissions: map[string]string{"all": "deny"},
+	}
+	result := driver.launchApp(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+
+	caps, _ := sessionBody["capabilities"].(map[string]interface{})
+	alwaysMatch, _ := caps["alwaysMatch"].(map[string]interface{})
+	if alwaysMatch["defaultAlertAction"] != "dismiss" {
+		t.Errorf("Expected defaultAlertAction 'dismiss', got '%v'", alwaysMatch["defaultAlertAction"])
+	}
+}
+
+func TestLaunchAppRealDeviceMixedPermissions(t *testing.T) {
+	var sessionBody map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		if path == "/session" && r.Method == "POST" {
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &sessionBody)
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"sessionId": "new-session"},
+			})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+
+	driver := &Driver{
+		client: &Client{baseURL: server.URL, httpClient: http.DefaultClient},
+		info:   &core.PlatformInfo{Platform: "ios", IsSimulator: false},
+		udid:   "REAL-DEVICE-UDID",
+	}
+
+	step := &flow.LaunchAppStep{
+		AppID:       "com.test.app",
+		Permissions: map[string]string{"camera": "allow", "location": "deny"},
+	}
+	result := driver.launchApp(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+
+	// Mixed permissions → no defaultAlertAction
+	caps, _ := sessionBody["capabilities"].(map[string]interface{})
+	alwaysMatch, _ := caps["alwaysMatch"].(map[string]interface{})
+	if _, exists := alwaysMatch["defaultAlertAction"]; exists {
+		t.Error("Expected no defaultAlertAction for mixed permissions")
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/danielpaulus/go-ios/ios/zipconduit"
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
+	"github.com/devicelab-dev/maestro-runner/pkg/logger"
 )
 
 // Tap commands
@@ -577,28 +578,34 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 	}
 
 	// Apply permissions (default: all allow, like Maestro)
-	// Only works on simulators with UDID
 	if d.udid != "" {
 		permissions := step.Permissions
 		if len(permissions) == 0 {
 			permissions = map[string]string{"all": "allow"}
 		}
-		for name, value := range permissions {
-			if strings.ToLower(name) == "all" {
-				for _, perm := range getIOSPermissions() {
-					_ = d.applyIOSPermission(bundleID, perm, value)
-				}
-			} else {
-				for _, perm := range resolveIOSPermissionShortcut(name) {
-					_ = d.applyIOSPermission(bundleID, perm, value)
+
+		if d.info.IsSimulator {
+			// Simulator: use simctl privacy (fast, no dialogs)
+			for name, value := range permissions {
+				if strings.ToLower(name) == "all" {
+					for _, perm := range getIOSPermissions() {
+						_ = d.applyIOSPermission(bundleID, perm, value)
+					}
+				} else {
+					for _, perm := range resolveIOSPermissionShortcut(name) {
+						_ = d.applyIOSPermission(bundleID, perm, value)
+					}
 				}
 			}
+		} else {
+			// Real device: resolve WDA alert action from permissions
+			d.alertAction = resolveAlertAction(permissions)
 		}
 	}
 
 	// If no session exists, create one (which also launches the app)
 	if !d.client.HasSession() {
-		if err := d.client.CreateSession(bundleID); err != nil {
+		if err := d.client.CreateSession(bundleID, d.alertAction); err != nil {
 			return errorResult(err, fmt.Sprintf("Failed to create session for app: %s", bundleID))
 		}
 		// Disable quiescence wait to prevent XCTest crashes on certain Xcode/iOS versions
@@ -684,7 +691,8 @@ func (d *Driver) clearState(step *flow.ClearStateStep) *core.CommandResult {
 func (d *Driver) clearAppState(bundleID string) *core.CommandResult {
 	if d.appFile == "" {
 		return errorResult(fmt.Errorf("clearState on iOS requires --app-file for reinstall"),
-			"clearState on iOS requires --app-file to reinstall the app after uninstalling")
+			"clearState on iOS requires --app-file to reinstall the app after uninstalling\n"+
+				"Usage: maestro-runner --app-file <path-to-ipa-or-app> --platform ios test <flow-files>")
 	}
 
 	if d.info.IsSimulator {
@@ -974,7 +982,9 @@ func parsePercentageCoords(coord string) (float64, float64, error) {
 	return x / 100.0, y / 100.0, nil
 }
 
-// setPermissions sets app permissions using xcrun simctl privacy (iOS simulator only).
+// setPermissions sets app permissions.
+// On simulators, uses xcrun simctl privacy. On real devices, relies on WDA's
+// defaultAlertAction set at session creation time.
 func (d *Driver) setPermissions(step *flow.SetPermissionsStep) *core.CommandResult {
 	appID := step.AppID
 	if appID == "" {
@@ -984,7 +994,7 @@ func (d *Driver) setPermissions(step *flow.SetPermissionsStep) *core.CommandResu
 	if d.udid == "" {
 		return &core.CommandResult{
 			Success: true,
-			Message: "setPermissions skipped (no UDID - permissions require simulator)",
+			Message: "setPermissions skipped (no UDID)",
 		}
 	}
 
@@ -992,11 +1002,23 @@ func (d *Driver) setPermissions(step *flow.SetPermissionsStep) *core.CommandResu
 		return errorResult(fmt.Errorf("no permissions specified"), "No permissions to set")
 	}
 
+	// Real device: permissions are handled by WDA's defaultAlertAction at session creation
+	if !d.info.IsSimulator {
+		action := resolveAlertAction(step.Permissions)
+		if action == "" {
+			logger.Warn("Mixed permissions not supported on real iOS devices — permission dialogs must be handled manually")
+		}
+		return &core.CommandResult{
+			Success: true,
+			Message: "setPermissions on real device: handled by WDA alert monitor",
+		}
+	}
+
+	// Simulator: use simctl privacy
 	var granted, revoked, errors []string
 
 	for name, value := range step.Permissions {
 		if strings.ToLower(name) == "all" {
-			// Apply to all common iOS permissions
 			allPerms := getIOSPermissions()
 			for _, perm := range allPerms {
 				if err := d.applyIOSPermission(appID, perm, value); err != nil {
@@ -1010,7 +1032,6 @@ func (d *Driver) setPermissions(step *flow.SetPermissionsStep) *core.CommandResu
 			continue
 		}
 
-		// Map shortcut to iOS permission service name
 		perms := resolveIOSPermissionShortcut(name)
 		for _, perm := range perms {
 			if err := d.applyIOSPermission(appID, perm, value); err != nil {
@@ -1095,6 +1116,43 @@ func resolveIOSPermissionShortcut(shortcut string) []string {
 	default:
 		// Assume it's already a valid service name
 		return []string{shortcut}
+	}
+}
+
+// resolveAlertAction determines the WDA defaultAlertAction from a permission map.
+// Returns "accept" for all-allow, "dismiss" for all-deny, "" for mixed.
+func resolveAlertAction(permissions map[string]string) string {
+	if len(permissions) == 0 {
+		return "accept"
+	}
+
+	// Check for "all" key
+	if val, ok := permissions["all"]; ok && len(permissions) == 1 {
+		switch strings.ToLower(val) {
+		case "allow":
+			return "accept"
+		case "deny":
+			return "dismiss"
+		}
+	}
+
+	// Check if all values are the same
+	var lastVal string
+	for _, v := range permissions {
+		lower := strings.ToLower(v)
+		if lastVal == "" {
+			lastVal = lower
+		} else if lastVal != lower {
+			return "" // Mixed permissions
+		}
+	}
+	switch lastVal {
+	case "allow":
+		return "accept"
+	case "deny":
+		return "dismiss"
+	default:
+		return ""
 	}
 }
 

@@ -20,6 +20,9 @@ type Driver struct {
 	// App file path for clearState (uninstall+reinstall)
 	appFile string
 
+	// WDA alert action for real device permission handling ("accept", "dismiss", or "")
+	alertAction string
+
 	// Timeouts (0 = use defaults)
 	findTimeout         int // ms, for required elements
 	optionalFindTimeout int // ms, for optional elements
