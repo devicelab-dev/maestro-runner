@@ -399,6 +399,34 @@ func TestExecuteHideKeyboard(t *testing.T) {
 	}
 }
 
+// TestExecuteAcceptAlert tests acceptAlert via Execute dispatch
+func TestExecuteAcceptAlert(t *testing.T) {
+	server := mockWDAServerForDriver()
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.AcceptAlertStep{BaseStep: flow.BaseStep{TimeoutMs: 500}}
+	result := driver.Execute(step)
+
+	if !result.Success {
+		t.Errorf("Expected success, got error: %v", result.Error)
+	}
+}
+
+// TestExecuteDismissAlert tests dismissAlert via Execute dispatch
+func TestExecuteDismissAlert(t *testing.T) {
+	server := mockWDAServerForDriver()
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.DismissAlertStep{BaseStep: flow.BaseStep{TimeoutMs: 500}}
+	result := driver.Execute(step)
+
+	if !result.Success {
+		t.Errorf("Expected success, got error: %v", result.Error)
+	}
+}
+
 // TestExecuteInputRandom tests random input
 func TestExecuteInputRandom(t *testing.T) {
 	server := mockWDAServerForDriver()

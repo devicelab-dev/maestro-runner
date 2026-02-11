@@ -294,6 +294,18 @@ func (c *Client) Unlock() error {
 	return err
 }
 
+// AcceptAlert accepts the current system alert (taps Allow/OK).
+func (c *Client) AcceptAlert() error {
+	_, err := c.post(c.sessionPath("/alert/accept"), nil)
+	return err
+}
+
+// DismissAlert dismisses the current system alert (taps Don't Allow/Cancel).
+func (c *Client) DismissAlert() error {
+	_, err := c.post(c.sessionPath("/alert/dismiss"), nil)
+	return err
+}
+
 // GetOrientation returns the current orientation.
 func (c *Client) GetOrientation() (string, error) {
 	resp, err := c.get(c.sessionPath("/orientation"))

@@ -317,6 +317,48 @@ func (d *Driver) hideKeyboard(step *flow.HideKeyboardStep) *core.CommandResult {
 	return successResult("Attempted to hide keyboard", nil)
 }
 
+func (d *Driver) acceptAlert(step *flow.AcceptAlertStep) *core.CommandResult {
+	return d.waitForAlert(step.TimeoutMs, true)
+}
+
+func (d *Driver) dismissAlert(step *flow.DismissAlertStep) *core.CommandResult {
+	return d.waitForAlert(step.TimeoutMs, false)
+}
+
+// waitForAlert polls for a system alert and accepts/dismisses it.
+// If no alert appears within the timeout, succeeds silently.
+func (d *Driver) waitForAlert(timeoutMs int, accept bool) *core.CommandResult {
+	if timeoutMs <= 0 {
+		timeoutMs = 5000
+	}
+	timeout := time.Duration(timeoutMs) * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	action := "accept"
+	if !accept {
+		action = "dismiss"
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return successResult(fmt.Sprintf("No alert to %s", action), nil)
+		default:
+			var err error
+			if accept {
+				err = d.client.AcceptAlert()
+			} else {
+				err = d.client.DismissAlert()
+			}
+			if err == nil {
+				return successResult(fmt.Sprintf("Alert %sed", action), nil)
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+}
+
 func (d *Driver) inputRandom(step *flow.InputRandomStep) *core.CommandResult {
 	length := step.Length
 	if length <= 0 {
@@ -585,15 +627,29 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 		}
 
 		if d.info.IsSimulator {
-			// Simulator: use simctl privacy (fast, no dialogs)
-			for name, value := range permissions {
-				if strings.ToLower(name) == "all" {
-					for _, perm := range getIOSPermissions() {
-						_ = d.applyIOSPermission(bundleID, perm, value)
+			// Simulator permission handling via simctl privacy:
+			//   "allow"  → reset + grant (no dialog, app gets .authorized)
+			//   "deny"   → reset + revoke (no dialog, app gets .denied)
+			//   "unset"  → skip everything (hands off, don't touch permissions)
+			if !hasAllValue(permissions, "unset") {
+				// Reset all permissions to clean slate ("not determined")
+				for _, perm := range getIOSPermissions() {
+					_ = d.resetIOSPermission(bundleID, perm)
+				}
+				// Apply allow/deny permissions; unspecified stay as "not determined"
+				for name, value := range permissions {
+					lower := strings.ToLower(value)
+					if lower != "allow" && lower != "deny" {
+						continue
 					}
-				} else {
-					for _, perm := range resolveIOSPermissionShortcut(name) {
-						_ = d.applyIOSPermission(bundleID, perm, value)
+					if strings.ToLower(name) == "all" {
+						for _, perm := range getIOSPermissions() {
+							_ = d.applyIOSPermission(bundleID, perm, lower)
+						}
+					} else {
+						for _, perm := range resolveIOSPermissionShortcut(name) {
+							_ = d.applyIOSPermission(bundleID, perm, lower)
+						}
 					}
 				}
 			}
@@ -610,6 +666,19 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 		}
 		// Disable quiescence wait to prevent XCTest crashes on certain Xcode/iOS versions
 		_ = d.client.DisableQuiescence()
+		// Set alert button selectors to help WDA find correct buttons on non-standard
+		// permission dialogs (e.g. location with "Allow While Using App")
+		if d.alertAction != "" {
+			if d.alertAction == "accept" {
+				_ = d.client.UpdateSettings(map[string]interface{}{
+					"acceptAlertButtonSelector": "**/XCUIElementTypeButton[`label CONTAINS[c] 'Allow'`]",
+				})
+			} else if d.alertAction == "dismiss" {
+				_ = d.client.UpdateSettings(map[string]interface{}{
+					"dismissAlertButtonSelector": "**/XCUIElementTypeButton[`label CONTAINS[c] 'Don't Allow' OR label CONTAINS[c] 'Dont Allow'`]",
+				})
+			}
+		}
 		time.Sleep(time.Second) // Brief wait for app to start
 		return successResult(fmt.Sprintf("Launched app: %s", bundleID), nil)
 	}
@@ -1014,37 +1083,48 @@ func (d *Driver) setPermissions(step *flow.SetPermissionsStep) *core.CommandResu
 		}
 	}
 
-	// Simulator: use simctl privacy
-	var granted, revoked, errors []string
+	// Simulator: same logic as launchApp —
+	//   "unset" → do nothing (hands off)
+	//   otherwise → reset all, then grant only "allow" ones
+	if hasAllValue(step.Permissions, "unset") {
+		return &core.CommandResult{
+			Success: true,
+			Message: "setPermissions: unset — no permissions changed",
+		}
+	}
 
+	// Reset all to clean slate
+	for _, perm := range getIOSPermissions() {
+		_ = d.resetIOSPermission(appID, perm)
+	}
+
+	// Apply allow/deny permissions; unspecified stay as "not determined"
+	var applied, errors []string
 	for name, value := range step.Permissions {
-		if strings.ToLower(name) == "all" {
-			allPerms := getIOSPermissions()
-			for _, perm := range allPerms {
-				if err := d.applyIOSPermission(appID, perm, value); err != nil {
-					errors = append(errors, fmt.Sprintf("%s: %v", perm, err))
-				} else if strings.ToLower(value) == "allow" {
-					granted = append(granted, perm)
-				} else {
-					revoked = append(revoked, perm)
-				}
-			}
+		lower := strings.ToLower(value)
+		if lower != "allow" && lower != "deny" {
 			continue
 		}
-
-		perms := resolveIOSPermissionShortcut(name)
-		for _, perm := range perms {
-			if err := d.applyIOSPermission(appID, perm, value); err != nil {
-				errors = append(errors, fmt.Sprintf("%s: %v", perm, err))
-			} else if strings.ToLower(value) == "allow" {
-				granted = append(granted, perm)
-			} else {
-				revoked = append(revoked, perm)
+		if strings.ToLower(name) == "all" {
+			for _, perm := range getIOSPermissions() {
+				if err := d.applyIOSPermission(appID, perm, lower); err != nil {
+					errors = append(errors, fmt.Sprintf("%s: %v", perm, err))
+				} else {
+					applied = append(applied, perm)
+				}
+			}
+		} else {
+			for _, perm := range resolveIOSPermissionShortcut(name) {
+				if err := d.applyIOSPermission(appID, perm, lower); err != nil {
+					errors = append(errors, fmt.Sprintf("%s: %v", perm, err))
+				} else {
+					applied = append(applied, perm)
+				}
 			}
 		}
 	}
 
-	msg := fmt.Sprintf("Permissions set: %d granted, %d revoked", len(granted), len(revoked))
+	msg := fmt.Sprintf("Permissions set: %d applied, all others reset", len(applied))
 	if len(errors) > 0 {
 		msg += fmt.Sprintf(", %d errors", len(errors))
 	}
@@ -1117,6 +1197,26 @@ func resolveIOSPermissionShortcut(shortcut string) []string {
 		// Assume it's already a valid service name
 		return []string{shortcut}
 	}
+}
+
+// hasAllValue checks if all permission values match the given value.
+func hasAllValue(permissions map[string]string, value string) bool {
+	for _, v := range permissions {
+		if strings.ToLower(v) != value {
+			return false
+		}
+	}
+	return len(permissions) > 0
+}
+
+// resetIOSPermission resets a single permission to "not determined" using xcrun simctl privacy.
+func (d *Driver) resetIOSPermission(appID, permission string) error {
+	cmd := exec.Command("xcrun", "simctl", "privacy", d.udid, "reset", permission, appID)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s: %s", err, string(output))
+	}
+	return nil
 }
 
 // resolveAlertAction determines the WDA defaultAlertAction from a permission map.

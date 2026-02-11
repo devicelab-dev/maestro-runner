@@ -3169,6 +3169,59 @@ func TestResolveAlertActionAllKeyUnsetValue(t *testing.T) {
 }
 
 // =============================================================================
+// hasAllValue tests
+// =============================================================================
+
+func TestHasAllValueAllAllow(t *testing.T) {
+	if !hasAllValue(map[string]string{"camera": "allow", "location": "allow"}, "allow") {
+		t.Error("Expected true for all allow")
+	}
+}
+
+func TestHasAllValueMixed(t *testing.T) {
+	if hasAllValue(map[string]string{"camera": "allow", "location": "deny"}, "allow") {
+		t.Error("Expected false for mixed")
+	}
+}
+
+func TestHasAllValueEmpty(t *testing.T) {
+	if hasAllValue(map[string]string{}, "unset") {
+		t.Error("Expected false for empty map")
+	}
+}
+
+func TestHasAllValueUnset(t *testing.T) {
+	if !hasAllValue(map[string]string{"all": "unset"}, "unset") {
+		t.Error("Expected true for all unset")
+	}
+}
+
+// =============================================================================
+// setPermissions simulator unset test
+// =============================================================================
+
+func TestSetPermissionsSimulatorUnset(t *testing.T) {
+	driver := &Driver{
+		client: &Client{},
+		info:   &core.PlatformInfo{Platform: "ios", IsSimulator: true},
+		udid:   "FAKE-UDID-12345",
+	}
+
+	step := &flow.SetPermissionsStep{
+		AppID:       "com.test.app",
+		Permissions: map[string]string{"all": "unset"},
+	}
+	result := driver.setPermissions(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "unset") {
+		t.Errorf("Expected 'unset' in message, got: %s", result.Message)
+	}
+}
+
+// =============================================================================
 // setPermissions real device tests
 // =============================================================================
 
@@ -3335,5 +3388,191 @@ func TestLaunchAppRealDeviceMixedPermissions(t *testing.T) {
 	alwaysMatch, _ := caps["alwaysMatch"].(map[string]interface{})
 	if _, exists := alwaysMatch["defaultAlertAction"]; exists {
 		t.Error("Expected no defaultAlertAction for mixed permissions")
+	}
+}
+
+// =============================================================================
+// acceptAlert / dismissAlert / waitForAlert tests
+// =============================================================================
+
+// TestAcceptAlertSuccess tests acceptAlert when an alert is present and accepted.
+func TestAcceptAlertSuccess(t *testing.T) {
+	var acceptCalled bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/alert/accept") && r.Method == "POST" {
+			acceptCalled = true
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.AcceptAlertStep{BaseStep: flow.BaseStep{TimeoutMs: 1000}}
+	result := driver.acceptAlert(step)
+
+	if !result.Success {
+		t.Errorf("Expected success, got: %s", result.Message)
+	}
+	if !acceptCalled {
+		t.Error("Expected AcceptAlert endpoint to be called")
+	}
+	if !strings.Contains(result.Message, "accepted") {
+		// waitForAlert returns "Alert accepted" on success
+		t.Logf("Result message: %s", result.Message)
+	}
+}
+
+// TestDismissAlertSuccess tests dismissAlert when an alert is present and dismissed.
+func TestDismissAlertSuccess(t *testing.T) {
+	var dismissCalled bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/alert/dismiss") && r.Method == "POST" {
+			dismissCalled = true
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.DismissAlertStep{BaseStep: flow.BaseStep{TimeoutMs: 1000}}
+	result := driver.dismissAlert(step)
+
+	if !result.Success {
+		t.Errorf("Expected success, got: %s", result.Message)
+	}
+	if !dismissCalled {
+		t.Error("Expected DismissAlert endpoint to be called")
+	}
+}
+
+// TestAcceptAlertNoAlertTimeout tests acceptAlert when no alert appears within timeout.
+// Should succeed silently per the waitForAlert contract.
+func TestAcceptAlertNoAlertTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/alert/accept") && r.Method == "POST" {
+			// No alert present - return error
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{
+					"error":   "no such alert",
+					"message": "An attempt was made to operate on a modal dialog when one was not open",
+				},
+			})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.AcceptAlertStep{BaseStep: flow.BaseStep{TimeoutMs: 600}}
+	result := driver.acceptAlert(step)
+
+	// Should succeed silently when no alert appears
+	if !result.Success {
+		t.Errorf("Expected success (no alert is OK), got: %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "No alert") {
+		t.Errorf("Expected 'No alert' in message, got: %s", result.Message)
+	}
+}
+
+// TestDismissAlertNoAlertTimeout tests dismissAlert when no alert appears within timeout.
+func TestDismissAlertNoAlertTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/alert/dismiss") && r.Method == "POST" {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{
+					"error":   "no such alert",
+					"message": "No alert open",
+				},
+			})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.DismissAlertStep{BaseStep: flow.BaseStep{TimeoutMs: 600}}
+	result := driver.dismissAlert(step)
+
+	if !result.Success {
+		t.Errorf("Expected success (no alert is OK), got: %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "No alert") {
+		t.Errorf("Expected 'No alert' in message, got: %s", result.Message)
+	}
+}
+
+// TestAcceptAlertDefaultTimeout tests acceptAlert uses 5000ms default timeout.
+func TestAcceptAlertDefaultTimeout(t *testing.T) {
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/alert/accept") && r.Method == "POST" {
+			callCount++
+			// Always succeed on first call
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	// TimeoutMs = 0 should default to 5000ms
+	step := &flow.AcceptAlertStep{BaseStep: flow.BaseStep{TimeoutMs: 0}}
+	result := driver.acceptAlert(step)
+
+	if !result.Success {
+		t.Errorf("Expected success, got: %s", result.Message)
+	}
+	if callCount == 0 {
+		t.Error("Expected at least one call to accept alert")
+	}
+}
+
+// TestWaitForAlertPollingBehavior tests that waitForAlert polls and eventually finds an alert.
+func TestWaitForAlertPollingBehavior(t *testing.T) {
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/alert/accept") && r.Method == "POST" {
+			callCount++
+			if callCount < 3 {
+				// No alert for first 2 calls
+				jsonResponse(w, map[string]interface{}{
+					"value": map[string]interface{}{
+						"error":   "no such alert",
+						"message": "No alert open",
+					},
+				})
+				return
+			}
+			// Alert appears on 3rd call
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.AcceptAlertStep{BaseStep: flow.BaseStep{TimeoutMs: 5000}}
+	result := driver.acceptAlert(step)
+
+	if !result.Success {
+		t.Errorf("Expected success after polling, got: %s", result.Message)
+	}
+	if callCount < 3 {
+		t.Errorf("Expected at least 3 calls (polling), got: %d", callCount)
 	}
 }

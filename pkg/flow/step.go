@@ -16,6 +16,8 @@ const (
 	StepScrollUntilVisible StepType = "scrollUntilVisible"
 	StepBack               StepType = "back"
 	StepHideKeyboard       StepType = "hideKeyboard"
+	StepAcceptAlert        StepType = "acceptAlert"
+	StepDismissAlert       StepType = "dismissAlert"
 
 	// Text
 	StepInputText             StepType = "inputText"
@@ -191,6 +193,16 @@ type BackStep struct {
 
 // HideKeyboardStep hides the keyboard.
 type HideKeyboardStep struct {
+	BaseStep `yaml:",inline"`
+}
+
+// AcceptAlertStep accepts a system alert dialog (taps Allow/OK).
+type AcceptAlertStep struct {
+	BaseStep `yaml:",inline"`
+}
+
+// DismissAlertStep dismisses a system alert dialog (taps Don't Allow/Cancel).
+type DismissAlertStep struct {
 	BaseStep `yaml:",inline"`
 }
 

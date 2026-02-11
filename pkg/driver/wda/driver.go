@@ -95,6 +95,10 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 		result = d.eraseText(s)
 	case *flow.HideKeyboardStep:
 		result = d.hideKeyboard(s)
+	case *flow.AcceptAlertStep:
+		result = d.acceptAlert(s)
+	case *flow.DismissAlertStep:
+		result = d.dismissAlert(s)
 	case *flow.InputRandomStep:
 		result = d.inputRandom(s)
 

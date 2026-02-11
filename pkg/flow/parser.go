@@ -223,6 +223,7 @@ func isStepType(key string) bool {
 	switch StepType(key) {
 	case StepTapOn, StepDoubleTapOn, StepLongPressOn, StepTapOnPoint,
 		StepSwipe, StepScroll, StepScrollUntilVisible, StepBack, StepHideKeyboard,
+		StepAcceptAlert, StepDismissAlert,
 		StepInputText, StepInputRandom, StepInputRandomEmail, StepInputRandomNumber,
 		StepInputRandomPersonName, StepInputRandomText,
 		StepEraseText, StepCopyTextFrom, StepPasteText, StepSetClipboard,
@@ -315,6 +316,12 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 
 	case StepHideKeyboard:
 		return &HideKeyboardStep{BaseStep: BaseStep{StepType: stepType}}, nil
+
+	case StepAcceptAlert:
+		return &AcceptAlertStep{BaseStep: BaseStep{StepType: stepType}}, nil
+
+	case StepDismissAlert:
+		return &DismissAlertStep{BaseStep: BaseStep{StepType: stepType}}, nil
 
 	case StepInputText:
 		var s InputTextStep
