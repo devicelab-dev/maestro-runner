@@ -1497,6 +1497,98 @@ func TestAppiumGetElementInfo(t *testing.T) {
 	}
 }
 
+// TestGetElementInfoAndroidAttribute verifies Android uses content-desc attribute
+func TestGetElementInfoAndroidAttribute(t *testing.T) {
+	var requestedAttr string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		if strings.Contains(path, "/attribute/") {
+			requestedAttr = path[strings.LastIndex(path, "/attribute/")+len("/attribute/"):]
+			writeJSON(w, map[string]interface{}{"value": "Submit button"})
+			return
+		}
+		if strings.Contains(path, "/rect") {
+			writeJSON(w, map[string]interface{}{"value": map[string]interface{}{"x": 10.0, "y": 20.0, "width": 100.0, "height": 40.0}})
+			return
+		}
+		if strings.Contains(path, "/text") {
+			writeJSON(w, map[string]interface{}{"value": "Submit"})
+			return
+		}
+		if strings.Contains(path, "/displayed") {
+			writeJSON(w, map[string]interface{}{"value": true})
+			return
+		}
+		if strings.Contains(path, "/enabled") {
+			writeJSON(w, map[string]interface{}{"value": true})
+			return
+		}
+		writeJSON(w, map[string]interface{}{"value": nil})
+	}))
+	defer server.Close()
+
+	driver := createTestAppiumDriver(server)
+	driver.platform = "android"
+
+	info, err := driver.getElementInfo("elem-1")
+	if err != nil {
+		t.Fatalf("Expected success, got error: %v", err)
+	}
+	if requestedAttr != "content-desc" {
+		t.Errorf("Expected Android to request 'content-desc', got '%s'", requestedAttr)
+	}
+	if info.AccessibilityLabel != "Submit button" {
+		t.Errorf("Expected AccessibilityLabel 'Submit button', got '%s'", info.AccessibilityLabel)
+	}
+}
+
+// TestGetElementInfoIOSAttribute verifies iOS uses label attribute instead of content-desc
+func TestGetElementInfoIOSAttribute(t *testing.T) {
+	var requestedAttr string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		if strings.Contains(path, "/attribute/") {
+			requestedAttr = path[strings.LastIndex(path, "/attribute/")+len("/attribute/"):]
+			writeJSON(w, map[string]interface{}{"value": "Submit button"})
+			return
+		}
+		if strings.Contains(path, "/rect") {
+			writeJSON(w, map[string]interface{}{"value": map[string]interface{}{"x": 10.0, "y": 20.0, "width": 100.0, "height": 40.0}})
+			return
+		}
+		if strings.Contains(path, "/text") {
+			writeJSON(w, map[string]interface{}{"value": "Submit"})
+			return
+		}
+		if strings.Contains(path, "/displayed") {
+			writeJSON(w, map[string]interface{}{"value": true})
+			return
+		}
+		if strings.Contains(path, "/enabled") {
+			writeJSON(w, map[string]interface{}{"value": true})
+			return
+		}
+		writeJSON(w, map[string]interface{}{"value": nil})
+	}))
+	defer server.Close()
+
+	driver := createTestAppiumDriver(server)
+	driver.platform = "ios"
+
+	info, err := driver.getElementInfo("elem-1")
+	if err != nil {
+		t.Fatalf("Expected success, got error: %v", err)
+	}
+	if requestedAttr != "label" {
+		t.Errorf("Expected iOS to request 'label', got '%s'", requestedAttr)
+	}
+	if info.AccessibilityLabel != "Submit button" {
+		t.Errorf("Expected AccessibilityLabel 'Submit button', got '%s'", info.AccessibilityLabel)
+	}
+}
+
 // TestElementToInfo tests elementToInfo conversion
 func TestAppiumElementToInfo(t *testing.T) {
 	elem := &ParsedElement{

@@ -685,13 +685,19 @@ func (d *Driver) getElementInfo(elementID string) (*core.ElementInfo, error) {
 	displayed, _ := d.client.IsElementDisplayed(elementID)
 	enabled, _ := d.client.IsElementEnabled(elementID)
 
-	// Get content-desc (AccessibilityLabel) - important for elements found via descriptionMatches
-	contentDesc, _ := d.client.GetElementAttribute(elementID, "content-desc")
+	// Get accessibility description - important for elements found via descriptionMatches
+	// iOS uses "label" (accessibilityLabel), Android uses "content-desc"
+	var accessibilityDesc string
+	if d.platform == "ios" {
+		accessibilityDesc, _ = d.client.GetElementAttribute(elementID, "label")
+	} else {
+		accessibilityDesc, _ = d.client.GetElementAttribute(elementID, "content-desc")
+	}
 
 	return &core.ElementInfo{
 		ID:                 elementID,
 		Text:               text,
-		AccessibilityLabel: contentDesc,
+		AccessibilityLabel: accessibilityDesc,
 		Bounds:             core.Bounds{X: x, Y: y, Width: w, Height: h},
 		Visible:            displayed,
 		Enabled:            enabled,
