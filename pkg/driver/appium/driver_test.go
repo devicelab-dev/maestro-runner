@@ -2,6 +2,8 @@ package appium
 
 import (
 	"encoding/base64"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -2382,5 +2384,61 @@ func TestInputTextError(t *testing.T) {
 
 	if result.Success {
 		t.Error("Expected failure when inputText fails")
+	}
+}
+
+// TestInputTextIOSUsesMobileKeys verifies iOS uses "mobile: keys" instead of W3C key actions
+func TestInputTextIOSUsesMobileKeys(t *testing.T) {
+	var lastPath string
+	var lastBody map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		lastPath = r.URL.Path
+		if strings.Contains(r.URL.Path, "/execute/sync") {
+			body, _ := io.ReadAll(r.Body)
+			json.Unmarshal(body, &lastBody)
+		}
+		writeJSON(w, map[string]interface{}{"value": nil})
+	}))
+	defer server.Close()
+
+	driver := createTestAppiumDriver(server)
+	driver.platform = "ios"
+
+	step := &flow.InputTextStep{Text: "hello"}
+	result := driver.inputText(step)
+
+	if !result.Success {
+		t.Errorf("iOS inputText failed: %v", result.Error)
+	}
+	if !strings.Contains(lastPath, "/execute/sync") {
+		t.Errorf("iOS inputText should use /execute/sync (mobile: keys), got %s", lastPath)
+	}
+	if script, ok := lastBody["script"].(string); !ok || script != "mobile: keys" {
+		t.Errorf("iOS inputText should call 'mobile: keys', got %v", lastBody["script"])
+	}
+}
+
+// TestInputTextAndroidStillUsesActions verifies Android still uses W3C key actions for inputText
+func TestInputTextAndroidStillUsesActions(t *testing.T) {
+	var lastPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		lastPath = r.URL.Path
+		writeJSON(w, map[string]interface{}{"value": nil})
+	}))
+	defer server.Close()
+
+	driver := createTestAppiumDriver(server)
+	// driver.platform is "android" by default
+
+	step := &flow.InputTextStep{Text: "hello"}
+	result := driver.inputText(step)
+
+	if !result.Success {
+		t.Errorf("Android inputText failed: %v", result.Error)
+	}
+	if !strings.Contains(lastPath, "/actions") {
+		t.Errorf("Android inputText should use /actions, got %s", lastPath)
 	}
 }

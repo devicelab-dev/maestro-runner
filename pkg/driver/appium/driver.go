@@ -22,6 +22,7 @@ type Driver struct {
 	findTimeout               time.Duration // configurable timeout for finding elements
 	currentWaitForIdleTimeout int           // track current value to skip redundant calls
 	waitForIdleTimeoutSet     bool          // whether waitForIdleTimeout has been set
+	lastTappedElementID       string        // iOS: last element clicked via ClickElement, used by inputText
 }
 
 // NewDriver creates a new Appium driver.

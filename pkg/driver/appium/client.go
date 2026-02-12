@@ -235,7 +235,7 @@ func (c *Client) FindElements(strategy, value string) ([]string, error) {
 
 // GetActiveElement returns the currently focused element.
 func (c *Client) GetActiveElement() (string, error) {
-	resp, err := c.get(c.sessionPath() + "/element/active")
+	resp, err := c.post(c.sessionPath()+"/element/active", nil)
 	if err != nil {
 		return "", err
 	}
@@ -248,6 +248,15 @@ func (c *Client) GetActiveElement() (string, error) {
 // ClickElement clicks an element using WebDriver standard endpoint.
 func (c *Client) ClickElement(elementID string) error {
 	_, err := c.post(c.elementPath(elementID)+"/click", nil)
+	return err
+}
+
+// ElementSendKeys types text into a specific element.
+func (c *Client) ElementSendKeys(elementID, text string) error {
+	_, err := c.post(c.elementPath(elementID)+"/value", map[string]interface{}{
+		"value": strings.Split(text, ""),
+		"text":  text,
+	})
 	return err
 }
 

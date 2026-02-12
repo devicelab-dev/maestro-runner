@@ -26,6 +26,12 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		return errorResult(err, fmt.Sprintf("Element not found: %s", step.Selector.Describe()))
 	}
 
+	// On iOS, store the element ID so inputText can use ElementSendKeys
+	// to atomically focus + type (bypasses keyboard focus timing issues).
+	if d.platform == "ios" && info.ID != "" {
+		d.lastTappedElementID = info.ID
+	}
+
 	cx, cy := info.Bounds.Center()
 	if err := d.client.Tap(cx, cy); err != nil {
 		return errorResult(err, "Failed to tap")
@@ -239,11 +245,45 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 	text := step.Text
 
-	if err := d.client.SendKeys(text); err != nil {
-		return errorResult(err, "Failed to input text")
+	if d.platform == "ios" {
+		// On iOS, use ElementSendKeys (POST /element/{id}/value) which internally
+		// calls WDA's fb_typeText. This atomically handles focus (taps the element
+		// if not focused) and types text — no dependency on prior keyboard state.
+		if d.lastTappedElementID != "" {
+			// Wait for the element to have keyboard focus before typing.
+			// A prior coordinate tap may still be establishing focus asynchronously.
+			d.waitForKeyboardFocus(d.lastTappedElementID)
+			if err := d.client.ElementSendKeys(d.lastTappedElementID, text); err != nil {
+				return errorResult(err, "Failed to input text")
+			}
+		} else {
+			// Fallback: use "mobile: keys" which types into currently focused element
+			_, err := d.client.ExecuteMobile("keys", map[string]interface{}{
+				"keys": strings.Split(text, ""),
+			})
+			if err != nil {
+				return errorResult(err, "Failed to input text")
+			}
+		}
+	} else {
+		if err := d.client.SendKeys(text); err != nil {
+			return errorResult(err, "Failed to input text")
+		}
 	}
 
 	return successResult(fmt.Sprintf("Input text: %s", text), nil)
+}
+
+// waitForKeyboardFocus polls until the element has keyboard focus or timeout.
+// This handles the async gap between a coordinate tap and keyboard readiness.
+func (d *Driver) waitForKeyboardFocus(elementID string) {
+	for i := 0; i < 10; i++ {
+		val, err := d.client.GetElementAttribute(elementID, "hasKeyboardFocus")
+		if err == nil && val == "true" {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func (d *Driver) eraseText(step *flow.EraseTextStep) *core.CommandResult {
