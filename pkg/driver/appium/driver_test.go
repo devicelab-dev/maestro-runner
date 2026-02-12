@@ -650,6 +650,95 @@ func TestExecuteAppiumPressKeyUnknown(t *testing.T) {
 	}
 }
 
+// TestPressKeyIOSKeyboard verifies iOS uses W3C key actions for keyboard keys
+func TestPressKeyIOSKeyboard(t *testing.T) {
+	var lastPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		lastPath = r.URL.Path
+		writeJSON(w, map[string]interface{}{"value": nil})
+	}))
+	defer server.Close()
+
+	driver := createTestAppiumDriver(server)
+	driver.platform = "ios"
+
+	keys := []string{"enter", "return", "tab", "backspace", "delete", "space"}
+	for _, key := range keys {
+		step := &flow.PressKeyStep{Key: key}
+		result := driver.Execute(step)
+		if !result.Success {
+			t.Errorf("iOS pressKey %s failed: %v", key, result.Error)
+		}
+		if !strings.Contains(lastPath, "/actions") {
+			t.Errorf("iOS pressKey %s: expected W3C actions endpoint, got %s", key, lastPath)
+		}
+	}
+}
+
+// TestPressKeyIOSPhysicalButtons verifies iOS uses mobile:pressButton for physical buttons
+func TestPressKeyIOSPhysicalButtons(t *testing.T) {
+	var lastPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		lastPath = r.URL.Path
+		writeJSON(w, map[string]interface{}{"value": nil})
+	}))
+	defer server.Close()
+
+	driver := createTestAppiumDriver(server)
+	driver.platform = "ios"
+
+	keys := []string{"home", "volume_up", "volume_down"}
+	for _, key := range keys {
+		step := &flow.PressKeyStep{Key: key}
+		result := driver.Execute(step)
+		if !result.Success {
+			t.Errorf("iOS pressKey %s failed: %v", key, result.Error)
+		}
+		if !strings.Contains(lastPath, "/execute/sync") {
+			t.Errorf("iOS pressKey %s: expected mobile:pressButton (execute/sync), got %s", key, lastPath)
+		}
+	}
+}
+
+// TestPressKeyIOSUnknown verifies iOS returns error for unknown keys
+func TestPressKeyIOSUnknown(t *testing.T) {
+	server := mockAppiumServerForDriver()
+	defer server.Close()
+	driver := createTestAppiumDriver(server)
+	driver.platform = "ios"
+
+	step := &flow.PressKeyStep{Key: "unknown_key"}
+	result := driver.Execute(step)
+	if result.Success {
+		t.Error("Expected error for unknown key on iOS")
+	}
+}
+
+// TestPressKeyAndroidStillUsesKeycode verifies Android still uses press_keycode
+func TestPressKeyAndroidStillUsesKeycode(t *testing.T) {
+	var lastPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		lastPath = r.URL.Path
+		writeJSON(w, map[string]interface{}{"value": nil})
+	}))
+	defer server.Close()
+
+	driver := createTestAppiumDriver(server)
+	driver.platform = "android"
+
+	step := &flow.PressKeyStep{Key: "enter"}
+	result := driver.Execute(step)
+	if !result.Success {
+		t.Errorf("Android pressKey enter failed: %v", result.Error)
+	}
+	if !strings.Contains(lastPath, "/press_keycode") {
+		t.Errorf("Android pressKey enter: expected press_keycode, got %s", lastPath)
+	}
+}
+
 // TestScreenshot tests screenshot capture
 func TestAppiumScreenshot(t *testing.T) {
 	server := mockAppiumServerForDriver()

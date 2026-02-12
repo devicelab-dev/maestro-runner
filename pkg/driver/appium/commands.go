@@ -530,6 +530,13 @@ func (d *Driver) setClipboard(step *flow.SetClipboardStep) *core.CommandResult {
 func (d *Driver) pressKey(step *flow.PressKeyStep) *core.CommandResult {
 	key := strings.ToLower(step.Key)
 
+	if d.platform == "ios" {
+		return d.pressKeyIOS(key)
+	}
+	return d.pressKeyAndroid(key)
+}
+
+func (d *Driver) pressKeyAndroid(key string) *core.CommandResult {
 	keyMap := map[string]int{
 		"back":        4,
 		"home":        3,
@@ -550,6 +557,53 @@ func (d *Driver) pressKey(step *flow.PressKeyStep) *core.CommandResult {
 	}
 
 	return errorResult(fmt.Errorf("unknown key: %s", key), "")
+}
+
+func (d *Driver) pressKeyIOS(key string) *core.CommandResult {
+	// Physical buttons via mobile: pressButton
+	switch key {
+	case "home":
+		if _, err := d.client.ExecuteMobile("pressButton", map[string]interface{}{"name": "home"}); err != nil {
+			return errorResult(err, "Failed to press home")
+		}
+		return successResult("Pressed home", nil)
+	case "volumeup", "volume_up":
+		if _, err := d.client.ExecuteMobile("pressButton", map[string]interface{}{"name": "volumeUp"}); err != nil {
+			return errorResult(err, "Failed to press volume up")
+		}
+		return successResult("Pressed volume up", nil)
+	case "volumedown", "volume_down":
+		if _, err := d.client.ExecuteMobile("pressButton", map[string]interface{}{"name": "volumeDown"}); err != nil {
+			return errorResult(err, "Failed to press volume down")
+		}
+		return successResult("Pressed volume down", nil)
+	}
+
+	// Keyboard keys via W3C key actions (SendKeys)
+	keyChar := iosKeyChar(key)
+	if keyChar == "" {
+		return errorResult(fmt.Errorf("unknown key: %s", key), "")
+	}
+	if err := d.client.SendKeys(keyChar); err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to press key: %s", key))
+	}
+	return successResult(fmt.Sprintf("Pressed key: %s", key), nil)
+}
+
+// iosKeyChar maps key names to the character to send via W3C key actions.
+func iosKeyChar(name string) string {
+	switch name {
+	case "enter", "return":
+		return "\n"
+	case "tab":
+		return "\t"
+	case "backspace", "delete":
+		return "\b"
+	case "space":
+		return " "
+	default:
+		return ""
+	}
 }
 
 // Helpers
