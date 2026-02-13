@@ -1966,3 +1966,204 @@ func TestFlowsUseClearState(t *testing.T) {
 		})
 	}
 }
+
+// ============================================================
+// Tests for handleDeviceStartup mismatch errors
+// ============================================================
+
+func TestHandleDeviceStartup_EmulatorFlagOnIOS(t *testing.T) {
+	cfg := &RunConfig{
+		Platform:      "ios",
+		StartEmulator: "Pixel_7_API_33",
+	}
+	emulatorMgr := emulator.NewManager()
+	simulatorMgr := simulator.NewManager()
+
+	err := handleDeviceStartup(cfg, emulatorMgr, simulatorMgr)
+	if err == nil {
+		t.Error("expected error when --start-emulator is used with --platform ios")
+	}
+	if !strings.Contains(err.Error(), "--start-emulator is for Android") {
+		t.Errorf("expected mismatch error message, got: %v", err)
+	}
+}
+
+func TestHandleDeviceStartup_SimulatorFlagOnAndroid(t *testing.T) {
+	cfg := &RunConfig{
+		Platform:       "android",
+		StartSimulator: "iPhone 15 Pro",
+	}
+	emulatorMgr := emulator.NewManager()
+	simulatorMgr := simulator.NewManager()
+
+	err := handleDeviceStartup(cfg, emulatorMgr, simulatorMgr)
+	if err == nil {
+		t.Error("expected error when --start-simulator is used with --platform android")
+	}
+	if !strings.Contains(err.Error(), "--start-simulator is for iOS") {
+		t.Errorf("expected mismatch error message, got: %v", err)
+	}
+}
+
+func TestHandleDeviceStartup_SimulatorFlagOnDefaultPlatform(t *testing.T) {
+	cfg := &RunConfig{
+		Platform:       "", // default (android)
+		StartSimulator: "iPhone 15 Pro",
+	}
+	emulatorMgr := emulator.NewManager()
+	simulatorMgr := simulator.NewManager()
+
+	err := handleDeviceStartup(cfg, emulatorMgr, simulatorMgr)
+	if err == nil {
+		t.Error("expected error when --start-simulator is used without --platform ios")
+	}
+	if !strings.Contains(err.Error(), "--start-simulator is for iOS") {
+		t.Errorf("expected mismatch error message, got: %v", err)
+	}
+}
+
+// ============================================================
+// Tests for activeCleanup / cleanupMu pattern
+// ============================================================
+
+func TestActiveCleanup_SetAndClear(t *testing.T) {
+	// Verify the activeCleanup global can be set and cleared under mutex
+	called := false
+	fn := func() { called = true }
+
+	cleanupMu.Lock()
+	activeCleanup = fn
+	cleanupMu.Unlock()
+
+	// Read it back
+	cleanupMu.Lock()
+	got := activeCleanup
+	cleanupMu.Unlock()
+
+	if got == nil {
+		t.Fatal("expected activeCleanup to be set")
+	}
+	got()
+	if !called {
+		t.Error("expected cleanup function to be called")
+	}
+
+	// Clear it
+	cleanupMu.Lock()
+	activeCleanup = nil
+	cleanupMu.Unlock()
+
+	cleanupMu.Lock()
+	got = activeCleanup
+	cleanupMu.Unlock()
+
+	if got != nil {
+		t.Error("expected activeCleanup to be nil after clearing")
+	}
+}
+
+func TestActiveCleanup_NilSafeInSignalHandler(t *testing.T) {
+	// Simulate the signal handler pattern: read activeCleanup, call if non-nil
+	cleanupMu.Lock()
+	activeCleanup = nil
+	cleanupMu.Unlock()
+
+	cleanupMu.Lock()
+	fn := activeCleanup
+	cleanupMu.Unlock()
+
+	// Should be nil-safe -- no panic
+	if fn != nil {
+		fn()
+	}
+}
+
+// ============================================================
+// Tests for autoDetectDevices
+// ============================================================
+
+func TestAutoDetectDevices_InvalidCount(t *testing.T) {
+	_, err := autoDetectDevices("android", 0)
+	if err == nil {
+		t.Error("expected error for count=0")
+	}
+	if !strings.Contains(err.Error(), "device count must be positive") {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	_, err = autoDetectDevices("android", -1)
+	if err == nil {
+		t.Error("expected error for negative count")
+	}
+}
+
+func TestAutoDetectDevices_UnsupportedPlatform(t *testing.T) {
+	_, err := autoDetectDevices("web", 1)
+	if err == nil {
+		t.Error("expected error for unsupported platform")
+	}
+	if !strings.Contains(err.Error(), "unsupported platform for auto-detection") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// ============================================================
+// Tests for isSocketInUse (additional edge cases)
+// ============================================================
+
+func TestIsSocketInUse_SocketFileExistsButNoPidFile(t *testing.T) {
+	dir := t.TempDir()
+	socketPath := dir + "/test.sock"
+
+	// Create socket file (just a regular file to simulate existence)
+	if err := os.WriteFile(socketPath, []byte{}, 0644); err != nil {
+		t.Fatalf("failed to create socket file: %v", err)
+	}
+
+	// No PID file -> stale socket, not in use
+	if isSocketInUse(socketPath) {
+		t.Error("expected socket without PID file to not be in use")
+	}
+}
+
+func TestIsSocketInUse_SocketAndPidWithLiveProcess(t *testing.T) {
+	dir := t.TempDir()
+	socketPath := dir + "/test.sock"
+	pidPath := strings.TrimSuffix(socketPath, ".sock") + ".pid"
+
+	// Create socket file
+	if err := os.WriteFile(socketPath, []byte{}, 0644); err != nil {
+		t.Fatalf("failed to create socket file: %v", err)
+	}
+
+	// Write current process PID
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+		t.Fatalf("failed to write PID file: %v", err)
+	}
+
+	// Socket exists + live PID -> in use
+	if !isSocketInUse(socketPath) {
+		t.Error("expected socket with live owner PID to be in use")
+	}
+}
+
+func TestIsSocketInUse_SocketAndPidWithDeadProcess(t *testing.T) {
+	dir := t.TempDir()
+	socketPath := dir + "/test.sock"
+	pidPath := strings.TrimSuffix(socketPath, ".sock") + ".pid"
+
+	// Create socket file
+	if err := os.WriteFile(socketPath, []byte{}, 0644); err != nil {
+		t.Fatalf("failed to create socket file: %v", err)
+	}
+
+	// Write dead PID
+	if err := os.WriteFile(pidPath, []byte("99999999"), 0644); err != nil {
+		t.Fatalf("failed to write PID file: %v", err)
+	}
+
+	// Socket exists + dead PID -> stale, not in use
+	if isSocketInUse(socketPath) {
+		t.Error("expected socket with dead owner PID to not be in use")
+	}
+}
