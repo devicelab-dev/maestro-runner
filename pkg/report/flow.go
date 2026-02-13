@@ -155,6 +155,26 @@ func (w *FlowWriter) SaveScreenshot(cmdIndex int, timing string, data []byte) (s
 	return filepath.Join("assets", w.flow.ID, filename), nil
 }
 
+// SaveNamedScreenshot saves a screenshot with a user-specified name, prefixed with cmd index.
+// If name is empty, defaults to "screenshot.png".
+func (w *FlowWriter) SaveNamedScreenshot(cmdIndex int, name string, data []byte) (string, error) {
+	if name == "" {
+		name = "screenshot.png"
+	}
+	filename := fmt.Sprintf("cmd-%03d-%s", cmdIndex, name)
+	// Ensure .png extension
+	if filepath.Ext(filename) == "" {
+		filename += ".png"
+	}
+	absPath := filepath.Join(w.assetsDir, filename)
+
+	if err := os.WriteFile(absPath, data, 0o644); err != nil {
+		return "", err
+	}
+
+	return filepath.Join("assets", w.flow.ID, filename), nil
+}
+
 // SaveViewHierarchy saves view hierarchy and returns the relative path.
 func (w *FlowWriter) SaveViewHierarchy(cmdIndex int, data []byte) (string, error) {
 	filename := fmt.Sprintf("cmd-%03d-hierarchy.xml", cmdIndex)

@@ -1948,3 +1948,255 @@ func TestRunner_NestedOptionalStepFailure(t *testing.T) {
 		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
 	}
 }
+
+// ===========================================
+// TakeScreenshotStep Tests
+// ===========================================
+
+func TestRunner_TakeScreenshotStep_Success(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	screenshotData := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A} // PNG header
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			if _, ok := step.(*flow.TakeScreenshotStep); ok {
+				return &core.CommandResult{
+					Success: true,
+					Data:    screenshotData,
+				}
+			}
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+		App:         report.App{ID: "com.test"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Screenshot Test"},
+			Steps: []flow.Step{
+				&flow.TakeScreenshotStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepTakeScreenshot},
+					Path:     "my-screenshot.png",
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+
+	// Check that screenshot file was saved
+	screenshotPath := filepath.Join(tmpDir, "assets", "flow-000", "cmd-000-my-screenshot.png")
+	if _, err := os.Stat(screenshotPath); err != nil {
+		t.Errorf("screenshot file not created at %s: %v", screenshotPath, err)
+	}
+}
+
+func TestRunner_TakeScreenshotStep_EmptyName(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	screenshotData := []byte{0x89, 0x50, 0x4E, 0x47}
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			if _, ok := step.(*flow.TakeScreenshotStep); ok {
+				return &core.CommandResult{
+					Success: true,
+					Data:    screenshotData,
+				}
+			}
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+		App:         report.App{ID: "com.test"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Screenshot Empty Name"},
+			Steps: []flow.Step{
+				&flow.TakeScreenshotStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepTakeScreenshot},
+					Path:     "", // Empty name should default to screenshot.png
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+
+	// Check that screenshot file was saved with default name
+	screenshotPath := filepath.Join(tmpDir, "assets", "flow-000", "cmd-000-screenshot.png")
+	if _, err := os.Stat(screenshotPath); err != nil {
+		t.Errorf("screenshot file not created at %s: %v", screenshotPath, err)
+	}
+}
+
+func TestRunner_TakeScreenshotStep_DriverFailure(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			if _, ok := step.(*flow.TakeScreenshotStep); ok {
+				return &core.CommandResult{
+					Success: false,
+					Error:   &testError{msg: "screenshot failed"},
+				}
+			}
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+		App:         report.App{ID: "com.test"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Screenshot Fail Test"},
+			Steps: []flow.Step{
+				&flow.TakeScreenshotStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepTakeScreenshot},
+					Path:     "test.png",
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	// Step failure should fail the flow
+	if result.Status != report.StatusFailed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusFailed)
+	}
+}
+
+func TestRunner_TakeScreenshotStep_NoData(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			if _, ok := step.(*flow.TakeScreenshotStep); ok {
+				// Success but no data returned (Data is nil)
+				return &core.CommandResult{
+					Success: true,
+					Data:    nil,
+				}
+			}
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+		App:         report.App{ID: "com.test"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Screenshot No Data"},
+			Steps: []flow.Step{
+				&flow.TakeScreenshotStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepTakeScreenshot},
+					Path:     "test.png",
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	// Should still pass, just no screenshot saved
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+}
+
+func TestRunner_TakeScreenshotStep_EmptyData(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			if _, ok := step.(*flow.TakeScreenshotStep); ok {
+				return &core.CommandResult{
+					Success: true,
+					Data:    []byte{}, // Empty data
+				}
+			}
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+		App:         report.App{ID: "com.test"},
+	})
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "Screenshot Empty Data"},
+			Steps: []flow.Step{
+				&flow.TakeScreenshotStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepTakeScreenshot},
+					Path:     "test.png",
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	// Should still pass, just no screenshot saved due to empty data
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+}

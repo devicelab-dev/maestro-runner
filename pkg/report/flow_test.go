@@ -423,6 +423,82 @@ func containsSubstring(s, substr string) bool {
 	return false
 }
 
+func TestFlowWriter_SaveNamedScreenshot(t *testing.T) {
+	tests := []struct {
+		name           string
+		cmdIndex       int
+		screenshotName string
+		wantFilename   string
+	}{
+		{
+			name:           "empty name defaults to screenshot.png",
+			cmdIndex:       0,
+			screenshotName: "",
+			wantFilename:   "cmd-000-screenshot.png",
+		},
+		{
+			name:           "name with .png extension",
+			cmdIndex:       1,
+			screenshotName: "login-screen.png",
+			wantFilename:   "cmd-001-login-screen.png",
+		},
+		{
+			name:           "name without extension gets .png appended",
+			cmdIndex:       2,
+			screenshotName: "dashboard",
+			wantFilename:   "cmd-002-dashboard.png",
+		},
+		{
+			name:           "name with .jpg extension kept as-is",
+			cmdIndex:       0,
+			screenshotName: "capture.jpg",
+			wantFilename:   "cmd-000-capture.jpg",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fw, iw, _ := createTestFlowWriter(t)
+			defer iw.Close()
+
+			data := []byte{0x89, 0x50, 0x4E, 0x47} // PNG magic bytes
+
+			path, err := fw.SaveNamedScreenshot(tt.cmdIndex, tt.screenshotName, data)
+			if err != nil {
+				t.Fatalf("SaveNamedScreenshot() error = %v", err)
+			}
+
+			expected := filepath.Join("assets", "flow-000", tt.wantFilename)
+			if path != expected {
+				t.Errorf("path = %q, want %q", path, expected)
+			}
+
+			// Check file exists on disk
+			absPath := filepath.Join(fw.assetsDir, tt.wantFilename)
+			stat, err := os.Stat(absPath)
+			if err != nil {
+				t.Errorf("screenshot file not created: %v", err)
+			} else if stat.Size() != int64(len(data)) {
+				t.Errorf("file size = %d, want %d", stat.Size(), len(data))
+			}
+		})
+	}
+}
+
+func TestFlowWriter_SaveNamedScreenshot_WriteError(t *testing.T) {
+	fw, iw, _ := createTestFlowWriter(t)
+	defer iw.Close()
+
+	// Point assets dir to a non-existent deep path that can't be created
+	fw.assetsDir = "/dev/null/impossible/path"
+
+	data := []byte{0x89, 0x50, 0x4E, 0x47}
+	_, err := fw.SaveNamedScreenshot(0, "test.png", data)
+	if err == nil {
+		t.Error("SaveNamedScreenshot() expected error for invalid path, got nil")
+	}
+}
+
 func TestFlowWriter_commandSummary(t *testing.T) {
 	fw, iw, _ := createTestFlowWriter(t)
 	defer iw.Close()

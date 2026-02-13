@@ -306,6 +306,21 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 			}
 		}
 
+	// TakeScreenshot - delegate to driver, then save the returned PNG data
+	case *flow.TakeScreenshotStep:
+		result = fr.driver.Execute(step)
+		if result.Success {
+			if data, ok := result.Data.([]byte); ok && len(data) > 0 {
+				path, saveErr := fr.flowWriter.SaveNamedScreenshot(idx, s.Path, data)
+				if saveErr != nil {
+					logger.Warn("Failed to save screenshot: %v", saveErr)
+				} else {
+					artifacts.ScreenshotAfter = path
+					result.Message = fmt.Sprintf("Screenshot saved: %s", filepath.Base(path))
+				}
+			}
+		}
+
 	// PasteText - use in-memory copiedText first, clipboard as fallback
 	case *flow.PasteTextStep:
 		text := fr.script.GetCopiedText()
@@ -566,6 +581,20 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 		result = fr.executeRetry(s)
 	case *flow.RunFlowStep:
 		result = fr.executeRunFlow(s)
+	case *flow.TakeScreenshotStep:
+		fr.script.ExpandStep(step)
+		result = fr.driver.Execute(step)
+		if result.Success {
+			if data, ok := result.Data.([]byte); ok && len(data) > 0 {
+				subIdx := len(fr.subCommands)
+				path, saveErr := fr.flowWriter.SaveNamedScreenshot(subIdx, s.Path, data)
+				if saveErr != nil {
+					logger.Warn("Failed to save nested screenshot: %v", saveErr)
+				} else {
+					result.Message = fmt.Sprintf("Screenshot saved: %s", filepath.Base(path))
+				}
+			}
+		}
 	case *flow.CopyTextFromStep:
 		// Expand variables before driver execution
 		fr.script.ExpandStep(step)

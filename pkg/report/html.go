@@ -872,6 +872,18 @@ const htmlTemplate = `<!DOCTYPE html>
             text-align: right;
         }
 
+        .command-screenshot-icon {
+            margin-left: 6px;
+            color: #FF7F00;
+            opacity: 0.85;
+            display: inline-flex;
+            vertical-align: middle;
+        }
+        .command-screenshot-icon svg {
+            width: 14px;
+            height: 14px;
+        }
+
         .command-expand-icon {
             color: var(--text-muted);
             font-size: 10px;
@@ -1636,7 +1648,8 @@ const htmlTemplate = `<!DOCTYPE html>
             const status = cmd.status || 'pending';
             const keyValue = extractKeyValue(cmd);
             const hasSubCommands = cmd.subCommands && cmd.subCommands.length > 0;
-            const hasDetails = cmd.yaml || cmd.error || (cmd.artifacts && (cmd.artifacts.screenshotBefore || cmd.artifacts.screenshotAfter));
+            const hasScreenshots = cmd.artifacts && (cmd.artifacts.screenshotBefore || cmd.artifacts.screenshotAfter);
+            const hasDetails = cmd.yaml || cmd.error || hasScreenshots;
             const isExpandable = hasDetails || hasSubCommands;
 
             let html = '<div class="command-item ' + status + (hasSubCommands ? ' has-subcommands' : '') + '" id="flow-' + flowIndex + '-cmd-' + index + '-d' + depth + '" onclick="toggleCommand(this, event)">';
@@ -1647,6 +1660,9 @@ const htmlTemplate = `<!DOCTYPE html>
                 '<span class="command-type">' + escapeHtml(cmd.type) + '</span>' +
                 '<span class="command-value">' + escapeHtml(keyValue) + '</span>' +
                 '<span class="command-duration">' + formatDuration(cmd.duration) + '</span>';
+            if (hasScreenshots) {
+                html += '<span class="command-screenshot-icon" title="Screenshot available"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></span>';
+            }
             if (isExpandable) {
                 html += '<span class="command-expand-icon">▶</span>';
             }
