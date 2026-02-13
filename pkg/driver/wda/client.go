@@ -492,7 +492,11 @@ func (c *Client) get(path string) (map[string]interface{}, error) {
 		logger.Error("WDA GET %s failed (%dms): %v", path, duration, err)
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			logger.Debug("failed to close response body for GET %s: %v", path, err)
+		}
+	}()
 
 	logger.Debug("WDA GET %s completed (%dms, status: %d)", path, duration, resp.StatusCode)
 	return c.parseResponse(resp)
@@ -523,7 +527,11 @@ func (c *Client) post(path string, body interface{}) (map[string]interface{}, er
 		logger.Error("WDA POST %s failed (%dms): %v", path, duration, err)
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			logger.Debug("failed to close response body for POST %s: %v", path, err)
+		}
+	}()
 
 	logger.Debug("WDA POST %s completed (%dms, status: %d)", path, duration, resp.StatusCode)
 	return c.parseResponse(resp)
@@ -545,7 +553,11 @@ func (c *Client) delete(path string) (map[string]interface{}, error) {
 		logger.Error("WDA DELETE %s failed (%dms): %v", path, duration, err)
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			logger.Debug("failed to close response body for DELETE %s: %v", path, err)
+		}
+	}()
 	return c.parseResponse(resp)
 }
 

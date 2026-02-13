@@ -676,6 +676,112 @@ func TestLockUnlock(t *testing.T) {
 	}
 }
 
+// TestAcceptAlertClient tests accepting a system alert via client
+func TestAcceptAlertClient(t *testing.T) {
+	var called bool
+	server := mockWDAServer(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/alert/accept") && r.Method == "POST" {
+			called = true
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	})
+	defer server.Close()
+
+	client := &Client{
+		baseURL:    server.URL,
+		httpClient: http.DefaultClient,
+		sessionID:  "test-session",
+	}
+
+	if err := client.AcceptAlert(); err != nil {
+		t.Fatalf("AcceptAlert failed: %v", err)
+	}
+	if !called {
+		t.Error("Expected /alert/accept to be called")
+	}
+}
+
+// TestDismissAlertClient tests dismissing a system alert via client
+func TestDismissAlertClient(t *testing.T) {
+	var called bool
+	server := mockWDAServer(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/alert/dismiss") && r.Method == "POST" {
+			called = true
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	})
+	defer server.Close()
+
+	client := &Client{
+		baseURL:    server.URL,
+		httpClient: http.DefaultClient,
+		sessionID:  "test-session",
+	}
+
+	if err := client.DismissAlert(); err != nil {
+		t.Fatalf("DismissAlert failed: %v", err)
+	}
+	if !called {
+		t.Error("Expected /alert/dismiss to be called")
+	}
+}
+
+// TestAcceptAlertClientError tests AcceptAlert when server returns an error
+func TestAcceptAlertClientError(t *testing.T) {
+	server := mockWDAServer(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/alert/accept") {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{
+					"error":   "no such alert",
+					"message": "An attempt was made to operate on a modal dialog when one was not open",
+				},
+			})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	})
+	defer server.Close()
+
+	client := &Client{
+		baseURL:    server.URL,
+		httpClient: http.DefaultClient,
+		sessionID:  "test-session",
+	}
+
+	err := client.AcceptAlert()
+	if err == nil {
+		t.Error("Expected error when no alert is present")
+	}
+}
+
+// TestDismissAlertClientError tests DismissAlert when server returns an error
+func TestDismissAlertClientError(t *testing.T) {
+	server := mockWDAServer(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/alert/dismiss") {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{
+					"error":   "no such alert",
+					"message": "No alert open",
+				},
+			})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	})
+	defer server.Close()
+
+	client := &Client{
+		baseURL:    server.URL,
+		httpClient: http.DefaultClient,
+		sessionID:  "test-session",
+	}
+
+	err := client.DismissAlert()
+	if err == nil {
+		t.Error("Expected error when no alert is present")
+	}
+}
+
 // TestGetOrientation tests orientation retrieval
 func TestGetOrientation(t *testing.T) {
 	server := mockWDAServer(func(w http.ResponseWriter, r *http.Request) {

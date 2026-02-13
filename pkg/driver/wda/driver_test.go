@@ -1373,7 +1373,11 @@ func TestFindElementRelativeBelow(t *testing.T) {
 		Below: &flow.Selector{Text: "Header"},
 	}
 
-	info, err := func() (*core.ElementInfo, error) { ctx, cancel := context.WithTimeout(context.Background(), 2000*time.Millisecond); defer cancel(); return driver.findElementRelativeWithContext(ctx, sel) }()
+	info, err := func() (*core.ElementInfo, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2000*time.Millisecond)
+		defer cancel()
+		return driver.findElementRelativeWithContext(ctx, sel)
+	}()
 	if err != nil {
 		t.Fatalf("Expected success, got error: %v", err)
 	}
@@ -1393,7 +1397,11 @@ func TestFindElementRelativeAbove(t *testing.T) {
 		Above: &flow.Selector{Text: "BelowButton"},
 	}
 
-	info, err := func() (*core.ElementInfo, error) { ctx, cancel := context.WithTimeout(context.Background(), 2000*time.Millisecond); defer cancel(); return driver.findElementRelativeWithContext(ctx, sel) }()
+	info, err := func() (*core.ElementInfo, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2000*time.Millisecond)
+		defer cancel()
+		return driver.findElementRelativeWithContext(ctx, sel)
+	}()
 	if err != nil {
 		t.Fatalf("Expected success, got error: %v", err)
 	}
@@ -1413,7 +1421,11 @@ func TestFindElementRelativeRightOf(t *testing.T) {
 		RightOf: &flow.Selector{Text: "LeftLabel"},
 	}
 
-	info, err := func() (*core.ElementInfo, error) { ctx, cancel := context.WithTimeout(context.Background(), 2000*time.Millisecond); defer cancel(); return driver.findElementRelativeWithContext(ctx, sel) }()
+	info, err := func() (*core.ElementInfo, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2000*time.Millisecond)
+		defer cancel()
+		return driver.findElementRelativeWithContext(ctx, sel)
+	}()
 	if err != nil {
 		t.Fatalf("Expected success, got error: %v", err)
 	}
@@ -1433,7 +1445,11 @@ func TestFindElementRelativeLeftOf(t *testing.T) {
 		LeftOf: &flow.Selector{Text: "RightButton"},
 	}
 
-	info, err := func() (*core.ElementInfo, error) { ctx, cancel := context.WithTimeout(context.Background(), 2000*time.Millisecond); defer cancel(); return driver.findElementRelativeWithContext(ctx, sel) }()
+	info, err := func() (*core.ElementInfo, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2000*time.Millisecond)
+		defer cancel()
+		return driver.findElementRelativeWithContext(ctx, sel)
+	}()
 	if err != nil {
 		t.Fatalf("Expected success, got error: %v", err)
 	}
@@ -1453,7 +1469,11 @@ func TestFindElementRelativeAnchorNotFound(t *testing.T) {
 		Below: &flow.Selector{Text: "NonExistentAnchor"},
 	}
 
-	_, err := func() (*core.ElementInfo, error) { ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond); defer cancel(); return driver.findElementRelativeWithContext(ctx, sel) }()
+	_, err := func() (*core.ElementInfo, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		return driver.findElementRelativeWithContext(ctx, sel)
+	}()
 	if err == nil {
 		t.Error("Expected error when anchor not found")
 	}
@@ -1470,7 +1490,11 @@ func TestFindElementRelativeNoMatch(t *testing.T) {
 		Below: &flow.Selector{Text: "Header"},
 	}
 
-	_, err := func() (*core.ElementInfo, error) { ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond); defer cancel(); return driver.findElementRelativeWithContext(ctx, sel) }()
+	_, err := func() (*core.ElementInfo, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		return driver.findElementRelativeWithContext(ctx, sel)
+	}()
 	if err == nil {
 		t.Error("Expected error when no element matches")
 	}
@@ -3743,7 +3767,6 @@ func TestFindElementQuickWithSize(t *testing.T) {
 	// Find by width
 	sel := flow.Selector{Width: 100, Height: 50, Tolerance: 5}
 	info, err := driver.findElementQuick(sel, 1000)
-
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
@@ -3781,7 +3804,6 @@ func TestFindElementQuickWDAFallback(t *testing.T) {
 
 	sel := flow.Selector{ID: "testID"}
 	info, err := driver.findElementQuick(sel, 1000)
-
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
@@ -3833,7 +3855,11 @@ func TestFindElementRelativeParseError(t *testing.T) {
 		Below: &flow.Selector{Text: "Header"},
 	}
 
-	_, err := func() (*core.ElementInfo, error) { ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond); defer cancel(); return driver.findElementRelativeWithContext(ctx, sel) }()
+	_, err := func() (*core.ElementInfo, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		return driver.findElementRelativeWithContext(ctx, sel)
+	}()
 	if err == nil {
 		t.Error("Expected error when XML parse fails")
 	}
@@ -3862,7 +3888,11 @@ func TestFindElementRelativeSourceError(t *testing.T) {
 		Below: &flow.Selector{Text: "Header"},
 	}
 
-	_, err := func() (*core.ElementInfo, error) { ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond); defer cancel(); return driver.findElementRelativeWithContext(ctx, sel) }()
+	_, err := func() (*core.ElementInfo, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		return driver.findElementRelativeWithContext(ctx, sel)
+	}()
 	if err == nil {
 		t.Error("Expected error when source fails")
 	}
@@ -4572,7 +4602,6 @@ func TestFindElementQuickWithRelative(t *testing.T) {
 		Below: &flow.Selector{Text: "Header"},
 	}
 	info, err := driver.findElementQuick(sel, 1000)
-
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
@@ -4606,7 +4635,6 @@ func TestFindElementByWDAWithText(t *testing.T) {
 
 	sel := flow.Selector{Text: "TestText"}
 	info, err := driver.findElementByWDA(sel)
-
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
@@ -5317,8 +5345,8 @@ func TestScrollUntilVisibleMaxScrolls(t *testing.T) {
 	driver := createTestDriver(server)
 
 	step := &flow.ScrollUntilVisibleStep{
-		Element:   flow.Selector{Text: "NotFound"},
-		BaseStep:  flow.BaseStep{TimeoutMs: 3000}, // 3 max scrolls (TimeoutMs/1000)
+		Element:  flow.Selector{Text: "NotFound"},
+		BaseStep: flow.BaseStep{TimeoutMs: 3000}, // 3 max scrolls (TimeoutMs/1000)
 	}
 	result := driver.scrollUntilVisible(step)
 

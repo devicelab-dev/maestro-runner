@@ -311,13 +311,21 @@ func copyFile(src, dst string) {
 	if err != nil {
 		return
 	}
-	defer in.Close()
+	defer func() {
+		if err := in.Close(); err != nil {
+			logger.Warn("failed to close source file %s: %v", src, err)
+		}
+	}()
 
 	out, err := os.Create(dst)
 	if err != nil {
 		return
 	}
-	defer out.Close()
+	defer func() {
+		if err := out.Close(); err != nil {
+			logger.Warn("failed to close destination file %s: %v", dst, err)
+		}
+	}()
 
 	if _, err := io.Copy(out, in); err != nil {
 		logger.Warn("failed to copy %s to %s: %v", src, dst, err)

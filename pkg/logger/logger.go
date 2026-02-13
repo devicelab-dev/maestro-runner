@@ -21,11 +21,11 @@ func Init(logPath string) error {
 
 	// Close previous log file if exists
 	if logFile != nil {
-		logFile.Close()
+		_ = logFile.Close()
 	}
 
 	// Create log file
-	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to create log file: %w", err)
 	}
@@ -42,7 +42,7 @@ func Close() {
 	defer mu.Unlock()
 
 	if logFile != nil {
-		logFile.Close()
+		_ = logFile.Close()
 		logFile = nil
 	}
 }

@@ -143,13 +143,13 @@ func TestGenerateJUnitWithFailedFlows(t *testing.T) {
 	errMsg := "Element not found"
 
 	index := &Index{
-		Version:     "1.0.0",
-		Status:      StatusFailed,
-		StartTime:   now,
-		EndTime:     &endTime,
-		LastUpdated: now,
-		Device:      Device{ID: "test", Name: "Pixel 7", Platform: "android"},
-		App:         App{ID: "com.test"},
+		Version:       "1.0.0",
+		Status:        StatusFailed,
+		StartTime:     now,
+		EndTime:       &endTime,
+		LastUpdated:   now,
+		Device:        Device{ID: "test", Name: "Pixel 7", Platform: "android"},
+		App:           App{ID: "com.test"},
 		MaestroRunner: RunnerInfo{Version: "0.1.0", Driver: "uiautomator2"},
 		Summary: Summary{
 			Total:  1,
@@ -226,13 +226,13 @@ func TestGenerateJUnitWithSkippedFlows(t *testing.T) {
 	endTime := now.Add(3 * time.Second)
 
 	index := &Index{
-		Version:     "1.0.0",
-		Status:      StatusPassed,
-		StartTime:   now,
-		EndTime:     &endTime,
-		LastUpdated: now,
-		Device:      Device{ID: "test", Name: "iPhone 15", Platform: "ios"},
-		App:         App{ID: "com.test"},
+		Version:       "1.0.0",
+		Status:        StatusPassed,
+		StartTime:     now,
+		EndTime:       &endTime,
+		LastUpdated:   now,
+		Device:        Device{ID: "test", Name: "iPhone 15", Platform: "ios"},
+		App:           App{ID: "com.test"},
 		MaestroRunner: RunnerInfo{Version: "0.1.0", Driver: "xctest"},
 		Summary: Summary{
 			Total:   1,
@@ -297,13 +297,13 @@ func TestGenerateJUnitMixedResults(t *testing.T) {
 	errMsg := "Tap failed"
 
 	index := &Index{
-		Version:     "1.0.0",
-		Status:      StatusFailed,
-		StartTime:   now,
-		EndTime:     &endTime,
-		LastUpdated: now,
-		Device:      Device{ID: "emu-5554", Name: "Pixel 6", Platform: "android"},
-		App:         App{ID: "com.test"},
+		Version:       "1.0.0",
+		Status:        StatusFailed,
+		StartTime:     now,
+		EndTime:       &endTime,
+		LastUpdated:   now,
+		Device:        Device{ID: "emu-5554", Name: "Pixel 6", Platform: "android"},
+		App:           App{ID: "com.test"},
 		MaestroRunner: RunnerInfo{Version: "0.1.0", Driver: "uiautomator2"},
 		Summary: Summary{
 			Total:   3,
@@ -327,17 +327,23 @@ func TestGenerateJUnitMixedResults(t *testing.T) {
 			{
 				Index: 2, ID: "flow-002", Name: "Settings",
 				SourceFile: "flows/settings.yaml", DataFile: "flows/flow-002.json",
-				Status: StatusSkipped,
+				Status:   StatusSkipped,
 				Commands: CommandSummary{Total: 0},
 			},
 		},
 	}
 
-	flow0 := FlowDetail{ID: "flow-000", Name: "Login", StartTime: now, Duration: &d1,
-		Commands: []Command{{ID: "cmd-000", Type: "launchApp", Status: StatusPassed, Duration: &cmdDuration}}}
-	flow1 := FlowDetail{ID: "flow-001", Name: "Checkout", StartTime: now, Duration: &d2,
-		Commands: []Command{{ID: "cmd-000", Type: "tapOn", Status: StatusFailed, Duration: &cmdDuration,
-			Error: &Error{Type: "element_not_found", Message: "Tap failed"}}}}
+	flow0 := FlowDetail{
+		ID: "flow-000", Name: "Login", StartTime: now, Duration: &d1,
+		Commands: []Command{{ID: "cmd-000", Type: "launchApp", Status: StatusPassed, Duration: &cmdDuration}},
+	}
+	flow1 := FlowDetail{
+		ID: "flow-001", Name: "Checkout", StartTime: now, Duration: &d2,
+		Commands: []Command{{
+			ID: "cmd-000", Type: "tapOn", Status: StatusFailed, Duration: &cmdDuration,
+			Error: &Error{Type: "element_not_found", Message: "Tap failed"},
+		}},
+	}
 	flow2 := FlowDetail{ID: "flow-002", Name: "Settings", StartTime: now, Commands: []Command{}}
 
 	if err := os.MkdirAll(filepath.Join(tmpDir, "flows"), 0o755); err != nil {

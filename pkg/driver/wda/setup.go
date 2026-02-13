@@ -73,7 +73,7 @@ func GetLatestWDAVersion() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch latest release: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("GitHub API returned HTTP %d", resp.StatusCode)
@@ -122,27 +122,27 @@ func DownloadWDA(version string) error {
 		return err
 	}
 	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
+	defer func() { _ = os.Remove(tmpPath) }()
 
 	// Download
 	fmt.Printf("Downloading WebDriverAgent v%s...\n", version)
 	resp, err := http.Get(url)
 	if err != nil {
-		tmpFile.Close()
+		_ = tmpFile.Close()
 		return fmt.Errorf("download failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		tmpFile.Close()
+		_ = tmpFile.Close()
 		return fmt.Errorf("download failed: HTTP %d", resp.StatusCode)
 	}
 
 	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
-		tmpFile.Close()
+		_ = tmpFile.Close()
 		return fmt.Errorf("download failed: %w", err)
 	}
-	tmpFile.Close()
+	_ = tmpFile.Close()
 
 	// Remove old WDA directory if exists
 	if _, err := os.Stat(wdaPath); err == nil {
@@ -153,7 +153,7 @@ func DownloadWDA(version string) error {
 
 	// Create destination directory
 	baseDir := filepath.Dir(wdaPath)
-	if err := os.MkdirAll(baseDir, 0755); err != nil {
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
@@ -187,7 +187,7 @@ func unzip(src, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 
 	for _, f := range r.File {
 		// Security: prevent zip slip
@@ -197,13 +197,13 @@ func unzip(src, dest string) error {
 		}
 
 		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, 0755); err != nil {
+			if err := os.MkdirAll(target, 0o755); err != nil {
 				return err
 			}
 			continue
 		}
 
-		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err
 		}
 
@@ -220,13 +220,13 @@ func extractFile(f *zip.File, target string) error {
 	if err != nil {
 		return err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 
 	_, err = io.Copy(out, rc)
 	return err

@@ -36,29 +36,29 @@ func TestGetAndroidHome(t *testing.T) {
 	origSDKRoot := os.Getenv("ANDROID_SDK_ROOT")
 	origSDKHome := os.Getenv("ANDROID_SDK_HOME")
 	defer func() {
-		os.Setenv("ANDROID_HOME", origHome)
-		os.Setenv("ANDROID_SDK_ROOT", origSDKRoot)
-		os.Setenv("ANDROID_SDK_HOME", origSDKHome)
+		_ = os.Setenv("ANDROID_HOME", origHome)
+		_ = os.Setenv("ANDROID_SDK_ROOT", origSDKRoot)
+		_ = os.Setenv("ANDROID_SDK_HOME", origSDKHome)
 	}()
 
 	// Test ANDROID_HOME priority
-	os.Setenv("ANDROID_HOME", "/path/to/android")
-	os.Setenv("ANDROID_SDK_ROOT", "/other/path")
+	_ = os.Setenv("ANDROID_HOME", "/path/to/android")
+	_ = os.Setenv("ANDROID_SDK_ROOT", "/other/path")
 	result := getAndroidHome()
 	if result != "/path/to/android" {
 		t.Errorf("getAndroidHome() = %q, want %q", result, "/path/to/android")
 	}
 
 	// Test ANDROID_SDK_ROOT fallback
-	os.Unsetenv("ANDROID_HOME")
+	_ = os.Unsetenv("ANDROID_HOME")
 	result = getAndroidHome()
 	if result != "/other/path" {
 		t.Errorf("getAndroidHome() = %q, want %q", result, "/other/path")
 	}
 
 	// Test no env vars
-	os.Unsetenv("ANDROID_SDK_ROOT")
-	os.Unsetenv("ANDROID_SDK_HOME")
+	_ = os.Unsetenv("ANDROID_SDK_ROOT")
+	_ = os.Unsetenv("ANDROID_SDK_HOME")
 	result = getAndroidHome()
 	if result != "" {
 		t.Errorf("getAndroidHome() = %q, want empty string", result)
@@ -145,17 +145,17 @@ func TestFindEmulatorBinary_NoAndroidHome(t *testing.T) {
 	origSDKHome := os.Getenv("ANDROID_SDK_HOME")
 	origPath := os.Getenv("PATH")
 	defer func() {
-		os.Setenv("ANDROID_HOME", origHome)
-		os.Setenv("ANDROID_SDK_ROOT", origSDKRoot)
-		os.Setenv("ANDROID_SDK_HOME", origSDKHome)
-		os.Setenv("PATH", origPath)
+		_ = os.Setenv("ANDROID_HOME", origHome)
+		_ = os.Setenv("ANDROID_SDK_ROOT", origSDKRoot)
+		_ = os.Setenv("ANDROID_SDK_HOME", origSDKHome)
+		_ = os.Setenv("PATH", origPath)
 	}()
 
 	// Clear all Android env vars and PATH
-	os.Unsetenv("ANDROID_HOME")
-	os.Unsetenv("ANDROID_SDK_ROOT")
-	os.Unsetenv("ANDROID_SDK_HOME")
-	os.Setenv("PATH", "/nonexistent/path")
+	_ = os.Unsetenv("ANDROID_HOME")
+	_ = os.Unsetenv("ANDROID_SDK_ROOT")
+	_ = os.Unsetenv("ANDROID_SDK_HOME")
+	_ = os.Setenv("PATH", "/nonexistent/path")
 
 	_, err := FindEmulatorBinary()
 	if err == nil {
@@ -331,16 +331,16 @@ func TestFindAVDManagerBinary_NoAndroidHome(t *testing.T) {
 	origSDKHome := os.Getenv("ANDROID_SDK_HOME")
 	origPath := os.Getenv("PATH")
 	defer func() {
-		os.Setenv("ANDROID_HOME", origHome)
-		os.Setenv("ANDROID_SDK_ROOT", origSDKRoot)
-		os.Setenv("ANDROID_SDK_HOME", origSDKHome)
-		os.Setenv("PATH", origPath)
+		_ = os.Setenv("ANDROID_HOME", origHome)
+		_ = os.Setenv("ANDROID_SDK_ROOT", origSDKRoot)
+		_ = os.Setenv("ANDROID_SDK_HOME", origSDKHome)
+		_ = os.Setenv("PATH", origPath)
 	}()
 
-	os.Unsetenv("ANDROID_HOME")
-	os.Unsetenv("ANDROID_SDK_ROOT")
-	os.Unsetenv("ANDROID_SDK_HOME")
-	os.Setenv("PATH", "/nonexistent/path")
+	_ = os.Unsetenv("ANDROID_HOME")
+	_ = os.Unsetenv("ANDROID_SDK_ROOT")
+	_ = os.Unsetenv("ANDROID_SDK_HOME")
+	_ = os.Setenv("PATH", "/nonexistent/path")
 
 	_, err := FindAVDManagerBinary()
 	if err == nil {
@@ -356,14 +356,14 @@ func TestGetAndroidHome_SDKHome(t *testing.T) {
 	origSDKRoot := os.Getenv("ANDROID_SDK_ROOT")
 	origSDKHome := os.Getenv("ANDROID_SDK_HOME")
 	defer func() {
-		os.Setenv("ANDROID_HOME", origHome)
-		os.Setenv("ANDROID_SDK_ROOT", origSDKRoot)
-		os.Setenv("ANDROID_SDK_HOME", origSDKHome)
+		_ = os.Setenv("ANDROID_HOME", origHome)
+		_ = os.Setenv("ANDROID_SDK_ROOT", origSDKRoot)
+		_ = os.Setenv("ANDROID_SDK_HOME", origSDKHome)
 	}()
 
-	os.Unsetenv("ANDROID_HOME")
-	os.Unsetenv("ANDROID_SDK_ROOT")
-	os.Setenv("ANDROID_SDK_HOME", "/sdk/home/path")
+	_ = os.Unsetenv("ANDROID_HOME")
+	_ = os.Unsetenv("ANDROID_SDK_ROOT")
+	_ = os.Setenv("ANDROID_SDK_HOME", "/sdk/home/path")
 
 	result := getAndroidHome()
 	if result != "/sdk/home/path" {
@@ -526,10 +526,10 @@ func TestFindEmulatorBinary_WithAndroidHomeDirExists(t *testing.T) {
 	origSDKHome := os.Getenv("ANDROID_SDK_HOME")
 	origPath := os.Getenv("PATH")
 	defer func() {
-		os.Setenv("ANDROID_HOME", origHome)
-		os.Setenv("ANDROID_SDK_ROOT", origSDKRoot)
-		os.Setenv("ANDROID_SDK_HOME", origSDKHome)
-		os.Setenv("PATH", origPath)
+		_ = os.Setenv("ANDROID_HOME", origHome)
+		_ = os.Setenv("ANDROID_SDK_ROOT", origSDKRoot)
+		_ = os.Setenv("ANDROID_SDK_HOME", origSDKHome)
+		_ = os.Setenv("PATH", origPath)
 	}()
 
 	// Create temp directory with emulator binary
@@ -543,10 +543,10 @@ func TestFindEmulatorBinary_WithAndroidHomeDirExists(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
-	os.Setenv("ANDROID_HOME", tmpDir)
-	os.Unsetenv("ANDROID_SDK_ROOT")
-	os.Unsetenv("ANDROID_SDK_HOME")
-	os.Setenv("PATH", "/nonexistent/path")
+	_ = os.Setenv("ANDROID_HOME", tmpDir)
+	_ = os.Unsetenv("ANDROID_SDK_ROOT")
+	_ = os.Unsetenv("ANDROID_SDK_HOME")
+	_ = os.Setenv("PATH", "/nonexistent/path")
 
 	result, err := FindEmulatorBinary()
 	if err != nil {
@@ -563,10 +563,10 @@ func TestFindEmulatorBinary_OldLayout(t *testing.T) {
 	origSDKHome := os.Getenv("ANDROID_SDK_HOME")
 	origPath := os.Getenv("PATH")
 	defer func() {
-		os.Setenv("ANDROID_HOME", origHome)
-		os.Setenv("ANDROID_SDK_ROOT", origSDKRoot)
-		os.Setenv("ANDROID_SDK_HOME", origSDKHome)
-		os.Setenv("PATH", origPath)
+		_ = os.Setenv("ANDROID_HOME", origHome)
+		_ = os.Setenv("ANDROID_SDK_ROOT", origSDKRoot)
+		_ = os.Setenv("ANDROID_SDK_HOME", origSDKHome)
+		_ = os.Setenv("PATH", origPath)
 	}()
 
 	// Create temp directory with old-layout emulator binary
@@ -580,10 +580,10 @@ func TestFindEmulatorBinary_OldLayout(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
-	os.Setenv("ANDROID_HOME", tmpDir)
-	os.Unsetenv("ANDROID_SDK_ROOT")
-	os.Unsetenv("ANDROID_SDK_HOME")
-	os.Setenv("PATH", "/nonexistent/path")
+	_ = os.Setenv("ANDROID_HOME", tmpDir)
+	_ = os.Unsetenv("ANDROID_SDK_ROOT")
+	_ = os.Unsetenv("ANDROID_SDK_HOME")
+	_ = os.Setenv("PATH", "/nonexistent/path")
 
 	result, err := FindEmulatorBinary()
 	if err != nil {
@@ -604,10 +604,10 @@ func TestFindAVDManagerBinary_NewLayout(t *testing.T) {
 	origSDKHome := os.Getenv("ANDROID_SDK_HOME")
 	origPath := os.Getenv("PATH")
 	defer func() {
-		os.Setenv("ANDROID_HOME", origHome)
-		os.Setenv("ANDROID_SDK_ROOT", origSDKRoot)
-		os.Setenv("ANDROID_SDK_HOME", origSDKHome)
-		os.Setenv("PATH", origPath)
+		_ = os.Setenv("ANDROID_HOME", origHome)
+		_ = os.Setenv("ANDROID_SDK_ROOT", origSDKRoot)
+		_ = os.Setenv("ANDROID_SDK_HOME", origSDKHome)
+		_ = os.Setenv("PATH", origPath)
 	}()
 
 	tmpDir := t.TempDir()
@@ -620,10 +620,10 @@ func TestFindAVDManagerBinary_NewLayout(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
-	os.Setenv("ANDROID_HOME", tmpDir)
-	os.Unsetenv("ANDROID_SDK_ROOT")
-	os.Unsetenv("ANDROID_SDK_HOME")
-	os.Setenv("PATH", "/nonexistent/path")
+	_ = os.Setenv("ANDROID_HOME", tmpDir)
+	_ = os.Unsetenv("ANDROID_SDK_ROOT")
+	_ = os.Unsetenv("ANDROID_SDK_HOME")
+	_ = os.Setenv("PATH", "/nonexistent/path")
 
 	result, err := FindAVDManagerBinary()
 	if err != nil {
@@ -640,10 +640,10 @@ func TestFindAVDManagerBinary_OldLayout(t *testing.T) {
 	origSDKHome := os.Getenv("ANDROID_SDK_HOME")
 	origPath := os.Getenv("PATH")
 	defer func() {
-		os.Setenv("ANDROID_HOME", origHome)
-		os.Setenv("ANDROID_SDK_ROOT", origSDKRoot)
-		os.Setenv("ANDROID_SDK_HOME", origSDKHome)
-		os.Setenv("PATH", origPath)
+		_ = os.Setenv("ANDROID_HOME", origHome)
+		_ = os.Setenv("ANDROID_SDK_ROOT", origSDKRoot)
+		_ = os.Setenv("ANDROID_SDK_HOME", origSDKHome)
+		_ = os.Setenv("PATH", origPath)
 	}()
 
 	tmpDir := t.TempDir()
@@ -656,10 +656,10 @@ func TestFindAVDManagerBinary_OldLayout(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
-	os.Setenv("ANDROID_HOME", tmpDir)
-	os.Unsetenv("ANDROID_SDK_ROOT")
-	os.Unsetenv("ANDROID_SDK_HOME")
-	os.Setenv("PATH", "/nonexistent/path")
+	_ = os.Setenv("ANDROID_HOME", tmpDir)
+	_ = os.Unsetenv("ANDROID_SDK_ROOT")
+	_ = os.Unsetenv("ANDROID_SDK_HOME")
+	_ = os.Setenv("PATH", "/nonexistent/path")
 
 	result, err := FindAVDManagerBinary()
 	if err != nil {

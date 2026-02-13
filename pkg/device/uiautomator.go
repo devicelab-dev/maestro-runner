@@ -100,7 +100,9 @@ func (d *AndroidDevice) setupSocketForward(cfg UIAutomator2Config) error {
 	}
 
 	// Remove stale socket file
-	os.Remove(socketPath)
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		logger.Debug("failed to remove stale socket %s: %v", socketPath, err)
+	}
 
 	if err := d.ForwardSocket(socketPath, cfg.DevicePort); err != nil {
 		return fmt.Errorf("socket forward failed: %w", err)
@@ -133,7 +135,9 @@ func findFreePort(start, end int) (int, error) {
 		addr := fmt.Sprintf("127.0.0.1:%d", port)
 		ln, err := net.Listen("tcp", addr)
 		if err == nil {
-			ln.Close()
+			if closeErr := ln.Close(); closeErr != nil {
+				logger.Warn("failed to close listener on port %d: %v", port, closeErr)
+			}
 			return port, nil
 		}
 	}
@@ -158,7 +162,9 @@ func (d *AndroidDevice) StopUIAutomator2() error {
 		if err := d.RemoveSocketForward(d.socketPath); err != nil {
 			logger.Warn("failed to remove socket forward for %s: %v", d.socketPath, err)
 		}
-		os.Remove(d.socketPath)
+		if err := os.Remove(d.socketPath); err != nil && !os.IsNotExist(err) {
+			logger.Warn("failed to remove socket file %s: %v", d.socketPath, err)
+		}
 		d.socketPath = ""
 	}
 	// Also clean up default socket path (in case of stale from previous run)
@@ -166,7 +172,9 @@ func (d *AndroidDevice) StopUIAutomator2() error {
 	if err := d.RemoveSocketForward(defaultSocket); err != nil {
 		logger.Warn("failed to remove default socket forward for %s: %v", defaultSocket, err)
 	}
-	os.Remove(defaultSocket)
+	if err := os.Remove(defaultSocket); err != nil && !os.IsNotExist(err) {
+		logger.Warn("failed to remove default socket file %s: %v", defaultSocket, err)
+	}
 
 	// Clean up port forward (Windows)
 	if d.localPort != 0 {
@@ -242,7 +250,11 @@ func checkHealthWithClient(client *http.Client, url string) bool {
 	if resp == nil {
 		return false
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			logger.Debug("failed to close health check response body: %v", err)
+		}
+	}()
 	return resp.StatusCode == http.StatusOK
 }
 

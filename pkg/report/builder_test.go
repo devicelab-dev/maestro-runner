@@ -244,10 +244,10 @@ func TestExtractFlowName(t *testing.T) {
 
 func TestGetBaseStep(t *testing.T) {
 	tests := []struct {
-		name      string
-		step      flow.Step
-		wantNil   bool
-		wantTO    int // expected TimeoutMs if non-nil
+		name    string
+		step    flow.Step
+		wantNil bool
+		wantTO  int // expected TimeoutMs if non-nil
 	}{
 		{
 			name:    "TapOnStep",

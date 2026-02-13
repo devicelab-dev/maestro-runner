@@ -1471,7 +1471,9 @@ func createAppiumDriver(cfg *RunConfig) (core.Driver, func(), error) {
 
 	// Cleanup function
 	cleanup := func() {
-		driver.Close()
+		if err := driver.Close(); err != nil {
+			logger.Debug("failed to close driver during cleanup: %v", err)
+		}
 	}
 
 	return driver, cleanup, nil
@@ -1495,7 +1497,9 @@ func isPortInUse(port uint16) bool {
 	if err != nil {
 		return true // port in use
 	}
-	ln.Close()
+	if err := ln.Close(); err != nil {
+		logger.Debug("failed to close listener: %v", err)
+	}
 	return false
 }
 
@@ -1723,10 +1727,14 @@ func isSocketInUse(socketPath string) bool {
 	if err != nil {
 		// Socket file exists but can't connect - might be stale
 		// Try to remove it and consider it not in use
-		os.Remove(socketPath)
+		if removeErr := os.Remove(socketPath); removeErr != nil {
+			logger.Debug("failed to remove stale socket %s: %v", socketPath, removeErr)
+		}
 		return false
 	}
-	conn.Close()
+	if err := conn.Close(); err != nil {
+		logger.Debug("failed to close socket connection: %v", err)
+	}
 	return true // socket is active and in use
 }
 

@@ -1077,26 +1077,26 @@ func newMockHTTPClient(serverURL string) *MockHTTPClient {
 func TestTapOnWithElement(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "elem-123"},
 			})
 		},
 		"POST /element/elem-123/click": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 		"GET /element/elem-123/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Button"})
+			writeJSON(w, map[string]interface{}{"value": "Button"})
 		},
 		"GET /element/elem-123/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 100, "y": 200, "width": 50, "height": 30},
 			})
 		},
 		"GET /element/elem-123/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/elem-123/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 	})
 	defer server.Close()
@@ -1118,27 +1118,27 @@ func TestTapOnWithElement(t *testing.T) {
 func TestTapOnClickError(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "elem-123"},
 			})
 		},
 		"POST /element/elem-123/click": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
-			writeJSON(w,map[string]interface{}{"value": "click failed"})
+			writeJSON(w, map[string]interface{}{"value": "click failed"})
 		},
 		"GET /element/elem-123/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Button"})
+			writeJSON(w, map[string]interface{}{"value": "Button"})
 		},
 		"GET /element/elem-123/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 100, "y": 200, "width": 50, "height": 30},
 			})
 		},
 		"GET /element/elem-123/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/elem-123/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 	})
 	defer server.Close()
@@ -1157,26 +1157,26 @@ func TestTapOnClickError(t *testing.T) {
 func TestDoubleTapOnWithElement(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "elem-456"},
 			})
 		},
 		"POST /appium/gestures/double_click": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 		"GET /element/elem-456/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Button"})
+			writeJSON(w, map[string]interface{}{"value": "Button"})
 		},
 		"GET /element/elem-456/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 100, "y": 200, "width": 50, "height": 30},
 			})
 		},
 		"GET /element/elem-456/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/elem-456/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 	})
 	defer server.Close()
@@ -1195,27 +1195,27 @@ func TestDoubleTapOnWithElement(t *testing.T) {
 func TestDoubleTapOnClickError(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "elem-456"},
 			})
 		},
 		"POST /appium/gestures/double_click": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
-			writeJSON(w,map[string]interface{}{"value": "double click failed"})
+			writeJSON(w, map[string]interface{}{"value": "double click failed"})
 		},
 		"GET /element/elem-456/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Button"})
+			writeJSON(w, map[string]interface{}{"value": "Button"})
 		},
 		"GET /element/elem-456/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 100, "y": 200, "width": 50, "height": 30},
 			})
 		},
 		"GET /element/elem-456/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/elem-456/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 	})
 	defer server.Close()
@@ -1234,26 +1234,26 @@ func TestDoubleTapOnClickError(t *testing.T) {
 func TestLongPressOnWithElement(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "elem-789"},
 			})
 		},
 		"POST /appium/gestures/long_click": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 		"GET /element/elem-789/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Button"})
+			writeJSON(w, map[string]interface{}{"value": "Button"})
 		},
 		"GET /element/elem-789/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 100, "y": 200, "width": 50, "height": 30},
 			})
 		},
 		"GET /element/elem-789/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/elem-789/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 	})
 	defer server.Close()
@@ -1272,27 +1272,27 @@ func TestLongPressOnWithElement(t *testing.T) {
 func TestLongPressOnClickError(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "elem-789"},
 			})
 		},
 		"POST /appium/gestures/long_click": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
-			writeJSON(w,map[string]interface{}{"value": "long click failed"})
+			writeJSON(w, map[string]interface{}{"value": "long click failed"})
 		},
 		"GET /element/elem-789/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Button"})
+			writeJSON(w, map[string]interface{}{"value": "Button"})
 		},
 		"GET /element/elem-789/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 100, "y": 200, "width": 50, "height": 30},
 			})
 		},
 		"GET /element/elem-789/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/elem-789/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 	})
 	defer server.Close()
@@ -1311,23 +1311,23 @@ func TestLongPressOnClickError(t *testing.T) {
 func TestAssertVisibleWithElement(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "elem-vis"},
 			})
 		},
 		"GET /element/elem-vis/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Label"})
+			writeJSON(w, map[string]interface{}{"value": "Label"})
 		},
 		"GET /element/elem-vis/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 100, "y": 200, "width": 50, "height": 30},
 			})
 		},
 		"GET /element/elem-vis/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/elem-vis/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 	})
 	defer server.Close()
@@ -1349,15 +1349,15 @@ func TestAssertVisibleWithElement(t *testing.T) {
 func TestAssertVisibleElementFoundIsVisible(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "elem-vis"},
 			})
 		},
 		"GET /element/elem-vis/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Label"})
+			writeJSON(w, map[string]interface{}{"value": "Label"})
 		},
 		"GET /element/elem-vis/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 100, "y": 200, "width": 50, "height": 30},
 			})
 		},
@@ -1379,23 +1379,23 @@ func TestAssertVisibleElementFoundIsVisible(t *testing.T) {
 func TestAssertNotVisibleElementFound(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "elem-found"},
 			})
 		},
 		"GET /element/elem-found/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Label"})
+			writeJSON(w, map[string]interface{}{"value": "Label"})
 		},
 		"GET /element/elem-found/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 100, "y": 200, "width": 50, "height": 30},
 			})
 		},
 		"GET /element/elem-found/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/elem-found/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 	})
 	defer server.Close()
@@ -1414,26 +1414,26 @@ func TestAssertNotVisibleElementFound(t *testing.T) {
 func TestInputTextWithElement(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "elem-input"},
 			})
 		},
 		"POST /element/elem-input/value": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 		"GET /element/elem-input/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": ""})
+			writeJSON(w, map[string]interface{}{"value": ""})
 		},
 		"GET /element/elem-input/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 100, "y": 200, "width": 200, "height": 40},
 			})
 		},
 		"GET /element/elem-input/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/elem-input/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 	})
 	defer server.Close()
@@ -1455,27 +1455,27 @@ func TestInputTextWithElement(t *testing.T) {
 func TestInputTextSendKeysError(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "elem-input"},
 			})
 		},
 		"POST /element/elem-input/value": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
-			writeJSON(w,map[string]interface{}{"value": "send keys failed"})
+			writeJSON(w, map[string]interface{}{"value": "send keys failed"})
 		},
 		"GET /element/elem-input/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": ""})
+			writeJSON(w, map[string]interface{}{"value": ""})
 		},
 		"GET /element/elem-input/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 100, "y": 200, "width": 200, "height": 40},
 			})
 		},
 		"GET /element/elem-input/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/elem-input/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 	})
 	defer server.Close()
@@ -1497,12 +1497,12 @@ func TestInputTextSendKeysError(t *testing.T) {
 func TestInputTextNoSelector(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"GET /element/active": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "active-elem"},
 			})
 		},
 		"POST /element/active-elem/value": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 	})
 	defer server.Close()
@@ -1521,13 +1521,13 @@ func TestInputTextNoSelector(t *testing.T) {
 func TestInputTextNoSelectorError(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"GET /element/active": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "active-elem"},
 			})
 		},
 		"POST /element/active-elem/value": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
-			writeJSON(w,map[string]interface{}{"value": "send keys failed"})
+			writeJSON(w, map[string]interface{}{"value": "send keys failed"})
 		},
 	})
 	defer server.Close()
@@ -1546,12 +1546,12 @@ func TestInputTextNoSelectorError(t *testing.T) {
 func TestInputRandomWithActiveElement(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"GET /element/active": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "active-elem"},
 			})
 		},
 		"POST /element/active-elem/value": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 	})
 	defer server.Close()
@@ -1573,12 +1573,12 @@ func TestInputRandomWithActiveElement(t *testing.T) {
 func TestInputRandomDefaultLength(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"GET /element/active": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "active-elem"},
 			})
 		},
 		"POST /element/active-elem/value": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 	})
 	defer server.Close()
@@ -1603,13 +1603,13 @@ func TestInputRandomDefaultLength(t *testing.T) {
 func TestInputRandomSendKeysError(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"GET /element/active": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "active-elem"},
 			})
 		},
 		"POST /element/active-elem/value": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
-			writeJSON(w,map[string]interface{}{"value": "error"})
+			writeJSON(w, map[string]interface{}{"value": "error"})
 		},
 	})
 	defer server.Close()
@@ -1628,26 +1628,26 @@ func TestInputRandomSendKeysError(t *testing.T) {
 func TestCopyTextFromWithElement(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "elem-copy"},
 			})
 		},
 		"GET /element/elem-copy/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Copied text"})
+			writeJSON(w, map[string]interface{}{"value": "Copied text"})
 		},
 		"GET /element/elem-copy/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 100, "y": 200, "width": 50, "height": 30},
 			})
 		},
 		"GET /element/elem-copy/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/elem-copy/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"POST /appium/device/set_clipboard": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 	})
 	defer server.Close()
@@ -1669,24 +1669,24 @@ func TestCopyTextFromWithElement(t *testing.T) {
 func TestCopyTextFromTextError(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "elem-copy"},
 			})
 		},
 		"GET /element/elem-copy/text": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
-			writeJSON(w,map[string]interface{}{"value": "error"})
+			writeJSON(w, map[string]interface{}{"value": "error"})
 		},
 		"GET /element/elem-copy/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 100, "y": 200, "width": 50, "height": 30},
 			})
 		},
 		"GET /element/elem-copy/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/elem-copy/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 	})
 	defer server.Close()
@@ -1705,27 +1705,27 @@ func TestCopyTextFromTextError(t *testing.T) {
 func TestCopyTextFromClipboardError(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "elem-copy"},
 			})
 		},
 		"GET /element/elem-copy/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Copied text"})
+			writeJSON(w, map[string]interface{}{"value": "Copied text"})
 		},
 		"GET /element/elem-copy/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 100, "y": 200, "width": 50, "height": 30},
 			})
 		},
 		"GET /element/elem-copy/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/elem-copy/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"POST /appium/device/set_clipboard": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
-			writeJSON(w,map[string]interface{}{"value": "clipboard error"})
+			writeJSON(w, map[string]interface{}{"value": "clipboard error"})
 		},
 	})
 	defer server.Close()
@@ -1745,15 +1745,15 @@ func TestPasteTextWithActiveElement(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /appium/device/get_clipboard": func(w http.ResponseWriter, r *http.Request) {
 			// Clipboard returns base64 encoded text
-			writeJSON(w,map[string]interface{}{"value": "SGVsbG8gV29ybGQ="}) // "Hello World"
+			writeJSON(w, map[string]interface{}{"value": "SGVsbG8gV29ybGQ="}) // "Hello World"
 		},
 		"GET /element/active": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "active-elem"},
 			})
 		},
 		"POST /element/active-elem/value": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 	})
 	defer server.Close()
@@ -1772,10 +1772,10 @@ func TestPasteTextWithActiveElement(t *testing.T) {
 func TestPasteTextNoActiveElement(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /appium/device/get_clipboard": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "SGVsbG8="})
+			writeJSON(w, map[string]interface{}{"value": "SGVsbG8="})
 		},
 		"GET /element/active": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": ""},
 			})
 		},
@@ -1796,16 +1796,16 @@ func TestPasteTextNoActiveElement(t *testing.T) {
 func TestPasteTextSendKeysError(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /appium/device/get_clipboard": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "SGVsbG8="})
+			writeJSON(w, map[string]interface{}{"value": "SGVsbG8="})
 		},
 		"GET /element/active": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "active-elem"},
 			})
 		},
 		"POST /element/active-elem/value": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
-			writeJSON(w,map[string]interface{}{"value": "send keys failed"})
+			writeJSON(w, map[string]interface{}{"value": "send keys failed"})
 		},
 	})
 	defer server.Close()
@@ -1828,34 +1828,34 @@ func TestScrollUntilVisibleFound(t *testing.T) {
 			callCount++
 			// Found on second attempt
 			if callCount >= 2 {
-				writeJSON(w,map[string]interface{}{
+				writeJSON(w, map[string]interface{}{
 					"value": map[string]string{"ELEMENT": "elem-scroll"},
 				})
 			} else {
-				writeJSON(w,map[string]interface{}{
+				writeJSON(w, map[string]interface{}{
 					"value": map[string]string{"ELEMENT": ""},
 				})
 			}
 		},
 		"GET /element/elem-scroll/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Target"})
+			writeJSON(w, map[string]interface{}{"value": "Target"})
 		},
 		"GET /element/elem-scroll/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 100, "y": 200, "width": 50, "height": 30},
 			})
 		},
 		"GET /element/elem-scroll/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/elem-scroll/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"POST /appium/actions": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 		"GET /appium/device/info": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]interface{}{"realDisplaySize": "1080x2400"},
 			})
 		},
@@ -1879,28 +1879,28 @@ func TestScrollUntilVisibleFound(t *testing.T) {
 func TestScrollUntilVisibleScrollError(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": ""},
 			})
 		},
 		"POST /appium/actions": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
-			writeJSON(w,map[string]interface{}{"value": "scroll error"})
+			writeJSON(w, map[string]interface{}{"value": "scroll error"})
 		},
 		"GET /appium/device/info": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]interface{}{"realDisplaySize": "1080x2400"},
 			})
 		},
 		"GET /source": func(w http.ResponseWriter, r *http.Request) {
 			// Return valid hierarchy without target element
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": `<hierarchy><node text="Other" bounds="[0,0][100,100]"/></hierarchy>`,
 			})
 		},
 		"POST /appium/gestures/scroll": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
-			writeJSON(w,map[string]interface{}{"value": "scroll error"})
+			writeJSON(w, map[string]interface{}{"value": "scroll error"})
 		},
 	})
 	defer server.Close()
@@ -1929,27 +1929,27 @@ func setupRelativeSelectorServer(t *testing.T, pageSource string, clickHandler f
 	return setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		// Anchor element finding
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "anchor-elem"},
 			})
 		},
 		"GET /element/anchor-elem/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Header"})
+			writeJSON(w, map[string]interface{}{"value": "Header"})
 		},
 		"GET /element/anchor-elem/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 0, "y": 0, "width": 1080, "height": 100},
 			})
 		},
 		"GET /element/anchor-elem/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/anchor-elem/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		// Page source for target finding
 		"GET /source": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": pageSource})
+			writeJSON(w, map[string]interface{}{"value": pageSource})
 		},
 		// Coordinate-based click
 		"POST /appium/gestures/click": clickHandler,
@@ -1966,7 +1966,7 @@ func TestTapOnRelativeSelectorBelow(t *testing.T) {
 	var clickCalled bool
 	server := setupRelativeSelectorServer(t, pageSource, func(w http.ResponseWriter, r *http.Request) {
 		clickCalled = true
-		writeJSON(w,map[string]interface{}{"value": nil})
+		writeJSON(w, map[string]interface{}{"value": nil})
 	})
 	defer server.Close()
 
@@ -1998,7 +1998,7 @@ func TestTapOnRelativeSelectorClickError(t *testing.T) {
 
 	server := setupRelativeSelectorServer(t, pageSource, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		writeJSON(w,map[string]interface{}{"value": "click failed"})
+		writeJSON(w, map[string]interface{}{"value": "click failed"})
 	})
 	defer server.Close()
 
@@ -2028,30 +2028,30 @@ func TestDoubleTapOnRelativeSelector(t *testing.T) {
 	var doubleClickCalled bool
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "anchor-elem"},
 			})
 		},
 		"GET /element/anchor-elem/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Header"})
+			writeJSON(w, map[string]interface{}{"value": "Header"})
 		},
 		"GET /element/anchor-elem/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 0, "y": 0, "width": 1080, "height": 100},
 			})
 		},
 		"GET /element/anchor-elem/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/anchor-elem/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /source": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": pageSource})
+			writeJSON(w, map[string]interface{}{"value": pageSource})
 		},
 		"POST /appium/gestures/double_click": func(w http.ResponseWriter, r *http.Request) {
 			doubleClickCalled = true
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 	})
 	defer server.Close()
@@ -2084,30 +2084,30 @@ func TestDoubleTapOnRelativeSelectorError(t *testing.T) {
 
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "anchor-elem"},
 			})
 		},
 		"GET /element/anchor-elem/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Header"})
+			writeJSON(w, map[string]interface{}{"value": "Header"})
 		},
 		"GET /element/anchor-elem/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 0, "y": 0, "width": 1080, "height": 100},
 			})
 		},
 		"GET /element/anchor-elem/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/anchor-elem/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /source": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": pageSource})
+			writeJSON(w, map[string]interface{}{"value": pageSource})
 		},
 		"POST /appium/gestures/double_click": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
-			writeJSON(w,map[string]interface{}{"value": "double click failed"})
+			writeJSON(w, map[string]interface{}{"value": "double click failed"})
 		},
 	})
 	defer server.Close()
@@ -2138,30 +2138,30 @@ func TestLongPressOnRelativeSelectorSuccess(t *testing.T) {
 	var longClickCalled bool
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "anchor-elem"},
 			})
 		},
 		"GET /element/anchor-elem/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Header"})
+			writeJSON(w, map[string]interface{}{"value": "Header"})
 		},
 		"GET /element/anchor-elem/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 0, "y": 0, "width": 1080, "height": 100},
 			})
 		},
 		"GET /element/anchor-elem/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/anchor-elem/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /source": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": pageSource})
+			writeJSON(w, map[string]interface{}{"value": pageSource})
 		},
 		"POST /appium/gestures/long_click": func(w http.ResponseWriter, r *http.Request) {
 			longClickCalled = true
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 	})
 	defer server.Close()
@@ -2194,30 +2194,30 @@ func TestLongPressOnRelativeSelectorError(t *testing.T) {
 
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "anchor-elem"},
 			})
 		},
 		"GET /element/anchor-elem/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Header"})
+			writeJSON(w, map[string]interface{}{"value": "Header"})
 		},
 		"GET /element/anchor-elem/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 0, "y": 0, "width": 1080, "height": 100},
 			})
 		},
 		"GET /element/anchor-elem/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/anchor-elem/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /source": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": pageSource})
+			writeJSON(w, map[string]interface{}{"value": pageSource})
 		},
 		"POST /appium/gestures/long_click": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
-			writeJSON(w,map[string]interface{}{"value": "long click failed"})
+			writeJSON(w, map[string]interface{}{"value": "long click failed"})
 		},
 	})
 	defer server.Close()
@@ -2249,30 +2249,30 @@ func TestTapOnRelativeSelectorAbove(t *testing.T) {
 	var clickCalled bool
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "anchor-elem"},
 			})
 		},
 		"GET /element/anchor-elem/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Footer"})
+			writeJSON(w, map[string]interface{}{"value": "Footer"})
 		},
 		"GET /element/anchor-elem/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 0, "y": 150, "width": 1080, "height": 50},
 			})
 		},
 		"GET /element/anchor-elem/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/anchor-elem/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /source": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": pageSource})
+			writeJSON(w, map[string]interface{}{"value": pageSource})
 		},
 		"POST /appium/gestures/click": func(w http.ResponseWriter, r *http.Request) {
 			clickCalled = true
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 	})
 	defer server.Close()
@@ -2306,30 +2306,30 @@ func TestTapOnRelativeSelectorLeftOf(t *testing.T) {
 	var clickCalled bool
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "anchor-elem"},
 			})
 		},
 		"GET /element/anchor-elem/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Input"})
+			writeJSON(w, map[string]interface{}{"value": "Input"})
 		},
 		"GET /element/anchor-elem/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 200, "y": 100, "width": 200, "height": 50},
 			})
 		},
 		"GET /element/anchor-elem/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/anchor-elem/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /source": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": pageSource})
+			writeJSON(w, map[string]interface{}{"value": pageSource})
 		},
 		"POST /appium/gestures/click": func(w http.ResponseWriter, r *http.Request) {
 			clickCalled = true
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 	})
 	defer server.Close()
@@ -2363,30 +2363,30 @@ func TestTapOnRelativeSelectorRightOf(t *testing.T) {
 	var clickCalled bool
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "anchor-elem"},
 			})
 		},
 		"GET /element/anchor-elem/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Label"})
+			writeJSON(w, map[string]interface{}{"value": "Label"})
 		},
 		"GET /element/anchor-elem/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 50, "y": 100, "width": 100, "height": 50},
 			})
 		},
 		"GET /element/anchor-elem/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/anchor-elem/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /source": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": pageSource})
+			writeJSON(w, map[string]interface{}{"value": pageSource})
 		},
 		"POST /appium/gestures/click": func(w http.ResponseWriter, r *http.Request) {
 			clickCalled = true
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 	})
 	defer server.Close()
@@ -2422,11 +2422,11 @@ func TestTapOnRelativeSelectorChildOf(t *testing.T) {
 	var clickCalled bool
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"GET /source": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": pageSource})
+			writeJSON(w, map[string]interface{}{"value": pageSource})
 		},
 		"POST /appium/gestures/click": func(w http.ResponseWriter, r *http.Request) {
 			clickCalled = true
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 	})
 	defer server.Close()
@@ -2461,30 +2461,30 @@ func TestTapOnRelativeSelectorContainsChild(t *testing.T) {
 	var clickCalled bool
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "anchor-elem"},
 			})
 		},
 		"GET /element/anchor-elem/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "ChildText"})
+			writeJSON(w, map[string]interface{}{"value": "ChildText"})
 		},
 		"GET /element/anchor-elem/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 100, "y": 100, "width": 100, "height": 50},
 			})
 		},
 		"GET /element/anchor-elem/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/anchor-elem/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /source": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": pageSource})
+			writeJSON(w, map[string]interface{}{"value": pageSource})
 		},
 		"POST /appium/gestures/click": func(w http.ResponseWriter, r *http.Request) {
 			clickCalled = true
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 	})
 	defer server.Close()
@@ -2519,11 +2519,11 @@ func TestTapOnRelativeSelectorContainsDescendants(t *testing.T) {
 	var clickCalled bool
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"GET /source": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": pageSource})
+			writeJSON(w, map[string]interface{}{"value": pageSource})
 		},
 		"POST /appium/gestures/click": func(w http.ResponseWriter, r *http.Request) {
 			clickCalled = true
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 	})
 	defer server.Close()
@@ -2561,30 +2561,30 @@ func TestRelativeSelectorWithIndex(t *testing.T) {
 	var clickCalled bool
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "anchor-elem"},
 			})
 		},
 		"GET /element/anchor-elem/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Header"})
+			writeJSON(w, map[string]interface{}{"value": "Header"})
 		},
 		"GET /element/anchor-elem/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 0, "y": 0, "width": 1080, "height": 100},
 			})
 		},
 		"GET /element/anchor-elem/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/anchor-elem/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /source": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": pageSource})
+			writeJSON(w, map[string]interface{}{"value": pageSource})
 		},
 		"POST /appium/gestures/click": func(w http.ResponseWriter, r *http.Request) {
 			clickCalled = true
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 	})
 	defer server.Close()
@@ -2622,30 +2622,30 @@ func TestRelativeSelectorWithNegativeIndex(t *testing.T) {
 	var clickCalled bool
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "anchor-elem"},
 			})
 		},
 		"GET /element/anchor-elem/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Header"})
+			writeJSON(w, map[string]interface{}{"value": "Header"})
 		},
 		"GET /element/anchor-elem/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 0, "y": 0, "width": 1080, "height": 100},
 			})
 		},
 		"GET /element/anchor-elem/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/anchor-elem/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /source": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": pageSource})
+			writeJSON(w, map[string]interface{}{"value": pageSource})
 		},
 		"POST /appium/gestures/click": func(w http.ResponseWriter, r *http.Request) {
 			clickCalled = true
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 	})
 	defer server.Close()
@@ -2679,26 +2679,26 @@ func TestRelativeSelectorNoMatch(t *testing.T) {
 
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "anchor-elem"},
 			})
 		},
 		"GET /element/anchor-elem/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Header"})
+			writeJSON(w, map[string]interface{}{"value": "Header"})
 		},
 		"GET /element/anchor-elem/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 0, "y": 0, "width": 1080, "height": 100},
 			})
 		},
 		"GET /element/anchor-elem/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/anchor-elem/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /source": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": pageSource})
+			writeJSON(w, map[string]interface{}{"value": pageSource})
 		},
 	})
 	defer server.Close()
@@ -2723,27 +2723,27 @@ func TestRelativeSelectorNoMatch(t *testing.T) {
 func TestRelativeSelectorPageSourceError(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "anchor-elem"},
 			})
 		},
 		"GET /element/anchor-elem/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Header"})
+			writeJSON(w, map[string]interface{}{"value": "Header"})
 		},
 		"GET /element/anchor-elem/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 0, "y": 0, "width": 1080, "height": 100},
 			})
 		},
 		"GET /element/anchor-elem/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/anchor-elem/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /source": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
-			writeJSON(w,map[string]interface{}{"value": "source error"})
+			writeJSON(w, map[string]interface{}{"value": "source error"})
 		},
 	})
 	defer server.Close()
@@ -2767,26 +2767,26 @@ func TestRelativeSelectorPageSourceError(t *testing.T) {
 func TestRelativeSelectorParseError(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": "anchor-elem"},
 			})
 		},
 		"GET /element/anchor-elem/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Header"})
+			writeJSON(w, map[string]interface{}{"value": "Header"})
 		},
 		"GET /element/anchor-elem/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 0, "y": 0, "width": 1080, "height": 100},
 			})
 		},
 		"GET /element/anchor-elem/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/anchor-elem/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /source": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "<invalid xml"})
+			writeJSON(w, map[string]interface{}{"value": "<invalid xml"})
 		},
 	})
 	defer server.Close()
@@ -2819,31 +2819,31 @@ func TestFindElementMultipleStrategies(t *testing.T) {
 			callCount++
 			// Fail text strategy, succeed on description
 			if callCount >= 2 {
-				writeJSON(w,map[string]interface{}{
+				writeJSON(w, map[string]interface{}{
 					"value": map[string]string{"ELEMENT": "elem-multi"},
 				})
 			} else {
-				writeJSON(w,map[string]interface{}{
+				writeJSON(w, map[string]interface{}{
 					"value": map[string]string{"ELEMENT": ""},
 				})
 			}
 		},
 		"GET /element/elem-multi/text": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "Found"})
+			writeJSON(w, map[string]interface{}{"value": "Found"})
 		},
 		"GET /element/elem-multi/rect": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]int{"x": 10, "y": 20, "width": 100, "height": 50},
 			})
 		},
 		"GET /element/elem-multi/attribute/displayed": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"GET /element/elem-multi/attribute/enabled": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": "true"})
+			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"POST /element/elem-multi/click": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 	})
 	defer server.Close()

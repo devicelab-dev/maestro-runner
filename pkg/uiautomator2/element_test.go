@@ -39,7 +39,7 @@ func TestFindElement(t *testing.T) {
 			t.Errorf("expected com.example:id/button, got %s", req.Selector)
 		}
 
-		writeJSON(w,map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"value": map[string]interface{}{
 				"ELEMENT": "element-123",
 			},
@@ -58,7 +58,7 @@ func TestFindElement(t *testing.T) {
 
 func TestFindElementNotFound(t *testing.T) {
 	client, server := newTestClientWithSession(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w,map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"value": map[string]interface{}{},
 		})
 	})
@@ -81,7 +81,7 @@ func TestFindElementWithContext(t *testing.T) {
 			t.Errorf("expected parent-123 context, got %s", req.Context)
 		}
 
-		writeJSON(w,map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"value": map[string]interface{}{
 				"ELEMENT": "child-456",
 			},
@@ -104,7 +104,7 @@ func TestFindElements(t *testing.T) {
 			t.Errorf("expected /elements suffix, got %s", r.URL.Path)
 		}
 
-		writeJSON(w,map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"value": []map[string]interface{}{
 				{"ELEMENT": "elem-1"},
 				{"ELEMENT": "elem-2"},
@@ -128,7 +128,7 @@ func TestFindElements(t *testing.T) {
 
 func TestFindElementsEmpty(t *testing.T) {
 	client, server := newTestClientWithSession(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w,map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"value": []map[string]interface{}{},
 		})
 	})
@@ -148,7 +148,7 @@ func TestActiveElement(t *testing.T) {
 		if !strings.HasSuffix(r.URL.Path, "/element/active") {
 			t.Errorf("expected /element/active suffix, got %s", r.URL.Path)
 		}
-		writeJSON(w,map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"value": map[string]interface{}{
 				"ELEMENT": "active-elem",
 			},
@@ -167,7 +167,7 @@ func TestActiveElement(t *testing.T) {
 
 func TestActiveElementNone(t *testing.T) {
 	client, server := newTestClientWithSession(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w,map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"value": map[string]interface{}{},
 		})
 	})
@@ -187,7 +187,7 @@ func TestElementClick(t *testing.T) {
 		if r.Method != "POST" {
 			t.Errorf("expected POST, got %s", r.Method)
 		}
-		writeJSON(w,map[string]interface{}{})
+		writeJSON(w, map[string]interface{}{})
 	})
 	defer server.Close()
 
@@ -203,7 +203,7 @@ func TestElementClear(t *testing.T) {
 		if !strings.Contains(r.URL.Path, "/element/elem-123/clear") {
 			t.Errorf("expected /element/elem-123/clear, got %s", r.URL.Path)
 		}
-		writeJSON(w,map[string]interface{}{})
+		writeJSON(w, map[string]interface{}{})
 	})
 	defer server.Close()
 
@@ -228,7 +228,7 @@ func TestElementSendKeys(t *testing.T) {
 		if req.Text != "hello world" {
 			t.Errorf("expected 'hello world', got %s", req.Text)
 		}
-		writeJSON(w,map[string]interface{}{})
+		writeJSON(w, map[string]interface{}{})
 	})
 	defer server.Close()
 
@@ -247,7 +247,7 @@ func TestElementText(t *testing.T) {
 		if r.Method != "GET" {
 			t.Errorf("expected GET, got %s", r.Method)
 		}
-		writeJSON(w,map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"value": "Button Text",
 		})
 	})
@@ -268,7 +268,7 @@ func TestElementAttribute(t *testing.T) {
 		if !strings.Contains(r.URL.Path, "/element/elem-123/attribute/enabled") {
 			t.Errorf("expected attribute/enabled, got %s", r.URL.Path)
 		}
-		writeJSON(w,map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"value": "true",
 		})
 	})
@@ -289,7 +289,7 @@ func TestElementRect(t *testing.T) {
 		if !strings.Contains(r.URL.Path, "/element/elem-123/rect") {
 			t.Errorf("expected /element/elem-123/rect, got %s", r.URL.Path)
 		}
-		writeJSON(w,map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"value": map[string]interface{}{
 				"x":      100,
 				"y":      200,
@@ -312,7 +312,7 @@ func TestElementRect(t *testing.T) {
 
 func TestElementIsDisplayed(t *testing.T) {
 	client, server := newTestClientWithSession(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w,map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"value": "true",
 		})
 	})
@@ -330,7 +330,7 @@ func TestElementIsDisplayed(t *testing.T) {
 
 func TestElementIsEnabled(t *testing.T) {
 	client, server := newTestClientWithSession(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w,map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"value": "false",
 		})
 	})
@@ -348,7 +348,7 @@ func TestElementIsEnabled(t *testing.T) {
 
 func TestElementIsSelected(t *testing.T) {
 	client, server := newTestClientWithSession(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w,map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"value": "true",
 		})
 	})
@@ -370,7 +370,7 @@ func TestElementScreenshot(t *testing.T) {
 			t.Errorf("expected /element/elem-123/screenshot, got %s", r.URL.Path)
 		}
 		// Base64 encoded "PNG"
-		writeJSON(w,map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"value": "UE5H",
 		})
 	})
@@ -388,7 +388,7 @@ func TestElementScreenshot(t *testing.T) {
 
 func TestElementScreenshotInvalidResponse(t *testing.T) {
 	client, server := newTestClientWithSession(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w,map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"value": 12345,
 		})
 	})

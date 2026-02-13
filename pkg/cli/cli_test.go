@@ -725,7 +725,7 @@ func TestIsPortInUse_PortInUse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create listener: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	// Get the port that was assigned
 	addr := ln.Addr().(*net.TCPAddr)
@@ -754,7 +754,7 @@ func TestIsPortInUse_PortBecomesAvailable(t *testing.T) {
 	}
 
 	// Close the listener
-	ln.Close()
+	_ = ln.Close()
 
 	// Give the OS a moment to release the port
 	time.Sleep(10 * time.Millisecond)
@@ -769,7 +769,7 @@ func TestIsPortInUse_PortBecomesAvailable(t *testing.T) {
 
 func TestIsSocketInUse_NonExistentSocket(t *testing.T) {
 	socketPath := "/tmp/test-socket-nonexistent.sock"
-	os.Remove(socketPath) // Ensure it doesn't exist
+	_ = os.Remove(socketPath) // Ensure it doesn't exist
 
 	if isSocketInUse(socketPath) {
 		t.Error("expected non-existent socket to not be in use")
@@ -784,15 +784,15 @@ func TestIsSocketInUse_EmptyPath(t *testing.T) {
 
 func TestIsSocketInUse_ActiveSocket(t *testing.T) {
 	socketPath := "/tmp/test-socket-active-" + time.Now().Format("20060102150405") + ".sock"
-	os.Remove(socketPath) // Clean up if exists
+	_ = os.Remove(socketPath) // Clean up if exists
 
 	// Create a listener on the socket
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("failed to create socket listener: %v", err)
 	}
-	defer ln.Close()
-	defer os.Remove(socketPath)
+	defer func() { _ = ln.Close() }()
+	defer func() { _ = os.Remove(socketPath) }()
 
 	// Socket should be in use
 	if !isSocketInUse(socketPath) {
@@ -802,14 +802,14 @@ func TestIsSocketInUse_ActiveSocket(t *testing.T) {
 
 func TestIsSocketInUse_StaleSocket(t *testing.T) {
 	socketPath := "/tmp/test-socket-stale-" + time.Now().Format("20060102150405") + ".sock"
-	os.Remove(socketPath) // Clean up if exists
+	_ = os.Remove(socketPath) // Clean up if exists
 
 	// Create a socket file without a listener (stale)
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("failed to create socket: %v", err)
 	}
-	ln.Close() // Close immediately to make it stale
+	_ = ln.Close() // Close immediately to make it stale
 
 	// Give OS time to clean up
 	time.Sleep(10 * time.Millisecond)
@@ -822,7 +822,7 @@ func TestIsSocketInUse_StaleSocket(t *testing.T) {
 	// Socket file should be removed
 	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
 		t.Error("expected stale socket file to be removed")
-		os.Remove(socketPath) // Clean up
+		_ = os.Remove(socketPath) // Clean up
 	}
 }
 

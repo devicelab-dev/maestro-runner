@@ -35,7 +35,7 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 
 	// On Windows, rename fails if target exists
 	if runtime.GOOS == "windows" {
-		os.Remove(path)
+		_ = os.Remove(path)
 	}
 
 	// Atomic rename

@@ -1621,12 +1621,12 @@ func TestParsePercentageCoords(t *testing.T) {
 		{"50%, 50%", 0.50, 0.50, false},
 		{"85%, 15%", 0.85, 0.15, false},
 		{"0%, 100%", 0.0, 1.0, false},
-		{"50, 50", 0.50, 0.50, false},       // Without % sign
-		{"invalid", 0, 0, true},              // No comma
-		{"abc, def", 0, 0, true},             // Non-numeric
-		{"50%, abc", 0, 0, true},             // Y non-numeric
-		{"abc, 50%", 0, 0, true},             // X non-numeric
-		{"50%, 50%, 50%", 0, 0, true},        // Too many parts
+		{"50, 50", 0.50, 0.50, false}, // Without % sign
+		{"invalid", 0, 0, true},       // No comma
+		{"abc, def", 0, 0, true},      // Non-numeric
+		{"50%, abc", 0, 0, true},      // Y non-numeric
+		{"abc, 50%", 0, 0, true},      // X non-numeric
+		{"50%, 50%, 50%", 0, 0, true}, // Too many parts
 	}
 
 	for _, tt := range tests {
@@ -2373,7 +2373,6 @@ func TestApplyPermissionAllow(t *testing.T) {
 	driver := &Driver{device: shell}
 
 	err := driver.applyPermission("com.example.app", "android.permission.CAMERA", "allow")
-
 	if err != nil {
 		t.Errorf("expected no error, got: %v", err)
 	}
@@ -2391,7 +2390,6 @@ func TestApplyPermissionDeny(t *testing.T) {
 	driver := &Driver{device: shell}
 
 	err := driver.applyPermission("com.example.app", "android.permission.CAMERA", "deny")
-
 	if err != nil {
 		t.Errorf("expected no error, got: %v", err)
 	}
@@ -2409,7 +2407,6 @@ func TestApplyPermissionUnset(t *testing.T) {
 	driver := &Driver{device: shell}
 
 	err := driver.applyPermission("com.example.app", "android.permission.CAMERA", "unset")
-
 	if err != nil {
 		t.Errorf("expected no error, got: %v", err)
 	}
@@ -2531,7 +2528,6 @@ func TestGetScreenSizeViaDeviceInfo(t *testing.T) {
 	driver := &Driver{client: client}
 
 	w, h, err := driver.getScreenSize()
-
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -2556,7 +2552,6 @@ func TestGetScreenSizeViaWmSize(t *testing.T) {
 	driver := New(client.Client, nil, shell)
 
 	w, h, err := driver.getScreenSize()
-
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -2971,7 +2966,6 @@ func TestSetWaitForIdleTimeoutSuccess(t *testing.T) {
 	driver := New(client.Client, nil, nil)
 
 	err := driver.SetWaitForIdleTimeout(5000)
-
 	if err != nil {
 		t.Errorf("expected no error, got: %v", err)
 	}
@@ -2989,7 +2983,6 @@ func TestSetWaitForIdleTimeoutZeroDisable(t *testing.T) {
 	driver := New(client.Client, nil, nil)
 
 	err := driver.SetWaitForIdleTimeout(0)
-
 	if err != nil {
 		t.Errorf("expected no error, got: %v", err)
 	}
@@ -3157,7 +3150,6 @@ func TestGetScreenSizeDeviceInfoBadFormat(t *testing.T) {
 	driver := New(client.Client, nil, shell)
 
 	w, h, err := driver.getScreenSize()
-
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -3182,7 +3174,6 @@ func TestGetScreenSizeDeviceInfoNonNumeric(t *testing.T) {
 	driver := New(client.Client, nil, shell)
 
 	w, h, err := driver.getScreenSize()
-
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -3286,7 +3277,6 @@ func TestSetWaitForIdleTimeoutMock(t *testing.T) {
 	driver := New(client, nil, nil)
 
 	err := driver.SetWaitForIdleTimeout(0)
-
 	if err != nil {
 		t.Errorf("expected no error, got: %v", err)
 	}

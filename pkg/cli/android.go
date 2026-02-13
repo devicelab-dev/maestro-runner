@@ -185,7 +185,9 @@ func createUIAutomator2Driver(cfg *RunConfig, dev *device.AndroidDevice, info de
 
 	// Cleanup function (silent)
 	cleanup := func() {
-		client.Close()
+		if err := client.Close(); err != nil {
+			logger.Debug("failed to close client during cleanup: %v", err)
+		}
 		if err := dev.StopUIAutomator2(); err != nil {
 			logger.Warn("failed to stop UIAutomator2 during cleanup: %v", err)
 		}

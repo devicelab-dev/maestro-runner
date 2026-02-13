@@ -86,10 +86,10 @@ func (r *Runner) Build(ctx context.Context) error {
 		return fmt.Errorf("failed to get build cache directory: %w", err)
 	}
 
-	if err := os.MkdirAll(r.buildDir, 0755); err != nil {
+	if err := os.MkdirAll(r.buildDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create build directory: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Join(r.buildDir, "logs"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(r.buildDir, "logs"), 0o755); err != nil {
 		return fmt.Errorf("failed to create logs directory: %w", err)
 	}
 
@@ -111,7 +111,11 @@ func (r *Runner) Build(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to create log file: %w", err)
 	}
-	defer logFile.Close()
+	defer func() {
+		if err := logFile.Close(); err != nil {
+			logger.Warn("failed to close build log file: %v", err)
+		}
+	}()
 
 	buildCtx, cancel := context.WithTimeout(ctx, buildTimeout)
 	defer cancel()
@@ -259,7 +263,7 @@ func (r *Runner) injectPort(xctestrunPath string) error {
 		return fmt.Errorf("failed to serialize xctestrun: %w", err)
 	}
 
-	if err := os.WriteFile(xctestrunPath, result, 0644); err != nil {
+	if err := os.WriteFile(xctestrunPath, result, 0o644); err != nil {
 		return fmt.Errorf("failed to write xctestrun: %w", err)
 	}
 
@@ -288,7 +292,9 @@ func setPortEnv(target interface{}, portStr string) {
 func (r *Runner) Stop() {
 	// Stop port forwarding if running (for physical devices)
 	if r.portForwardListener != nil {
-		r.portForwardListener.Close()
+		if err := r.portForwardListener.Close(); err != nil {
+			logger.Warn("failed to close port forward listener: %v", err)
+		}
 		r.portForwardListener = nil
 	}
 	if r.cmd != nil && r.cmd.Process != nil {
@@ -298,7 +304,9 @@ func (r *Runner) Stop() {
 		r.cmd = nil
 	}
 	if r.logFile != nil {
-		r.logFile.Close()
+		if err := r.logFile.Close(); err != nil {
+			logger.Warn("failed to close WDA log file: %v", err)
+		}
 		r.logFile = nil
 	}
 }

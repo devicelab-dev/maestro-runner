@@ -58,8 +58,10 @@ func TestGenerateAllurePassedFlow(t *testing.T) {
 	flow0 := FlowDetail{
 		ID: "flow-000", Name: "Login Test", StartTime: now, Duration: &d,
 		Commands: []Command{
-			{ID: "cmd-000", Type: "launchApp", Label: "Launch app", Status: StatusPassed, Duration: &cmdDur,
-				StartTime: &now, EndTime: &endTime},
+			{
+				ID: "cmd-000", Type: "launchApp", Label: "Launch app", Status: StatusPassed, Duration: &cmdDur,
+				StartTime: &now, EndTime: &endTime,
+			},
 		},
 	}
 
@@ -141,11 +143,15 @@ func TestGenerateAllureFailedFlow(t *testing.T) {
 	flow0 := FlowDetail{
 		ID: "flow-000", Name: "Checkout", StartTime: now, Duration: &d,
 		Commands: []Command{
-			{ID: "cmd-000", Type: "launchApp", Status: StatusPassed, Duration: &cmdDur,
-				StartTime: &now, EndTime: &endTime},
-			{ID: "cmd-001", Type: "assertVisible", Label: "Check button", Status: StatusFailed, Duration: &cmdDur,
+			{
+				ID: "cmd-000", Type: "launchApp", Status: StatusPassed, Duration: &cmdDur,
 				StartTime: &now, EndTime: &endTime,
-				Error: &Error{Type: "element_not_found", Message: "Element not found: login_button"}},
+			},
+			{
+				ID: "cmd-001", Type: "assertVisible", Label: "Check button", Status: StatusFailed, Duration: &cmdDur,
+				StartTime: &now, EndTime: &endTime,
+				Error: &Error{Type: "element_not_found", Message: "Element not found: login_button"},
+			},
 		},
 	}
 
@@ -234,27 +240,39 @@ func TestGenerateAllureMixedFlows(t *testing.T) {
 		MaestroRunner: RunnerInfo{Version: "0.1.0", Driver: "uiautomator2"},
 		Summary:       Summary{Total: 3, Passed: 1, Failed: 1, Skipped: 1},
 		Flows: []FlowEntry{
-			{Index: 0, ID: "flow-000", Name: "Login",
+			{
+				Index: 0, ID: "flow-000", Name: "Login",
 				SourceFile: "flows/login.yaml", DataFile: "flows/flow-000.json",
 				Status: StatusPassed, Duration: &d1, StartTime: &now, EndTime: &endTime,
-				Commands: CommandSummary{Total: 1, Passed: 1}},
-			{Index: 1, ID: "flow-001", Name: "Checkout",
+				Commands: CommandSummary{Total: 1, Passed: 1},
+			},
+			{
+				Index: 1, ID: "flow-001", Name: "Checkout",
 				SourceFile: "flows/checkout.yaml", DataFile: "flows/flow-001.json",
 				Status: StatusFailed, Duration: &d2, Error: &errMsg,
 				StartTime: &now, EndTime: &endTime,
-				Commands: CommandSummary{Total: 1, Failed: 1}},
-			{Index: 2, ID: "flow-002", Name: "Settings",
+				Commands: CommandSummary{Total: 1, Failed: 1},
+			},
+			{
+				Index: 2, ID: "flow-002", Name: "Settings",
 				SourceFile: "flows/settings.yaml", DataFile: "flows/flow-002.json",
-				Status: StatusSkipped},
+				Status: StatusSkipped,
+			},
 		},
 	}
 
 	flows := []FlowDetail{
-		{ID: "flow-000", Name: "Login", StartTime: now, Duration: &d1,
-			Commands: []Command{{ID: "cmd-000", Type: "launchApp", Status: StatusPassed, Duration: &cmdDur}}},
-		{ID: "flow-001", Name: "Checkout", StartTime: now, Duration: &d2,
-			Commands: []Command{{ID: "cmd-000", Type: "tapOn", Status: StatusFailed, Duration: &cmdDur,
-				Error: &Error{Message: "Tap failed"}}}},
+		{
+			ID: "flow-000", Name: "Login", StartTime: now, Duration: &d1,
+			Commands: []Command{{ID: "cmd-000", Type: "launchApp", Status: StatusPassed, Duration: &cmdDur}},
+		},
+		{
+			ID: "flow-001", Name: "Checkout", StartTime: now, Duration: &d2,
+			Commands: []Command{{
+				ID: "cmd-000", Type: "tapOn", Status: StatusFailed, Duration: &cmdDur,
+				Error: &Error{Message: "Tap failed"},
+			}},
+		},
 		{ID: "flow-002", Name: "Settings", StartTime: now, Commands: []Command{}},
 	}
 
@@ -285,8 +303,8 @@ func TestGenerateAllureMixedFlows(t *testing.T) {
 		data, _ := os.ReadFile(filepath.Join(allureDir, tc.id+"-result.json"))
 		var result AllureResult
 		if err := json.Unmarshal(data, &result); err != nil {
-		t.Fatalf("json.Unmarshal: %v", err)
-	}
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
 		if result.Status != tc.status {
 			t.Errorf("%s status = %q, want %q", tc.id, result.Status, tc.status)
 		}
@@ -307,23 +325,31 @@ func TestAllureNestedSteps(t *testing.T) {
 		Device:  Device{ID: "test", Name: "Pixel 6", Platform: "android"},
 		Summary: Summary{Total: 1, Passed: 1},
 		Flows: []FlowEntry{
-			{Index: 0, ID: "flow-000", Name: "Nested Test",
+			{
+				Index: 0, ID: "flow-000", Name: "Nested Test",
 				SourceFile: "flows/nested.yaml", DataFile: "flows/flow-000.json",
-				Status: StatusPassed, Duration: &d, StartTime: &now, EndTime: &endTime},
+				Status: StatusPassed, Duration: &d, StartTime: &now, EndTime: &endTime,
+			},
 		},
 	}
 
 	flow0 := FlowDetail{
 		ID: "flow-000", Name: "Nested Test", StartTime: now, Duration: &d,
 		Commands: []Command{
-			{ID: "cmd-000", Type: "runFlow", Label: "Login Sub", Status: StatusPassed, Duration: &cmdDur,
+			{
+				ID: "cmd-000", Type: "runFlow", Label: "Login Sub", Status: StatusPassed, Duration: &cmdDur,
 				StartTime: &now, EndTime: &endTime,
 				SubCommands: []Command{
-					{ID: "sub-000", Type: "launchApp", Status: StatusPassed, Duration: &subDur,
-						StartTime: &now, EndTime: &endTime},
-					{ID: "sub-001", Type: "tapOn", Label: "Tap login", Status: StatusPassed, Duration: &subDur,
-						StartTime: &now, EndTime: &endTime},
-				}},
+					{
+						ID: "sub-000", Type: "launchApp", Status: StatusPassed, Duration: &subDur,
+						StartTime: &now, EndTime: &endTime,
+					},
+					{
+						ID: "sub-001", Type: "tapOn", Label: "Tap login", Status: StatusPassed, Duration: &subDur,
+						StartTime: &now, EndTime: &endTime,
+					},
+				},
+			},
 		},
 	}
 
@@ -379,21 +405,25 @@ func TestAllureScreenshotAttachments(t *testing.T) {
 		Device:  Device{ID: "test", Name: "Pixel 6", Platform: "android"},
 		Summary: Summary{Total: 1, Passed: 1},
 		Flows: []FlowEntry{
-			{Index: 0, ID: "flow-000", Name: "Screenshot Test",
+			{
+				Index: 0, ID: "flow-000", Name: "Screenshot Test",
 				SourceFile: "flows/screenshots.yaml", DataFile: "flows/flow-000.json",
-				Status: StatusPassed, Duration: &d, StartTime: &now, EndTime: &endTime},
+				Status: StatusPassed, Duration: &d, StartTime: &now, EndTime: &endTime,
+			},
 		},
 	}
 
 	flow0 := FlowDetail{
 		ID: "flow-000", Name: "Screenshot Test", StartTime: now, Duration: &d,
 		Commands: []Command{
-			{ID: "cmd-000", Type: "tapOn", Label: "Tap button", Status: StatusPassed, Duration: &cmdDur,
+			{
+				ID: "cmd-000", Type: "tapOn", Label: "Tap button", Status: StatusPassed, Duration: &cmdDur,
 				StartTime: &now, EndTime: &endTime,
 				Artifacts: CommandArtifacts{
 					ScreenshotBefore: "assets/flow-000/cmd-000-before.png",
 					ScreenshotAfter:  "assets/flow-000/cmd-000-after.png",
-				}},
+				},
+			},
 		},
 	}
 
@@ -486,9 +516,11 @@ func TestAllureCategoriesJSON(t *testing.T) {
 		Device:  Device{ID: "test", Name: "Test", Platform: "android"},
 		Summary: Summary{Total: 1, Passed: 1},
 		Flows: []FlowEntry{
-			{Index: 0, ID: "flow-000", Name: "Test",
+			{
+				Index: 0, ID: "flow-000", Name: "Test",
 				SourceFile: "test.yaml", DataFile: "flows/flow-000.json",
-				Status: StatusPassed},
+				Status: StatusPassed,
+			},
 		},
 	}
 
@@ -541,9 +573,11 @@ func TestAllureEnvironmentProperties(t *testing.T) {
 		MaestroRunner: RunnerInfo{Version: "0.3.0", Driver: "uiautomator2"},
 		Summary:       Summary{Total: 1, Passed: 1},
 		Flows: []FlowEntry{
-			{Index: 0, ID: "flow-000", Name: "Test",
+			{
+				Index: 0, ID: "flow-000", Name: "Test",
 				SourceFile: "test.yaml", DataFile: "flows/flow-000.json",
-				Status: StatusPassed},
+				Status: StatusPassed,
+			},
 		},
 	}
 
@@ -587,9 +621,11 @@ func TestAllureExecutorJSON(t *testing.T) {
 		Device:  Device{ID: "test", Name: "Test", Platform: "android"},
 		Summary: Summary{Total: 1, Passed: 1},
 		Flows: []FlowEntry{
-			{Index: 0, ID: "flow-000", Name: "Test",
+			{
+				Index: 0, ID: "flow-000", Name: "Test",
 				SourceFile: "test.yaml", DataFile: "flows/flow-000.json",
-				Status: StatusPassed},
+				Status: StatusPassed,
+			},
 		},
 	}
 
@@ -636,10 +672,12 @@ func TestAllureLabels(t *testing.T) {
 		Device:  Device{ID: "emulator-5554", Name: "Pixel 6", Platform: "android"},
 		Summary: Summary{Total: 1, Passed: 1},
 		Flows: []FlowEntry{
-			{Index: 0, ID: "flow-000", Name: "Login Test",
+			{
+				Index: 0, ID: "flow-000", Name: "Login Test",
 				SourceFile: "flows/login.yaml", DataFile: "flows/flow-000.json",
 				Status: StatusPassed, Duration: &d, StartTime: &now, EndTime: &endTime,
-				Tags: []string{"smoke", "login"}},
+				Tags: []string{"smoke", "login"},
+			},
 		},
 	}
 
@@ -826,9 +864,11 @@ func TestGenerateAllureUnwritableDir(t *testing.T) {
 		Device:  Device{ID: "test", Name: "Test", Platform: "android"},
 		Summary: Summary{Total: 1, Passed: 1},
 		Flows: []FlowEntry{
-			{Index: 0, ID: "flow-000", Name: "Test",
+			{
+				Index: 0, ID: "flow-000", Name: "Test",
 				SourceFile: "test.yaml", DataFile: "flows/flow-000.json",
-				Status: StatusPassed},
+				Status: StatusPassed,
+			},
 		},
 	}
 	flow0 := FlowDetail{ID: "flow-000", Name: "Test", StartTime: now, Commands: []Command{}}
@@ -990,9 +1030,11 @@ func TestGenerateAllureResultWriteError(t *testing.T) {
 		Device:  Device{ID: "test", Name: "Test", Platform: "android"},
 		Summary: Summary{Total: 1, Passed: 1},
 		Flows: []FlowEntry{
-			{Index: 0, ID: "flow-000", Name: "Test",
+			{
+				Index: 0, ID: "flow-000", Name: "Test",
 				SourceFile: "test.yaml", DataFile: "flows/flow-000.json",
-				Status: StatusPassed, StartTime: &now, EndTime: &endTime},
+				Status: StatusPassed, StartTime: &now, EndTime: &endTime,
+			},
 		},
 	}
 	flow0 := FlowDetail{ID: "flow-000", Name: "Test", StartTime: now, Commands: []Command{}}
@@ -1034,10 +1076,12 @@ func TestAllurePerFlowDevice(t *testing.T) {
 		Device:  Device{ID: "default", Name: "Default Device", Platform: "android"},
 		Summary: Summary{Total: 1, Passed: 1},
 		Flows: []FlowEntry{
-			{Index: 0, ID: "flow-000", Name: "Test",
+			{
+				Index: 0, ID: "flow-000", Name: "Test",
 				SourceFile: "test.yaml", DataFile: "flows/flow-000.json",
 				Status: StatusPassed, Duration: &d, StartTime: &now, EndTime: &endTime,
-				Device: flowDevice},
+				Device: flowDevice,
+			},
 		},
 	}
 

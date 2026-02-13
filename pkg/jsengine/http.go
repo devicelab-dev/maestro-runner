@@ -144,7 +144,7 @@ func (e *Engine) doHTTPRequest(method string, call goja.FunctionCall) goja.Value
 	if err != nil {
 		panic(e.runtime.NewTypeError(fmt.Sprintf("HTTP request failed: %v", err)))
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Read body
 	bodyBytes, err := io.ReadAll(resp.Body)
