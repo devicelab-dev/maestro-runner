@@ -676,7 +676,7 @@ func TestGrantPermissionsWithExplicitPermissions(t *testing.T) {
 	driver := createTestAppiumDriver(server)
 
 	permissions := map[string]string{
-		"android.permission.CAMERA":              "allow",
+		"android.permission.CAMERA":               "allow",
 		"android.permission.ACCESS_FINE_LOCATION": "allow",
 	}
 	driver.grantPermissions("com.test.app", permissions)

@@ -30,6 +30,14 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 	// to atomically focus + type (bypasses keyboard focus timing issues).
 	if d.platform == "ios" && info.ID != "" {
 		d.lastTappedElementID = info.ID
+		// Use ClickElement (POST /element/{id}/click) instead of coordinate tap.
+		// Coordinate taps via W3C pointer actions are unreliable on iOS: they can miss
+		// if the keyboard is animating, or if the element is partially obscured.
+		// ClickElement calls [XCUIElement tap] directly via WDA.
+		if err := d.client.ClickElement(info.ID); err != nil {
+			return errorResult(err, "Failed to tap")
+		}
+		return successResult(fmt.Sprintf("Tapped on element '%s'", info.ID), info)
 	}
 
 	cx, cy := info.Bounds.Center()
@@ -249,15 +257,20 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		// On iOS, use ElementSendKeys (POST /element/{id}/value) which internally
 		// calls WDA's fb_typeText. This atomically handles focus (taps the element
 		// if not focused) and types text — no dependency on prior keyboard state.
-		if d.lastTappedElementID != "" {
-			// Wait for the element to have keyboard focus before typing.
-			// A prior coordinate tap may still be establishing focus asynchronously.
-			d.waitForKeyboardFocus(d.lastTappedElementID)
-			if err := d.client.ElementSendKeys(d.lastTappedElementID, text); err != nil {
+		elemID := d.lastTappedElementID
+		if elemID == "" {
+			// No element ID from tapOn (e.g., element found via page source parsing).
+			// Find the currently focused element by polling for hasKeyboardFocus.
+			elemID = d.findFocusedElementID()
+		}
+
+		if elemID != "" {
+			d.waitForKeyboardFocus(elemID)
+			if err := d.client.ElementSendKeys(elemID, text); err != nil {
 				return errorResult(err, "Failed to input text")
 			}
 		} else {
-			// Fallback: use "mobile: keys" which types into currently focused element
+			// Final fallback: use "mobile: keys" which types into currently focused element
 			_, err := d.client.ExecuteMobile("keys", map[string]interface{}{
 				"keys": strings.Split(text, ""),
 			})
@@ -284,6 +297,18 @@ func (d *Driver) waitForKeyboardFocus(elementID string) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+// findFocusedElementID finds the element with keyboard focus on iOS.
+// Polls up to 1s for an element with hasKeyboardFocus == true.
+func (d *Driver) findFocusedElementID() string {
+	for i := 0; i < 10; i++ {
+		if id, err := d.client.FindElement("-ios predicate string", "hasKeyboardFocus == true"); err == nil && id != "" {
+			return id
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return ""
 }
 
 func (d *Driver) eraseText(step *flow.EraseTextStep) *core.CommandResult {

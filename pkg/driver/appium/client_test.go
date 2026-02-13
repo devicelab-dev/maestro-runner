@@ -18,7 +18,7 @@ func writeJSON(w http.ResponseWriter, data interface{}) {
 func TestClient_Connect(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session" && r.Method == "POST" {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]interface{}{
 					"sessionId": "test-session-123",
 					"capabilities": map[string]interface{}{
@@ -30,7 +30,7 @@ func TestClient_Connect(t *testing.T) {
 			return
 		}
 		if r.URL.Path == "/session/test-session-123/window/rect" {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]interface{}{
 					"width":  1080.0,
 					"height": 1920.0,
@@ -46,7 +46,6 @@ func TestClient_Connect(t *testing.T) {
 	err := client.Connect(map[string]interface{}{
 		"platformName": "Android",
 	})
-
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -70,7 +69,7 @@ func TestClient_Disconnect(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session" && r.Method == "DELETE" {
 			deleteCalled = true
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -97,7 +96,7 @@ func TestClient_Disconnect(t *testing.T) {
 func TestClient_FindElement(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/element" && r.Method == "POST" {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]interface{}{
 					"element-6066-11e4-a52e-4f735466cecf": "elem-123",
 				},
@@ -124,7 +123,7 @@ func TestClient_FindElement(t *testing.T) {
 func TestClient_FindElements(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/elements" && r.Method == "POST" {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": []interface{}{
 					map[string]interface{}{"element-6066-11e4-a52e-4f735466cecf": "elem-1"},
 					map[string]interface{}{"element-6066-11e4-a52e-4f735466cecf": "elem-2"},
@@ -154,7 +153,7 @@ func TestClient_Tap(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/actions" && r.Method == "POST" {
 			actionsCalled = true
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -177,7 +176,7 @@ func TestClient_Tap(t *testing.T) {
 func TestClient_DoubleTap(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/actions" {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -196,7 +195,7 @@ func TestClient_DoubleTap(t *testing.T) {
 func TestClient_LongPress(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/actions" {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -215,7 +214,7 @@ func TestClient_LongPress(t *testing.T) {
 func TestClient_Swipe(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/actions" {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -234,7 +233,7 @@ func TestClient_Swipe(t *testing.T) {
 func TestClient_SendKeys(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/actions" {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -256,7 +255,7 @@ func TestClient_Screenshot(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/screenshot" {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": encoded,
 			})
 			return
@@ -283,7 +282,7 @@ func TestClient_Source(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/source" {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": expectedSource,
 			})
 			return
@@ -308,7 +307,7 @@ func TestClient_Source(t *testing.T) {
 func TestClient_GetOrientation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/orientation" && r.Method == "GET" {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": "PORTRAIT",
 			})
 			return
@@ -333,7 +332,7 @@ func TestClient_GetOrientation(t *testing.T) {
 func TestClient_SetOrientation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/orientation" && r.Method == "POST" {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -363,7 +362,7 @@ func TestClient_LaunchApp(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/session/test-session/appium/device/activate_app" {
-					writeJSON(w,map[string]interface{}{"value": nil})
+					writeJSON(w, map[string]interface{}{"value": nil})
 					return
 				}
 				w.WriteHeader(http.StatusNotFound)
@@ -385,7 +384,7 @@ func TestClient_LaunchApp(t *testing.T) {
 func TestClient_TerminateApp(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/appium/device/terminate_app" {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -405,7 +404,7 @@ func TestClient_TerminateApp(t *testing.T) {
 func TestClient_Back(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/appium/device/press_keycode" {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -424,7 +423,7 @@ func TestClient_Back(t *testing.T) {
 func TestClient_HideKeyboard(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/appium/device/hide_keyboard" {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -446,7 +445,7 @@ func TestClient_GetClipboard(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/appium/device/get_clipboard" {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": encoded,
 			})
 			return
@@ -471,7 +470,7 @@ func TestClient_GetClipboard(t *testing.T) {
 func TestClient_SetClipboard(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/appium/device/set_clipboard" {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -490,7 +489,7 @@ func TestClient_SetClipboard(t *testing.T) {
 func TestClient_OpenURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/url" {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -509,7 +508,7 @@ func TestClient_OpenURL(t *testing.T) {
 func TestClient_SetLocation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/location" {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -528,7 +527,7 @@ func TestClient_SetLocation(t *testing.T) {
 func TestClient_GetElementRect(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/element/elem-1/rect" {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": map[string]interface{}{
 					"x":      100.0,
 					"y":      200.0,
@@ -558,7 +557,7 @@ func TestClient_GetElementRect(t *testing.T) {
 func TestClient_GetElementText(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/element/elem-1/text" {
-			writeJSON(w,map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"value": "Hello World",
 			})
 			return
@@ -583,7 +582,7 @@ func TestClient_GetElementText(t *testing.T) {
 func TestClient_ClickElement(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/element/elem-1/click" {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -602,7 +601,7 @@ func TestClient_ClickElement(t *testing.T) {
 func TestClient_ClearElement(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/element/elem-1/clear" {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -621,7 +620,7 @@ func TestClient_ClearElement(t *testing.T) {
 func TestClient_SetImplicitWait(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/timeouts" {
-			writeJSON(w,map[string]interface{}{"value": nil})
+			writeJSON(w, map[string]interface{}{"value": nil})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)

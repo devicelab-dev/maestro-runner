@@ -265,9 +265,9 @@ func (d *Driver) findElementDirect(sel flow.Selector) (*core.ElementInfo, error)
 	// Try text using native platform strategies (fast)
 	if sel.Text != "" {
 		if d.platform == "ios" {
-			// iOS: use -ios predicate string
+			// iOS: use -ios predicate string (check label, name, and value to match page source behavior)
 			escaped := escapeIOSPredicateString(sel.Text)
-			predicate := fmt.Sprintf(`label CONTAINS[c] "%s" OR name CONTAINS[c] "%s"`, escaped, escaped)
+			predicate := fmt.Sprintf(`label CONTAINS[c] "%s" OR name CONTAINS[c] "%s" OR value CONTAINS[c] "%s"`, escaped, escaped, escaped)
 			if elemID, err := d.client.FindElement("-ios predicate string", predicate); err == nil && elemID != "" {
 				return d.getElementInfo(elemID)
 			}
@@ -391,18 +391,22 @@ func (d *Driver) findElementForTap(sel flow.Selector, timeout time.Duration) (*c
 	deadline := time.Now().Add(timeout)
 
 	for {
-		// Try clickable-first approach for text-based selectors on Android
-		if sel.Text != "" && d.platform != "ios" {
-			info, err := d.findElementForTapDirect(sel)
-			if err == nil && info != nil {
-				return info, nil
-			}
+		var info *core.ElementInfo
+		var err error
+
+		if sel.Text != "" && d.platform == "ios" {
+			// iOS: exact match first, then page source with clickable prioritization
+			info, err = d.findElementForTapIOS(sel)
+		} else if sel.Text != "" && d.platform != "ios" {
+			// Android: clickable-first approach via UiAutomator
+			info, err = d.findElementForTapDirect(sel)
 		} else {
-			// For ID-based or iOS selectors, use standard approach
-			info, err := d.findElementDirect(sel)
-			if err == nil && info != nil {
-				return info, nil
-			}
+			// ID-based selectors: standard approach
+			info, err = d.findElementDirect(sel)
+		}
+
+		if err == nil && info != nil {
+			return info, nil
 		}
 
 		if time.Now().After(deadline) {
@@ -451,6 +455,27 @@ func (d *Driver) findElementForTapDirect(sel flow.Selector) (*core.ElementInfo, 
 	}
 
 	// Step 3: Text exists but not clickable → use page source with parent lookup
+	return d.findElementByPageSource(sel)
+}
+
+// findElementForTapIOS finds element for tap on iOS, prioritizing clickable elements.
+// Step 1: Try exact match via iOS predicate (avoids substring false positives,
+//
+//	e.g., "Sign In" button vs "Sign in to continue" text).
+//
+// Step 2: Fall back to page source which has clickable prioritization
+//
+//	(SortClickableFirst + GetClickableElement).
+func (d *Driver) findElementForTapIOS(sel flow.Selector) (*core.ElementInfo, error) {
+	escaped := escapeIOSPredicateString(sel.Text)
+
+	// Step 1: Try exact match (fast path — returns Appium element ID)
+	exactPredicate := fmt.Sprintf(`label ==[c] "%s" OR name ==[c] "%s" OR value ==[c] "%s"`, escaped, escaped, escaped)
+	if elemID, err := d.client.FindElement("-ios predicate string", exactPredicate); err == nil && elemID != "" {
+		return d.getElementInfo(elemID)
+	}
+
+	// Step 2: Page source with clickable prioritization
 	return d.findElementByPageSource(sel)
 }
 

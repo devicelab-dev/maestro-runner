@@ -39,6 +39,13 @@ func NewClient(serverURL string) *Client {
 
 // Connect creates a new session with the given capabilities.
 func (c *Client) Connect(capabilities map[string]interface{}) error {
+	// For iOS: disable auto-launch to prevent double-launch (once by Appium session,
+	// once by flow's launchApp). Double-launch causes duplicate permission alerts
+	// that interfere with element focus during text input.
+	if p, ok := capabilities["platformName"].(string); ok && strings.EqualFold(p, "ios") {
+		capabilities["appium:autoLaunch"] = false
+	}
+
 	// For Android with clearState (noReset=false): disable auto-launch so we can
 	// grant permissions via pm grant before the app starts (avoids permission popups).
 	// When noReset is true (default), permissions persist across sessions so this isn't needed.
@@ -687,7 +694,11 @@ func (c *Client) request(method, path string, body interface{}) (map[string]inte
 	if resp == nil {
 		return nil, fmt.Errorf("nil response from server")
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			logger.Debug("failed to close response body for %s %s: %v", method, path, err)
+		}
+	}()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
