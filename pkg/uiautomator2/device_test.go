@@ -691,3 +691,114 @@ func TestGetClipboardRequestError(t *testing.T) {
 		t.Error("expected error")
 	}
 }
+
+func TestSendKeyActions(t *testing.T) {
+	client, server := newTestClientWithSession(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/actions") {
+			t.Errorf("expected /actions suffix, got %s", r.URL.Path)
+		}
+		if r.Method != "POST" {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+
+		var req map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		actions, ok := req["actions"].([]interface{})
+		if !ok || len(actions) != 1 {
+			t.Errorf("expected 1 action source, got %v", req["actions"])
+		}
+
+		actionSource, ok := actions[0].(map[string]interface{})
+		if !ok {
+			t.Fatal("expected action source to be a map")
+		}
+		if actionSource["type"] != "key" {
+			t.Errorf("expected type 'key', got %v", actionSource["type"])
+		}
+		if actionSource["id"] != "keyboard" {
+			t.Errorf("expected id 'keyboard', got %v", actionSource["id"])
+		}
+
+		keyActions, ok := actionSource["actions"].([]interface{})
+		if !ok {
+			t.Fatal("expected key actions to be a list")
+		}
+		// "Hi" = 2 chars * 2 (keyDown + keyUp) = 4 actions
+		if len(keyActions) != 4 {
+			t.Errorf("expected 4 key actions for 'Hi', got %d", len(keyActions))
+		}
+
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	})
+	defer server.Close()
+
+	err := client.SendKeyActions("Hi")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSendKeyActionsEmpty(t *testing.T) {
+	client, server := newTestClientWithSession(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		actions := req["actions"].([]interface{})
+		actionSource := actions[0].(map[string]interface{})
+		keyActions := actionSource["actions"]
+
+		// Empty string = nil actions (no keyDown/keyUp pairs)
+		if keyActions != nil {
+			t.Errorf("expected nil key actions for empty string, got %v", keyActions)
+		}
+
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	})
+	defer server.Close()
+
+	err := client.SendKeyActions("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSendKeyActionsRequestError(t *testing.T) {
+	client := newErrorTestClient()
+	err := client.SendKeyActions("test")
+	if err == nil {
+		t.Error("expected error")
+	}
+}
+
+func TestSendKeyActionsServerError(t *testing.T) {
+	client, server := newTestClientWithSession(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
+			"value": map[string]interface{}{
+				"error":   "unknown error",
+				"message": "server error",
+			},
+		}); err != nil {
+			return
+		}
+	})
+	defer server.Close()
+
+	err := client.SendKeyActions("test")
+	if err == nil {
+		t.Error("expected error on server error")
+	}
+}

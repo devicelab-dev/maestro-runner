@@ -3332,6 +3332,99 @@ func TestTapOnPointWithPercentageScreenSizeError(t *testing.T) {
 }
 
 // ============================================================================
+// InputText keyPress Mode Tests
+// ============================================================================
+
+func TestInputTextKeyPressSuccess(t *testing.T) {
+	var sendKeyActionsCalled bool
+	var textSent string
+	client := &MockUIA2Client{}
+	// Override SendKeyActions to track the call
+	client.sendKeyActionsFunc = func(text string) error {
+		sendKeyActionsCalled = true
+		textSent = text
+		return nil
+	}
+	driver := New(client, nil, nil)
+
+	step := &flow.InputTextStep{
+		Text:     "Hello",
+		KeyPress: true,
+	}
+	result := driver.inputText(step)
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	if !sendKeyActionsCalled {
+		t.Error("expected SendKeyActions to be called")
+	}
+	if textSent != "Hello" {
+		t.Errorf("expected text 'Hello', got %q", textSent)
+	}
+	if !strings.Contains(result.Message, "keyPress") {
+		t.Errorf("expected 'keyPress' in message, got: %s", result.Message)
+	}
+}
+
+func TestInputTextKeyPressError(t *testing.T) {
+	client := &MockUIA2Client{}
+	client.sendKeyActionsFunc = func(text string) error {
+		return errors.New("key actions failed")
+	}
+	driver := New(client, nil, nil)
+
+	step := &flow.InputTextStep{
+		Text:     "Hello",
+		KeyPress: true,
+	}
+	result := driver.inputText(step)
+
+	if result.Success {
+		t.Error("expected failure when SendKeyActions fails")
+	}
+	if !strings.Contains(result.Message, "key press") {
+		t.Errorf("expected 'key press' in error message, got: %s", result.Message)
+	}
+}
+
+func TestInputTextKeyPressWithUnicode(t *testing.T) {
+	client := &MockUIA2Client{}
+	client.sendKeyActionsFunc = func(text string) error {
+		return nil
+	}
+	driver := New(client, nil, nil)
+
+	step := &flow.InputTextStep{
+		Text:     "caf\u00e9",
+		KeyPress: true,
+	}
+	result := driver.inputText(step)
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	if !strings.Contains(result.Message, "non-ASCII") {
+		t.Errorf("expected non-ASCII warning in message, got: %s", result.Message)
+	}
+}
+
+func TestInputTextKeyPressEmptyText(t *testing.T) {
+	client := &MockUIA2Client{}
+	driver := New(client, nil, nil)
+
+	step := &flow.InputTextStep{
+		Text:     "",
+		KeyPress: true,
+	}
+	result := driver.inputText(step)
+
+	if result.Success {
+		t.Error("expected failure for empty text even with keyPress=true")
+	}
+}
+
+// ============================================================================
 // Compile-time interface assertion
 // ============================================================================
 

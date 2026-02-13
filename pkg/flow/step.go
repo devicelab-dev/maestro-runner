@@ -214,6 +214,7 @@ type DismissAlertStep struct {
 type InputTextStep struct {
 	BaseStep `yaml:",inline"`
 	Text     string   `yaml:"text"`
+	KeyPress bool     `yaml:"keyPress"` // If true, simulate real key presses (Android native only)
 	Selector Selector `yaml:",inline"`
 }
 

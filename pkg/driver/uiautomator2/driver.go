@@ -42,6 +42,7 @@ type UIA2Client interface {
 	Back() error
 	HideKeyboard() error
 	PressKeyCode(keyCode int) error
+	SendKeyActions(text string) error
 
 	// Device state
 	Screenshot() ([]byte, error)

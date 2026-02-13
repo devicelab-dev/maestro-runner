@@ -28,9 +28,10 @@ func writeJSON(w http.ResponseWriter, data interface{}) {
 
 type MockUIA2Client struct {
 	// Config
-	findElementFunc   func(strategy, selector string) (*uiautomator2.Element, error)
-	activeElementFunc func() (*uiautomator2.Element, error)
-	sourceFunc        func() (string, error)
+	findElementFunc    func(strategy, selector string) (*uiautomator2.Element, error)
+	activeElementFunc  func() (*uiautomator2.Element, error)
+	sourceFunc         func() (string, error)
+	sendKeyActionsFunc func(text string) error
 
 	// Tracking
 	clickCalls          []struct{ X, Y int }
@@ -125,6 +126,13 @@ func (m *MockUIA2Client) HideKeyboard() error {
 func (m *MockUIA2Client) PressKeyCode(keyCode int) error {
 	m.pressKeyCalls = append(m.pressKeyCalls, keyCode)
 	return m.pressKeyErr
+}
+
+func (m *MockUIA2Client) SendKeyActions(text string) error {
+	if m.sendKeyActionsFunc != nil {
+		return m.sendKeyActionsFunc(text)
+	}
+	return nil
 }
 
 func (m *MockUIA2Client) Screenshot() ([]byte, error) {

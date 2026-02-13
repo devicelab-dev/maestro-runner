@@ -233,6 +233,15 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		unicodeWarning = " (warning: non-ASCII characters may not input correctly)"
 	}
 
+	// keyPress mode: simulate real key presses via W3C Actions API.
+	// This triggers TextWatcher/onTextChanged per character (unlike setText injection).
+	if step.KeyPress {
+		if err := d.client.SendKeyActions(text); err != nil {
+			return errorResult(err, "Failed to input text via key press")
+		}
+		return successResult(fmt.Sprintf("Entered text (keyPress): %s%s", text, unicodeWarning), nil)
+	}
+
 	// If selector provided, find element and type into it
 	if !step.Selector.IsEmpty() {
 		elem, _, err := d.findElement(step.Selector, step.IsOptional(), step.TimeoutMs)

@@ -25,6 +25,31 @@ func (c *Client) PressKeyCode(keyCode int) error {
 	return err
 }
 
+// SendKeyActions sends text character-by-character via W3C Actions API.
+// Each character is sent as a keyDown/keyUp pair, simulating real key presses.
+// This triggers TextWatcher and onTextChanged events (unlike SendKeys/setText).
+// ASCII only — Unicode characters will not work.
+func (c *Client) SendKeyActions(text string) error {
+	var keyActions []map[string]interface{}
+	for _, ch := range text {
+		keyActions = append(keyActions,
+			map[string]interface{}{"type": "keyDown", "value": string(ch)},
+			map[string]interface{}{"type": "keyUp", "value": string(ch)},
+		)
+	}
+	req := map[string]interface{}{
+		"actions": []map[string]interface{}{
+			{
+				"type":    "key",
+				"id":      "keyboard",
+				"actions": keyActions,
+			},
+		},
+	}
+	_, err := c.request("POST", c.sessionPath("/actions"), req)
+	return err
+}
+
 // LongPressKeyCode long-presses a key.
 func (c *Client) LongPressKeyCode(keyCode int) error {
 	req := KeyCodeRequest{KeyCode: keyCode}
