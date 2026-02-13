@@ -703,10 +703,17 @@ func executeTest(cfg *RunConfig) error {
 	}
 	logger.Info("Validated %d flow(s)", len(flows))
 
-	// Pre-check: iOS clearState requires --app-file
-	if strings.EqualFold(cfg.Platform, "ios") && cfg.AppFile == "" && flowsUseClearState(flows) {
-		return fmt.Errorf("clearState on iOS requires --app-file to reinstall the app after uninstalling\n" +
-			"Usage: maestro-runner --app-file <path-to-ipa-or-app> --platform ios test <flow-files>")
+	// Pre-checks for iOS with direct WDA driver (not Appium).
+	// Appium handles everything via capabilities — no --app-file or --team-id needed.
+	if strings.EqualFold(cfg.Platform, "ios") && cfg.Driver != "appium" {
+		if cfg.TeamID == "" {
+			return fmt.Errorf("iOS with WDA driver requires --team-id for code signing\n" +
+				"Usage: maestro-runner --platform ios --team-id <APPLE_TEAM_ID> test <flow-files>")
+		}
+		if cfg.AppFile == "" && flowsUseClearState(flows) {
+			return fmt.Errorf("clearState on iOS requires --app-file to reinstall the app after uninstalling\n" +
+				"Usage: maestro-runner --app-file <path-to-ipa-or-app> --platform ios test <flow-files>")
+		}
 	}
 
 	// Extract appId from first flow if not in config
