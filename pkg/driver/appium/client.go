@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -19,12 +20,13 @@ const w3cElementKey = "element-6066-11e4-a52e-4f735466cecf"
 
 // Client handles HTTP communication with Appium server.
 type Client struct {
-	serverURL string
-	sessionID string
-	client    *http.Client
-	platform  string // ios, android
-	screenW   int
-	screenH   int
+	serverURL    string
+	sessionID    string
+	client       *http.Client
+	platform     string // ios, android
+	screenW      int
+	screenH      int
+	isRealDevice bool // true for physical devices, false for simulators
 }
 
 // NewClient creates a new Appium client.
@@ -81,10 +83,17 @@ func (c *Client) Connect(capabilities map[string]interface{}) error {
 		return fmt.Errorf("no session ID in response")
 	}
 
-	// Extract platform from capabilities
+	// Extract platform and device type from capabilities
 	if caps, ok := value["capabilities"].(map[string]interface{}); ok {
 		if platform, ok := caps["platformName"].(string); ok {
 			c.platform = strings.ToLower(platform)
+		}
+		// Detect real device vs simulator from session response
+		if isReal, ok := caps["isRealDevice"].(bool); ok {
+			c.isRealDevice = isReal
+		} else if udid, ok := capabilities["appium:udid"].(string); ok && udid != "" {
+			// Simulator UDIDs are UUID format (8-4-4-4-12 hex with dashes)
+			c.isRealDevice = !isUUIDFormat(udid)
 		}
 	}
 
@@ -489,7 +498,13 @@ func (c *Client) ClearAppData(appID string) error {
 	}
 
 	if c.platform == "ios" {
-		// iOS: use mobile: clearApp (only works on simulator)
+		if c.isRealDevice {
+			// Real iOS devices: mobile: clearApp is not supported.
+			// Just terminate (done above) — state won't be fully cleared.
+			logger.Warn("clearState on real iOS device via Appium: app state cannot be fully cleared (mobile: clearApp only works on simulators)")
+			return nil
+		}
+		// Simulator: use mobile: clearApp
 		_, err := c.post(c.sessionPath()+"/execute/sync", map[string]interface{}{
 			"script": "mobile: clearApp",
 			"args":   []interface{}{map[string]interface{}{"bundleId": appID}},
@@ -734,4 +749,12 @@ func extractElementID(value map[string]interface{}) string {
 		return id
 	}
 	return ""
+}
+
+// uuidRegex matches simulator UDIDs (e.g. "EB69B42A-4763-4A33-AF0F-CD233F721951").
+var uuidRegex = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
+
+// isUUIDFormat returns true if s matches the UUID format used by iOS simulators.
+func isUUIDFormat(s string) bool {
+	return uuidRegex.MatchString(s)
 }
