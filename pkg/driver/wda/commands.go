@@ -653,10 +653,11 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 					}
 				}
 			}
-		} else {
-			// Real device: resolve WDA alert action from permissions
-			d.alertAction = resolveAlertAction(permissions)
 		}
+		// Set WDA auto-alert handling for permissions that simctl can't grant
+		// (e.g. notifications). On real devices this is the only mechanism;
+		// on simulators it's a fallback alongside simctl privacy.
+		d.alertAction = resolveAlertAction(permissions)
 	}
 
 	// If no session exists, create one (which also launches the app)
