@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/logger"
@@ -99,15 +101,33 @@ func (d *AndroidDevice) setupSocketForward(cfg UIAutomator2Config) error {
 		socketPath = d.DefaultSocketPath()
 	}
 
-	// Remove stale socket file
-	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
-		logger.Debug("failed to remove stale socket %s: %v", socketPath, err)
+	// Check for existing socket file
+	if _, err := os.Stat(socketPath); err == nil {
+		// Socket file exists — check if the owning process is still alive
+		if IsOwnerAlive(socketPath) {
+			return fmt.Errorf("device %s already in use (socket %s is active)", d.Serial(), socketPath)
+		}
+		// Stale socket from a crashed/killed process — clean up
+		logger.Info("Removing stale socket for device %s: %s", d.Serial(), socketPath)
+		if err := d.RemoveSocketForward(socketPath); err != nil {
+			logger.Debug("failed to remove stale socket forward %s: %v", socketPath, err)
+		}
+		if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+			logger.Debug("failed to remove stale socket file %s: %v", socketPath, err)
+		}
+		os.Remove(pidPathFor(socketPath))
 	}
 
 	if err := d.ForwardSocket(socketPath, cfg.DevicePort); err != nil {
 		return fmt.Errorf("socket forward failed: %w", err)
 	}
 	d.socketPath = socketPath
+
+	// Write PID file so other instances can detect us as the owner
+	if err := os.WriteFile(pidPathFor(socketPath), []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+		logger.Warn("failed to write PID file: %v", err)
+	}
+
 	return nil
 }
 
@@ -165,6 +185,7 @@ func (d *AndroidDevice) StopUIAutomator2() error {
 		if err := os.Remove(d.socketPath); err != nil && !os.IsNotExist(err) {
 			logger.Warn("failed to remove socket file %s: %v", d.socketPath, err)
 		}
+		os.Remove(pidPathFor(d.socketPath))
 		d.socketPath = ""
 	}
 	// Also clean up default socket path (in case of stale from previous run)
@@ -175,6 +196,7 @@ func (d *AndroidDevice) StopUIAutomator2() error {
 	if err := os.Remove(defaultSocket); err != nil && !os.IsNotExist(err) {
 		logger.Warn("failed to remove default socket file %s: %v", defaultSocket, err)
 	}
+	os.Remove(pidPathFor(defaultSocket))
 
 	// Clean up port forward (Windows)
 	if d.localPort != 0 {
@@ -294,6 +316,32 @@ func findAPK(dir, pattern string) (string, error) {
 		return "", fmt.Errorf("no APK found matching %s", pattern)
 	}
 	return matches[0], nil
+}
+
+// pidPathFor returns the PID file path for a given socket path.
+// e.g., /tmp/uia2-SERIAL.sock → /tmp/uia2-SERIAL.pid
+func pidPathFor(socketPath string) string {
+	return strings.TrimSuffix(socketPath, filepath.Ext(socketPath)) + ".pid"
+}
+
+// IsOwnerAlive checks if the process that created the socket is still running.
+// Returns true only if PID file exists AND the process is alive.
+// Returns false if PID file is missing, unreadable, or the process is dead.
+func IsOwnerAlive(socketPath string) bool {
+	data, err := os.ReadFile(pidPathFor(socketPath))
+	if err != nil {
+		return false // no PID file → no owner → stale
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return false
+	}
+	// Signal 0 checks if process exists without actually sending a signal
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return proc.Signal(syscall.Signal(0)) == nil
 }
 
 // UninstallUIAutomator2 removes UIAutomator2 packages from the device.

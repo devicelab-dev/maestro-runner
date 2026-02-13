@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -29,6 +30,11 @@ import (
 	"github.com/devicelab-dev/maestro-runner/pkg/validator"
 	"github.com/urfave/cli/v2"
 )
+
+// activeCleanup holds the current driver cleanup function so the signal handler
+// can clean up resources (sockets, adb forwards, sessions) before os.Exit.
+var activeCleanup func()
+var cleanupMu sync.Mutex
 
 var testCommand = &cli.Command{
 	Name:      "test",
@@ -682,7 +688,16 @@ func executeTest(cfg *RunConfig) error {
 	go func() {
 		sig := <-sigCh
 		logger.Info("Received signal %v, cleaning up...", sig)
-		fmt.Fprintf(os.Stderr, "\nReceived %v, shutting down devices...\n", sig)
+		fmt.Fprintf(os.Stderr, "\nReceived %v, cleaning up...\n", sig)
+
+		// Clean up driver resources (socket, adb forward, session)
+		cleanupMu.Lock()
+		fn := activeCleanup
+		cleanupMu.Unlock()
+		if fn != nil {
+			fn()
+		}
+
 		if cfg.ShutdownAfter {
 			if err := emulatorMgr.ShutdownAll(); err != nil {
 				logger.Error("Failed to shutdown emulators on signal: %v", err)
@@ -1052,7 +1067,15 @@ func executeSingleDevice(cfg *RunConfig, flows []flow.Flow) (*executor.RunResult
 		}
 		return nil, fmt.Errorf("failed to create driver: %w", err)
 	}
-	defer cleanup()
+	cleanupMu.Lock()
+	activeCleanup = cleanup
+	cleanupMu.Unlock()
+	defer func() {
+		cleanup()
+		cleanupMu.Lock()
+		activeCleanup = nil
+		cleanupMu.Unlock()
+	}()
 
 	logger.Info("Driver created: %s on %s", driver.GetPlatformInfo().Platform, driver.GetPlatformInfo().DeviceName)
 
@@ -1357,7 +1380,15 @@ func executeAppiumSingleSession(cfg *RunConfig, flows []flow.Flow) (*executor.Ru
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Appium driver: %w", err)
 	}
-	defer cleanup()
+	cleanupMu.Lock()
+	activeCleanup = cleanup
+	cleanupMu.Unlock()
+	defer func() {
+		cleanup()
+		cleanupMu.Lock()
+		activeCleanup = nil
+		cleanupMu.Unlock()
+	}()
 
 	deviceInfo := buildDeviceReport(driver)
 
@@ -1716,9 +1747,8 @@ func getDriversDir(platform string) (string, error) {
 	return driversPath, nil
 }
 
-// isSocketInUse checks if a Unix socket is in use by attempting to connect to it.
-// Used to detect if another maestro-runner instance is using the same Android device.
-// On Windows, where sockets aren't used, this always returns false (TCP port check is used instead).
+// isSocketInUse checks if a Unix socket is actively owned by a running process.
+// Uses PID file to distinguish a live owner from a stale socket left by a crashed process.
 func isSocketInUse(socketPath string) bool {
 	if socketPath == "" {
 		return false
@@ -1726,23 +1756,11 @@ func isSocketInUse(socketPath string) bool {
 
 	// Check if socket file exists
 	if _, err := os.Stat(socketPath); os.IsNotExist(err) {
-		return false // socket file doesn't exist, so not in use
-	}
-
-	// Try to connect to the socket to verify it's actually active
-	conn, err := net.DialTimeout("unix", socketPath, 500*time.Millisecond)
-	if err != nil {
-		// Socket file exists but can't connect - might be stale
-		// Try to remove it and consider it not in use
-		if removeErr := os.Remove(socketPath); removeErr != nil {
-			logger.Debug("failed to remove stale socket %s: %v", socketPath, removeErr)
-		}
 		return false
 	}
-	if err := conn.Close(); err != nil {
-		logger.Debug("failed to close socket connection: %v", err)
-	}
-	return true // socket is active and in use
+
+	// Check if the owning process is still alive via PID file
+	return device.IsOwnerAlive(socketPath)
 }
 
 // autoDetectDevices finds N available devices for the specified platform.
@@ -1784,6 +1802,21 @@ func executeParallel(cfg *RunConfig, deviceIDs []string, flows []flow.Flow) (*ex
 	if err != nil {
 		return nil, err
 	}
+
+	// Register all worker cleanups for signal handler
+	allCleanup := func() {
+		for _, w := range workers {
+			w.Cleanup()
+		}
+	}
+	cleanupMu.Lock()
+	activeCleanup = allCleanup
+	cleanupMu.Unlock()
+	defer func() {
+		cleanupMu.Lock()
+		activeCleanup = nil
+		cleanupMu.Unlock()
+	}()
 
 	// 3. Run parallel
 	parallelRunner := createParallelRunner(cfg, workers, platform)

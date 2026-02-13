@@ -55,10 +55,10 @@ func CreateAndroidDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	printSetupSuccess(fmt.Sprintf("Connected to %s %s (SDK %s)", info.Brand, info.Model, info.SDK))
 
 	// 2. Check if device is already in use (for UIAutomator2 driver)
-	// Do this BEFORE installing app to fail fast
+	// Do this BEFORE StartUIAutomator2 which would kill the other instance's server
 	if driverType == "uiautomator2" {
 		socketPath := dev.DefaultSocketPath()
-		if isSocketInUse(socketPath) {
+		if device.IsOwnerAlive(socketPath) {
 			return nil, nil, fmt.Errorf("device %s is already in use\n"+
 				"Another maestro-runner instance may be using this device.\n"+
 				"Socket: %s\n"+

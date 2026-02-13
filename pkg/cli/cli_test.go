@@ -3,6 +3,7 @@ package cli
 import (
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -784,7 +785,9 @@ func TestIsSocketInUse_EmptyPath(t *testing.T) {
 
 func TestIsSocketInUse_ActiveSocket(t *testing.T) {
 	socketPath := "/tmp/test-socket-active-" + time.Now().Format("20060102150405") + ".sock"
-	_ = os.Remove(socketPath) // Clean up if exists
+	pidPath := strings.TrimSuffix(socketPath, ".sock") + ".pid"
+	_ = os.Remove(socketPath)
+	_ = os.Remove(pidPath)
 
 	// Create a listener on the socket
 	ln, err := net.Listen("unix", socketPath)
@@ -794,7 +797,13 @@ func TestIsSocketInUse_ActiveSocket(t *testing.T) {
 	defer func() { _ = ln.Close() }()
 	defer func() { _ = os.Remove(socketPath) }()
 
-	// Socket should be in use
+	// Write PID file for current process (simulates active owner)
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+		t.Fatalf("failed to write PID file: %v", err)
+	}
+	defer func() { _ = os.Remove(pidPath) }()
+
+	// Socket should be in use (PID alive + socket exists)
 	if !isSocketInUse(socketPath) {
 		t.Error("expected active socket to be in use")
 	}
@@ -802,27 +811,47 @@ func TestIsSocketInUse_ActiveSocket(t *testing.T) {
 
 func TestIsSocketInUse_StaleSocket(t *testing.T) {
 	socketPath := "/tmp/test-socket-stale-" + time.Now().Format("20060102150405") + ".sock"
-	_ = os.Remove(socketPath) // Clean up if exists
+	pidPath := strings.TrimSuffix(socketPath, ".sock") + ".pid"
+	_ = os.Remove(socketPath)
+	_ = os.Remove(pidPath)
 
 	// Create a socket file without a listener (stale)
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("failed to create socket: %v", err)
 	}
-	_ = ln.Close() // Close immediately to make it stale
+	_ = ln.Close()
+	defer func() { _ = os.Remove(socketPath) }()
 
-	// Give OS time to clean up
-	time.Sleep(10 * time.Millisecond)
-
-	// Stale socket should be detected as not in use (and cleaned up)
+	// No PID file → stale, not in use
 	if isSocketInUse(socketPath) {
-		t.Error("expected stale socket to not be in use")
+		t.Error("expected stale socket (no PID file) to not be in use")
 	}
+}
 
-	// Socket file should be removed
-	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
-		t.Error("expected stale socket file to be removed")
-		_ = os.Remove(socketPath) // Clean up
+func TestIsSocketInUse_DeadOwner(t *testing.T) {
+	socketPath := "/tmp/test-socket-dead-" + time.Now().Format("20060102150405") + ".sock"
+	pidPath := strings.TrimSuffix(socketPath, ".sock") + ".pid"
+	_ = os.Remove(socketPath)
+	_ = os.Remove(pidPath)
+
+	// Create socket file
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("failed to create socket: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	defer func() { _ = os.Remove(socketPath) }()
+
+	// Write PID file with a PID that doesn't exist (simulate dead owner)
+	if err := os.WriteFile(pidPath, []byte("99999999"), 0644); err != nil {
+		t.Fatalf("failed to write PID file: %v", err)
+	}
+	defer func() { _ = os.Remove(pidPath) }()
+
+	// Socket exists + PID dead → not in use (stale)
+	if isSocketInUse(socketPath) {
+		t.Error("expected socket with dead owner to not be in use")
 	}
 }
 
