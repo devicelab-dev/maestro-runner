@@ -1264,6 +1264,74 @@ func TestFindElementRelativeWithElementsContainsDescendants(t *testing.T) {
 	}
 }
 
+// mockAppiumServerForRelativeDepthTest creates a server with elements that test
+// distance vs. depth selection in directional relative selectors.
+func mockAppiumServerForRelativeDepthTest() *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		if strings.HasSuffix(path, "/source") {
+			writeJSON(w, map[string]interface{}{
+				"value": `<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <android.widget.FrameLayout bounds="[0,0][1080,2340]">
+    <android.widget.TextView text="Email Address" bounds="[100,100][500,130]"/>
+    <android.widget.EditText text="email input" clickable="true" enabled="true" bounds="[100,140][500,180]"/>
+    <android.widget.FrameLayout bounds="[100,300][500,500]">
+      <android.widget.FrameLayout bounds="[100,300][500,500]">
+        <android.widget.FrameLayout bounds="[100,300][500,500]">
+          <android.widget.TextView text="deep link" clickable="true" enabled="true" bounds="[100,350][500,380]"/>
+        </android.widget.FrameLayout>
+      </android.widget.FrameLayout>
+    </android.widget.FrameLayout>
+  </android.widget.FrameLayout>
+</hierarchy>`,
+			})
+			return
+		}
+
+		if strings.Contains(path, "/window/rect") {
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 1080.0, "height": 2340.0, "x": 0.0, "y": 0.0},
+			})
+			return
+		}
+
+		writeJSON(w, map[string]interface{}{"value": nil})
+	}))
+}
+
+// TestFindElementRelativePrefersClosestOverDeepest verifies that directional
+// relative selectors pick the closest element by distance rather than the
+// deepest in the DOM.
+func TestFindElementRelativePrefersClosestOverDeepest(t *testing.T) {
+	server := mockAppiumServerForRelativeDepthTest()
+	defer server.Close()
+	driver := createTestAppiumDriver(server)
+
+	source, _ := driver.client.Source()
+	elements, platform, _ := ParsePageSource(source)
+
+	sel := flow.Selector{
+		Below: &flow.Selector{Text: "Email Address"},
+	}
+
+	info, err := driver.findElementRelativeWithElements(sel, elements, platform)
+	if err != nil {
+		t.Fatalf("Expected success, got: %v", err)
+	}
+	if info == nil {
+		t.Fatal("Expected element info")
+	}
+
+	// The closest element below "Email Address" (bottom at y=130) is the
+	// EditText at y=140, not the deeply-nested TextView at y=350.
+	if info.Bounds.Y != 140 {
+		t.Errorf("Expected element at y=140, got y=%d", info.Bounds.Y)
+	}
+}
+
 // TestFindElementRelativeWithNestedRelative tests nested relative selector
 func TestFindElementRelativeWithNestedRelative(t *testing.T) {
 	server := mockAppiumServerForRelativeElements()

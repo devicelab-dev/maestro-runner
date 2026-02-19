@@ -1569,6 +1569,80 @@ func TestResolveRelativeSelectorContainsDescendants(t *testing.T) {
 	}
 }
 
+// mockWDAServerForRelativeDepthTest creates a server with elements that test
+// distance vs. depth selection in directional relative selectors.
+// The page source has a close TextField (depth 2) and a far-but-deeply-nested
+// Link (depth 5) below the anchor. The correct behavior is to select the closer one.
+func mockWDAServerForRelativeDepthTest() *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		if strings.HasSuffix(path, "/source") {
+			jsonResponse(w, map[string]interface{}{
+				"value": `<?xml version="1.0" encoding="UTF-8"?>
+<AppiumAUT>
+  <XCUIElementTypeApplication type="XCUIElementTypeApplication" name="TestApp" enabled="true" visible="true" x="0" y="0" width="390" height="844">
+    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" label="Email Address" enabled="true" visible="true" x="50" y="100" width="290" height="30"/>
+    <XCUIElementTypeTextField type="XCUIElementTypeTextField" label="email input" enabled="true" visible="true" x="50" y="140" width="290" height="40"/>
+    <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="true" x="50" y="300" width="290" height="100">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="true" x="50" y="300" width="290" height="100">
+        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="true" x="50" y="300" width="290" height="100">
+          <XCUIElementTypeLink type="XCUIElementTypeLink" label="deep link" enabled="true" visible="true" x="50" y="350" width="290" height="30"/>
+        </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+    </XCUIElementTypeOther>
+  </XCUIElementTypeApplication>
+</AppiumAUT>`,
+			})
+			return
+		}
+
+		if strings.Contains(path, "/window/size") {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 390.0, "height": 844.0},
+			})
+			return
+		}
+
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+}
+
+// TestResolveRelativeSelectorPrefersClosestOverDeepest verifies that directional
+// relative selectors (below/above/leftOf/rightOf) pick the closest element by
+// distance rather than the deepest in the DOM. This matches Maestro's
+// .firstOrNull() behavior on the distance-sorted candidate list.
+func TestResolveRelativeSelectorPrefersClosestOverDeepest(t *testing.T) {
+	server := mockWDAServerForRelativeDepthTest()
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	source, _ := driver.client.Source()
+	elements, _ := ParsePageSource(source)
+
+	sel := flow.Selector{
+		Below: &flow.Selector{Text: "Email Address"},
+	}
+
+	info, err := driver.resolveRelativeSelector(sel, elements)
+	if err != nil {
+		t.Fatalf("Expected success, got: %v", err)
+	}
+	if info == nil {
+		t.Fatal("Expected element info")
+	}
+
+	// The closest element below "Email Address" (bottom at y=130) is the
+	// TextField at y=140, not the deeply-nested Link at y=350 (depth 5).
+	if info.Text != "email input" {
+		t.Errorf("Expected closest element 'email input', got '%s'", info.Text)
+	}
+	if info.Bounds.Y != 140 {
+		t.Errorf("Expected element at y=140, got y=%d", info.Bounds.Y)
+	}
+}
+
 // TestEraseTextWithActiveElement tests eraseText with active element
 func TestEraseTextWithActiveElement(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
