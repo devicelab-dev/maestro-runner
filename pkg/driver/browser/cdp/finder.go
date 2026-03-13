@@ -643,26 +643,23 @@ func (d *Driver) elementInfo(elem *rod.Element) *core.ElementInfo {
 		info.Visible = visible
 	}
 
-	disabled, err := elem.Attribute("disabled")
-	if err != nil {
-		log.Printf("[browser] elementInfo: Attribute(disabled) failed: %v", err)
-	} else if disabled != nil {
-		info.Enabled = false
-	}
-
-	if checked, err := elem.Property("checked"); err == nil {
-		info.Checked = checked.Bool()
-	}
-
-	ariaLabel, err := elem.Attribute("aria-label")
-	if err != nil {
-		log.Printf("[browser] elementInfo: Attribute(aria-label) failed: %v", err)
-	} else if ariaLabel != nil {
-		info.AccessibilityLabel = *ariaLabel
-	}
-
-	if tagName, err := elem.Eval(`() => this.tagName`); err == nil {
+	// Skip attribute lookups for text nodes
+	tagName, err := elem.Eval(`() => this.tagName`)
+	if err == nil && tagName.Value.Str() != "" {
 		info.Class = tagName.Value.Str()
+
+		disabled, err := elem.Property("disabled")
+		if err == nil && disabled.Bool() {
+			info.Enabled = false
+		}
+
+		if checked, err := elem.Property("checked"); err == nil {
+			info.Checked = checked.Bool()
+		}
+
+		if ariaLabel, err := elem.Attribute("aria-label"); err == nil && ariaLabel != nil {
+			info.AccessibilityLabel = *ariaLabel
+		}
 	}
 
 	return info
