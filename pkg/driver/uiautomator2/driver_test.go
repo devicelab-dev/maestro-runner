@@ -1585,6 +1585,10 @@ func TestInputTextNoSelectorError(t *testing.T) {
 			w.WriteHeader(http.StatusInternalServerError)
 			writeJSON(w, map[string]interface{}{"value": "send keys failed"})
 		},
+		"POST /actions": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			writeJSON(w, map[string]interface{}{"value": "key actions also failed"})
+		},
 	})
 	defer server.Close()
 

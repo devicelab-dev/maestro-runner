@@ -1,7 +1,9 @@
 package devicelab
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,12 +12,15 @@ import (
 	"github.com/devicelab-dev/maestro-runner/pkg/uiautomator2"
 )
 
-// mockDeviceLabClient is a minimal mock for scrollUntilVisible tests.
+// mockDeviceLabClient is a minimal mock for tests.
 type mockDeviceLabClient struct {
-	sourceFunc     func() (string, error)
-	scrollCalls    int
-	scrollErr      error
-	findClickCalls int
+	sourceFunc         func() (string, error)
+	findAndClickFunc   func(strategy, selector string) (*uiautomator2.Element, error)
+	activeElementFunc  func() (*uiautomator2.Element, error)
+	sendKeyActionsFunc func(text string) error
+	scrollCalls        int
+	scrollErr          error
+	findClickCalls     int
 }
 
 func (m *mockDeviceLabClient) FindElement(strategy, selector string) (*uiautomator2.Element, error) {
@@ -23,9 +28,17 @@ func (m *mockDeviceLabClient) FindElement(strategy, selector string) (*uiautomat
 }
 func (m *mockDeviceLabClient) FindAndClick(strategy, selector string) (*uiautomator2.Element, error) {
 	m.findClickCalls++
+	if m.findAndClickFunc != nil {
+		return m.findAndClickFunc(strategy, selector)
+	}
 	return nil, nil
 }
-func (m *mockDeviceLabClient) ActiveElement() (*uiautomator2.Element, error) { return nil, nil }
+func (m *mockDeviceLabClient) ActiveElement() (*uiautomator2.Element, error) {
+	if m.activeElementFunc != nil {
+		return m.activeElementFunc()
+	}
+	return nil, nil
+}
 func (m *mockDeviceLabClient) SetImplicitWait(timeout time.Duration) error   { return nil }
 func (m *mockDeviceLabClient) Click(x, y int) error                          { return nil }
 func (m *mockDeviceLabClient) DoubleClick(x, y int) error                    { return nil }
@@ -44,7 +57,12 @@ func (m *mockDeviceLabClient) SwipeInArea(area uiautomator2.RectModel, direction
 func (m *mockDeviceLabClient) Back() error                       { return nil }
 func (m *mockDeviceLabClient) HideKeyboard() error               { return nil }
 func (m *mockDeviceLabClient) PressKeyCode(keyCode int) error    { return nil }
-func (m *mockDeviceLabClient) SendKeyActions(text string) error  { return nil }
+func (m *mockDeviceLabClient) SendKeyActions(text string) error {
+	if m.sendKeyActionsFunc != nil {
+		return m.sendKeyActionsFunc(text)
+	}
+	return nil
+}
 func (m *mockDeviceLabClient) Screenshot() ([]byte, error)       { return nil, nil }
 func (m *mockDeviceLabClient) Source() (string, error)           { return m.sourceFunc() }
 func (m *mockDeviceLabClient) GetOrientation() (string, error)   { return "PORTRAIT", nil }
@@ -124,6 +142,136 @@ func TestScrollUntilVisibleRespectsTimeout(t *testing.T) {
 		t.Errorf("Expected timeout to limit scrolls (got %d, default max is 20)", client.scrollCalls)
 	}
 }
+
+// ============================================================================
+// TapOn — ID selector uses atomic FindAndClick
+// ============================================================================
+
+func TestTapOnIDSelectorUsesAtomicFindAndClick(t *testing.T) {
+	client := &mockDeviceLabClient{
+		sourceFunc: func() (string, error) { return "", nil },
+		findAndClickFunc: func(strategy, selector string) (*uiautomator2.Element, error) {
+			return uiautomator2.NewCachedElement("elem-1", "Hello", uiautomator2.ElementRect{
+				X: 100, Y: 200, Width: 50, Height: 30,
+			}), nil
+		},
+	}
+
+	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, nil)
+	step := &flow.TapOnStep{
+		Selector: flow.Selector{ID: "my_button"},
+	}
+
+	result := driver.tapOn(step)
+
+	if !result.Success {
+		t.Errorf("Expected success, got error: %v", result.Error)
+	}
+	if client.findClickCalls != 1 {
+		t.Errorf("Expected 1 FindAndClick call, got %d", client.findClickCalls)
+	}
+	if result.Message != "Tapped on element" {
+		t.Errorf("Expected 'Tapped on element', got %q", result.Message)
+	}
+}
+
+func TestTapOnTextSelectorUsesAtomicFindAndClick(t *testing.T) {
+	client := &mockDeviceLabClient{
+		sourceFunc: func() (string, error) { return "", nil },
+		findAndClickFunc: func(strategy, selector string) (*uiautomator2.Element, error) {
+			return uiautomator2.NewCachedElement("elem-2", "Submit", uiautomator2.ElementRect{
+				X: 50, Y: 100, Width: 200, Height: 40,
+			}), nil
+		},
+	}
+
+	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, nil)
+	step := &flow.TapOnStep{
+		Selector: flow.Selector{Text: "Submit"},
+	}
+
+	result := driver.tapOn(step)
+
+	if !result.Success {
+		t.Errorf("Expected success, got error: %v", result.Error)
+	}
+	if client.findClickCalls != 1 {
+		t.Errorf("Expected 1 FindAndClick call, got %d", client.findClickCalls)
+	}
+}
+
+// ============================================================================
+// InputText — SendKeys fallback to SendKeyActions
+// ============================================================================
+
+func TestInputTextSendKeysFallbackToSendKeyActions(t *testing.T) {
+	sendKeyActionsCalled := false
+	client := &mockDeviceLabClient{
+		sourceFunc: func() (string, error) { return "", nil },
+		activeElementFunc: func() (*uiautomator2.Element, error) {
+			elem := uiautomator2.NewCachedElement("active-1", "", uiautomator2.ElementRect{})
+			elem.SetSendKeysFunc(func(text string) error {
+				return errors.New("stale element reference")
+			})
+			return elem, nil
+		},
+		sendKeyActionsFunc: func(text string) error {
+			sendKeyActionsCalled = true
+			return nil
+		},
+	}
+
+	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, nil)
+	step := &flow.InputTextStep{
+		Text: "hello",
+	}
+
+	result := driver.inputText(step)
+
+	if !result.Success {
+		t.Errorf("Expected success, got error: %v", result.Error)
+	}
+	if !sendKeyActionsCalled {
+		t.Error("Expected SendKeyActions fallback to be called")
+	}
+	if !strings.Contains(result.Message, "fallback") {
+		t.Errorf("Expected fallback in message, got %q", result.Message)
+	}
+}
+
+func TestInputTextSendKeysFallbackAlsoFails(t *testing.T) {
+	client := &mockDeviceLabClient{
+		sourceFunc: func() (string, error) { return "", nil },
+		activeElementFunc: func() (*uiautomator2.Element, error) {
+			elem := uiautomator2.NewCachedElement("active-1", "", uiautomator2.ElementRect{})
+			elem.SetSendKeysFunc(func(text string) error {
+				return errors.New("stale element reference")
+			})
+			return elem, nil
+		},
+		sendKeyActionsFunc: func(text string) error {
+			return errors.New("key actions failed")
+		},
+	}
+
+	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, nil)
+	step := &flow.InputTextStep{
+		Text: "hello",
+	}
+
+	result := driver.inputText(step)
+
+	if result.Success {
+		t.Error("Expected failure when both SendKeys and SendKeyActions fail")
+	}
+	if !strings.Contains(result.Message, "SendKeyActions fallback also failed") {
+		t.Errorf("Expected both errors in message, got %q", result.Message)
+	}
+}
+
+// ============================================================================
+// ScrollUntilVisible tests
+// ============================================================================
 
 func TestScrollUntilVisibleDefaultMaxScrolls(t *testing.T) {
 	client := &mockDeviceLabClient{

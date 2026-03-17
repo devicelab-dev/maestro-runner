@@ -4169,6 +4169,73 @@ func TestScrollUntilVisibleDefaultMaxScrolls(t *testing.T) {
 }
 
 // ============================================================================
+// InputText — SendKeys fallback to SendKeyActions
+// ============================================================================
+
+func TestInputTextSendKeysFallbackToSendKeyActions(t *testing.T) {
+	sendKeyActionsCalled := false
+	client := &MockUIA2Client{
+		activeElementFunc: func() (*uiautomator2.Element, error) {
+			elem := uiautomator2.NewCachedElement("active-1", "", uiautomator2.ElementRect{})
+			elem.SetSendKeysFunc(func(text string) error {
+				return errors.New("stale element reference")
+			})
+			return elem, nil
+		},
+		sendKeyActionsFunc: func(text string) error {
+			sendKeyActionsCalled = true
+			return nil
+		},
+	}
+
+	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, nil)
+	step := &flow.InputTextStep{
+		Text: "hello",
+	}
+
+	result := driver.inputText(step)
+
+	if !result.Success {
+		t.Errorf("Expected success, got error: %v", result.Error)
+	}
+	if !sendKeyActionsCalled {
+		t.Error("Expected SendKeyActions fallback to be called")
+	}
+	if !strings.Contains(result.Message, "fallback") {
+		t.Errorf("Expected fallback in message, got %q", result.Message)
+	}
+}
+
+func TestInputTextSendKeysFallbackAlsoFails(t *testing.T) {
+	client := &MockUIA2Client{
+		activeElementFunc: func() (*uiautomator2.Element, error) {
+			elem := uiautomator2.NewCachedElement("active-1", "", uiautomator2.ElementRect{})
+			elem.SetSendKeysFunc(func(text string) error {
+				return errors.New("stale element reference")
+			})
+			return elem, nil
+		},
+		sendKeyActionsFunc: func(text string) error {
+			return errors.New("key actions failed")
+		},
+	}
+
+	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, nil)
+	step := &flow.InputTextStep{
+		Text: "hello",
+	}
+
+	result := driver.inputText(step)
+
+	if result.Success {
+		t.Error("Expected failure when both SendKeys and SendKeyActions fail")
+	}
+	if !strings.Contains(result.Message, "SendKeyActions fallback also failed") {
+		t.Errorf("Expected both errors in message, got %q", result.Message)
+	}
+}
+
+// ============================================================================
 // Compile-time interface assertion
 // ============================================================================
 
