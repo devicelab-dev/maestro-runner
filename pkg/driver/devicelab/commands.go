@@ -30,10 +30,11 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		return result
 	}
 
-	// For text-based taps, use FindAndClick —
+	// For text-based and ID-based taps, use FindAndClick —
 	// single atomic Java call: find node + coordinate click at center.
 	// No stale nodes, no performAction, no parent walk-up.
-	if step.Selector.Text != "" && step.Point == "" && !step.Selector.HasRelativeSelector() {
+	// Prevents stale coordinates caused by Compose recomposition between find and click.
+	if (step.Selector.Text != "" || step.Selector.ID != "") && step.Point == "" && !step.Selector.HasRelativeSelector() {
 		strategies, err := buildSelectors(step.Selector, 0)
 		if err != nil {
 			return errorResult(err, fmt.Sprintf("Failed to build selectors: %v", err))
@@ -283,7 +284,13 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 			return successResult(fmt.Sprintf("Entered text: %s%s", text, unicodeWarning), nil)
 		}
 		if err := active.SendKeys(text); err != nil {
-			return errorResult(err, fmt.Sprintf("Failed to input text: %v", err))
+			// Fallback to SendKeyActions when SendKeys fails (e.g., stale element
+			// reference from Compose recomposition after tapping an EditText).
+			logger.Warn("SendKeys failed (%v), falling back to SendKeyActions", err)
+			if keyErr := d.client.SendKeyActions(text); keyErr != nil {
+				return errorResult(err, fmt.Sprintf("Failed to input text: %v (SendKeyActions fallback also failed: %v)", err, keyErr))
+			}
+			return successResult(fmt.Sprintf("Entered text (fallback): %s%s", text, unicodeWarning), nil)
 		}
 	}
 

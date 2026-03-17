@@ -275,7 +275,13 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 			return successResult(fmt.Sprintf("Entered text: %s%s", text, unicodeWarning), nil)
 		}
 		if err := active.SendKeys(text); err != nil {
-			return errorResult(err, fmt.Sprintf("Failed to input text: %v", err))
+			// Fallback to SendKeyActions when SendKeys fails (e.g., stale element
+			// reference from Compose recomposition after tapping an EditText).
+			logger.Warn("SendKeys failed (%v), falling back to SendKeyActions", err)
+			if keyErr := d.client.SendKeyActions(text); keyErr != nil {
+				return errorResult(err, fmt.Sprintf("Failed to input text: %v (SendKeyActions fallback also failed: %v)", err, keyErr))
+			}
+			return successResult(fmt.Sprintf("Entered text (fallback): %s%s", text, unicodeWarning), nil)
 		}
 	}
 
