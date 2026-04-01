@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	goios "github.com/danielpaulus/go-ios/ios"
@@ -37,6 +38,13 @@ type Runner struct {
 	logFile             *os.File
 	portForwardListener io.Closer // Port forwarding for physical devices (go-ios)
 	isSimulatorCache    bool      // Cached device type
+	persist             bool      // Keep WDA alive after parent exits
+}
+
+// SetPersist enables persist mode: the WDA process is detached into its own
+// process group so it survives after maestro-runner exits.
+func (r *Runner) SetPersist(enabled bool) {
+	r.persist = enabled
 }
 
 // NewRunner creates a new WDA runner.
@@ -181,6 +189,9 @@ func (r *Runner) Start(ctx context.Context) error {
 		"-destination", r.destination(),
 		"-derivedDataPath", r.derivedDataPath(),
 	)
+	if r.persist {
+		r.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
 	r.cmd.Stdout = r.logFile
 	r.cmd.Stderr = r.logFile
 

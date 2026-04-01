@@ -42,8 +42,18 @@ type iosDeviceInfo struct {
 func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	udid := getFirstDevice(cfg)
 
+	// --persist: before normal device detection, check if a persisted WDA is
+	// available. findBootedSimulator() skips port-in-use devices to prevent
+	// conflicts, so we need to find the device ourselves first.
+	if cfg.Persist && udid == "" {
+		if reusedUDID, driver, cleanup, ok := tryReusePersistedWDA(cfg); ok {
+			return driver, cleanup, nil
+		} else if reusedUDID != "" {
+			udid = reusedUDID
+		}
+	}
+
 	if udid == "" {
-		// Try to find booted simulator or connected physical device
 		printSetupStep("Finding iOS device...")
 		logger.Info("Auto-detecting iOS device (simulator or physical)...")
 		var err error
@@ -61,20 +71,17 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 
 	// Check if device port is already in use
 	port := wdadriver.PortFromUDID(udid)
-	portInUse := isPortInUse(port)
 
-	// --persist: try to reuse an existing WDA server
-	if cfg.Persist && portInUse {
-		logger.Info("--persist: WDA port %d in use, attempting to reuse existing session", port)
+	// --persist with explicit --device: try to reuse via health check
+	if cfg.Persist {
 		client := wdadriver.NewClient(port)
 		if client.IsHealthy() {
 			printSetupSuccess(fmt.Sprintf("Reusing existing WDA on port %d", port))
 			return createIOSDriverFromClient(cfg, udid, client, port, true)
 		}
-		logger.Info("--persist: existing WDA not healthy, starting fresh")
 	}
 
-	if portInUse && !cfg.Persist {
+	if isPortInUse(port) && !cfg.Persist {
 		return nil, nil, fmt.Errorf("device %s is in use (port %d already bound)\n"+
 			"Another maestro-runner instance may be using this device.\n"+
 			"Hint: Wait for it to finish, use --persist to reuse WDA, or use a different device with --device <UDID>", udid, port)
@@ -118,6 +125,9 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	printSetupStep("Building WDA...")
 	logger.Info("Building WDA for device %s (team ID: %s)", udid, cfg.TeamID)
 	runner := wdadriver.NewRunner(udid, cfg.TeamID, cfg.WDABundleID)
+	if cfg.Persist {
+		runner.SetPersist(true)
+	}
 	ctx := context.Background()
 
 	if err := runner.Build(ctx); err != nil {
@@ -208,6 +218,14 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 func createIOSDriverFromClient(cfg *RunConfig, udid string, client *wdadriver.Client, port uint16, persist bool) (core.Driver, func(), error) {
 	isSimulator := isIOSSimulator(udid)
 
+	// Adopt the existing WDA session so EnsureSession won't create a new one
+	// (which would relaunch the app).
+	if !client.ReuseSession() {
+		logger.Info("--persist: no existing session found, will create one on first flow")
+	} else {
+		printSetupSuccess("Reusing existing WDA session (app stays alive)")
+	}
+
 	// Install app if specified
 	if cfg.AppFile != "" && !cfg.NoAppInstall {
 		printSetupStep(fmt.Sprintf("Installing app: %s", cfg.AppFile))
@@ -284,6 +302,69 @@ func findIOSDevice() (string, error) {
 	}
 
 	return "", fmt.Errorf("no iOS device found (no booted simulator or connected physical device)")
+}
+
+// tryReusePersistedWDA scans all booted iOS simulators (including those with
+// port in use) for a healthy WDA session. Returns the UDID of the first match.
+// If WDA is healthy, returns the full driver+cleanup. If the device is found but
+// WDA isn't healthy, returns just the UDID so the caller can start fresh WDA on it.
+func tryReusePersistedWDA(cfg *RunConfig) (udid string, driver core.Driver, cleanup func(), ok bool) {
+	printSetupStep("Checking for persisted WDA session...")
+	sims, err := findBootedSimulatorAll()
+	if err != nil || len(sims) == 0 {
+		return "", nil, nil, false
+	}
+
+	for _, simUDID := range sims {
+		port := wdadriver.PortFromUDID(simUDID)
+		client := wdadriver.NewClient(port)
+		if client.IsHealthy() {
+			printSetupSuccess(fmt.Sprintf("Reusing persisted WDA on port %d (device %s)", port, simUDID))
+			d, cl, err := createIOSDriverFromClient(cfg, simUDID, client, port, true)
+			if err == nil {
+				return simUDID, d, cl, true
+			}
+			logger.Info("--persist: failed to create driver from existing WDA: %v", err)
+		}
+	}
+
+	return sims[0], nil, nil, false
+}
+
+// findBootedSimulatorAll returns UDIDs of all booted iOS simulators, including
+// those whose WDA port is in use. Used by --persist to find reusable sessions.
+func findBootedSimulatorAll() ([]string, error) {
+	out, err := runCommand("xcrun", "simctl", "list", "devices", "booted", "-j")
+	if err != nil {
+		return nil, err
+	}
+
+	var data map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &data); err != nil {
+		return nil, err
+	}
+
+	devices, ok := data["devices"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("no devices in simctl output")
+	}
+
+	var udids []string
+	for runtime, deviceList := range devices {
+		if !strings.Contains(runtime, "iOS-") {
+			continue
+		}
+		if list, ok := deviceList.([]interface{}); ok {
+			for _, device := range list {
+				if deviceMap, ok := device.(map[string]interface{}); ok {
+					if udid, ok := deviceMap["udid"].(string); ok && udid != "" {
+						udids = append(udids, udid)
+					}
+				}
+			}
+		}
+	}
+	return udids, nil
 }
 
 // hasBootedSimulator returns true if any iOS simulator is currently booted.
