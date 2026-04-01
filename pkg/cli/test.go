@@ -478,6 +478,9 @@ type RunConfig struct {
 	// Cloud provider (detected from AppiumURL, nil if not a cloud provider)
 	CloudProvider cloud.Provider
 	CloudMeta     map[string]string
+
+	// Session persistence
+	Persist bool // Keep WDA running between invocations; reuse existing WDA on startup
 }
 
 func hyperlink(url, text string) string {
@@ -637,6 +640,7 @@ func runTest(c *cli.Context) error {
 		NoAppInstall:       getBool("no-app-install"),
 		NoDriverInstall:    getBool("no-driver-install"),
 		NoFlutterFallback:  getBool("no-flutter-fallback"),
+		Persist:            getBool("persist"),
 	}
 
 	// Apply waitForIdleTimeout with priority:

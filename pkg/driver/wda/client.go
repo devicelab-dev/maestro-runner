@@ -116,6 +116,12 @@ func (c *Client) Status() (map[string]interface{}, error) {
 	return c.get("/status")
 }
 
+// IsHealthy checks if the WDA server is reachable and responding.
+func (c *Client) IsHealthy() bool {
+	_, err := c.Status()
+	return err == nil
+}
+
 // App management
 
 // LaunchApp launches an app by bundle ID.

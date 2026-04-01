@@ -59,12 +59,25 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		logger.Info("Using specified iOS device: %s", udid)
 	}
 
-	// Check if device port is already in use (another instance using this device)
+	// Check if device port is already in use
 	port := wdadriver.PortFromUDID(udid)
-	if isPortInUse(port) {
+	portInUse := isPortInUse(port)
+
+	// --persist: try to reuse an existing WDA server
+	if cfg.Persist && portInUse {
+		logger.Info("--persist: WDA port %d in use, attempting to reuse existing session", port)
+		client := wdadriver.NewClient(port)
+		if client.IsHealthy() {
+			printSetupSuccess(fmt.Sprintf("Reusing existing WDA on port %d", port))
+			return createIOSDriverFromClient(cfg, udid, client, port, true)
+		}
+		logger.Info("--persist: existing WDA not healthy, starting fresh")
+	}
+
+	if portInUse && !cfg.Persist {
 		return nil, nil, fmt.Errorf("device %s is in use (port %d already bound)\n"+
 			"Another maestro-runner instance may be using this device.\n"+
-			"Hint: Wait for it to finish or use a different device with --device <UDID>", udid, port)
+			"Hint: Wait for it to finish, use --persist to reuse WDA, or use a different device with --device <UDID>", udid, port)
 	}
 
 	// 0. Detect device type (simulator vs physical)
@@ -164,14 +177,82 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	wdaDrv := wdadriver.NewDriver(client, platformInfo, udid)
 	wdaDrv.SetAppFile(cfg.AppFile)
 
-	// Cleanup function
+	// Cleanup function — with --persist, leave WDA running
 	cleanup := func() {
+		if cfg.Persist {
+			logger.Info("--persist: leaving WDA running on port %d for reuse", runner.Port())
+			return
+		}
 		runner.Cleanup()
 	}
 
 	var driver core.Driver = wdaDrv
 
 	// 10. Wrap driver with Flutter VM Service fallback (simulator only)
+	if !cfg.NoFlutterFallback && isSimulator {
+		fw := flutter.WrapIOS(wdaDrv, nil, udid, cfg.AppID)
+		driver = fw
+		origCleanup := cleanup
+		cleanup = func() {
+			if fd, ok := fw.(*flutter.FlutterDriver); ok {
+				fd.Close()
+			}
+			origCleanup()
+		}
+	}
+
+	return driver, cleanup, nil
+}
+
+// createIOSDriverFromClient creates an iOS driver from an existing WDA client (for --persist reuse).
+func createIOSDriverFromClient(cfg *RunConfig, udid string, client *wdadriver.Client, port uint16, persist bool) (core.Driver, func(), error) {
+	isSimulator := isIOSSimulator(udid)
+
+	// Install app if specified
+	if cfg.AppFile != "" && !cfg.NoAppInstall {
+		printSetupStep(fmt.Sprintf("Installing app: %s", cfg.AppFile))
+		if err := installIOSApp(udid, cfg.AppFile, isSimulator); err != nil {
+			return nil, nil, fmt.Errorf("install app failed: %w", err)
+		}
+		printSetupSuccess("App installed")
+	}
+
+	deviceInfo, err := getIOSDeviceInfo(udid)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get device info: %w", err)
+	}
+
+	appVersion := ""
+	if cfg.AppID != "" && isSimulator {
+		appVersion = getIOSAppVersion(udid, cfg.AppID)
+	}
+
+	var screenW, screenH int
+	if w, h, err := client.WindowSize(); err == nil {
+		screenW, screenH = w, h
+	}
+
+	platformInfo := &core.PlatformInfo{
+		Platform:     "ios",
+		OSVersion:    deviceInfo.OSVersion,
+		DeviceName:   deviceInfo.Name,
+		DeviceID:     udid,
+		IsSimulator:  deviceInfo.IsSimulator,
+		ScreenWidth:  screenW,
+		ScreenHeight: screenH,
+		AppID:        cfg.AppID,
+		AppVersion:   appVersion,
+	}
+
+	wdaDrv := wdadriver.NewDriver(client, platformInfo, udid)
+	wdaDrv.SetAppFile(cfg.AppFile)
+
+	cleanup := func() {
+		logger.Info("--persist: leaving WDA running on port %d for reuse", port)
+	}
+
+	var driver core.Driver = wdaDrv
+
 	if !cfg.NoFlutterFallback && isSimulator {
 		fw := flutter.WrapIOS(wdaDrv, nil, udid, cfg.AppID)
 		driver = fw
