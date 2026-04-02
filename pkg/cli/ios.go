@@ -77,7 +77,7 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		client := wdadriver.NewClient(port)
 		if client.IsHealthy() {
 			printSetupSuccess(fmt.Sprintf("Reusing existing WDA on port %d", port))
-			return createIOSDriverFromClient(cfg, udid, client, port, true)
+			return createIOSDriverFromClient(cfg, udid, client, port)
 		}
 	}
 
@@ -215,7 +215,7 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 }
 
 // createIOSDriverFromClient creates an iOS driver from an existing WDA client (for --persist reuse).
-func createIOSDriverFromClient(cfg *RunConfig, udid string, client *wdadriver.Client, port uint16, persist bool) (core.Driver, func(), error) {
+func createIOSDriverFromClient(cfg *RunConfig, udid string, client *wdadriver.Client, port uint16) (core.Driver, func(), error) {
 	isSimulator := isIOSSimulator(udid)
 
 	// Adopt the existing WDA session so EnsureSession won't create a new one
@@ -320,7 +320,7 @@ func tryReusePersistedWDA(cfg *RunConfig) (udid string, driver core.Driver, clea
 		client := wdadriver.NewClient(port)
 		if client.IsHealthy() {
 			printSetupSuccess(fmt.Sprintf("Reusing persisted WDA on port %d (device %s)", port, simUDID))
-			d, cl, err := createIOSDriverFromClient(cfg, simUDID, client, port, true)
+			d, cl, err := createIOSDriverFromClient(cfg, simUDID, client, port)
 			if err == nil {
 				return simUDID, d, cl, true
 			}
