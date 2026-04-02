@@ -2249,6 +2249,33 @@ func TestIsSocketInUse_SocketAndPidWithDeadProcess(t *testing.T) {
 // Tests for killProcessOnPort
 // ============================================================
 
+// ============================================================
+// Tests for --persist flag and RunConfig.Persist field
+// ============================================================
+
+func TestGlobalFlags_PersistFlag(t *testing.T) {
+	flagNames := make(map[string]bool)
+	for _, f := range GlobalFlags {
+		for _, name := range f.Names() {
+			flagNames[name] = true
+		}
+	}
+	if !flagNames["persist"] {
+		t.Error("expected --persist flag to be defined in GlobalFlags")
+	}
+}
+
+func TestRunConfig_PersistField(t *testing.T) {
+	cfg := &RunConfig{}
+	if cfg.Persist {
+		t.Error("expected Persist to default to false")
+	}
+	cfg.Persist = true
+	if !cfg.Persist {
+		t.Error("expected Persist to be true after setting")
+	}
+}
+
 func TestKillProcessOnPort_FreePort(t *testing.T) {
 	port := uint16(49200 + (time.Now().UnixNano() % 100))
 	if isPortInUse(port) {

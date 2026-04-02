@@ -309,31 +309,39 @@ func findIOSDevice() (string, error) {
 	return "", fmt.Errorf("no iOS device found (no booted simulator or connected physical device)")
 }
 
-// tryReusePersistedWDA scans all booted iOS simulators (including those with
-// port in use) for a healthy WDA session. Returns the UDID of the first match.
-// If WDA is healthy, returns the full driver+cleanup. If the device is found but
-// WDA isn't healthy, returns just the UDID so the caller can start fresh WDA on it.
+// tryReusePersistedWDA scans all available iOS devices — booted simulators and
+// any connected physical device — for a healthy WDA session. Simulators and
+// physical devices are peers in this search; the function returns the first
+// candidate that has a live WDA session. If no healthy session is found, the
+// first candidate is returned so the caller can start a fresh WDA on it.
 func tryReusePersistedWDA(cfg *RunConfig) (udid string, driver core.Driver, cleanup func(), ok bool) {
 	printSetupStep("Checking for persisted WDA session...")
-	sims, err := findBootedSimulatorAll()
-	if err != nil || len(sims) == 0 {
+
+	var candidates []string
+	if sims, err := findBootedSimulatorAll(); err == nil {
+		candidates = append(candidates, sims...)
+	}
+	if physUDID, err := findConnectedDevice(); err == nil {
+		candidates = append(candidates, physUDID)
+	}
+	if len(candidates) == 0 {
 		return "", nil, nil, false
 	}
 
-	for _, simUDID := range sims {
-		port := wdadriver.PortFromUDID(simUDID)
+	for _, candidateUDID := range candidates {
+		port := wdadriver.PortFromUDID(candidateUDID)
 		client := wdadriver.NewClient(port)
 		if client.IsHealthy() {
-			printSetupSuccess(fmt.Sprintf("Reusing persisted WDA on port %d (device %s)", port, simUDID))
-			d, cl, err := createIOSDriverFromClient(cfg, simUDID, client, port)
+			printSetupSuccess(fmt.Sprintf("Reusing persisted WDA on port %d (device %s)", port, candidateUDID))
+			d, cl, err := createIOSDriverFromClient(cfg, candidateUDID, client, port)
 			if err == nil {
-				return simUDID, d, cl, true
+				return candidateUDID, d, cl, true
 			}
 			logger.Info("--persist: failed to create driver from existing WDA: %v", err)
 		}
 	}
 
-	return sims[0], nil, nil, false
+	return candidates[0], nil, nil, false
 }
 
 // findBootedSimulatorAll returns UDIDs of all booted iOS simulators, including
