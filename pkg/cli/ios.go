@@ -373,46 +373,21 @@ func hasBootedSimulator() bool {
 	return err == nil
 }
 
-// findBootedSimulator finds the UDID of a booted iOS simulator.
+// findBootedSimulator finds the UDID of a booted iOS simulator whose WDA port
+// is not already in use. Delegates to findBootedSimulatorAll for device enumeration.
 func findBootedSimulator() (string, error) {
-	out, err := runCommand("xcrun", "simctl", "list", "devices", "booted", "-j")
+	udids, err := findBootedSimulatorAll()
 	if err != nil {
 		return "", err
 	}
-
-	// Parse JSON to find booted device
-	var data map[string]interface{}
-	if err := json.Unmarshal([]byte(out), &data); err != nil {
-		return "", err
-	}
-
-	devices, ok := data["devices"].(map[string]interface{})
-	if !ok {
-		return "", fmt.Errorf("no devices in simctl output")
-	}
-
-	for runtime, deviceList := range devices {
-		// Only consider iOS simulators — skip tvOS, watchOS, visionOS
-		if !strings.Contains(runtime, "iOS-") {
+	for _, udid := range udids {
+		port := wdadriver.PortFromUDID(udid)
+		if isPortInUse(port) {
+			logger.Info("Skipping booted simulator %s: port %d in use", udid, port)
 			continue
 		}
-		if list, ok := deviceList.([]interface{}); ok {
-			for _, device := range list {
-				if deviceMap, ok := device.(map[string]interface{}); ok {
-					if udid, ok := deviceMap["udid"].(string); ok && udid != "" {
-						// Skip simulators whose WDA port is already in use
-						port := wdadriver.PortFromUDID(udid)
-						if isPortInUse(port) {
-							logger.Info("Skipping booted simulator %s: port %d in use", udid, port)
-							continue
-						}
-						return udid, nil
-					}
-				}
-			}
-		}
+		return udid, nil
 	}
-
 	return "", fmt.Errorf("no available booted iOS simulator found")
 }
 
