@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`--persist` flag** (`MAESTRO_PERSIST` env var) — keeps WebDriverAgent running between invocations for faster repeated test runs. On startup, reuses an existing healthy WDA session (leaving the app alive); on exit, leaves WDA running instead of tearing it down. The xcodebuild process is detached into its own process group so it survives `maestro-runner` exiting.
+  ```bash
+  # First run: builds and launches WDA normally
+  maestro-runner --persist --platform ios test flow.yaml
+
+  # Subsequent runs: reuses existing WDA session (~30-60s faster)
+  maestro-runner --persist --platform ios test flow.yaml
+  ```
+
 ## [1.1.12] - 2026-04-22
 
 ### Added
