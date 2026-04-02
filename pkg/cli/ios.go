@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -72,12 +73,41 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	// Check if device port is already in use
 	port := wdadriver.PortFromUDID(udid)
 
-	// --persist with explicit --device: try to reuse via health check
+	// --persist with explicit --device: try to reuse via health check.
+	// For physical devices the in-process port forward died when the previous
+	// invocation exited, so we re-establish it before checking health.
 	if cfg.Persist {
+		var fwd io.Closer
+		if !isIOSSimulator(udid) {
+			var fwdErr error
+			fwd, fwdErr = wdadriver.ResumePortForward(udid, port)
+			if fwdErr != nil {
+				logger.Info("--persist: failed to resume port forward for %s: %v", udid, fwdErr)
+			}
+		}
+
 		client := wdadriver.NewClient(port)
 		if client.IsHealthy() {
 			printSetupSuccess(fmt.Sprintf("Reusing existing WDA on port %d", port))
-			return createIOSDriverFromClient(cfg, udid, client, port)
+			d, cl, err := createIOSDriverFromClient(cfg, udid, client, port)
+			if err != nil {
+				if fwd != nil {
+					fwd.Close()
+				}
+				return nil, nil, err
+			}
+			if fwd != nil {
+				origCleanup := cl
+				cl = func() {
+					origCleanup()
+					fwd.Close()
+				}
+			}
+			return d, cl, nil
+		}
+
+		if fwd != nil {
+			fwd.Close()
 		}
 		// WDA is unhealthy — kill the stale process so the fresh WDA can bind the port
 		if isPortInUse(port) {
@@ -314,12 +344,20 @@ func findIOSDevice() (string, error) {
 // physical devices are peers in this search; the function returns the first
 // candidate that has a live WDA session. If no healthy session is found, the
 // first candidate is returned so the caller can start a fresh WDA on it.
+//
+// For physical devices the port forward (USB tunnel) dies when the previous
+// maestro-runner process exits, so it must be re-established before the health
+// check. Simulator WDA runs directly on localhost and needs no forwarding.
 func tryReusePersistedWDA(cfg *RunConfig) (udid string, driver core.Driver, cleanup func(), ok bool) {
 	printSetupStep("Checking for persisted WDA session...")
 
 	var candidates []string
+	simSet := make(map[string]bool)
 	if sims, err := findBootedSimulatorAll(); err == nil {
 		candidates = append(candidates, sims...)
+		for _, s := range sims {
+			simSet[s] = true
+		}
 	}
 	if physUDID, err := findConnectedDevice(); err == nil {
 		candidates = append(candidates, physUDID)
@@ -330,14 +368,37 @@ func tryReusePersistedWDA(cfg *RunConfig) (udid string, driver core.Driver, clea
 
 	for _, candidateUDID := range candidates {
 		port := wdadriver.PortFromUDID(candidateUDID)
+
+		// Physical devices need the port forward re-established before health check
+		var fwd io.Closer
+		if !simSet[candidateUDID] {
+			var fwdErr error
+			fwd, fwdErr = wdadriver.ResumePortForward(candidateUDID, port)
+			if fwdErr != nil {
+				logger.Info("--persist: failed to resume port forward for %s: %v", candidateUDID, fwdErr)
+				continue
+			}
+		}
+
 		client := wdadriver.NewClient(port)
 		if client.IsHealthy() {
 			printSetupSuccess(fmt.Sprintf("Reusing persisted WDA on port %d (device %s)", port, candidateUDID))
 			d, cl, err := createIOSDriverFromClient(cfg, candidateUDID, client, port)
 			if err == nil {
+				if fwd != nil {
+					origCleanup := cl
+					cl = func() {
+						origCleanup()
+						fwd.Close()
+					}
+				}
 				return candidateUDID, d, cl, true
 			}
 			logger.Info("--persist: failed to create driver from existing WDA: %v", err)
+		}
+
+		if fwd != nil {
+			fwd.Close()
 		}
 	}
 
