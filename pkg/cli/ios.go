@@ -79,6 +79,11 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 			printSetupSuccess(fmt.Sprintf("Reusing existing WDA on port %d", port))
 			return createIOSDriverFromClient(cfg, udid, client, port)
 		}
+		// WDA is unhealthy — kill the stale process so the fresh WDA can bind the port
+		if isPortInUse(port) {
+			logger.Info("--persist: stale WDA on port %d is unhealthy, killing process", port)
+			killProcessOnPort(port)
+		}
 	}
 
 	if isPortInUse(port) && !cfg.Persist {

@@ -1891,6 +1891,20 @@ func isPortInUse(port uint16) bool {
 	return false
 }
 
+// killProcessOnPort kills any process holding the given TCP port.
+// Used by --persist to evict a stale, unhealthy WDA process so a fresh one
+// can bind the port. Logs a warning on failure rather than returning an error
+// because the caller will proceed with the fresh WDA start regardless.
+func killProcessOnPort(port uint16) {
+	out, err := runCommand("sh", "-c", fmt.Sprintf("lsof -ti tcp:%d | xargs kill -9", port))
+	if err != nil {
+		logger.Warn("--persist: failed to kill process on port %d: %v (output: %s)", port, err, out)
+		return
+	}
+	logger.Info("--persist: killed stale WDA process on port %d", port)
+	time.Sleep(200 * time.Millisecond)
+}
+
 // checkDeviceAvailable checks if a device is available and not in use.
 // Returns error if device is busy or not found.
 func checkDeviceAvailable(deviceID, platform string) error {

@@ -2244,3 +2244,20 @@ func TestIsSocketInUse_SocketAndPidWithDeadProcess(t *testing.T) {
 		t.Error("expected socket with dead owner PID to not be in use")
 	}
 }
+
+// ============================================================
+// Tests for killProcessOnPort
+// ============================================================
+
+func TestKillProcessOnPort_FreePort(t *testing.T) {
+	port := uint16(49200 + (time.Now().UnixNano() % 100))
+	if isPortInUse(port) {
+		t.Skipf("port %d unexpectedly in use, skipping", port)
+	}
+	// Should not panic or error when nothing holds the port
+	killProcessOnPort(port)
+	// Port should still be free after the call
+	if isPortInUse(port) {
+		t.Errorf("port %d in use after killProcessOnPort on free port", port)
+	}
+}
