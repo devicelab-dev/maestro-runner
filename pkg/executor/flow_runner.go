@@ -795,6 +795,11 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 	}
 
 	switch s := step.(type) {
+	case *flow.LaunchAppStep:
+		if s.AppID == "" {
+			s.AppID = fr.flow.Config.EffectiveAppID()
+		}
+		result = fr.driver.Execute(step)
 	case *flow.DefineVariablesStep:
 		result = fr.script.ExecuteDefineVariables(s)
 	case *flow.RunScriptStep:
