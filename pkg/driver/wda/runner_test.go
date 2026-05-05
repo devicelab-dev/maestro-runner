@@ -177,3 +177,33 @@ func TestRunner_Destination(t *testing.T) {
 		t.Errorf("expected destination %q, got %q", expected, dest)
 	}
 }
+
+// Tests for SetPersist
+
+func TestSetPersist_EnablesFlag(t *testing.T) {
+	runner := &Runner{}
+
+	runner.SetPersist(true)
+
+	if !runner.persist {
+		t.Error("Expected persist to be true after SetPersist(true)")
+	}
+}
+
+func TestSetPersist_DisablesFlag(t *testing.T) {
+	runner := &Runner{persist: true}
+
+	runner.SetPersist(false)
+
+	if runner.persist {
+		t.Error("Expected persist to be false after SetPersist(false)")
+	}
+}
+
+func TestSetPersist_DefaultFalse(t *testing.T) {
+	runner := NewRunner("test-udid", "TEAM123", "")
+
+	if runner.persist {
+		t.Error("Expected persist to be false by default")
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,8 +43,18 @@ type iosDeviceInfo struct {
 func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	udid := getFirstDevice(cfg)
 
+	// --persist: before normal device detection, check if a persisted WDA is
+	// available. findBootedSimulator() skips port-in-use devices to prevent
+	// conflicts, so we need to find the device ourselves first.
+	if cfg.Persist && udid == "" {
+		if reusedUDID, driver, cleanup, ok := tryReusePersistedWDA(cfg); ok {
+			return driver, cleanup, nil
+		} else if reusedUDID != "" {
+			udid = reusedUDID
+		}
+	}
+
 	if udid == "" {
-		// Try to find booted simulator or connected physical device
 		printSetupStep("Finding iOS device...")
 		logger.Info("Auto-detecting iOS device (simulator or physical)...")
 		var err error
@@ -59,12 +70,56 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		logger.Info("Using specified iOS device: %s", udid)
 	}
 
-	// Check if device port is already in use (another instance using this device)
+	// Check if device port is already in use
 	port := wdadriver.PortFromUDID(udid)
-	if isPortInUse(port) {
+
+	// --persist with explicit --device: try to reuse via health check.
+	// For physical devices the in-process port forward died when the previous
+	// invocation exited, so we re-establish it before checking health.
+	if cfg.Persist {
+		var fwd io.Closer
+		if !isIOSSimulator(udid) {
+			var fwdErr error
+			fwd, fwdErr = wdadriver.ResumePortForward(udid, port)
+			if fwdErr != nil {
+				logger.Info("--persist: failed to resume port forward for %s: %v", udid, fwdErr)
+			}
+		}
+
+		client := wdadriver.NewClient(port)
+		if client.IsHealthy() {
+			printSetupSuccess(fmt.Sprintf("Reusing existing WDA on port %d", port))
+			d, cl, err := createIOSDriverFromClient(cfg, udid, client, port)
+			if err != nil {
+				if fwd != nil {
+					fwd.Close()
+				}
+				return nil, nil, err
+			}
+			if fwd != nil {
+				origCleanup := cl
+				cl = func() {
+					origCleanup()
+					fwd.Close()
+				}
+			}
+			return d, cl, nil
+		}
+
+		if fwd != nil {
+			fwd.Close()
+		}
+		// WDA is unhealthy — kill the stale process so the fresh WDA can bind the port
+		if isPortInUse(port) {
+			logger.Info("--persist: stale WDA on port %d is unhealthy, killing process", port)
+			killProcessOnPort(port)
+		}
+	}
+
+	if isPortInUse(port) && !cfg.Persist {
 		return nil, nil, fmt.Errorf("device %s is in use (port %d already bound)\n"+
 			"Another maestro-runner instance may be using this device.\n"+
-			"Hint: Wait for it to finish or use a different device with --device <UDID>", udid, port)
+			"Hint: Wait for it to finish, use --persist to reuse WDA, or use a different device with --device <UDID>", udid, port)
 	}
 
 	// 0. Detect device type (simulator vs physical)
@@ -105,6 +160,9 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	printSetupStep("Building WDA...")
 	logger.Info("Building WDA for device %s (team ID: %s)", udid, cfg.TeamID)
 	runner := wdadriver.NewRunner(udid, cfg.TeamID, cfg.WDABundleID)
+	if cfg.Persist {
+		runner.SetPersist(true)
+	}
 	ctx := context.Background()
 
 	if err := runner.Build(ctx); err != nil {
@@ -164,14 +222,90 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	wdaDrv := wdadriver.NewDriver(client, platformInfo, udid)
 	wdaDrv.SetAppFile(cfg.AppFile)
 
-	// Cleanup function
+	// Cleanup function — with --persist, leave WDA running
 	cleanup := func() {
+		if cfg.Persist {
+			logger.Info("--persist: leaving WDA running on port %d for reuse", runner.Port())
+			return
+		}
 		runner.Cleanup()
 	}
 
 	var driver core.Driver = wdaDrv
 
 	// 10. Wrap driver with Flutter VM Service fallback (simulator only)
+	if !cfg.NoFlutterFallback && isSimulator {
+		fw := flutter.WrapIOS(wdaDrv, nil, udid, cfg.AppID)
+		driver = fw
+		origCleanup := cleanup
+		cleanup = func() {
+			if fd, ok := fw.(*flutter.FlutterDriver); ok {
+				fd.Close()
+			}
+			origCleanup()
+		}
+	}
+
+	return driver, cleanup, nil
+}
+
+// createIOSDriverFromClient creates an iOS driver from an existing WDA client (for --persist reuse).
+func createIOSDriverFromClient(cfg *RunConfig, udid string, client *wdadriver.Client, port uint16) (core.Driver, func(), error) {
+	isSimulator := isIOSSimulator(udid)
+
+	// Adopt the existing WDA session so EnsureSession won't create a new one
+	// (which would relaunch the app).
+	if !client.ReuseSession() {
+		logger.Info("--persist: no existing session found, will create one on first flow")
+	} else {
+		printSetupSuccess("Reusing existing WDA session (app stays alive)")
+	}
+
+	// Install app if specified
+	if cfg.AppFile != "" && !cfg.NoAppInstall {
+		printSetupStep(fmt.Sprintf("Installing app: %s", cfg.AppFile))
+		if err := installIOSApp(udid, cfg.AppFile, isSimulator); err != nil {
+			return nil, nil, fmt.Errorf("install app failed: %w", err)
+		}
+		printSetupSuccess("App installed")
+	}
+
+	deviceInfo, err := getIOSDeviceInfo(udid)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get device info: %w", err)
+	}
+
+	appVersion := ""
+	if cfg.AppID != "" && isSimulator {
+		appVersion = getIOSAppVersion(udid, cfg.AppID)
+	}
+
+	var screenW, screenH int
+	if w, h, err := client.WindowSize(); err == nil {
+		screenW, screenH = w, h
+	}
+
+	platformInfo := &core.PlatformInfo{
+		Platform:     "ios",
+		OSVersion:    deviceInfo.OSVersion,
+		DeviceName:   deviceInfo.Name,
+		DeviceID:     udid,
+		IsSimulator:  deviceInfo.IsSimulator,
+		ScreenWidth:  screenW,
+		ScreenHeight: screenH,
+		AppID:        cfg.AppID,
+		AppVersion:   appVersion,
+	}
+
+	wdaDrv := wdadriver.NewDriver(client, platformInfo, udid)
+	wdaDrv.SetAppFile(cfg.AppFile)
+
+	cleanup := func() {
+		logger.Info("--persist: leaving WDA running on port %d for reuse", port)
+	}
+
+	var driver core.Driver = wdaDrv
+
 	if !cfg.NoFlutterFallback && isSimulator {
 		fw := flutter.WrapIOS(wdaDrv, nil, udid, cfg.AppID)
 		driver = fw
@@ -205,32 +339,92 @@ func findIOSDevice() (string, error) {
 	return "", fmt.Errorf("no iOS device found (no booted simulator or connected physical device)")
 }
 
-// hasBootedSimulator returns true if any iOS simulator is currently booted.
-func hasBootedSimulator() bool {
-	_, err := findBootedSimulator()
-	return err == nil
-}
+// tryReusePersistedWDA scans all available iOS devices — booted simulators and
+// any connected physical device — for a healthy WDA session. Simulators and
+// physical devices are peers in this search; the function returns the first
+// candidate that has a live WDA session. If no healthy session is found, the
+// first candidate is returned so the caller can start a fresh WDA on it.
+//
+// For physical devices the port forward (USB tunnel) dies when the previous
+// maestro-runner process exits, so it must be re-established before the health
+// check. Simulator WDA runs directly on localhost and needs no forwarding.
+func tryReusePersistedWDA(cfg *RunConfig) (udid string, driver core.Driver, cleanup func(), ok bool) {
+	printSetupStep("Checking for persisted WDA session...")
 
-// findBootedSimulator finds the UDID of a booted iOS simulator.
-func findBootedSimulator() (string, error) {
-	out, err := runCommand("xcrun", "simctl", "list", "devices", "booted", "-j")
-	if err != nil {
-		return "", err
+	var candidates []string
+	simSet := make(map[string]bool)
+	if sims, err := findBootedSimulatorAll(); err == nil {
+		candidates = append(candidates, sims...)
+		for _, s := range sims {
+			simSet[s] = true
+		}
+	}
+	if physUDID, err := findConnectedDevice(); err == nil {
+		candidates = append(candidates, physUDID)
+	}
+	if len(candidates) == 0 {
+		return "", nil, nil, false
 	}
 
-	// Parse JSON to find booted device
+	for _, candidateUDID := range candidates {
+		port := wdadriver.PortFromUDID(candidateUDID)
+
+		// Physical devices need the port forward re-established before health check
+		var fwd io.Closer
+		if !simSet[candidateUDID] {
+			var fwdErr error
+			fwd, fwdErr = wdadriver.ResumePortForward(candidateUDID, port)
+			if fwdErr != nil {
+				logger.Info("--persist: failed to resume port forward for %s: %v", candidateUDID, fwdErr)
+				continue
+			}
+		}
+
+		client := wdadriver.NewClient(port)
+		if client.IsHealthy() {
+			printSetupSuccess(fmt.Sprintf("Reusing persisted WDA on port %d (device %s)", port, candidateUDID))
+			d, cl, err := createIOSDriverFromClient(cfg, candidateUDID, client, port)
+			if err == nil {
+				if fwd != nil {
+					origCleanup := cl
+					cl = func() {
+						origCleanup()
+						fwd.Close()
+					}
+				}
+				return candidateUDID, d, cl, true
+			}
+			logger.Info("--persist: failed to create driver from existing WDA: %v", err)
+		}
+
+		if fwd != nil {
+			fwd.Close()
+		}
+	}
+
+	return candidates[0], nil, nil, false
+}
+
+// findBootedSimulatorAll returns UDIDs of all booted iOS simulators, including
+// those whose WDA port is in use. Used by --persist to find reusable sessions.
+func findBootedSimulatorAll() ([]string, error) {
+	out, err := runCommand("xcrun", "simctl", "list", "devices", "booted", "-j")
+	if err != nil {
+		return nil, err
+	}
+
 	var data map[string]interface{}
 	if err := json.Unmarshal([]byte(out), &data); err != nil {
-		return "", err
+		return nil, err
 	}
 
 	devices, ok := data["devices"].(map[string]interface{})
 	if !ok {
-		return "", fmt.Errorf("no devices in simctl output")
+		return nil, fmt.Errorf("no devices in simctl output")
 	}
 
+	var udids []string
 	for runtime, deviceList := range devices {
-		// Only consider iOS simulators — skip tvOS, watchOS, visionOS
 		if !strings.Contains(runtime, "iOS-") {
 			continue
 		}
@@ -238,19 +432,36 @@ func findBootedSimulator() (string, error) {
 			for _, device := range list {
 				if deviceMap, ok := device.(map[string]interface{}); ok {
 					if udid, ok := deviceMap["udid"].(string); ok && udid != "" {
-						// Skip simulators whose WDA port is already in use
-						port := wdadriver.PortFromUDID(udid)
-						if isPortInUse(port) {
-							logger.Info("Skipping booted simulator %s: port %d in use", udid, port)
-							continue
-						}
-						return udid, nil
+						udids = append(udids, udid)
 					}
 				}
 			}
 		}
 	}
+	return udids, nil
+}
 
+// hasBootedSimulator returns true if any iOS simulator is currently booted.
+func hasBootedSimulator() bool {
+	_, err := findBootedSimulator()
+	return err == nil
+}
+
+// findBootedSimulator finds the UDID of a booted iOS simulator whose WDA port
+// is not already in use. Delegates to findBootedSimulatorAll for device enumeration.
+func findBootedSimulator() (string, error) {
+	udids, err := findBootedSimulatorAll()
+	if err != nil {
+		return "", err
+	}
+	for _, udid := range udids {
+		port := wdadriver.PortFromUDID(udid)
+		if isPortInUse(port) {
+			logger.Info("Skipping booted simulator %s: port %d in use", udid, port)
+			continue
+		}
+		return udid, nil
+	}
 	return "", fmt.Errorf("no available booted iOS simulator found")
 }
 

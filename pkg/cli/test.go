@@ -478,6 +478,9 @@ type RunConfig struct {
 	// Cloud provider (detected from AppiumURL, nil if not a cloud provider)
 	CloudProvider cloud.Provider
 	CloudMeta     map[string]string
+
+	// Session persistence
+	Persist bool // Keep WDA running between invocations; reuse existing WDA on startup
 }
 
 func hyperlink(url, text string) string {
@@ -637,6 +640,7 @@ func runTest(c *cli.Context) error {
 		NoAppInstall:       getBool("no-app-install"),
 		NoDriverInstall:    getBool("no-driver-install"),
 		NoFlutterFallback:  getBool("no-flutter-fallback"),
+		Persist:            getBool("persist"),
 	}
 
 	// Apply waitForIdleTimeout with priority:
@@ -1886,6 +1890,20 @@ func isPortInUse(port uint16) bool {
 		logger.Debug("failed to close listener: %v", err)
 	}
 	return false
+}
+
+// killProcessOnPort kills any process holding the given TCP port.
+// Used by --persist to evict a stale, unhealthy WDA process so a fresh one
+// can bind the port. Logs a warning on failure rather than returning an error
+// because the caller will proceed with the fresh WDA start regardless.
+func killProcessOnPort(port uint16) {
+	out, err := runCommand("sh", "-c", fmt.Sprintf("lsof -ti tcp:%d | xargs kill -9", port))
+	if err != nil {
+		logger.Warn("--persist: failed to kill process on port %d: %v (output: %s)", port, err, out)
+		return
+	}
+	logger.Info("--persist: killed stale WDA process on port %d", port)
+	time.Sleep(200 * time.Millisecond)
 }
 
 // checkDeviceAvailable checks if a device is available and not in use.

@@ -1235,3 +1235,76 @@ func TestElementAttributeInvalidResponse(t *testing.T) {
 		t.Error("Expected error for non-string attribute value")
 	}
 }
+
+// TestIsHealthy tests WDA health check
+
+func TestIsHealthy_Healthy(t *testing.T) {
+	server := mockWDAServer(func(w http.ResponseWriter, r *http.Request) {
+		jsonResponse(w, map[string]interface{}{
+			"value": map[string]interface{}{"state": "idle"},
+		})
+	})
+	defer server.Close()
+
+	client := &Client{baseURL: server.URL, httpClient: http.DefaultClient}
+
+	if !client.IsHealthy() {
+		t.Error("Expected IsHealthy to return true when /status responds")
+	}
+}
+
+func TestIsHealthy_Unhealthy(t *testing.T) {
+	// Point at a closed server so the request fails
+	client := &Client{baseURL: "http://127.0.0.1:1", httpClient: http.DefaultClient}
+
+	if client.IsHealthy() {
+		t.Error("Expected IsHealthy to return false when server is unreachable")
+	}
+}
+
+// TestReuseSession tests adopting an existing WDA session
+
+func TestReuseSession_WithSession(t *testing.T) {
+	server := mockWDAServer(func(w http.ResponseWriter, r *http.Request) {
+		jsonResponse(w, map[string]interface{}{
+			"sessionId": "existing-session-abc",
+			"value":     map[string]interface{}{"state": "idle"},
+		})
+	})
+	defer server.Close()
+
+	client := &Client{baseURL: server.URL, httpClient: http.DefaultClient}
+
+	if !client.ReuseSession() {
+		t.Error("Expected ReuseSession to return true when sessionId is present")
+	}
+	if client.sessionID != "existing-session-abc" {
+		t.Errorf("Expected sessionID 'existing-session-abc', got '%s'", client.sessionID)
+	}
+}
+
+func TestReuseSession_NoSession(t *testing.T) {
+	server := mockWDAServer(func(w http.ResponseWriter, r *http.Request) {
+		jsonResponse(w, map[string]interface{}{
+			"value": map[string]interface{}{"state": "idle"},
+		})
+	})
+	defer server.Close()
+
+	client := &Client{baseURL: server.URL, httpClient: http.DefaultClient}
+
+	if client.ReuseSession() {
+		t.Error("Expected ReuseSession to return false when no sessionId in response")
+	}
+	if client.sessionID != "" {
+		t.Errorf("Expected sessionID to remain empty, got '%s'", client.sessionID)
+	}
+}
+
+func TestReuseSession_ServerUnreachable(t *testing.T) {
+	client := &Client{baseURL: "http://127.0.0.1:1", httpClient: http.DefaultClient}
+
+	if client.ReuseSession() {
+		t.Error("Expected ReuseSession to return false when server is unreachable")
+	}
+}

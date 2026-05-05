@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	goios "github.com/danielpaulus/go-ios/ios"
@@ -37,6 +38,13 @@ type Runner struct {
 	logFile             *os.File
 	portForwardListener io.Closer // Port forwarding for physical devices (go-ios)
 	isSimulatorCache    bool      // Cached device type
+	persist             bool      // Keep WDA alive after parent exits
+}
+
+// SetPersist enables persist mode: the WDA process is detached into its own
+// process group so it survives after maestro-runner exits.
+func (r *Runner) SetPersist(enabled bool) {
+	r.persist = enabled
 }
 
 // NewRunner creates a new WDA runner.
@@ -181,6 +189,9 @@ func (r *Runner) Start(ctx context.Context) error {
 		"-destination", r.destination(),
 		"-derivedDataPath", r.derivedDataPath(),
 	)
+	if r.persist {
+		r.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
 	r.cmd.Stdout = r.logFile
 	r.cmd.Stderr = r.logFile
 
@@ -209,21 +220,34 @@ func (r *Runner) Start(ctx context.Context) error {
 
 // startPortForward uses go-ios to forward the WDA port from a physical device to localhost.
 func (r *Runner) startPortForward() error {
-	entry, err := goios.GetDevice(r.deviceUDID)
+	listener, err := ResumePortForward(r.deviceUDID, r.port)
 	if err != nil {
-		return fmt.Errorf("device %s not found: %w", r.deviceUDID, err)
-	}
-
-	listener, err := forward.Forward(entry, r.port, r.port)
-	if err != nil {
-		return fmt.Errorf("port forward %d->%d failed: %w", r.port, r.port, err)
+		return err
 	}
 	r.portForwardListener = listener
+	return nil
+}
 
-	// Give the forward a moment to establish
+// ResumePortForward re-establishes a USB port forward from localhost:<port> to the
+// physical device's WDA port. Used by --persist to reconnect the tunnel after the
+// previous maestro-runner process exited (taking its in-process forwarder with it).
+// WDA on the device is still alive; only the Mac-side tunnel needs to be recreated.
+// The returned closer must be held open for the lifetime of the session.
+func ResumePortForward(deviceUDID string, port uint16) (io.Closer, error) {
+	entry, err := goios.GetDevice(deviceUDID)
+	if err != nil {
+		return nil, fmt.Errorf("device %s not found: %w", deviceUDID, err)
+	}
+
+	listener, err := forward.Forward(entry, port, port)
+	if err != nil {
+		return nil, fmt.Errorf("port forward %d->%d failed: %w", port, port, err)
+	}
+
+	// Give the tunnel a moment to establish
 	time.Sleep(500 * time.Millisecond)
 
-	return nil
+	return listener, nil
 }
 
 // injectPort writes USE_PORT into the xctestrun plist's EnvironmentVariables

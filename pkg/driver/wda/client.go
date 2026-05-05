@@ -116,6 +116,31 @@ func (c *Client) Status() (map[string]interface{}, error) {
 	return c.get("/status")
 }
 
+// IsHealthy checks if the WDA server is reachable and responding.
+func (c *Client) IsHealthy() bool {
+	_, err := c.Status()
+	return err == nil
+}
+
+// ReuseSession queries WDA for an existing session and adopts it.
+// WDA includes a top-level "sessionId" field in every response when a
+// session is active. We use the /status endpoint to retrieve it because
+// the W3C /sessions endpoint is not supported by Apple's WDA.
+func (c *Client) ReuseSession() bool {
+	resp, err := c.get("/status")
+	if err != nil {
+		return false
+	}
+
+	if id, ok := resp["sessionId"].(string); ok && id != "" {
+		c.sessionID = id
+		logger.Info("Reusing existing WDA session: %s", id)
+		return true
+	}
+
+	return false
+}
+
 // App management
 
 // LaunchApp launches an app by bundle ID.

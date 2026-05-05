@@ -108,6 +108,11 @@ var GlobalFlags = []cli.Flag{
 		Value: 180,
 		Usage: "Device boot timeout in seconds",
 	},
+	&cli.BoolFlag{
+		Name:    "persist",
+		Usage:   "Keep WDA running between invocations. Reuses an existing WDA session on startup and leaves it running on exit.",
+		EnvVars: []string{"MAESTRO_PERSIST"},
+	},
 }
 
 // Execute runs the CLI.
