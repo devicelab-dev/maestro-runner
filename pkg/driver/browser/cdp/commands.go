@@ -155,28 +155,54 @@ func (d *Driver) dispatchCrossRoot(elem *rod.Element, info *core.ElementInfo, de
 		return errorResult(err, fmt.Sprintf("Failed to dispatch input for %s", desc))
 	}
 
-	// Step 4: poll hit-target verify.
+	// Step 4: poll for verify result. Chromium delivers trusted events
+	// synchronously during Mouse.Click, so the first poll is usually
+	// decisive. Brief retry window absorbs scheduler jitter on slower
+	// machines / CI.
+	//
+	// pollHitTargetResult always returns an object with a `status` field:
+	//   { status: 'done' }
+	//   { status: 'pending', inFlutter: bool }
+	//   { status: 'failed', hitTargetDescription: string }
+	inFlutter := false
 	for i := 0; i < 5; i++ {
 		pollRes, pollErr := d.page.Eval(`(t) => window.__maestro.pollHitTargetResult(t)`, token)
 		if pollErr != nil {
 			return errorResult(pollErr, fmt.Sprintf("Failed to poll hit-target result for %s", desc))
 		}
 		v := pollRes.Value
-		if v.Has("hitTargetDescription") {
+		switch v.Get("status").Str() {
+		case "pending":
+			if v.Get("inFlutter").Bool() {
+				inFlutter = true
+			}
+			time.Sleep(20 * time.Millisecond)
+			continue
+		case "done":
+			return successResult(fmt.Sprintf("%s on %s", verbed, desc), info)
+		case "failed":
 			hd := v.Get("hitTargetDescription").Str()
 			return errorResult(
 				fmt.Errorf("input did not reach %s — landed on %s", desc, hd),
 				fmt.Sprintf("Input on %s did not reach the target (landed on %s)", desc, hd))
 		}
-		switch v.Str() {
-		case "pending":
-			time.Sleep(20 * time.Millisecond)
-			continue
-		case "done":
-			return successResult(fmt.Sprintf("%s on %s", verbed, desc), info)
-		default:
-			return successResult(fmt.Sprintf("%s on %s", verbed, desc), info)
-		}
+	}
+	// Flutter Web concession (post-click): the trusted event verifier never
+	// captured a pointerdown/mousedown on the target frame's window. For
+	// Flutter targets this is the expected steady state — Flutter's pointer
+	// router sits at the document/flutter-view capture layer and routes the
+	// trusted event to its own internal hit testing for semantics dispatch;
+	// it generally does not bubble back out as a window-level
+	// pointerdown/mousedown that a third-party listener can observe. Pre-
+	// flight expectHitTarget already validated the static hit point and
+	// applied the same Flutter concession (jshelper.js:expectHitTarget). So
+	// when we got past pre-flight and the target lives in Flutter, accept
+	// the dispatch — Chromium delivered a trusted click at the target's
+	// coordinates and Flutter handled it. Living in dispatchCrossRoot means
+	// doubleTapOn / longPressOn / scrollUntilVisible inherit the concession
+	// for free, since they share this dispatch path.
+	if inFlutter {
+		return successResult(fmt.Sprintf("%s on %s", verbed, desc), info)
 	}
 	return errorResult(
 		fmt.Errorf("hit-target verify did not capture trusted event within timeout"),

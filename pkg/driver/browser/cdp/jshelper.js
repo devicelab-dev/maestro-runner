@@ -730,7 +730,11 @@ window.__maestro = {
     var token = this._hitTargetNextToken++;
     var win = targetElement.ownerDocument && targetElement.ownerDocument.defaultView;
     if (!win) return { error: '<target window unavailable>' };
-    var state = { captured: false, result: undefined, target: targetElement, win: win };
+    var inFlutter = this._isInFlutterContext(targetElement);
+    var state = {
+      captured: false, result: undefined, target: targetElement, win: win,
+      inFlutter: inFlutter
+    };
     this._hitTargetState[token] = state;
 
     var listener = function(ev) {
@@ -758,17 +762,21 @@ window.__maestro = {
     return { token: token };
   },
 
-  // pollHitTargetResult: returns the captured verify outcome for a token, or
-  // 'pending' if the listener hasn't fired yet. Caller should poll a few
-  // times after dispatch (a real trusted pointerdown is delivered
-  // synchronously to JS during Mouse.Click, so 'pending' should be rare —
-  // but a brief retry window absorbs scheduler jitter).
+  // pollHitTargetResult: returns the captured verify outcome for a token.
+  // Caller should poll a few times after dispatch (a real trusted pointerdown
+  // is delivered synchronously to JS during Mouse.Click, so 'pending' should
+  // be rare — but a brief retry window absorbs scheduler jitter).
+  //
+  // Always returns an object with a `status` field:
+  //   { status: 'done' }                                 → success
+  //   { status: 'pending', inFlutter: bool }             → trusted event not seen yet
+  //   { status: 'failed', hitTargetDescription: string } → landed on the wrong element
   //
   // After returning a non-'pending' result, the token is cleaned up.
   pollHitTargetResult: function(token) {
     var state = this._hitTargetState[token];
-    if (!state) return 'done'; // unknown token → don't block caller
-    if (!state.captured) return 'pending';
+    if (!state) return { status: 'done' }; // unknown token → don't block caller
+    if (!state.captured) return { status: 'pending', inFlutter: !!state.inFlutter };
     var r = state.result;
     // Cleanup listener if still attached (defensive — listener removes itself
     // on capture, but if the click never fired we want to stop leaking).
@@ -777,7 +785,13 @@ window.__maestro = {
       state.win.removeEventListener('mousedown', state.listener, true);
     } catch (e) {}
     delete this._hitTargetState[token];
-    return r;
+    // Normalize the listener-stashed expectHitTarget result into the unified
+    // shape. expectHitTarget returns 'done' or { hitTargetDescription }.
+    if (r === 'done') return { status: 'done' };
+    if (r && typeof r === 'object' && 'hitTargetDescription' in r) {
+      return { status: 'failed', hitTargetDescription: r.hitTargetDescription };
+    }
+    return { status: 'done' }; // defensive fallback
   },
 
   // disposeHitTargetInterceptor: called by Go to abandon a token without
