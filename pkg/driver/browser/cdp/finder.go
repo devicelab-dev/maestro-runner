@@ -510,6 +510,15 @@ func (d *Driver) findByAXTree(text, role string, sel flow.Selector) (*rod.Elemen
 }
 
 // findBySearch uses Rod's page.Search() which handles Shadow DOM via DOMPerformSearch.
+//
+// Reject IFRAME results: CDP DOM.performSearch matches against the iframe
+// element's serialized attributes, including srcdoc — for an iframe whose
+// srcdoc HTML happens to contain the search text, the iframe element itself
+// is returned. That is essentially never what the caller wants (the caller
+// is looking for a tappable text element, not the iframe wrapper). Falling
+// through here lets the cascade reach the JS findByText path, which walks
+// _collectRoots() into the iframe document and shadow DOM and returns the
+// actual visible match. (Issues #71/#72 acting layer.)
 func (d *Driver) findBySearch(text string, sel flow.Selector) (*rod.Element, *core.ElementInfo, error) {
 	p := d.page.Timeout(2 * time.Second)
 	res, err := p.Search(text)
@@ -523,6 +532,10 @@ func (d *Driver) findBySearch(text string, sel flow.Selector) (*rod.Element, *co
 	}
 
 	elem := res.First
+	if tag, _ := elem.Eval(`() => this.tagName`); tag != nil &&
+		(tag.Value.Str() == "IFRAME" || tag.Value.Str() == "FRAME") {
+		return nil, nil, fmt.Errorf("search returned iframe element (likely srcdoc text match) — falling through to JS findByText")
+	}
 	if !d.matchesStateFilters(elem, sel) {
 		return nil, nil, fmt.Errorf("search found element but state filters don't match")
 	}

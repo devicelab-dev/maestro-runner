@@ -43,6 +43,19 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		return successResult(fmt.Sprintf("Selected option %s", step.Selector.DescribeQuoted()), info)
 	}
 
+	// Iframe / shadow-root branch: when the element lives inside an iframe,
+	// Rod's Click() uses iframe-LOCAL coordinates while CDP Input.dispatchMouseEvent
+	// operates in TOP-FRAME viewport coordinates — clicks land at the wrong place
+	// and report success silently. Route these through the coord-translated
+	// dispatch path which also runs Playwright-style hit-target verification.
+	// Top-frame elements (including those inside top-frame shadow roots) keep
+	// the existing path — getBoundingClientRect() is already in top-frame
+	// coords for them, so Rod's Click() is correct. (Issues #71/#72 acting layer.)
+	inIframe, _ := elem.Eval(`() => window.__maestro._isInIframe(this)`)
+	if inIframe != nil && inIframe.Value.Bool() {
+		return d.tapOnCrossRoot(elem, info, step)
+	}
+
 	if err := elem.Click(proto.InputMouseButtonLeft, 1); err != nil {
 		// Fallback: use JS click (handles elements that can't receive CDP input events)
 		if _, jsErr := elem.Eval(`() => this.click()`); jsErr != nil {
@@ -51,6 +64,118 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 	}
 
 	return successResult(fmt.Sprintf("Tapped on %s", step.Selector.DescribeQuoted()), info)
+}
+
+// tapOnCrossRoot dispatches a tap against an element nested inside an iframe
+// (or iframe + open shadow root). Translates the element's coordinate from
+// iframe-local to top-frame viewport coordinates, runs Playwright-style
+// hit-target verification before and after dispatch, and uses page-level
+// Mouse to send a trusted Input.dispatchMouseEvent at the translated point.
+//
+// Ports microsoft/playwright `_checkFrameIsHitTarget` (server/dom.ts) and
+// `setupHitTargetInterceptor` (injected/injectedScript.ts) into the maestro
+// CDP driver. The coord-translation walk is in jshelper.js
+// (`topFrameClickPoint`); pre-flight + interceptor lives in
+// `setupHitTargetInterceptor`. (Issues #71/#72 acting layer.)
+func (d *Driver) tapOnCrossRoot(elem *rod.Element, info *core.ElementInfo, step *flow.TapOnStep) *core.CommandResult {
+	desc := step.Selector.DescribeQuoted()
+
+	// Step 1: compute top-frame click point. The JS walks up the frame chain,
+	// adding each iframe's box.left/top + content-area inset (border+padding)
+	// at every level, ending with a coord in the top-frame viewport.
+	// Throws on transformed-iframe ancestors (Playwright bails on transforms
+	// rather than computing through DOMMatrix; we follow that decision).
+	ptRes, err := elem.Eval(`() => {
+		var p = window.__maestro.topFrameClickPoint(this);
+		return [p.x, p.y];
+	}`)
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("Cross-root click setup failed for %s: %v", desc, err))
+	}
+	arr := ptRes.Value.Arr()
+	if len(arr) != 2 {
+		return errorResult(
+			fmt.Errorf("topFrameClickPoint returned %d values", len(arr)),
+			fmt.Sprintf("Failed to compute cross-root click point for %s", desc))
+	}
+	x := arr[0].Num()
+	y := arr[1].Num()
+
+	// Step 2: pre-flight expectHitTarget + install trusted-event interceptor.
+	// Pre-flight runs elementsFromPoint per shadow root and walks slot/host
+	// chain to verify the click point would land on our target. If something
+	// occludes (modal overlay, hidden iframe, etc.), we get back an
+	// {error: hitTargetDescription} and bail before dispatch.
+	setupRes, err := elem.Eval(
+		`(x, y) => window.__maestro.setupHitTargetInterceptor(this, {x: x, y: y})`,
+		x, y)
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to set up hit-target interceptor for %s", desc))
+	}
+	if setupRes.Value.Has("error") {
+		errMsg := setupRes.Value.Get("error").Str()
+		return errorResult(
+			fmt.Errorf("hit-target pre-flight: %s blocks %s", errMsg, desc),
+			fmt.Sprintf("Click on %s blocked by overlay (%s)", desc, errMsg))
+	}
+	if !setupRes.Value.Has("token") {
+		return errorResult(
+			fmt.Errorf("interceptor returned no token"),
+			fmt.Sprintf("Failed to set up hit-target interceptor for %s", desc))
+	}
+	token := setupRes.Value.Get("token").Int()
+
+	// Defensive cleanup. pollHitTargetResult also frees the token on capture,
+	// but if we error out before polling, this prevents a leaked listener.
+	defer func() {
+		_, _ = d.page.Eval(`(t) => window.__maestro.disposeHitTargetInterceptor(t)`, token)
+	}()
+
+	// Step 3: dispatch via top-frame mouse. Produces a trusted
+	// pointerdown/mousedown/click sequence; the JS interceptor captures the
+	// actual clientX/Y at event-fire time and runs expectHitTarget against
+	// that point. We do NOT use elem.Click() here — that's the buggy path
+	// for cross-root elements.
+	mouse := d.page.Mouse
+	if err := mouse.MoveTo(proto.NewPoint(x, y)); err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to move mouse for %s", desc))
+	}
+	if err := mouse.Click(proto.InputMouseButtonLeft, 1); err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to dispatch click for %s", desc))
+	}
+
+	// Step 4: poll for verify result. Chromium delivers trusted events
+	// synchronously during Mouse.Click, so the first poll is usually
+	// decisive. Brief retry window absorbs scheduler jitter on slower
+	// machines / CI.
+	for i := 0; i < 5; i++ {
+		pollRes, pollErr := d.page.Eval(`(t) => window.__maestro.pollHitTargetResult(t)`, token)
+		if pollErr != nil {
+			return errorResult(pollErr, fmt.Sprintf("Failed to poll hit-target result for %s", desc))
+		}
+		v := pollRes.Value
+		if v.Has("hitTargetDescription") {
+			hd := v.Get("hitTargetDescription").Str()
+			return errorResult(
+				fmt.Errorf("click did not reach %s — landed on %s", desc, hd),
+				fmt.Sprintf("Click on %s did not reach the target (landed on %s)", desc, hd))
+		}
+		switch v.Str() {
+		case "pending":
+			time.Sleep(20 * time.Millisecond)
+			continue
+		case "done":
+			return successResult(fmt.Sprintf("Tapped on %s", desc), info)
+		default:
+			// Unrecognized payload — be permissive (don't manufacture
+			// failures from unknown shapes), but the success path still
+			// returns the standard ok result.
+			return successResult(fmt.Sprintf("Tapped on %s", desc), info)
+		}
+	}
+	return errorResult(
+		fmt.Errorf("hit-target verify did not capture trusted event within timeout"),
+		fmt.Sprintf("Click on %s dispatched but verification timed out", desc))
 }
 
 // doubleTapOn double-clicks an element.

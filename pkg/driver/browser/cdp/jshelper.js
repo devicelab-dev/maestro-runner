@@ -402,5 +402,300 @@ window.__maestro = {
       }
       requestAnimationFrame(check);
     });
+  },
+
+  // ─── Iframe / shadow-root click coordinate translation + hit-target verify ───
+  //
+  // Ports Playwright's `_checkFrameIsHitTarget` walk and `setupHitTargetInterceptor`
+  // (microsoft/playwright `packages/playwright-core/src/server/dom.ts` and
+  // `packages/injected/src/injectedScript.ts`) so that taps on elements nested
+  // inside iframes (or iframe + open shadow root) dispatch at the correct
+  // top-frame viewport coordinates and verify post-dispatch that the click
+  // actually reached the target. (Issues #71/#72 acting layer.)
+  //
+  // Why a new path: Rod's Element.Click() uses getBoundingClientRect() which
+  // returns iframe-LOCAL coordinates for elements inside an iframe. CDP
+  // Input.dispatchMouseEvent operates in TOP-FRAME viewport coordinates.
+  // Mismatch → click lands at the wrong place, reports success silently.
+
+  // _parentElementOrShadowHost: walk one step up — through parent element or
+  // through shadow-root host boundary. Mirrors Playwright domUtils helper of
+  // the same name.
+  _parentElementOrShadowHost: function(el) {
+    if (!el) return null;
+    if (el.parentElement) return el.parentElement;
+    var root = el.getRootNode && el.getRootNode();
+    // 11 = DOCUMENT_FRAGMENT_NODE; ShadowRoot is the only fragment with .host
+    if (root && root.nodeType === 11 && root.host) return root.host;
+    return null;
+  },
+
+  // _isInIframe: cheap check used by Go to decide whether to use the new
+  // coord-translated dispatch path. True iff the element's owner document has
+  // a non-null frameElement (i.e. it lives inside an iframe at any depth).
+  // Top-frame elements (including those inside top-frame shadow roots) keep
+  // the existing Rod Click() path — getBoundingClientRect() is already in the
+  // top-frame viewport for them.
+  _isInIframe: function(el) {
+    if (!el) return false;
+    var doc = el.ownerDocument;
+    if (!doc || !doc.defaultView) return false;
+    try { return !!doc.defaultView.frameElement; } catch (e) { return false; }
+  },
+
+  // _describeIFrameStyle: verbatim port of Playwright's `describeIFrameStyle`.
+  // Returns the iframe's content-area inset (border + padding) within the
+  // iframe element box, or 'transformed' if the iframe (or any ancestor) has
+  // a CSS transform — Playwright bails on transforms rather than computing
+  // through DOMMatrix; we follow that decision so a transformed-iframe page
+  // surfaces a clear error instead of a subtly-wrong click.
+  _describeIFrameStyle: function(iframe) {
+    if (!iframe.ownerDocument || !iframe.ownerDocument.defaultView)
+      return 'error:notconnected';
+    var defaultView = iframe.ownerDocument.defaultView;
+    for (var e = iframe; e; e = this._parentElementOrShadowHost(e)) {
+      try {
+        if (defaultView.getComputedStyle(e).transform !== 'none') return 'transformed';
+      } catch (err) { /* getComputedStyle on detached element throws */ }
+    }
+    var s = defaultView.getComputedStyle(iframe);
+    return {
+      left: parseInt(s.borderLeftWidth || '', 10) + parseInt(s.paddingLeft || '', 10),
+      top:  parseInt(s.borderTopWidth  || '', 10) + parseInt(s.paddingTop  || '', 10)
+    };
+  },
+
+  // topFrameClickPoint: translate an element's center point from iframe-local
+  // viewport coordinates into top-frame viewport coordinates. Walks up the
+  // frame chain; at each level adds the iframe element's box (its position in
+  // the parent document) plus the iframe's content-area inset.
+  //
+  // Inverse direction of Playwright's `_checkFrameIsHitTarget` (which starts
+  // with top-frame coords and SUBTRACTS to find frame-local coords for
+  // occlusion checks at each level). We start frame-local and ADD.
+  //
+  // Throws on transformed-iframe ancestors (see _describeIFrameStyle).
+  topFrameClickPoint: function(el) {
+    var r = el.getBoundingClientRect();
+    var pt = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    var doc = el.ownerDocument;
+    while (doc && doc.defaultView) {
+      var iframe;
+      try { iframe = doc.defaultView.frameElement; } catch (e) { break; }
+      if (!iframe) break;
+      var style = this._describeIFrameStyle(iframe);
+      if (typeof style === 'string') {
+        throw new Error('iframe coord translation: ' + style + ' iframe ancestor');
+      }
+      var box = iframe.getBoundingClientRect();
+      pt.x += box.left + style.left;
+      pt.y += box.top + style.top;
+      doc = iframe.ownerDocument;
+    }
+    return pt;
+  },
+
+  // _previewNode: short string description of a node, used inside
+  // hitTargetDescription for actionable error messages. Best-effort, never
+  // throws.
+  _previewNode: function(node) {
+    if (!node) return '<none>';
+    try {
+      var tag = (node.tagName || node.nodeName || '').toLowerCase();
+      var id = node.id ? '#' + node.id : '';
+      var cls = '';
+      if (node.classList && node.classList.length) {
+        cls = '.' + Array.prototype.slice.call(node.classList).slice(0, 2).join('.');
+      }
+      var text = '';
+      if (node.textContent) {
+        var t = node.textContent.trim().replace(/\s+/g, ' ');
+        if (t) text = ' "' + (t.length > 30 ? t.slice(0, 30) + '…' : t) + '"';
+      }
+      return '<' + tag + id + cls + '>' + text;
+    } catch (e) { return '<node>'; }
+  },
+
+  // expectHitTarget: verbatim port of Playwright's `expectHitTarget` from
+  // injectedScript.ts. Walks shadow-root boundaries via elementsFromPoint per
+  // root (document.elementFromPoint does NOT pierce shadow boundaries — only
+  // sees the host). Returns 'done' if the click point would land on the
+  // target (or one of its descendants reachable through slot/host chain), or
+  // { hitTargetDescription } if something is in the way.
+  expectHitTarget: function(hitPoint, targetElement) {
+    var roots = [];
+    var parentElement = targetElement;
+    while (parentElement) {
+      var root = parentElement.getRootNode && parentElement.getRootNode();
+      if (!root) break;
+      roots.push(root);
+      if (root.nodeType === 9) break; // 9 = DOCUMENT_NODE; reached top
+      parentElement = root.host; // ShadowRoot.host
+    }
+    var hitElement;
+    for (var index = roots.length - 1; index >= 0; index--) {
+      var r = roots[index];
+      var elements;
+      var single;
+      try {
+        elements = r.elementsFromPoint(hitPoint.x, hitPoint.y);
+        single = r.elementFromPoint(hitPoint.x, hitPoint.y);
+      } catch (e) { break; }
+      if (single && elements && elements[0] &&
+          this._parentElementOrShadowHost(single) === elements[0]) {
+        try {
+          var st = window.getComputedStyle(single);
+          if (st && st.display === 'contents') elements.unshift(single);
+        } catch (e) {}
+      }
+      if (elements && elements[0] && elements[0].shadowRoot === r &&
+          elements[1] === single) {
+        elements.shift();
+      }
+      var innerElement = elements && elements[0];
+      if (!innerElement) break;
+      hitElement = innerElement;
+      // If we're not at the deepest root yet, the hit element should be the
+      // shadow host that opens the next root down. If it isn't, occlusion at
+      // an outer level — stop walking deeper.
+      if (index && innerElement !== (roots[index - 1] && roots[index - 1].host)) break;
+    }
+    var hitParents = [];
+    while (hitElement && hitElement !== targetElement) {
+      hitParents.push(hitElement);
+      hitElement = hitElement.assignedSlot || this._parentElementOrShadowHost(hitElement);
+    }
+    if (hitElement === targetElement) return 'done';
+    var description = this._previewNode(hitParents[0] || document.documentElement);
+    return { hitTargetDescription: description };
+  },
+
+  // Hit-target interceptor state. _hitTargetState[token] receives the verify
+  // result captured from the trusted event listener. One entry per in-flight
+  // tapOn (we only ever have one at a time in maestro flows, but keying by
+  // token keeps the state hygienic).
+  _hitTargetState: {},
+  _hitTargetNextToken: 1,
+
+  // _hitPointInTargetFrame: convert a top-frame viewport point to the
+  // target's owner-document viewport (the inverse of topFrameClickPoint).
+  // expectHitTarget always runs in the target's frame and expects coords in
+  // that frame's viewport — for iframe targets this means subtracting each
+  // ancestor iframe's box + content-area inset.
+  _hitPointInTargetFrame: function(topPoint, targetElement) {
+    var pt = { x: topPoint.x, y: topPoint.y };
+    var doc = targetElement.ownerDocument;
+    var frames = [];
+    while (doc && doc.defaultView) {
+      var iframe;
+      try { iframe = doc.defaultView.frameElement; } catch (e) { break; }
+      if (!iframe) break;
+      frames.push(iframe);
+      doc = iframe.ownerDocument;
+    }
+    // frames[0] = innermost, frames[last] = outermost. Walk outermost inward,
+    // subtracting each iframe's box.left/top + content-area inset.
+    for (var i = frames.length - 1; i >= 0; i--) {
+      var iframe = frames[i];
+      var style = this._describeIFrameStyle(iframe);
+      if (typeof style === 'string') break; // transformed/notconnected — bail
+      var box = iframe.getBoundingClientRect();
+      pt.x -= box.left + style.left;
+      pt.y -= box.top + style.top;
+    }
+    return pt;
+  },
+
+  // setupHitTargetInterceptor: install a one-shot listener that captures the
+  // ACTUAL clientX/Y of the first trusted pointerdown/mousedown event after
+  // setup, runs expectHitTarget against that point, and stashes the result
+  // for later polling by Go.
+  //
+  // Pre-flight: expectHitTarget is also run synchronously here against the
+  // computed hitPoint; if pre-flight fails (occluded, wrong element on top),
+  // we return { error } immediately so the caller skips dispatch.
+  //
+  // Why listen to the trusted event instead of just verifying after Click():
+  // by the time Click() returns, the DOM may have already mutated (e.g. the
+  // dialog handler removes the dialog). Capturing at event-fire time gives
+  // a snapshot of what was actually under the pointer when the click landed.
+  // Same pattern as Playwright's `setupHitTargetInterceptor`.
+  //
+  // Frame scope: the listener is installed on the target's owner-document
+  // window. Pointer events don't cross frame boundaries, so a top-window
+  // listener wouldn't see clicks landing inside an iframe.
+  setupHitTargetInterceptor: function(targetElement, hitPoint) {
+    // hitPoint comes in TOP-FRAME viewport coords (as computed by
+    // topFrameClickPoint). expectHitTarget runs in the target's frame, so
+    // convert before passing.
+    var localPoint = this._hitPointInTargetFrame(hitPoint, targetElement);
+    var pre = this.expectHitTarget(localPoint, targetElement);
+    if (pre !== 'done') return { error: pre.hitTargetDescription };
+
+    var self = this;
+    var token = this._hitTargetNextToken++;
+    var win = targetElement.ownerDocument && targetElement.ownerDocument.defaultView;
+    if (!win) return { error: '<target window unavailable>' };
+    var state = { captured: false, result: undefined, target: targetElement, win: win };
+    this._hitTargetState[token] = state;
+
+    var listener = function(ev) {
+      if (state.captured) return;
+      if (!ev.isTrusted) return;
+      if (ev.type !== 'pointerdown' && ev.type !== 'mousedown') return;
+      // Only interested in primary (left) button.
+      if (typeof ev.button === 'number' && ev.button !== 0) return;
+      state.captured = true;
+      try {
+        // ev.clientX/Y are in the firing window's viewport == target's frame.
+        state.result = self.expectHitTarget({ x: ev.clientX, y: ev.clientY }, state.target);
+      } catch (e) {
+        state.result = { hitTargetDescription: '<error: ' + (e && e.message) + '>' };
+      }
+      // Listener is one-shot — remove ourselves to avoid leaking handlers.
+      try {
+        state.win.removeEventListener('pointerdown', listener, true);
+        state.win.removeEventListener('mousedown', listener, true);
+      } catch (e) {}
+    };
+    state.listener = listener;
+    win.addEventListener('pointerdown', listener, true);
+    win.addEventListener('mousedown', listener, true);
+    return { token: token };
+  },
+
+  // pollHitTargetResult: returns the captured verify outcome for a token, or
+  // 'pending' if the listener hasn't fired yet. Caller should poll a few
+  // times after dispatch (a real trusted pointerdown is delivered
+  // synchronously to JS during Mouse.Click, so 'pending' should be rare —
+  // but a brief retry window absorbs scheduler jitter).
+  //
+  // After returning a non-'pending' result, the token is cleaned up.
+  pollHitTargetResult: function(token) {
+    var state = this._hitTargetState[token];
+    if (!state) return 'done'; // unknown token → don't block caller
+    if (!state.captured) return 'pending';
+    var r = state.result;
+    // Cleanup listener if still attached (defensive — listener removes itself
+    // on capture, but if the click never fired we want to stop leaking).
+    try {
+      state.win.removeEventListener('pointerdown', state.listener, true);
+      state.win.removeEventListener('mousedown', state.listener, true);
+    } catch (e) {}
+    delete this._hitTargetState[token];
+    return r;
+  },
+
+  // disposeHitTargetInterceptor: called by Go to abandon a token without
+  // waiting for a result (e.g. Mouse.Click failed before any event fired).
+  // Removes the listener and frees the slot.
+  disposeHitTargetInterceptor: function(token) {
+    var state = this._hitTargetState[token];
+    if (!state) return;
+    try {
+      state.win.removeEventListener('pointerdown', state.listener, true);
+      state.win.removeEventListener('mousedown', state.listener, true);
+    } catch (e) {}
+    delete this._hitTargetState[token];
   }
 };
