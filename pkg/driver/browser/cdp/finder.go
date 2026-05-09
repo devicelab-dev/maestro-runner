@@ -511,14 +511,19 @@ func (d *Driver) findByAXTree(text, role string, sel flow.Selector) (*rod.Elemen
 
 // findBySearch uses Rod's page.Search() which handles Shadow DOM via DOMPerformSearch.
 //
-// Reject IFRAME results: CDP DOM.performSearch matches against the iframe
-// element's serialized attributes, including srcdoc — for an iframe whose
-// srcdoc HTML happens to contain the search text, the iframe element itself
-// is returned. That is essentially never what the caller wants (the caller
-// is looking for a tappable text element, not the iframe wrapper). Falling
-// through here lets the cascade reach the JS findByText path, which walks
-// _collectRoots() into the iframe document and shadow DOM and returns the
-// actual visible match. (Issues #71/#72 acting layer.)
+// Reject non-tappable text containers: CDP DOM.performSearch matches against
+// the serialized HTML of every node, including the source text of <script>
+// and <style> blocks and the srcdoc attribute of <iframe>. For a page whose
+// JS source happens to contain "Close" (a button label coincidentally also
+// found in the source code), the <script> element itself is returned — it's
+// never visible, never tappable, and any subsequent click translates to
+// nonsense coordinates that the hit-target verifier then reports as occluded
+// by whatever real content sits at the page origin. Same shape for <style>,
+// <template>, and other inert text containers; same shape for <iframe> when
+// its srcdoc contains the search text. Falling through here lets the cascade
+// reach the JS findByText path, which walks _collectRoots() into the iframe
+// document and shadow DOM and returns the actual visible match. (Issues
+// #71/#72 acting layer.)
 func (d *Driver) findBySearch(text string, sel flow.Selector) (*rod.Element, *core.ElementInfo, error) {
 	p := d.page.Timeout(2 * time.Second)
 	res, err := p.Search(text)
@@ -532,9 +537,13 @@ func (d *Driver) findBySearch(text string, sel flow.Selector) (*rod.Element, *co
 	}
 
 	elem := res.First
-	if tag, _ := elem.Eval(`() => this.tagName`); tag != nil &&
-		(tag.Value.Str() == "IFRAME" || tag.Value.Str() == "FRAME") {
-		return nil, nil, fmt.Errorf("search returned iframe element (likely srcdoc text match) — falling through to JS findByText")
+	if tag, _ := elem.Eval(`() => this.tagName`); tag != nil {
+		switch tag.Value.Str() {
+		case "IFRAME", "FRAME":
+			return nil, nil, fmt.Errorf("search returned iframe element (likely srcdoc text match) — falling through to JS findByText")
+		case "SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT", "TITLE", "META", "LINK", "HEAD":
+			return nil, nil, fmt.Errorf("search returned non-tappable %s element (text matched in source/inert content) — falling through to JS findByText", strings.ToLower(tag.Value.Str()))
+		}
 	}
 	if !d.matchesStateFilters(elem, sel) {
 		return nil, nil, fmt.Errorf("search found element but state filters don't match")
