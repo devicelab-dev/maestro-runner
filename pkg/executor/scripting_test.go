@@ -188,6 +188,31 @@ func TestScriptEngine_RunScript_WithEnv(t *testing.T) {
 	}
 }
 
+func TestScriptEngine_RunScript_EnvExpandsVariableRefs(t *testing.T) {
+	// runScript's `env:` block must expand ${VAR} against the parent scope,
+	// matching runFlow's withEnvVars semantics. This is the YAML pattern
+	//   - runScript:
+	//       env:
+	//         BASE_URL: ${BASE_URL}
+	// where the outer BASE_URL came from a CLI -e flag or flow Config.Env.
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("BASE_URL", "https://api.example.com")
+
+	err := se.RunScript("output.url = BASE_URL", map[string]string{
+		"BASE_URL": "${BASE_URL}",
+	})
+	if err != nil {
+		t.Fatalf("RunScript() error = %v", err)
+	}
+
+	if got := se.GetVariable("url"); got != "https://api.example.com" {
+		t.Errorf("url = %q, want %q (env value was passed through verbatim instead of expanded)",
+			got, "https://api.example.com")
+	}
+}
+
 func TestScriptEngine_RunScript_Error(t *testing.T) {
 	se := NewScriptEngine()
 	defer se.Close()
@@ -1015,6 +1040,71 @@ func TestScriptEngine_ExpandStep_LaunchAppStep_Environment(t *testing.T) {
 	}
 	if step.Environment["ENV"] != "staging" {
 		t.Errorf("Environment[ENV] = %q, want %q", step.Environment["ENV"], "staging")
+	}
+}
+
+func TestScriptEngine_ExpandStep_RunScriptStep_Env(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("BASE_URL", "https://api.example.com")
+	se.SetVariable("STAGE", "staging")
+
+	step := &flow.RunScriptStep{
+		File: "seed.js",
+		Env: map[string]string{
+			"BASE_URL": "${BASE_URL}",
+			"ENV":      "${STAGE}",
+			"LITERAL":  "hardcoded_value",
+		},
+	}
+
+	se.ExpandStep(step)
+
+	if step.Env["BASE_URL"] != "https://api.example.com" {
+		t.Errorf("Env[BASE_URL] = %q, want %q", step.Env["BASE_URL"], "https://api.example.com")
+	}
+	if step.Env["ENV"] != "staging" {
+		t.Errorf("Env[ENV] = %q, want %q", step.Env["ENV"], "staging")
+	}
+	if step.Env["LITERAL"] != "hardcoded_value" {
+		t.Errorf("Env[LITERAL] = %q (literals must pass through untouched)", step.Env["LITERAL"])
+	}
+}
+
+func TestScriptEngine_ExpandStep_RunBrowserScriptStep_Env(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("API_KEY", "secret123")
+
+	step := &flow.RunBrowserScriptStep{
+		File: "probe.js",
+		Env:  map[string]string{"KEY": "${API_KEY}"},
+	}
+
+	se.ExpandStep(step)
+
+	if step.Env["KEY"] != "secret123" {
+		t.Errorf("Env[KEY] = %q, want %q", step.Env["KEY"], "secret123")
+	}
+}
+
+func TestScriptEngine_ExpandStep_RunWebViewScriptStep_Env(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("API_KEY", "secret123")
+
+	step := &flow.RunWebViewScriptStep{
+		File: "probe.js",
+		Env:  map[string]string{"KEY": "${API_KEY}"},
+	}
+
+	se.ExpandStep(step)
+
+	if step.Env["KEY"] != "secret123" {
+		t.Errorf("Env[KEY] = %q, want %q", step.Env["KEY"], "secret123")
 	}
 }
 

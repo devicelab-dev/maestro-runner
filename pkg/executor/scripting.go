@@ -166,9 +166,13 @@ func (se *ScriptEngine) RunScript(script string, env map[string]string) error {
 	// Expand variables in script
 	script = se.ExpandVariables(script)
 
-	// Apply env variables
+	// Apply env variables. Values are expanded through ExpandVariables so
+	// `${VAR}` / `${VAR || "default"}` references resolve against the parent
+	// scope (CLI -e flags, flow Config.Env, prior runScript output). Mirrors
+	// withEnvVars used by runFlow — keeps env semantics consistent across
+	// step types so the YAML pattern `MY_KEY: ${MY_KEY}` works the same way.
 	for k, v := range env {
-		se.SetVariable(k, v)
+		se.SetVariable(k, se.ExpandVariables(v))
 	}
 
 	// Pre-define potential env variables as undefined to avoid ReferenceError.
@@ -475,6 +479,18 @@ func conditionTimeout(cond flow.Condition, sel *flow.Selector) int {
 	return 0 // Optional=true on the step means driver uses OptionalFindTimeout (7s)
 }
 
+// expandEnvMap expands ${VAR} / ${VAR || "default"} in every value of a YAML
+// `env:` map, in place. Used by ExpandStep for any step type whose Env field
+// references parent-scope variables — keeps env semantics identical across
+// runScript, runFlow, runBrowserScript, runWebViewScript, retry, and
+// LaunchAppStep.Environment / .Arguments. No-op for keys whose values contain
+// no `${...}` so plain literals stay untouched.
+func (se *ScriptEngine) expandEnvMap(env map[string]string) {
+	for k, v := range env {
+		env[k] = se.ExpandVariables(v)
+	}
+}
+
 // withEnvVars applies environment variables and returns a restore function.
 // Values are expanded through ExpandVariables to support ${VAR || "default"} syntax.
 func (se *ScriptEngine) withEnvVars(env map[string]string) func() {
@@ -536,9 +552,17 @@ func (se *ScriptEngine) ExpandStep(step flow.Step) {
 				s.Arguments[k] = se.ExpandVariables(str)
 			}
 		}
-		for k, v := range s.Environment {
-			s.Environment[k] = se.ExpandVariables(v)
-		}
+		se.expandEnvMap(s.Environment)
+	case *flow.RunScriptStep:
+		se.expandEnvMap(s.Env)
+	case *flow.RunBrowserScriptStep:
+		se.expandEnvMap(s.Env)
+	case *flow.RunWebViewScriptStep:
+		se.expandEnvMap(s.Env)
+	case *flow.RetryStep:
+		se.expandEnvMap(s.Env)
+	case *flow.DefineVariablesStep:
+		se.expandEnvMap(s.Env)
 	case *flow.StopAppStep:
 		s.AppID = se.ExpandVariables(s.AppID)
 	case *flow.KillAppStep:
@@ -565,9 +589,7 @@ func (se *ScriptEngine) ExpandStep(step flow.Step) {
 				s.When.Platform = se.ExpandVariables(s.When.Platform)
 			}
 		}
-		for k, v := range s.Env {
-			s.Env[k] = se.ExpandVariables(v)
-		}
+		se.expandEnvMap(s.Env)
 	}
 }
 

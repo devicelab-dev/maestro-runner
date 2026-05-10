@@ -294,8 +294,10 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 	switch s := step.(type) {
 	// JS/Scripting steps - handled by ScriptEngine
 	case *flow.DefineVariablesStep:
+		fr.script.ExpandStep(step)
 		result = fr.script.ExecuteDefineVariables(s)
 	case *flow.RunScriptStep:
+		fr.script.ExpandStep(step)
 		result = fr.script.ExecuteRunScript(s)
 	case *flow.EvalScriptStep:
 		result = fr.script.ExecuteEvalScript(s)
@@ -796,8 +798,10 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 
 	switch s := step.(type) {
 	case *flow.DefineVariablesStep:
+		fr.script.ExpandStep(step)
 		result = fr.script.ExecuteDefineVariables(s)
 	case *flow.RunScriptStep:
+		fr.script.ExpandStep(step)
 		result = fr.script.ExecuteRunScript(s)
 	case *flow.EvalScriptStep:
 		result = fr.script.ExecuteEvalScript(s)
