@@ -1,7 +1,11 @@
 // Package flow handles parsing and representation of Maestro YAML flow files.
 package flow
 
-import "gopkg.in/yaml.v3"
+import (
+	"fmt"
+
+	"gopkg.in/yaml.v3"
+)
 
 // StepType represents the type of step.
 type StepType string
@@ -54,6 +58,7 @@ const (
 	// Device Control
 	StepSetLocation        StepType = "setLocation"
 	StepSetOrientation     StepType = "setOrientation"
+	StepViewport           StepType = "viewport"
 	StepSetAirplaneMode    StepType = "setAirplaneMode"
 	StepToggleAirplaneMode StepType = "toggleAirplaneMode"
 	StepTravel             StepType = "travel"
@@ -430,6 +435,14 @@ type SetLocationStep struct {
 type SetOrientationStep struct {
 	BaseStep    `yaml:",inline"`
 	Orientation string `yaml:"orientation"` // PORTRAIT, LANDSCAPE
+}
+
+// ViewportStep resizes the browser viewport mid-flow (web-only).
+// Mirrors Playwright's page.setViewportSize semantics.
+type ViewportStep struct {
+	BaseStep `yaml:",inline"`
+	Width    int `yaml:"width"`
+	Height   int `yaml:"height"`
 }
 
 // SetAirplaneModeStep sets airplane mode.
@@ -850,6 +863,11 @@ func (s *SwipeStep) Describe() string {
 		return "swipe: " + s.Direction
 	}
 	return "swipe"
+}
+
+// Describe returns a human-readable description of the viewport step.
+func (s *ViewportStep) Describe() string {
+	return fmt.Sprintf("viewport: %dx%d", s.Width, s.Height)
 }
 
 // Describe returns a human-readable description of the scroll step.

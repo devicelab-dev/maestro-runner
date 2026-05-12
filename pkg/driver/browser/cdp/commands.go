@@ -818,6 +818,16 @@ func (d *Driver) setClipboard(step *flow.SetClipboardStep) *core.CommandResult {
 	return successResult(fmt.Sprintf("Set clipboard: %s", step.Text), nil)
 }
 
+// viewport resizes the browser viewport mid-flow. Mirrors Playwright's
+// page.setViewportSize semantics — affects the current page and is reused
+// by initPage for any tabs opened later.
+func (d *Driver) viewport(step *flow.ViewportStep) *core.CommandResult {
+	if err := d.SetViewport(step.Width, step.Height); err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to set viewport %dx%d", step.Width, step.Height))
+	}
+	return successResult(fmt.Sprintf("Set viewport: %dx%d", step.Width, step.Height), nil)
+}
+
 // setOrientation changes viewport dimensions to simulate orientation.
 func (d *Driver) setOrientation(step *flow.SetOrientationStep) *core.CommandResult {
 	switch strings.ToUpper(step.Orientation) {

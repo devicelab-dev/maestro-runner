@@ -117,6 +117,19 @@ func (fr *FlowRunner) Run() FlowResult {
 		}
 	}
 
+	// Apply flow-level viewport before any step runs. Web (CDP) driver
+	// implements core.ViewportConfigurer; mobile drivers do not and the
+	// header is silently ignored on those platforms (Playwright parity:
+	// the option is web-only).
+	if fr.flow.Config.Viewport != nil {
+		if configurer, ok := core.Unwrap(fr.driver).(core.ViewportConfigurer); ok {
+			vp := fr.flow.Config.Viewport
+			if err := configurer.SetViewport(vp.Width, vp.Height); err != nil {
+				logger.Warn("failed to apply flow-level viewport %dx%d: %v", vp.Width, vp.Height, err)
+			}
+		}
+	}
+
 	// Ensure a WDA session exists before execution starts.
 	// If launchApp runs later, it reuses this session and updates settings.
 	// Use Unwrap to reach through wrapper layers (e.g. FlutterDriver).

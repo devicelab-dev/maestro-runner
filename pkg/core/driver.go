@@ -225,6 +225,13 @@ type TypingFrequencyConfigurer interface {
 	SetTypingFrequency(freq int) error
 }
 
+// ViewportConfigurer is an optional interface drivers can implement to
+// resize the rendering viewport. Currently only the web (CDP) driver
+// supports this — it mirrors Playwright's page.setViewportSize semantics.
+type ViewportConfigurer interface {
+	SetViewport(width, height int) error
+}
+
 // SessionEnsurer is an optional interface drivers can implement to create
 // a session before flow execution starts. This is needed when a flow has
 // no launchApp step (e.g. stopApp → openLink pattern) so that WDA commands

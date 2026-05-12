@@ -73,6 +73,14 @@ type Config struct {
 	CommandTimeout     int               `yaml:"commandTimeout"`     // Default timeout for all commands in ms (overrides driver default)
 	WaitForIdleTimeout *int              `yaml:"waitForIdleTimeout"` // Wait for device idle in ms (nil = use global, 0 = disabled)
 	TypingFrequency    *int              `yaml:"typingFrequency"`    // WDA typing speed in keys/sec (nil = use global, 0 = disabled)
+	Viewport           *ViewportConfig   `yaml:"viewport,omitempty"` // Web-only: initial browser viewport size (nil = driver default)
 	OnFlowStart        []Step            `yaml:"-"`                  // Lifecycle hook: runs before commands
 	OnFlowComplete     []Step            `yaml:"-"`                  // Lifecycle hook: runs after commands
+}
+
+// ViewportConfig is the flow-header viewport setting (web-only).
+// Mirrors Playwright's browser.newContext({ viewport }) shape.
+type ViewportConfig struct {
+	Width  int `yaml:"width"`
+	Height int `yaml:"height"`
 }

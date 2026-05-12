@@ -500,6 +500,8 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	// Device control
 	case *flow.SetOrientationStep:
 		result = d.setOrientation(s)
+	case *flow.ViewportStep:
+		result = d.viewport(s)
 	case *flow.OpenLinkStep:
 		result = d.openLink(s)
 	case *flow.OpenBrowserStep:
@@ -657,6 +659,24 @@ func (d *Driver) SetFindTimeout(ms int) {
 
 // SetWaitForIdleTimeout is a no-op for browser since Rod handles waits differently.
 func (d *Driver) SetWaitForIdleTimeout(ms int) error {
+	return nil
+}
+
+// SetViewport resizes the rendering viewport. Implements core.ViewportConfigurer.
+// Mirrors Playwright's page.setViewportSize semantics — the new size affects
+// the current page immediately and is reused by initPage for new tabs.
+func (d *Driver) SetViewport(width, height int) error {
+	if width <= 0 || height <= 0 {
+		return fmt.Errorf("viewport dimensions must be positive (got %dx%d)", width, height)
+	}
+	if err := d.page.SetViewport(&proto.EmulationSetDeviceMetricsOverride{
+		Width:  width,
+		Height: height,
+	}); err != nil {
+		return fmt.Errorf("failed to set viewport: %w", err)
+	}
+	d.viewportW = width
+	d.viewportH = height
 	return nil
 }
 

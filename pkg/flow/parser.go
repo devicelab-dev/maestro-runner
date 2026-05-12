@@ -149,6 +149,16 @@ func parseConfig(content string, flow *Flow) error {
 		config.OnFlowComplete = append(config.OnFlowComplete, step)
 	}
 
+	if config.Viewport != nil {
+		if config.Viewport.Width <= 0 || config.Viewport.Height <= 0 {
+			return &ParseError{
+				Path: flow.SourcePath,
+				Message: fmt.Sprintf("viewport requires positive width and height, got %dx%d",
+					config.Viewport.Width, config.Viewport.Height),
+			}
+		}
+	}
+
 	flow.Config = config
 	return nil
 }
@@ -230,7 +240,7 @@ func isStepType(key string) bool {
 		StepAssertVisible, StepAssertNotVisible, StepAssertTrue, StepAssertCondition,
 		StepAssertNoDefectsWithAI, StepAssertWithAI, StepExtractTextWithAI, StepWaitUntil,
 		StepLaunchApp, StepStopApp, StepKillApp, StepClearState, StepClearKeychain, StepSetPermissions,
-		StepSetLocation, StepSetOrientation, StepSetAirplaneMode, StepToggleAirplaneMode,
+		StepSetLocation, StepSetOrientation, StepViewport, StepSetAirplaneMode, StepToggleAirplaneMode,
 		StepTravel, StepOpenLink, StepOpenBrowser, StepRepeat, StepRetry, StepRunFlow,
 		StepRunScript, StepEvalScript, StepEvalBrowserScript,
 		StepRunBrowserScript, StepEvalWebViewScript, StepRunWebViewScript,
@@ -547,6 +557,18 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 			s.Orientation = valueNode.Value
 		} else if err := valueNode.Decode(&s); err != nil {
 			return nil, wrapParseError(sourcePath, valueNode.Line, err)
+		}
+		s.StepType = stepType
+		return &s, nil
+
+	case StepViewport:
+		var s ViewportStep
+		if err := valueNode.Decode(&s); err != nil {
+			return nil, wrapParseError(sourcePath, valueNode.Line, err)
+		}
+		if s.Width <= 0 || s.Height <= 0 {
+			return nil, wrapParseError(sourcePath, valueNode.Line,
+				fmt.Errorf("viewport requires positive width and height, got %dx%d", s.Width, s.Height))
 		}
 		s.StepType = stepType
 		return &s, nil
