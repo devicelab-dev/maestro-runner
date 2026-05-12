@@ -118,6 +118,7 @@ func TestStepInterface(t *testing.T) {
 		&SetPermissionsStep{BaseStep: BaseStep{StepType: StepSetPermissions}},
 		&SetLocationStep{BaseStep: BaseStep{StepType: StepSetLocation}},
 		&SetOrientationStep{BaseStep: BaseStep{StepType: StepSetOrientation}},
+		&ViewportStep{BaseStep: BaseStep{StepType: StepViewport}},
 		&SetAirplaneModeStep{BaseStep: BaseStep{StepType: StepSetAirplaneMode}},
 		&ToggleAirplaneModeStep{BaseStep: BaseStep{StepType: StepToggleAirplaneMode}},
 		&TravelStep{BaseStep: BaseStep{StepType: StepTravel}},
@@ -553,6 +554,18 @@ func TestLongPressOnStep_Describe(t *testing.T) {
 	}
 }
 
+func TestViewportStep_Describe(t *testing.T) {
+	s := ViewportStep{
+		BaseStep: BaseStep{StepType: StepViewport},
+		Width:    1280,
+		Height:   720,
+	}
+	expected := "viewport: 1280x720"
+	if got := s.Describe(); got != expected {
+		t.Errorf("Describe() = %q, want %q", got, expected)
+	}
+}
+
 func TestAssertVisibleStep_Describe(t *testing.T) {
 	s := AssertVisibleStep{
 		BaseStep: BaseStep{StepType: StepAssertVisible},
@@ -833,6 +846,7 @@ func TestStepTypeConstants(t *testing.T) {
 		StepSetPermissions:        "setPermissions",
 		StepSetLocation:           "setLocation",
 		StepSetOrientation:        "setOrientation",
+		StepViewport:              "viewport",
 		StepSetAirplaneMode:       "setAirplaneMode",
 		StepToggleAirplaneMode:    "toggleAirplaneMode",
 		StepTravel:                "travel",

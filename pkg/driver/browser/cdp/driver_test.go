@@ -692,6 +692,81 @@ func TestSetOrientation(t *testing.T) {
 	}
 }
 
+func TestViewportStep(t *testing.T) {
+	ts := newTestServer()
+	defer ts.Close()
+
+	d := newTestDriver(t, ts.URL)
+	defer d.Close()
+
+	// Initial size from newTestDriver should be 1024x768
+	if info := d.GetPlatformInfo(); info.ScreenWidth != 1024 || info.ScreenHeight != 768 {
+		t.Fatalf("initial viewport: expected 1024x768, got %dx%d", info.ScreenWidth, info.ScreenHeight)
+	}
+
+	// Mid-flow resize via step dispatch
+	result := d.Execute(&flow.ViewportStep{Width: 1280, Height: 720})
+	if !result.Success {
+		t.Fatalf("viewport step should succeed: %s", result.Message)
+	}
+	if info := d.GetPlatformInfo(); info.ScreenWidth != 1280 || info.ScreenHeight != 720 {
+		t.Errorf("after 1280x720 step: got %dx%d", info.ScreenWidth, info.ScreenHeight)
+	}
+
+	// Verify the browser actually rendered at the new size via window.innerWidth
+	jsResult, err := d.page.Eval(`() => ({w: window.innerWidth, h: window.innerHeight})`)
+	if err != nil {
+		t.Fatalf("eval innerWidth/Height: %v", err)
+	}
+	if w := jsResult.Value.Get("w").Int(); w != 1280 {
+		t.Errorf("window.innerWidth: got %d, want 1280", w)
+	}
+	if h := jsResult.Value.Get("h").Int(); h != 720 {
+		t.Errorf("window.innerHeight: got %d, want 720", h)
+	}
+
+	// Second resize must also stick (mid-flow change like Playwright)
+	result = d.Execute(&flow.ViewportStep{Width: 1920, Height: 1080})
+	if !result.Success {
+		t.Fatalf("second viewport resize should succeed: %s", result.Message)
+	}
+	if info := d.GetPlatformInfo(); info.ScreenWidth != 1920 || info.ScreenHeight != 1080 {
+		t.Errorf("after 1920x1080 step: got %dx%d", info.ScreenWidth, info.ScreenHeight)
+	}
+}
+
+func TestSetViewport_InvalidDimensions(t *testing.T) {
+	ts := newTestServer()
+	defer ts.Close()
+
+	d := newTestDriver(t, ts.URL)
+	defer d.Close()
+
+	cases := []struct {
+		name   string
+		width  int
+		height int
+	}{
+		{"zero width", 0, 720},
+		{"zero height", 1280, 0},
+		{"negative width", -1, 720},
+		{"both zero", 0, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := d.SetViewport(tc.width, tc.height); err == nil {
+				t.Errorf("expected error for %dx%d, got nil", tc.width, tc.height)
+			}
+		})
+	}
+}
+
+func TestViewportConfigurer_InterfaceSatisfied(t *testing.T) {
+	// Compile-time check: *Driver must satisfy core.ViewportConfigurer so
+	// flow_runner.go can pick it up via the optional-interface lookup.
+	var _ core.ViewportConfigurer = (*Driver)(nil)
+}
+
 func TestWaitUntilVisible(t *testing.T) {
 	ts := newTestServer()
 	defer ts.Close()

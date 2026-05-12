@@ -137,6 +137,8 @@ func TestParse_AllStepTypes(t *testing.T) {
 		{"setLocation", `- setLocation: {latitude: "37.7", longitude: "-122.4"}`, StepSetLocation},
 		{"setOrientation scalar", `- setOrientation: LANDSCAPE`, StepSetOrientation},
 		{"setOrientation mapping", `- setOrientation: {orientation: PORTRAIT}`, StepSetOrientation},
+		{"viewport mapping", `- viewport: {width: 1280, height: 720}`, StepViewport},
+		{"viewport HD", `- viewport: {width: 1920, height: 1080}`, StepViewport},
 		{"setAirplaneMode enabled scalar", `- setAirplaneMode: enabled`, StepSetAirplaneMode},
 		{"setAirplaneMode disabled scalar", `- setAirplaneMode: disabled`, StepSetAirplaneMode},
 		{"setAirplaneMode mapping", `- setAirplaneMode: {enabled: true}`, StepSetAirplaneMode},
@@ -1007,7 +1009,7 @@ func TestIsStepType(t *testing.T) {
 		"assertNotVisible", "assertTrue", "assertCondition", "assertNoDefectsWithAI",
 		"assertWithAI", "extractTextWithAI", "extendedWaitUntil", "launchApp",
 		"stopApp", "killApp", "clearState", "clearKeychain", "setPermissions",
-		"setLocation", "setOrientation", "setAirplaneMode", "toggleAirplaneMode",
+		"setLocation", "setOrientation", "viewport", "setAirplaneMode", "toggleAirplaneMode",
 		"travel", "openLink", "openBrowser", "repeat", "retry", "runFlow",
 		"runScript", "evalScript", "takeScreenshot", "startRecording", "stopRecording",
 		"addMedia", "pressKey", "waitForAnimationToEnd", "defineVariables",
@@ -1183,6 +1185,10 @@ func TestParse_DecodeErrors(t *testing.T) {
 		{"clearState invalid", `- clearState: {appId: [invalid]}`},
 		{"setLocation invalid", `- setLocation: {latitude: [invalid]}`},
 		{"setOrientation invalid", `- setOrientation: {orientation: [invalid]}`},
+		{"viewport missing width", `- viewport: {height: 720}`},
+		{"viewport zero width", `- viewport: {width: 0, height: 720}`},
+		{"viewport negative", `- viewport: {width: -1, height: 720}`},
+		{"viewport invalid type", `- viewport: {width: "wide", height: 720}`},
 		{"setAirplaneMode invalid mapping", `- setAirplaneMode: {enabled: "not a bool"}`},
 		{"setAirplaneMode invalid scalar", `- setAirplaneMode: foobar`},
 		{"travel invalid", `- travel: {points: "not an array"}`},
@@ -1431,6 +1437,91 @@ name: Web Test
 	}
 	if flow.Config.Name != "Web Test" {
 		t.Errorf("expected name=Web Test, got %q", flow.Config.Name)
+	}
+}
+
+func TestParse_ConfigWithViewport(t *testing.T) {
+	yaml := `
+url: https://example.com
+viewport:
+  width: 1280
+  height: 720
+---
+- tapOn: "Login"
+`
+	flow, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if flow.Config.Viewport == nil {
+		t.Fatal("expected viewport to be set")
+	}
+	if flow.Config.Viewport.Width != 1280 || flow.Config.Viewport.Height != 720 {
+		t.Errorf("expected 1280x720, got %dx%d", flow.Config.Viewport.Width, flow.Config.Viewport.Height)
+	}
+
+	// Mid-flow change should also parse
+	yaml2 := `
+url: https://example.com
+---
+- viewport: {width: 1280, height: 720}
+- viewport:
+    width: 1920
+    height: 1080
+`
+	flow2, err := Parse([]byte(yaml2), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(flow2.Steps) != 2 {
+		t.Fatalf("expected 2 viewport steps, got %d", len(flow2.Steps))
+	}
+	step1, ok := flow2.Steps[0].(*ViewportStep)
+	if !ok {
+		t.Fatalf("expected *ViewportStep, got %T", flow2.Steps[0])
+	}
+	if step1.Width != 1280 || step1.Height != 720 {
+		t.Errorf("step1: expected 1280x720, got %dx%d", step1.Width, step1.Height)
+	}
+	step2, ok := flow2.Steps[1].(*ViewportStep)
+	if !ok {
+		t.Fatalf("expected *ViewportStep, got %T", flow2.Steps[1])
+	}
+	if step2.Width != 1920 || step2.Height != 1080 {
+		t.Errorf("step2: expected 1920x1080, got %dx%d", step2.Width, step2.Height)
+	}
+}
+
+func TestParse_ConfigWithInvalidViewport(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+	}{
+		{"zero width", `
+url: https://example.com
+viewport: {width: 0, height: 720}
+---
+- tapOn: "Login"
+`},
+		{"negative height", `
+url: https://example.com
+viewport: {width: 1280, height: -1}
+---
+- tapOn: "Login"
+`},
+		{"missing height", `
+url: https://example.com
+viewport: {width: 1280}
+---
+- tapOn: "Login"
+`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := Parse([]byte(tc.yaml), "test.yaml"); err == nil {
+				t.Error("expected parse error for invalid viewport, got nil")
+			}
+		})
 	}
 }
 
