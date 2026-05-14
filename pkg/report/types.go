@@ -98,24 +98,25 @@ type Summary struct {
 
 // FlowEntry is the index entry for a flow (minimal info).
 type FlowEntry struct {
-	Index          int            `json:"index"`            // Original position
-	ID             string         `json:"id"`               // Unique flow ID
-	Name           string         `json:"name"`             // Display name
-	SourceFile     string         `json:"sourceFile"`       // Path to YAML file
-	Tags           []string       `json:"tags,omitempty"`   // Tags for filtering
-	Device         *Device        `json:"device,omitempty"` // Device that ran this flow (for multi-device runs)
-	DataFile       string         `json:"dataFile"`         // Path to flow detail JSON
-	AssetsDir      string         `json:"assetsDir"`        // Path to assets directory
-	Status         Status         `json:"status"`
-	UpdateSeq      uint64         `json:"updateSeq"`
-	StartTime      *time.Time     `json:"startTime,omitempty"`
-	EndTime        *time.Time     `json:"endTime,omitempty"`
-	Duration       *int64         `json:"duration,omitempty"` // milliseconds
-	LastUpdated    *time.Time     `json:"lastUpdated,omitempty"`
-	Commands       CommandSummary `json:"commands"`
-	Attempts       int            `json:"attempts"`
-	AttemptHistory []AttemptEntry `json:"attemptHistory,omitempty"`
-	Error          *string        `json:"error,omitempty"`
+	Index          int               `json:"index"`                // Original position
+	ID             string            `json:"id"`                   // Unique flow ID
+	Name           string            `json:"name"`                 // Display name
+	SourceFile     string            `json:"sourceFile"`           // Path to YAML file
+	Tags           []string          `json:"tags,omitempty"`       // Tags for filtering
+	Properties     map[string]string `json:"properties,omitempty"` // Custom metadata for junit XML
+	Device         *Device           `json:"device,omitempty"`     // Device that ran this flow (for multi-device runs)
+	DataFile       string            `json:"dataFile"`             // Path to flow detail JSON
+	AssetsDir      string            `json:"assetsDir"`            // Path to assets directory
+	Status         Status            `json:"status"`
+	UpdateSeq      uint64            `json:"updateSeq"`
+	StartTime      *time.Time        `json:"startTime,omitempty"`
+	EndTime        *time.Time        `json:"endTime,omitempty"`
+	Duration       *int64            `json:"duration,omitempty"` // milliseconds
+	LastUpdated    *time.Time        `json:"lastUpdated,omitempty"`
+	Commands       CommandSummary    `json:"commands"`
+	Attempts       int               `json:"attempts"`
+	AttemptHistory []AttemptEntry    `json:"attemptHistory,omitempty"`
+	Error          *string           `json:"error,omitempty"`
 }
 
 // CommandSummary contains command counts for a flow.
@@ -144,17 +145,18 @@ type AttemptEntry struct {
 
 // FlowDetail contains full flow execution details.
 type FlowDetail struct {
-	ID          string        `json:"id"`
-	Name        string        `json:"name"`
-	SourceFile  string        `json:"sourceFile"`
-	Tags        []string      `json:"tags,omitempty"`
-	Device      *Device       `json:"device,omitempty"` // Device that ran this flow (for multi-device runs)
-	StartTime   time.Time     `json:"startTime"`
-	EndTime     *time.Time    `json:"endTime,omitempty"`
-	Duration    *int64        `json:"duration,omitempty"` // milliseconds
-	Commands    []Command     `json:"commands"`
-	Artifacts   FlowArtifacts `json:"artifacts"`
-	ConsoleLogs []ConsoleLog  `json:"consoleLogs,omitempty"` // Browser console / page errors captured during the flow (web only)
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	SourceFile  string            `json:"sourceFile"`
+	Tags        []string          `json:"tags,omitempty"`
+	Properties  map[string]string `json:"properties,omitempty"` // Custom metadata for junit XML
+	Device      *Device           `json:"device,omitempty"`     // Device that ran this flow (for multi-device runs)
+	StartTime   time.Time         `json:"startTime"`
+	EndTime     *time.Time        `json:"endTime,omitempty"`
+	Duration    *int64            `json:"duration,omitempty"` // milliseconds
+	Commands    []Command         `json:"commands"`
+	Artifacts   FlowArtifacts     `json:"artifacts"`
+	ConsoleLogs []ConsoleLog      `json:"consoleLogs,omitempty"` // Browser console / page errors captured during the flow (web only)
 }
 
 // ConsoleLog represents a single browser console message or uncaught JS
