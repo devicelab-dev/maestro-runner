@@ -109,6 +109,15 @@ func buildTestCase(entry *FlowEntry, detail *FlowDetail, index *Index) string {
 			))
 		}
 	}
+	if len(entry.Properties) > 0 {
+		for key, value := range entry.Properties {
+			b.WriteString(fmt.Sprintf(
+				`        <property name="%s" value="%s"/>`+"\n",
+				xmlEscape(key),
+				xmlEscape(value),
+			))
+		}
+	}
 	b.WriteString("      </properties>\n")
 
 	// Status-specific elements
