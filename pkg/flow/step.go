@@ -18,6 +18,7 @@ const (
 	StepScrollUntilVisible StepType = "scrollUntilVisible"
 	StepBack               StepType = "back"
 	StepHideKeyboard       StepType = "hideKeyboard"
+	StepOpenNotifications  StepType = "openNotifications"
 	StepAcceptAlert        StepType = "acceptAlert"
 	StepDismissAlert       StepType = "dismissAlert"
 
@@ -103,6 +104,7 @@ const (
 	StepStartRecording StepType = "startRecording"
 	StepStopRecording  StepType = "stopRecording"
 	StepAddMedia       StepType = "addMedia"
+	StepRemoveMedia    StepType = "removeMedia"
 
 	// Other
 	StepPressKey              StepType = "pressKey"
@@ -149,6 +151,7 @@ type TapOnStep struct {
 	LongPress             bool     `yaml:"longPress"`
 	Repeat                int      `yaml:"repeat"`
 	DelayMs               int      `yaml:"delay"`
+	DurationMs            int      `yaml:"duration"`
 	Point                 string   `yaml:"point"`
 	RetryTapIfNoChange    *bool    `yaml:"retryTapIfNoChange"`
 	WaitUntilVisible      *bool    `yaml:"waitUntilVisible"`
@@ -168,6 +171,7 @@ type DoubleTapOnStep struct {
 type LongPressOnStep struct {
 	BaseStep              `yaml:",inline"`
 	Selector              Selector `yaml:",inline"`
+	DurationMs            int      `yaml:"duration"`
 	RetryTapIfNoChange    *bool    `yaml:"retryTapIfNoChange"`
 	WaitUntilVisible      *bool    `yaml:"waitUntilVisible"`
 	WaitToSettleTimeoutMs int      `yaml:"waitToSettleTimeoutMs"`
@@ -181,6 +185,7 @@ type TapOnPointStep struct {
 	Point                 string `yaml:"point"`
 	LongPress             bool   `yaml:"longPress"`
 	Repeat                int    `yaml:"repeat"`
+	DurationMs            int    `yaml:"duration"`
 	RetryTapIfNoChange    *bool  `yaml:"retryTapIfNoChange"`
 	WaitToSettleTimeoutMs int    `yaml:"waitToSettleTimeoutMs"`
 }
@@ -205,6 +210,12 @@ type SwipeStep struct {
 type ScrollStep struct {
 	BaseStep  `yaml:",inline"`
 	Direction string `yaml:"direction"`
+	// Engine selects the scroll backend on Android.
+	// "" (default) and "adb" → adb input swipe (matches upstream Maestro).
+	// "agent" → driver's existing on-device gesture path (UIA2 server
+	// /appium/gestures/scroll for the uiautomator2 driver, RPC MotionEvent
+	// injection for the devicelab driver). Ignored on iOS/web.
+	Engine string `yaml:"engine"`
 }
 
 // ScrollUntilVisibleStep scrolls until element is visible.
@@ -217,6 +228,8 @@ type ScrollUntilVisibleStep struct {
 	VisibilityPercentage  int      `yaml:"visibilityPercentage"`
 	CenterElement         bool     `yaml:"centerElement"`
 	WaitToSettleTimeoutMs int      `yaml:"waitToSettleTimeoutMs"`
+	// Engine selects the scroll backend. See ScrollStep.Engine.
+	Engine string `yaml:"engine"`
 }
 
 // BackStep presses back.
@@ -226,6 +239,12 @@ type BackStep struct {
 
 // HideKeyboardStep hides the keyboard.
 type HideKeyboardStep struct {
+	BaseStep `yaml:",inline"`
+}
+
+// OpenNotificationsStep pulls down the Android notification shade.
+// Android-only (no-op on iOS).
+type OpenNotificationsStep struct {
 	BaseStep `yaml:",inline"`
 }
 
@@ -433,9 +452,15 @@ type SetOrientationStep struct {
 }
 
 // SetAirplaneModeStep sets airplane mode.
+//
+// YAML accepts either a bool (`enabled: true`) or a string that may contain
+// variable interpolation (`enabled: ${OFFLINE}`). EnabledRaw captures the raw
+// YAML scalar; the executor's variable-expansion pass writes the resolved
+// boolean into Enabled before the driver runs the step.
 type SetAirplaneModeStep struct {
-	BaseStep `yaml:",inline"`
-	Enabled  bool `yaml:"enabled"`
+	BaseStep   `yaml:",inline"`
+	Enabled    bool `yaml:"-"`
+	EnabledRaw any  `yaml:"enabled"`
 }
 
 // ToggleAirplaneModeStep toggles airplane mode.
@@ -486,12 +511,17 @@ type RetryStep struct {
 }
 
 // RunFlowStep runs another flow.
+//
+// When `when:` evaluates false, execution falls through to the else branch
+// (ElseFile / ElseSteps). If no else branch is set, the step is skipped.
 type RunFlowStep struct {
-	BaseStep `yaml:",inline"`
-	File     string            `yaml:"file"`
-	Steps    []Step            `yaml:"-"` // Inline steps
-	When     *Condition        `yaml:"when"`
-	Env      map[string]string `yaml:"env"`
+	BaseStep  `yaml:",inline"`
+	File      string            `yaml:"file"`
+	Steps     []Step            `yaml:"-"` // Inline steps (commands)
+	ElseFile  string            `yaml:"-"` // Fallback flow file when `when` is false
+	ElseSteps []Step            `yaml:"-"` // Inline fallback steps (else / elseCommands)
+	When      *Condition        `yaml:"when"`
+	Env       map[string]string `yaml:"env"`
 }
 
 // RunScriptStep runs a script.
@@ -736,6 +766,11 @@ type AddMediaStep struct {
 	Files    []string `yaml:"files"`
 }
 
+// RemoveMediaStep clears media added by addMedia (Android: MediaStore index).
+type RemoveMediaStep struct {
+	BaseStep `yaml:",inline"`
+}
+
 // ============================================
 // Other Steps
 // ============================================
@@ -747,6 +782,11 @@ type PressKeyStep struct {
 }
 
 // WaitForAnimationToEndStep waits for animations.
+//
+// Algorithm (matches upstream Maestro): take two consecutive screenshots, if
+// fewer than 0.5% of pixels differ, the screen is considered static. Otherwise
+// poll until static or timeout. Timeout comes from the inlined BaseStep
+// (`timeout:` YAML key); defaults to 15s when unset.
 type WaitForAnimationToEndStep struct {
 	BaseStep `yaml:",inline"`
 }

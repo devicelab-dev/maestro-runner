@@ -82,6 +82,11 @@ Examples:
 			Aliases: []string{"e"},
 			Usage:   "Environment variables (KEY=VALUE)",
 		},
+		&cli.StringFlag{
+			Name:    "env-file",
+			Usage:   "Path to .env file (KEY=VALUE per line, # comments, single/double quoting)",
+			EnvVars: []string{"MAESTRO_ENV_FILE"},
+		},
 
 		// Tag filtering
 		&cli.StringSliceFlag{
@@ -125,6 +130,11 @@ Examples:
 			Name:    "browser",
 			Usage:   "Browser to use: chrome, chromium, or path to binary (web only)",
 			EnvVars: []string{"MAESTRO_BROWSER"},
+		},
+		&cli.StringFlag{
+			Name:    "user-data-dir",
+			Usage:   "Chrome user-data-dir for a persistent profile across runs (web only). Cookies / localStorage / extensions are reused.",
+			EnvVars: []string{"MAESTRO_USER_DATA_DIR"},
 		},
 
 		// Driver settings
@@ -439,8 +449,9 @@ type RunConfig struct {
 
 	// Execution
 	Continuous bool
-	Headed  bool   // Show browser window (web only, default is headless)
-	Browser string // chrome, chromium, or path to binary (web only)
+	Headed      bool   // Show browser window (web only, default is headless)
+	Browser     string // chrome, chromium, or path to binary (web only)
+	UserDataDir string // Persistent Chrome profile directory (web only)
 
 	// Device
 	Platform string
@@ -590,15 +601,30 @@ func runTest(c *cli.Context) error {
 		}
 	}
 
-	// Merge env variables: workspace config env + CLI env (CLI takes precedence)
+	// Load --env-file if specified. Values from the file slot between the
+	// workspace config (lowest precedence) and -e CLI flags (highest).
+	var envFileVars map[string]string
+	if envFilePath := getString("env-file"); envFilePath != "" {
+		var err error
+		envFileVars, err = ParseEnvFile(envFilePath)
+		if err != nil {
+			return fmt.Errorf("env-file: %w", err)
+		}
+	}
+
+	// Merge env variables. Precedence (lowest → highest):
+	//   workspace config Env  <  --env-file values  <  -e CLI flag values
 	mergedEnv := make(map[string]string)
 	if workspaceConfig != nil {
 		for k, v := range workspaceConfig.Env {
 			mergedEnv[k] = v
 		}
 	}
+	for k, v := range envFileVars {
+		mergedEnv[k] = v // --env-file overrides workspace config
+	}
 	for k, v := range env {
-		mergedEnv[k] = v // CLI overrides workspace config
+		mergedEnv[k] = v // -e CLI overrides --env-file and workspace config
 	}
 
 	// Get appId from workspace config or will be extracted from flows later
@@ -619,6 +645,7 @@ func runTest(c *cli.Context) error {
 		Continuous:         getBool("continuous"),
 		Headed:             getBool("headed"),
 		Browser:            getString("browser"),
+		UserDataDir:        getString("user-data-dir"),
 		Platform:           getString("platform"),
 		Devices:            parseDevices(getString("device")),
 		Verbose:            getBool("verbose"),
@@ -786,6 +813,11 @@ func executeTest(cfg *RunConfig) error {
 				"the installed bundle isn't reachable from the host. On simulators no flag is needed.\n" +
 				"Usage: maestro-runner --app-file <path-to-ipa-or-app> --platform ios test <flow-files>")
 		}
+
+		// Advisory only: surface Flutter debug-build pitfall before the run
+		// starts. Standalone debug builds crash and produce a port-forward
+		// flood — easy to misread as a maestro-runner bug.
+		warnIfFlutterDebugBuild(cfg.AppFile)
 	}
 
 	// Extract appId/url from first flow if not in config

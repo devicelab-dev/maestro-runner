@@ -489,6 +489,16 @@ func (d *Driver) findByAXTree(text, role string, sel flow.Selector) (*rod.Elemen
 			continue
 		}
 
+		// Skip non-renderable metadata tags. <title>, <script type="application/ld+json">,
+		// etc. expose accessible names via the AX tree (some SPAs put the route
+		// label into document.title), and Rod's Visible() check below doesn't
+		// reliably reject them. Filter at the source so the cascade falls
+		// through to a real visible element when the AX tree's first hit is
+		// off-screen metadata.
+		if isNonRenderableTag(elem) {
+			continue
+		}
+
 		visible, err := elem.Visible()
 		if err != nil {
 			log.Printf("[browser] findByAXTree: Visible() check failed: %v", err)
@@ -507,6 +517,22 @@ func (d *Driver) findByAXTree(text, role string, sel flow.Selector) (*rod.Elemen
 	}
 
 	return nil, nil, fmt.Errorf("no visible AX node found for text '%s' role '%s'", text, role)
+}
+
+// isNonRenderableTag returns true for elements that never paint anything
+// visible (head metadata, inert containers). Used by finders to skip past
+// elements whose accessible name happens to match the query but which the
+// user couldn't possibly interact with.
+func isNonRenderableTag(elem *rod.Element) bool {
+	res, err := elem.Eval(`() => this.tagName`)
+	if err != nil || res == nil {
+		return false
+	}
+	switch res.Value.Str() {
+	case "TITLE", "SCRIPT", "STYLE", "META", "LINK", "BASE", "HEAD", "NOSCRIPT", "TEMPLATE":
+		return true
+	}
+	return false
 }
 
 // findBySearch uses Rod's page.Search() which handles Shadow DOM via DOMPerformSearch.
@@ -633,7 +659,10 @@ func (d *Driver) findByTextAtAcrossRoots(text string, nth int, sel flow.Selector
 }
 
 // axNodeToElement converts an AX tree node to a Rod Element.
-// Handles #text nodes by auto-walking up to parent element.
+// Walks up text-node hits to their parent Element so callers always get an
+// interactable handle (Rod's Click() does not work on Node-but-not-Element
+// handles, and the AX tree's BackendDOMNodeID can legitimately point at a
+// #text node when the accessible name comes from a single text child).
 func (d *Driver) axNodeToElement(node *proto.AccessibilityAXNode) (*rod.Element, error) {
 	resolve := &proto.DOMResolveNode{
 		BackendNodeID: node.BackendDOMNodeID,
@@ -646,6 +675,16 @@ func (d *Driver) axNodeToElement(node *proto.AccessibilityAXNode) (*rod.Element,
 	elem, err := d.page.ElementFromObject(remote.Object)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get element from object: %w", err)
+	}
+
+	// If the resolved handle is a text node (or other non-Element), walk up
+	// to the nearest ancestor Element. nodeType 1 === Element. Rod's
+	// elem.Parent() returns the parent in the DOM tree which, for a text
+	// node, is the element whose accessible name was just derived from it.
+	if nt, err := elem.Eval(`() => this && this.nodeType`); err == nil && nt != nil && nt.Value.Int() != 1 {
+		if pelem, err := elem.Parent(); err == nil && pelem != nil {
+			return pelem, nil
+		}
 	}
 
 	return elem, nil

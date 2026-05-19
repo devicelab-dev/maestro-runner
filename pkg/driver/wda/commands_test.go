@@ -3137,22 +3137,12 @@ func TestOpenLinkEmpty(t *testing.T) {
 // waitForAnimationToEnd test
 // =============================================================================
 
-// TestWaitForAnimationToEndReturnsWarning tests that waitForAnimationToEnd returns success with WARNING.
+// TestWaitForAnimationToEndReturnsWarning predates the screenshot-comparison
+// implementation. The "WARNING: not fully implemented" message no longer
+// exists; TestWaitForAnimationToEnd in driver_test.go now exercises the real
+// polling path against a mocked WDA server.
 func TestWaitForAnimationToEndReturnsWarning(t *testing.T) {
-	driver := &Driver{
-		client: &Client{},
-		info:   &core.PlatformInfo{Platform: "ios"},
-	}
-
-	step := &flow.WaitForAnimationToEndStep{}
-	result := driver.waitForAnimationToEnd(step)
-
-	if !result.Success {
-		t.Fatalf("Expected success, got: %s", result.Message)
-	}
-	if !strings.Contains(result.Message, "WARNING") {
-		t.Errorf("Expected 'WARNING' in message, got: %s", result.Message)
-	}
+	t.Skip("superseded by real screenshot-comparison; see TestWaitForAnimationToEnd in driver_test.go")
 }
 
 // =============================================================================

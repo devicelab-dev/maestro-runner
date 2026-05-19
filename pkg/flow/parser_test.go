@@ -396,6 +396,97 @@ func TestParse_RunFlowWithInlineSteps(t *testing.T) {
 	}
 }
 
+func TestParse_RunFlowElseFile(t *testing.T) {
+	yaml := `
+- runFlow:
+    file: signed-in.yaml
+    when:
+      visible: "Logout"
+    else: sign-in.yaml
+`
+	flow, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rf := flow.Steps[0].(*RunFlowStep)
+	if rf.File != "signed-in.yaml" {
+		t.Errorf("expected File=signed-in.yaml, got %q", rf.File)
+	}
+	if rf.ElseFile != "sign-in.yaml" {
+		t.Errorf("expected ElseFile=sign-in.yaml, got %q", rf.ElseFile)
+	}
+	if len(rf.ElseSteps) != 0 {
+		t.Errorf("expected no inline else steps, got %d", len(rf.ElseSteps))
+	}
+}
+
+func TestParse_RunFlowElseInlineSteps(t *testing.T) {
+	yaml := `
+- runFlow:
+    when:
+      visible: "Welcome"
+    commands:
+      - tapOn: "Continue"
+    else:
+      - tapOn: "Try again"
+      - inputText: "fallback"
+`
+	flow, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rf := flow.Steps[0].(*RunFlowStep)
+	if len(rf.Steps) != 1 {
+		t.Errorf("expected 1 main step, got %d", len(rf.Steps))
+	}
+	if len(rf.ElseSteps) != 2 {
+		t.Fatalf("expected 2 else steps, got %d", len(rf.ElseSteps))
+	}
+	if rf.ElseSteps[0].Type() != StepTapOn {
+		t.Errorf("else[0] type = %v, want tapOn", rf.ElseSteps[0].Type())
+	}
+	if rf.ElseSteps[1].Type() != StepInputText {
+		t.Errorf("else[1] type = %v, want inputText", rf.ElseSteps[1].Type())
+	}
+}
+
+func TestParse_RunFlowElseCommandsAlias(t *testing.T) {
+	// elseCommands: should produce identical ElseSteps as else: <sequence>.
+	yaml := `
+- runFlow:
+    when:
+      visible: "Welcome"
+    elseCommands:
+      - tapOn: "fallback"
+`
+	flow, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rf := flow.Steps[0].(*RunFlowStep)
+	if len(rf.ElseSteps) != 1 {
+		t.Fatalf("expected 1 elseCommand, got %d", len(rf.ElseSteps))
+	}
+	if rf.ElseSteps[0].Type() != StepTapOn {
+		t.Errorf("elseCommands[0] type = %v, want tapOn", rf.ElseSteps[0].Type())
+	}
+}
+
+func TestParse_RunFlowElseInvalidType(t *testing.T) {
+	// else: as a mapping (not scalar or sequence) is rejected.
+	yaml := `
+- runFlow:
+    when:
+      visible: "X"
+    else:
+      file: nope.yaml
+`
+	_, err := Parse([]byte(yaml), "test.yaml")
+	if err == nil {
+		t.Error("expected error for else as mapping")
+	}
+}
+
 func TestParse_RunFlowWithTimeout(t *testing.T) {
 	yaml := `
 - runFlow:
@@ -904,6 +995,50 @@ func TestParse_ScrollUntilVisibleWithAllFields(t *testing.T) {
 	}
 }
 
+// TestParse_ScrollEngineField covers the per-step "engine" opt-in on both
+// scroll and scrollUntilVisible. Default is empty (= adb); "agent" selects
+// the on-device gesture path. Drivers ignore unknown values.
+func TestParse_ScrollEngineField(t *testing.T) {
+	yaml := `
+- scroll:
+    direction: DOWN
+- scroll:
+    direction: DOWN
+    engine: agent
+- scrollUntilVisible:
+    element:
+      id: target
+    engine: agent
+- scrollUntilVisible:
+    element:
+      id: target
+`
+	parsed, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+	if len(parsed.Steps) != 4 {
+		t.Fatalf("expected 4 steps, got %d", len(parsed.Steps))
+	}
+
+	s0 := parsed.Steps[0].(*ScrollStep)
+	if s0.Engine != "" {
+		t.Errorf("step 0 (default): Engine=%q, want empty", s0.Engine)
+	}
+	s1 := parsed.Steps[1].(*ScrollStep)
+	if s1.Engine != "agent" {
+		t.Errorf("step 1 (opt-in): Engine=%q, want \"agent\"", s1.Engine)
+	}
+	s2 := parsed.Steps[2].(*ScrollUntilVisibleStep)
+	if s2.Engine != "agent" {
+		t.Errorf("step 2 (opt-in): Engine=%q, want \"agent\"", s2.Engine)
+	}
+	s3 := parsed.Steps[3].(*ScrollUntilVisibleStep)
+	if s3.Engine != "" {
+		t.Errorf("step 3 (default): Engine=%q, want empty", s3.Engine)
+	}
+}
+
 func TestParse_WaitUntilStep(t *testing.T) {
 	yaml := `
 - extendedWaitUntil:
@@ -997,10 +1132,28 @@ func TestParse_SetAirplaneModeScalarValues(t *testing.T) {
 	}
 }
 
+func TestParse_SetAirplaneModeInterpolationCarriedThrough(t *testing.T) {
+	// Variable-interpolated `enabled:` should parse without error and reach the
+	// step as a string in EnabledRaw. Resolution to bool happens at execute time.
+	flow, err := Parse([]byte(`- setAirplaneMode: {enabled: "${OFFLINE}"}`), "test.yaml")
+	if err != nil {
+		t.Fatalf("expected no parse error, got %v", err)
+	}
+	if len(flow.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(flow.Steps))
+	}
+	step := flow.Steps[0].(*SetAirplaneModeStep)
+	got, ok := step.EnabledRaw.(string)
+	if !ok || got != "${OFFLINE}" {
+		t.Errorf("EnabledRaw=%v (%T), want %q (string)", step.EnabledRaw, step.EnabledRaw, "${OFFLINE}")
+	}
+}
+
 func TestIsStepType(t *testing.T) {
 	validTypes := []string{
 		"tapOn", "doubleTapOn", "longPressOn", "tapOnPoint", "swipe", "scroll",
-		"scrollUntilVisible", "back", "hideKeyboard", "acceptAlert", "dismissAlert",
+		"scrollUntilVisible", "back", "hideKeyboard", "openNotifications",
+		"acceptAlert", "dismissAlert",
 		"inputText", "inputRandom", "inputRandomEmail", "inputRandomNumber",
 		"inputRandomPersonName", "inputRandomText",
 		"eraseText", "copyTextFrom", "pasteText", "setClipboard", "assertVisible",
@@ -1010,7 +1163,7 @@ func TestIsStepType(t *testing.T) {
 		"setLocation", "setOrientation", "setAirplaneMode", "toggleAirplaneMode",
 		"travel", "openLink", "openBrowser", "repeat", "retry", "runFlow",
 		"runScript", "evalScript", "takeScreenshot", "startRecording", "stopRecording",
-		"addMedia", "pressKey", "waitForAnimationToEnd", "defineVariables",
+		"addMedia", "removeMedia", "pressKey", "waitForAnimationToEnd", "defineVariables",
 	}
 
 	for _, st := range validTypes {
@@ -1183,7 +1336,9 @@ func TestParse_DecodeErrors(t *testing.T) {
 		{"clearState invalid", `- clearState: {appId: [invalid]}`},
 		{"setLocation invalid", `- setLocation: {latitude: [invalid]}`},
 		{"setOrientation invalid", `- setOrientation: {orientation: [invalid]}`},
-		{"setAirplaneMode invalid mapping", `- setAirplaneMode: {enabled: "not a bool"}`},
+		// `enabled:` now accepts strings (for ${VAR} interpolation), so the
+		// "not a bool" form is no longer a parse-time error — it resolves to
+		// false at execute time.
 		{"setAirplaneMode invalid scalar", `- setAirplaneMode: foobar`},
 		{"travel invalid", `- travel: {points: "not an array"}`},
 		{"openLink invalid", `- openLink: {link: [invalid]}`},

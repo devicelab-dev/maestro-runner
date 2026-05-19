@@ -987,6 +987,57 @@ func TestScriptEngine_ExpandStep_InputTextStep(t *testing.T) {
 	}
 }
 
+func TestScriptEngine_ExpandStep_ScrollUntilVisibleDirection(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("DIR", "UP")
+
+	step := &flow.ScrollUntilVisibleStep{
+		Element:   flow.Selector{Text: "target"},
+		Direction: "${DIR}",
+	}
+
+	se.ExpandStep(step)
+
+	if step.Direction != "UP" {
+		t.Errorf("Direction = %q, want %q", step.Direction, "UP")
+	}
+}
+
+func TestScriptEngine_ExpandStep_SetAirplaneModeInterpolation(t *testing.T) {
+	cases := []struct {
+		offlineVar string
+		want       bool
+	}{
+		{"true", true},
+		{"enabled", true},
+		{"1", true},
+		{"on", true},
+		{"yes", true},
+		{"false", false},
+		{"disabled", false},
+		{"0", false},
+		{"", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.offlineVar, func(t *testing.T) {
+			se := NewScriptEngine()
+			defer se.Close()
+
+			se.SetVariable("OFFLINE", tc.offlineVar)
+			step := &flow.SetAirplaneModeStep{EnabledRaw: "${OFFLINE}"}
+
+			se.ExpandStep(step)
+
+			if step.Enabled != tc.want {
+				t.Errorf("OFFLINE=%q → Enabled=%v, want %v", tc.offlineVar, step.Enabled, tc.want)
+			}
+		})
+	}
+}
+
 func TestScriptEngine_ExpandStep_TapOnStep(t *testing.T) {
 	se := NewScriptEngine()
 	defer se.Close()

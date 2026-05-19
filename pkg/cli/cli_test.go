@@ -413,6 +413,77 @@ func TestTestCommand_WithAllFlags(t *testing.T) {
 	}
 }
 
+func TestTestCommand_EnvFileFlag(t *testing.T) {
+	dir := t.TempDir()
+	flowFile := dir + "/test.yaml"
+	if err := os.WriteFile(flowFile, []byte(`- tapOn: "Button"`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	envFile := dir + "/.env"
+	envContents := "USER=fromfile\nAPI_KEY=secret-from-env-file\n"
+	if err := os.WriteFile(envFile, []byte(envContents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &cli.App{
+		Name:     "test-app",
+		Flags:    GlobalFlags,
+		Commands: []*cli.Command{testCommand},
+	}
+
+	oldStdout := os.Stdout
+	os.Stdout, _ = os.Open(os.DevNull)
+	defer func() { os.Stdout = oldStdout }()
+
+	// --env-file alone (no -e overrides) should succeed.
+	err := app.Run([]string{
+		"test-app", "-p", "mock", "test",
+		"--env-file", envFile,
+		flowFile,
+	})
+	if err != nil {
+		t.Errorf("--env-file alone: unexpected error: %v", err)
+	}
+
+	// --env-file + -e (-e should override file values). Verifies merge order.
+	err = app.Run([]string{
+		"test-app", "-p", "mock", "test",
+		"--env-file", envFile,
+		"-e", "USER=fromcli",
+		flowFile,
+	})
+	if err != nil {
+		t.Errorf("--env-file + -e: unexpected error: %v", err)
+	}
+}
+
+func TestTestCommand_EnvFileMissingFile(t *testing.T) {
+	dir := t.TempDir()
+	flowFile := dir + "/test.yaml"
+	if err := os.WriteFile(flowFile, []byte(`- tapOn: "Button"`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &cli.App{
+		Name:     "test-app",
+		Flags:    GlobalFlags,
+		Commands: []*cli.Command{testCommand},
+	}
+
+	oldStdout := os.Stdout
+	os.Stdout, _ = os.Open(os.DevNull)
+	defer func() { os.Stdout = oldStdout }()
+
+	err := app.Run([]string{
+		"test-app", "-p", "mock", "test",
+		"--env-file", "/nonexistent/.env",
+		flowFile,
+	})
+	if err == nil {
+		t.Error("expected error for missing --env-file path")
+	}
+}
+
 func TestTestCommand_FlattenWithOutput(t *testing.T) {
 	dir := t.TempDir()
 	flowFile := dir + "/test.yaml"

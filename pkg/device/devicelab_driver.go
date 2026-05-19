@@ -98,6 +98,14 @@ func (d *AndroidDevice) StartDeviceLabDriver(cfg DeviceLabDriverConfig) error {
 		if _, reason := d.checkDriverCrashed(); reason != "" {
 			err = fmt.Errorf("%w\nDriver output: %s", err, reason)
 		}
+		// Slow-infra diagnostics: surface the runtime state that's most
+		// useful for explaining why the health check missed a running
+		// driver — adb forward list (is our local→device forward live?)
+		// and the device's listening sockets (did the driver actually
+		// bind its port?). Both hypotheses for the AWS Device Farm
+		// failure mode in #76. Best-effort: ignore command errors and
+		// just include whatever output we can grab.
+		err = d.appendDriverDiagnostics(err)
 		if stopErr := d.StopDeviceLabDriver(); stopErr != nil {
 			logger.Warn("failed to stop DeviceLab Android Driver after startup timeout: %v", stopErr)
 		}
@@ -420,4 +428,57 @@ func (d *AndroidDevice) UninstallDeviceLabDriver() error {
 		return fmt.Errorf("uninstall errors: %s", strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+// appendDriverDiagnostics enriches a driver-not-ready error with two
+// pieces of runtime state that explain the common slow-infra failure
+// modes:
+//
+//   * `adb forward --list` — verifies our local→device port/socket
+//     forward is established. If it's missing or pointing at a different
+//     port, the health check's net.Dial("tcp", 127.0.0.1:N) is failing
+//     because there's nothing on the local end (not because the driver
+//     is down).
+//   * `cat /proc/net/tcp` filtered to our port — verifies the driver
+//     process actually bound its WebSocket port on the device. If it
+//     didn't, the driver is still warming up (JVM, classpath, etc.) and
+//     a longer --driver-start-timeout helps.
+//
+// Both calls are best-effort. If they fail (locked-down farm, ADB
+// proxy stripping forward subcommand, etc.) we just include whatever
+// partial output we got. Never override the original error message.
+func (d *AndroidDevice) appendDriverDiagnostics(origErr error) error {
+	var diag strings.Builder
+
+	forwards, ferr := d.adb("forward", "--list")
+	diag.WriteString("\n\n[diagnostics] adb forward --list:")
+	if ferr != nil {
+		diag.WriteString(fmt.Sprintf(" (failed: %v)", ferr))
+	} else if forwards == "" {
+		diag.WriteString(" (empty — no active forwards)")
+	} else {
+		diag.WriteString("\n" + indentDiag(forwards))
+	}
+
+	// Driver port in hex for /proc/net/tcp matching.
+	portHex := fmt.Sprintf("%04X", DeviceLabDriverPort)
+	listening, lerr := d.Shell(fmt.Sprintf("cat /proc/net/tcp | grep ' %s '", portHex))
+	diag.WriteString(fmt.Sprintf("\n[diagnostics] /proc/net/tcp entries for port %d (%s):", DeviceLabDriverPort, portHex))
+	if lerr != nil || strings.TrimSpace(listening) == "" {
+		diag.WriteString(" (none — driver did NOT bind the port; likely still warming up)")
+	} else {
+		diag.WriteString("\n" + indentDiag(listening))
+	}
+
+	return fmt.Errorf("%w%s", origErr, diag.String())
+}
+
+// indentDiag prefixes each line with two spaces so the diagnostic block
+// reads visually distinct from the surrounding error.
+func indentDiag(s string) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	for i, l := range lines {
+		lines[i] = "  " + l
+	}
+	return strings.Join(lines, "\n")
 }

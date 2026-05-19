@@ -10,6 +10,7 @@ import (
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
+	"github.com/devicelab-dev/maestro-runner/pkg/logger"
 )
 
 // Driver implements core.Driver using WebDriverAgent for iOS.
@@ -36,7 +37,22 @@ type Driver struct {
 
 	// Selector validation dedup
 	warnedFields map[string]bool
+
+	// Crash-loop detection. When the app under test keeps dying immediately
+	// after launch (debug builds, signing mismatch, runtime crash on startup)
+	// we get a flood of "app not running" / "session lost" errors. Without
+	// this gate, the runner would chew through the full flow-level timeout
+	// retrying every step against a dead app.
+	appDeathCount    int
+	appDeathFirstAt  time.Time
+	crashAbortReason string
 }
+
+// Crash-loop detection thresholds.
+const (
+	crashLoopThreshold  = 4               // N app-death errors → abort
+	crashLoopTimeWindow = 6 * time.Second // ...within this window
+)
 
 // NewDriver creates a new WDA driver.
 func NewDriver(client *Client, info *core.PlatformInfo, udid string) *Driver {
@@ -151,6 +167,18 @@ const (
 func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	start := time.Now()
 
+	// If we've already detected a crash-loop on this driver, every
+	// subsequent step short-circuits with the same actionable error.
+	// Avoids spamming the user with the same diagnosis on every step.
+	if d.crashAbortReason != "" {
+		return &core.CommandResult{
+			Success:  false,
+			Error:    fmt.Errorf("%s", d.crashAbortReason),
+			Message:  d.crashAbortReason,
+			Duration: time.Since(start),
+		}
+	}
+
 	var result *core.CommandResult
 	switch s := step.(type) {
 	// Tap commands
@@ -256,7 +284,81 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	}
 
 	result.Duration = time.Since(start)
+	d.trackCrashLoop(result)
 	return result
+}
+
+// trackCrashLoop counts consecutive "app died on launch" failures and trips a
+// circuit-breaker after several within a short window. The follow-up Execute
+// calls then short-circuit with a clear error mentioning the most likely
+// causes — saves the user from waiting out a flow-level timeout staring at
+// "session lost / app not running" errors that all stem from the same root.
+func (d *Driver) trackCrashLoop(result *core.CommandResult) {
+	if d.crashAbortReason != "" {
+		return // already aborted
+	}
+	if result.Success {
+		// Any success resets the counter — the app is alive again.
+		d.appDeathCount = 0
+		return
+	}
+	if !isAppDeathError(result) {
+		return
+	}
+
+	now := time.Now()
+	if d.appDeathCount == 0 || now.Sub(d.appDeathFirstAt) > crashLoopTimeWindow {
+		d.appDeathFirstAt = now
+		d.appDeathCount = 1
+		return
+	}
+	d.appDeathCount++
+	if d.appDeathCount >= crashLoopThreshold {
+		d.crashAbortReason = "Aborting: the app under test appears to be crashing on launch (" +
+			fmt.Sprintf("%d 'app died' / 'session lost' errors in %.1fs).\n",
+				d.appDeathCount, now.Sub(d.appDeathFirstAt).Seconds()) +
+			"Common causes on iOS:\n" +
+			"  • Flutter debug build — rebuild with `flutter build ios --release` or `--profile`.\n" +
+			"  • Code-signing / provisioning mismatch — re-sign with the team ID passed via --team-id.\n" +
+			"  • App crashes immediately on startup — check device logs with `idevicesyslog` (real device)\n" +
+			"    or `xcrun simctl spawn booted log stream` (simulator).\n"
+		log.Printf("[wda] %s", d.crashAbortReason)
+	}
+}
+
+// isAppDeathError matches result messages / error texts that indicate the
+// app under test is no longer running. Patterns drawn from real WDA failure
+// modes observed in #38 and similar repros.
+func isAppDeathError(result *core.CommandResult) bool {
+	if result == nil {
+		return false
+	}
+	combined := result.Message
+	if result.Error != nil {
+		combined += " " + result.Error.Error()
+	}
+	combined = strings.ToLower(combined)
+
+	signals := []string{
+		"application is not in foreground",
+		"application is not running",
+		"app is not running",
+		"application died",
+		"session does not exist",
+		"session is not started",
+		"invalid session id",
+		"could not start app",
+		"failed to launch",
+		"no such session",
+		"connection reset",
+		"connection refused",
+	}
+	for _, s := range signals {
+		if strings.Contains(combined, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // Screenshot captures the current screen as PNG.
@@ -557,6 +659,43 @@ func (d *Driver) findElementQuick(sel flow.Selector, timeoutMs int) (*core.Eleme
 	return d.findElementOnce(sel)
 }
 
+// filterVisibleOrHostingVisible keeps candidates WDA reports visible="true",
+// plus candidates marked visible="false" that nonetheless host at least one
+// visible descendant. The second class covers RN container testIDs and other
+// wrapper views that XCUITest can't classify as accessible but which clearly
+// contain visible content. Hidden-but-still-mounted screens (all descendants
+// invisible) are correctly excluded.
+func filterVisibleOrHostingVisible(candidates []*ParsedElement) []*ParsedElement {
+	out := candidates[:0]
+	for _, c := range candidates {
+		if c.Displayed || HasVisibleDescendant(c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// rescueNote returns a non-empty match note when elem was accepted only
+// because it hosts visible descendants (XCUITest marked the container itself
+// visible="false"). Empty for normal matches.
+func rescueNote(elem *ParsedElement) string {
+	if elem.Displayed {
+		return ""
+	}
+	return "matched via visible descendant (container marked visible=false by XCUITest)"
+}
+
+// selectorLog returns a compact string describing a selector for log lines.
+func selectorLog(sel flow.Selector) string {
+	if sel.ID != "" {
+		return fmt.Sprintf("id=%q", sel.ID)
+	}
+	if sel.Text != "" {
+		return fmt.Sprintf("text=%q", sel.Text)
+	}
+	return sel.Describe()
+}
+
 // buildStateFilter builds WDA predicate conditions for state filters.
 // Returns empty string if no state filters are set.
 func buildStateFilter(sel flow.Selector) string {
@@ -765,14 +904,8 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector, allElements []*Parse
 		candidates = FilterContainsDescendants(candidates, allElements, sel.ContainsDescendants)
 	}
 
-	// Filter out off-screen elements
-	visible := candidates[:0]
-	for _, c := range candidates {
-		if c.Displayed {
-			visible = append(visible, c)
-		}
-	}
-	candidates = visible
+	// Same phased visibility check as findElementByPageSourceOnce.
+	candidates = filterVisibleOrHostingVisible(candidates)
 
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no elements match selector")
@@ -783,12 +916,17 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector, allElements []*Parse
 
 	selected := SelectByIndex(candidates, sel.Index)
 
-	return &core.ElementInfo{
+	info := &core.ElementInfo{
 		Text:    selected.Label,
 		Bounds:  selected.Bounds,
 		Enabled: selected.Enabled,
 		Visible: selected.Displayed,
-	}, nil
+	}
+	if note := rescueNote(selected); note != "" {
+		info.MatchNote = note
+		logger.Info("[wda] %s: %s", selectorLog(sel), note)
+	}
+	return info, nil
 }
 
 // findElementByPageSourceOnce performs a single page source search.
@@ -811,14 +949,12 @@ func (d *Driver) findElementByPageSourceOnce(sel flow.Selector) (*core.ElementIn
 
 	candidates := FilterBySelector(allElements, sel)
 
-	// Also filter by WDA's visible attribute
-	visible := candidates[:0]
-	for _, c := range candidates {
-		if c.Displayed {
-			visible = append(visible, c)
-		}
-	}
-	candidates = visible
+	// Phase 1: prefer elements WDA marks visible="true".
+	// Phase 2: rescue elements WDA marked visible="false" *only if* they
+	// host a visible descendant. This recovers React Native <View testID="..">
+	// wrappers (visible content inside, container itself non-accessible) while
+	// still rejecting hidden-but-still-mounted screens (all descendants invisible).
+	candidates = filterVisibleOrHostingVisible(candidates)
 
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no elements match selector")
@@ -833,12 +969,17 @@ func (d *Driver) findElementByPageSourceOnce(sel flow.Selector) (*core.ElementIn
 	// This handles patterns where text labels aren't interactive but their containers are
 	clickableElem := GetClickableElement(selected)
 
-	return &core.ElementInfo{
+	info := &core.ElementInfo{
 		Text:    selected.Label,
 		Bounds:  clickableElem.Bounds,
 		Enabled: selected.Enabled,
 		Visible: selected.Displayed,
-	}, nil
+	}
+	if note := rescueNote(selected); note != "" {
+		info.MatchNote = note
+		logger.Info("[wda] %s: %s", selectorLog(sel), note)
+	}
+	return info, nil
 }
 
 // relativeFilterType identifies which relative filter to apply

@@ -662,9 +662,13 @@ func (fr *FlowRunner) executeRetry(step *flow.RetryStep) *core.CommandResult {
 
 // executeRunFlow handles runFlow step execution.
 func (fr *FlowRunner) executeRunFlow(step *flow.RunFlowStep) *core.CommandResult {
-	// Check when condition
+	// Check when condition. When false, prefer the else branch over skipping
+	// if one was provided.
 	if step.When != nil {
 		if !fr.script.CheckCondition(fr.ctx, *step.When, fr.driver) {
+			if step.ElseFile != "" || len(step.ElseSteps) > 0 {
+				return fr.executeRunFlowElse(step)
+			}
 			return &core.CommandResult{
 				Success: true,
 				Message: "Skipped (when condition not met)",
@@ -747,6 +751,91 @@ func (fr *FlowRunner) executeRunFlow(step *flow.RunFlowStep) *core.CommandResult
 			Success: false,
 			Error:   err,
 			Message: fmt.Sprintf("Failed to parse flow file: %s", filePath),
+		}
+	}
+
+	result := fr.executeSubFlow(*subFlow)
+	if !result.Success {
+		return fr.wrapRunFlowTimeout(result, step, "", timeoutLimit)
+	}
+	return result
+}
+
+// executeRunFlowElse runs the fallback branch of a runFlow step (the `else:`
+// or `elseCommands:` block) when the `when:` condition evaluated false.
+// Mirrors the body of executeRunFlow for the else inputs — same depth bump,
+// env handling, timeout propagation, and sub-flow loading semantics.
+func (fr *FlowRunner) executeRunFlowElse(step *flow.RunFlowStep) *core.CommandResult {
+	// Apply runFlow timeout if specified (same as main branch).
+	if step.TimeoutMs > 0 {
+		timeout := time.Duration(step.TimeoutMs) * time.Millisecond
+		ctx, cancel := context.WithTimeout(fr.ctx, timeout)
+		defer cancel()
+		origCtx := fr.ctx
+		origTimeout := fr.runFlowTimeout
+		fr.ctx = ctx
+		fr.runFlowTimeout = timeout.String()
+		fr.driver.SetContext(ctx)
+		defer func() {
+			fr.ctx = origCtx
+			fr.runFlowTimeout = origTimeout
+			fr.driver.SetContext(origCtx)
+		}()
+	}
+
+	if fr.config.OnNestedFlowStart != nil && step.ElseFile != "" {
+		fr.config.OnNestedFlowStart(fr.depth+1, "Run "+step.ElseFile+" (else)")
+	}
+
+	fr.depth++
+	defer func() { fr.depth-- }()
+
+	defer fr.script.withEnvVars(step.Env)()
+
+	timeoutLimit := ""
+	if step.TimeoutMs > 0 {
+		timeoutLimit = (time.Duration(step.TimeoutMs) * time.Millisecond).String()
+	}
+
+	// Inline else steps take precedence over ElseFile when both are set.
+	if len(step.ElseSteps) > 0 {
+		var lastStep string
+		for _, nestedStep := range step.ElseSteps {
+			if fr.ctx.Err() != nil {
+				msg := fmt.Sprintf("runFlow else timed out (%s timeout) — last completed: %s", timeoutLimit, lastStep)
+				return &core.CommandResult{
+					Success: false,
+					Error:   fmt.Errorf("%s", msg),
+					Message: msg,
+				}
+			}
+			lastStep = nestedStep.Describe()
+			result := fr.executeNestedStep(nestedStep)
+			if !result.Success && !nestedStep.IsOptional() {
+				return fr.wrapRunFlowTimeout(result, step, lastStep, timeoutLimit)
+			}
+		}
+		return &core.CommandResult{
+			Success: true,
+			Message: "Else branch completed",
+		}
+	}
+
+	if step.ElseFile == "" {
+		return &core.CommandResult{
+			Success: false,
+			Error:   fmt.Errorf("runFlow else: no fallback file or steps specified"),
+			Message: "runFlow else requires file or inline steps",
+		}
+	}
+
+	filePath := fr.script.ResolvePath(step.ElseFile)
+	subFlow, err := flow.ParseFile(filePath)
+	if err != nil {
+		return &core.CommandResult{
+			Success: false,
+			Error:   err,
+			Message: fmt.Sprintf("Failed to parse else flow file: %s", filePath),
 		}
 	}
 

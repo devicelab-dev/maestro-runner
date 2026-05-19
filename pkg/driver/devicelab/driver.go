@@ -230,6 +230,8 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 		result = d.back(s)
 	case *flow.PressKeyStep:
 		result = d.pressKey(s)
+	case *flow.OpenNotificationsStep:
+		result = d.openNotifications(s)
 
 	// App lifecycle
 	case *flow.LaunchAppStep:
@@ -284,6 +286,8 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 		result = d.startRecording(s)
 	case *flow.StopRecordingStep:
 		result = d.stopRecording(s)
+	case *flow.RemoveMediaStep:
+		result = d.removeMedia(s)
 	case *flow.AddMediaStep:
 		result = d.addMedia(s)
 
@@ -1343,16 +1347,35 @@ func buildSelectorsWithOptions(sel flow.Selector, timeoutMs int, preferClickable
 	var strategies []LocatorStrategy
 	stateFilters := buildStateFilters(sel)
 
-	// ID-based selector - use resourceIdMatches for partial matching
-	// Always wrap with .* — works for both literal IDs and regex patterns
+	// ID-based selector — exact match FIRST, substring fallback ONLY if exact
+	// fails. Mirrors the parallel fix in pkg/driver/uiautomator2: substring-
+	// only `resourceIdMatches(".*X.*")` triggered internal scrolling and
+	// returned a wrong element when the target id wasn't in the rendered
+	// tree (lazy ListView with target offscreen). Web driver does the same
+	// cascade — exact → testid → substring → name → aria-label.
 	if sel.ID != "" {
 		escaped := escapeUIAutomatorString(sel.ID)
 		if preferClickable {
+			// Exact match — clickable first for tap commands.
+			strategies = append(strategies, LocatorStrategy{
+				Strategy: uiautomator2.StrategyUIAutomator,
+				Value:    `new UiSelector().resourceId("` + escaped + `").clickable(true)` + stateFilters,
+			})
+		}
+		// Exact match — any element.
+		strategies = append(strategies, LocatorStrategy{
+			Strategy: uiautomator2.StrategyUIAutomator,
+			Value:    `new UiSelector().resourceId("` + escaped + `")` + stateFilters,
+		})
+		if preferClickable {
+			// Substring fallback — clickable. Backward compat with users
+			// relying on substring behaviour.
 			strategies = append(strategies, LocatorStrategy{
 				Strategy: uiautomator2.StrategyUIAutomator,
 				Value:    `new UiSelector().resourceIdMatches(".*` + escaped + `.*").clickable(true)` + stateFilters,
 			})
 		}
+		// Substring fallback — any.
 		strategies = append(strategies, LocatorStrategy{
 			Strategy: uiautomator2.StrategyUIAutomator,
 			Value:    `new UiSelector().resourceIdMatches(".*` + escaped + `.*")` + stateFilters,

@@ -223,7 +223,7 @@ func isStepType(key string) bool {
 	switch StepType(key) {
 	case StepTapOn, StepDoubleTapOn, StepLongPressOn, StepTapOnPoint,
 		StepSwipe, StepScroll, StepScrollUntilVisible, StepBack, StepHideKeyboard,
-		StepAcceptAlert, StepDismissAlert,
+		StepOpenNotifications, StepAcceptAlert, StepDismissAlert,
 		StepInputText, StepInputRandom, StepInputRandomEmail, StepInputRandomNumber,
 		StepInputRandomPersonName, StepInputRandomText,
 		StepEraseText, StepCopyTextFrom, StepPasteText, StepSetClipboard,
@@ -240,7 +240,7 @@ func isStepType(key string) bool {
 		StepOpenTab, StepSwitchTab, StepCloseTab,
 		StepMockNetwork, StepBlockNetwork, StepSetNetworkConditions, StepWaitForRequest, StepClearNetworkMocks,
 		StepTakeScreenshot, StepStartRecording,
-		StepStopRecording, StepAddMedia, StepPressKey, StepWaitForAnimationToEnd,
+		StepStopRecording, StepAddMedia, StepRemoveMedia, StepPressKey, StepWaitForAnimationToEnd,
 		StepDefineVariables:
 		return true
 	}
@@ -323,6 +323,9 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 
 	case StepHideKeyboard:
 		return &HideKeyboardStep{BaseStep: BaseStep{StepType: stepType}}, nil
+
+	case StepOpenNotifications:
+		return &OpenNotificationsStep{BaseStep: BaseStep{StepType: stepType}}, nil
 
 	case StepAcceptAlert:
 		return &AcceptAlertStep{BaseStep: BaseStep{StepType: stepType}}, nil
@@ -565,6 +568,11 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 			}
 		} else if err := valueNode.Decode(&s); err != nil {
 			return nil, wrapParseError(sourcePath, valueNode.Line, err)
+		}
+		// If `enabled:` was a literal bool, copy it into Enabled now so flows
+		// without variable interpolation work without the expand pass.
+		if b, ok := s.EnabledRaw.(bool); ok {
+			s.Enabled = b
 		}
 		s.StepType = stepType
 		return &s, nil
@@ -860,6 +868,9 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 		s.StepType = stepType
 		return &s, nil
 
+	case StepRemoveMedia:
+		return &RemoveMediaStep{BaseStep: BaseStep{StepType: stepType}}, nil
+
 	case StepPressKey:
 		var s PressKeyStep
 		if valueNode.Kind == yaml.ScalarNode {
@@ -969,7 +980,13 @@ func parseRetryStep(valueNode *yaml.Node, sourcePath string) (Step, error) {
 	return s, nil
 }
 
-// parseRunFlowStep handles runFlow with optional nested commands.
+// parseRunFlowStep handles runFlow with optional nested commands and an
+// optional else branch (run when `when:` evaluates false).
+//
+// The else branch accepts three YAML shapes:
+//   - else: path/to/fallback.yaml          (string scalar → fallback file)
+//   - else: [- tapOn: foo, ...]            (sequence → inline fallback steps)
+//   - elseCommands: [- tapOn: foo, ...]    (alias for the sequence form)
 func parseRunFlowStep(valueNode *yaml.Node, sourcePath string) (Step, error) {
 	s := &RunFlowStep{BaseStep: BaseStep{StepType: StepRunFlow}}
 
@@ -979,13 +996,14 @@ func parseRunFlowStep(valueNode *yaml.Node, sourcePath string) (Step, error) {
 	}
 
 	var raw struct {
-		File     string            `yaml:"file"`
-		Commands []yaml.Node       `yaml:"commands"`
-		When     *Condition        `yaml:"when"`
-		Env      map[string]string `yaml:"env"`
-		Optional bool              `yaml:"optional"`
-		Label    string            `yaml:"label"`
-		Timeout  int               `yaml:"timeout"`
+		File         string            `yaml:"file"`
+		Commands     []yaml.Node       `yaml:"commands"`
+		ElseCommands []yaml.Node       `yaml:"elseCommands"`
+		When         *Condition        `yaml:"when"`
+		Env          map[string]string `yaml:"env"`
+		Optional     bool              `yaml:"optional"`
+		Label        string            `yaml:"label"`
+		Timeout      int               `yaml:"timeout"`
 	}
 
 	if err := valueNode.Decode(&raw); err != nil {
@@ -1005,6 +1023,42 @@ func parseRunFlowStep(valueNode *yaml.Node, sourcePath string) (Step, error) {
 			return nil, err
 		}
 		s.Steps = append(s.Steps, step)
+	}
+
+	// `else:` is decoded by walking the mapping manually because its value
+	// can be either a scalar (fallback file path) or a sequence (inline
+	// fallback steps). Decoding into a fixed Go type would force one shape.
+	for i := 0; i+1 < len(valueNode.Content); i += 2 {
+		keyNode := valueNode.Content[i]
+		valNode := valueNode.Content[i+1]
+		if keyNode.Value != "else" {
+			continue
+		}
+		switch valNode.Kind {
+		case yaml.ScalarNode:
+			s.ElseFile = valNode.Value
+		case yaml.SequenceNode:
+			for _, cmdNode := range valNode.Content {
+				step, err := parseStep(cmdNode, sourcePath)
+				if err != nil {
+					return nil, err
+				}
+				s.ElseSteps = append(s.ElseSteps, step)
+			}
+		default:
+			return nil, wrapParseError(sourcePath, valNode.Line,
+				fmt.Errorf("runFlow.else must be a file path (string) or a list of steps"))
+		}
+		break
+	}
+
+	// elseCommands: [steps...] — alias for else when used as a sequence.
+	for _, cmdNode := range raw.ElseCommands {
+		step, err := parseStep(&cmdNode, sourcePath)
+		if err != nil {
+			return nil, err
+		}
+		s.ElseSteps = append(s.ElseSteps, step)
 	}
 
 	return s, nil

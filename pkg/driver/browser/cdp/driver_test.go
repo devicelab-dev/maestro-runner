@@ -185,6 +185,66 @@ func TestNewAndClose(t *testing.T) {
 	}
 }
 
+// TestUserDataDir verifies that a UserDataDir setting causes Chrome to use
+// that directory as its profile — localStorage survives a second New() call
+// against the same directory.
+func TestUserDataDir(t *testing.T) {
+	// Manually managed dir — t.TempDir's auto-cleanup races Chrome's
+	// lock-file release on macOS and surfaces as a spurious test failure.
+	dir, err := os.MkdirTemp("", "maestro-user-data-dir-*")
+	if err != nil {
+		t.Fatalf("mkdirtemp: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	ts := newTestServer()
+	defer ts.Close()
+
+	// First session: write to localStorage.
+	d1, err := New(Config{
+		Headless:    true,
+		URL:         ts.URL,
+		UserDataDir: dir,
+		ViewportW:   1024,
+		ViewportH:   768,
+	})
+	if err != nil {
+		t.Fatalf("first driver: %v", err)
+	}
+	d1.SetFindTimeout(5000)
+
+	_, err = d1.page.Eval(`() => { localStorage.setItem("h5_test", "stayed"); }`)
+	if err != nil {
+		t.Fatalf("set localStorage: %v", err)
+	}
+	if err := d1.Close(); err != nil {
+		t.Fatalf("close first driver: %v", err)
+	}
+
+	// Second session: same UserDataDir → localStorage entry should survive.
+	d2, err := New(Config{
+		Headless:    true,
+		URL:         ts.URL,
+		UserDataDir: dir,
+		ViewportW:   1024,
+		ViewportH:   768,
+	})
+	if err != nil {
+		t.Fatalf("second driver: %v", err)
+	}
+	d2.SetFindTimeout(5000)
+	defer d2.Close()
+
+	obj, err := d2.page.Eval(`() => localStorage.getItem("h5_test")`)
+	if err != nil {
+		t.Fatalf("read localStorage: %v", err)
+	}
+	got := obj.Value.Str()
+	if got != "stayed" {
+		t.Errorf("localStorage not preserved across runs; got %q, want %q", got, "stayed")
+	}
+}
+
 func TestAssertVisible(t *testing.T) {
 	ts := newTestServer()
 	defer ts.Close()
@@ -1077,6 +1137,36 @@ func TestMapKey(t *testing.T) {
 		}
 		if !tt.want && key != 0 {
 			t.Errorf("mapKey(%q) should return 0", tt.name)
+		}
+	}
+}
+
+func TestMapModifier(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"ctrl", true},
+		{"control", true},
+		{"shift", true},
+		{"alt", true},
+		{"option", true},
+		{"meta", true},
+		{"cmd", true},
+		{"command", true},
+		{"win", true},
+		{"CTRL", true},
+		{"unknown", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		got := mapModifier(tt.name)
+		if tt.want && got == 0 {
+			t.Errorf("mapModifier(%q) returned 0, expected a key", tt.name)
+		}
+		if !tt.want && got != 0 {
+			t.Errorf("mapModifier(%q) returned %v, expected 0", tt.name, got)
 		}
 	}
 }

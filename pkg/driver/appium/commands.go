@@ -39,6 +39,20 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		return errorResult(err, fmt.Sprintf("Element not found: %s", step.Selector.Describe()))
 	}
 
+	cx, cy := info.Bounds.Center()
+
+	// If duration is set (or longPress: true), hold the press for that long.
+	if step.DurationMs > 0 || step.LongPress {
+		duration := step.DurationMs
+		if duration <= 0 {
+			duration = 1000
+		}
+		if err := d.client.LongPress(cx, cy, duration); err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to press for %dms", duration))
+		}
+		return successResult(fmt.Sprintf("Pressed on element for %dms", duration), info)
+	}
+
 	// On iOS, store the element ID so inputText can use ElementSendKeys
 	// to atomically focus + type (bypasses keyboard focus timing issues).
 	if d.platform == "ios" && info.ID != "" {
@@ -53,7 +67,6 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		return successResult(fmt.Sprintf("Tapped on element '%s'", info.ID), info)
 	}
 
-	cx, cy := info.Bounds.Center()
 	if err := d.client.Tap(cx, cy); err != nil {
 		return errorResult(err, "Failed to tap")
 	}
@@ -93,7 +106,10 @@ func (d *Driver) longPressOn(step *flow.LongPressOnStep) *core.CommandResult {
 		return errorResult(err, fmt.Sprintf("Element not found: %s", step.Selector.Describe()))
 	}
 
-	duration := 1000 // Default 1 second for long press
+	duration := step.DurationMs
+	if duration <= 0 {
+		duration = 1000 // Default 1 second for long press
+	}
 
 	cx, cy := info.Bounds.Center()
 	if err := d.client.LongPress(cx, cy, duration); err != nil {
@@ -116,6 +132,17 @@ func (d *Driver) tapOnPoint(step *flow.TapOnPointStep) *core.CommandResult {
 		if err != nil {
 			return errorResult(err, "Invalid point coordinates")
 		}
+	}
+
+	if step.DurationMs > 0 || step.LongPress {
+		duration := step.DurationMs
+		if duration <= 0 {
+			duration = 1000
+		}
+		if err := d.client.LongPress(x, y, duration); err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to press at point for %dms", duration))
+		}
+		return successResult(fmt.Sprintf("Pressed at (%d, %d)", x, y), nil)
 	}
 
 	if err := d.client.Tap(x, y); err != nil {

@@ -66,11 +66,17 @@ window.__maestro = {
     var lower = text.toLowerCase();
     var docs = this._collectRoots();
     var best = null, bestDepth = -1;
+    // Tags that never render visible text or live outside <body>. Skipping
+    // them prevents <title>, <script type="application/ld+json">, etc. from
+    // winning the deepest-match tiebreaker when an SPA puts the target text
+    // in document.title or a JSON-LD blob.
+    var SKIP_TAGS = { TITLE:1, SCRIPT:1, STYLE:1, META:1, LINK:1, BASE:1, HEAD:1, NOSCRIPT:1, TEMPLATE:1 };
     for (var d = 0; d < docs.length; d++) {
       var all;
       try { all = docs[d].querySelectorAll('*'); } catch (e) { continue; }
       for (var i = 0; i < all.length; i++) {
         var el = all[i];
+        if (SKIP_TAGS[el.tagName]) continue;
         var t = (el.textContent || '').trim().toLowerCase();
         var label = (el.getAttribute && (el.getAttribute('aria-label') || '')).toLowerCase();
         var ph = (el.getAttribute && (el.getAttribute('placeholder') || '')).toLowerCase();
@@ -202,7 +208,7 @@ window.__maestro = {
     var rect = el.getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) return false;
     var style2 = ownerWin.getComputedStyle(el);
-    if (style2 && (style2.visibility === 'hidden' || style2.opacity === '0')) return false;
+    if (style2 && style2.visibility === 'hidden') return false;
     if (this._isInIframe(el)) {
       return this._intersectsIframeChain(el, rect);
     }
@@ -234,17 +240,25 @@ window.__maestro = {
   //    coord-translated path via `expectHitTarget`; wiring it into the
   //    actionability gate for top-frame targets is a follow-up.
   _isActionable: function(el) {
-    if (!el || !el.isConnected) return false;
-    if (!this._isElementVisible(el)) return false;
-    // Enabled-property check (HTMLButtonElement / HTMLInputElement / etc.)
-    if (el.disabled === true) return false;
-    // ARIA disabled
-    if (el.getAttribute && el.getAttribute('aria-disabled') === 'true') return false;
-    // CSS pointer-events: 'none' (inherited)
+    function rej(r) { try { window.__maestroLastRejection = r; } catch (e) {} return false; }
+    if (!el || !el.isConnected) return rej('detached');
+    // Visibility is enforced upstream by the finder cascade. Re-checking it
+    // here was too strict in two cases that regressed in 1.1.15:
+    //   * <input type="checkbox"> covered by a styled <label> (TodoMVC pattern):
+    //     the input is rendered with opacity:0, so _isElementVisible rejected it,
+    //     but the click would have landed on the label and propagated to the
+    //     input correctly.
+    //   * SPAs that put the target text into document.title (Saucedemo): the
+    //     AX-tree finder occasionally surfaced the <title> element, which is
+    //     never visible. Letting the find cascade decide is enough.
+    // The gate's value-add is catching states the find cascade doesn't:
+    // disabled / aria-disabled / pointer-events.
+    if (el.disabled === true) return rej('disabled-prop');
+    if (el.getAttribute && el.getAttribute('aria-disabled') === 'true') return rej('aria-disabled');
     var ownerWin = (el.ownerDocument && el.ownerDocument.defaultView) || window;
-    if (ownerWin.getComputedStyle) {
+    if (ownerWin.getComputedStyle && el.nodeType === 1) {
       var cs = ownerWin.getComputedStyle(el);
-      if (cs && cs.pointerEvents === 'none') return false;
+      if (cs && cs.pointerEvents === 'none') return rej('pointer-events-none');
     }
     return true;
   },

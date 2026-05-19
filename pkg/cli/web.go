@@ -16,9 +16,10 @@ func CreateWebDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	logger.Info("Creating web driver (headless=%v)", headless)
 
 	driver, err := cdpdriver.New(cdpdriver.Config{
-		Headless: headless,
-		URL:      cfg.AppID,
-		Browser:  cfg.Browser,
+		Headless:    headless,
+		URL:         cfg.AppID,
+		Browser:     cfg.Browser,
+		UserDataDir: cfg.UserDataDir,
 	})
 	if err != nil {
 		logger.Error("Failed to launch browser: %v", err)

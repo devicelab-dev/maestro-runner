@@ -621,3 +621,122 @@ func TestIsElementNotFoundError(t *testing.T) {
 		})
 	}
 }
+
+func TestShouldRejectAsOffscreen(t *testing.T) {
+	// Pixel 4a — 1080x2340.
+	info := &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2340}
+
+	tests := []struct {
+		name   string
+		info   *core.PlatformInfo
+		cx, cy int
+		want   bool
+	}{
+		{"center of screen", info, 540, 1170, false},
+		{"top of usable area", info, 540, 80, false},     // just past 3% top inset (70)
+		{"bottom of usable area", info, 540, 2200, false}, // before 5% bottom inset (2223)
+		{"in status bar zone", info, 540, 50, true},
+		{"in nav bar zone (bug repro)", info, 540, 2271, true},
+		{"fully past bottom", info, 540, 2400, true},
+		{"negative x", info, -10, 1000, true},
+		{"x past width", info, 1100, 1000, true},
+		{"nil platform info — permissive", nil, 540, 5000, false},
+		{"zero screen size — permissive", &core.PlatformInfo{}, 540, 5000, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldRejectAsOffscreen(tt.info, tt.cx, tt.cy)
+			if got != tt.want {
+				t.Errorf("shouldRejectAsOffscreen(%d,%d) = %v, want %v", tt.cx, tt.cy, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFlutterDriver_OffscreenRejection reproduces the lazy-ListView bug:
+// the semantics tree reports an element at coordinates that lie just past
+// the visible viewport (in the nav-bar safe area). Without the viewport
+// check, the wrapper would dispatch a tap at those coords and silently
+// land on whatever widget is actually painted there.
+func TestFlutterDriver_OffscreenRejection(t *testing.T) {
+	var tappedAtCoords bool
+
+	inner := &mockDriverWithPlatform{
+		mockDriver: mockDriver{
+			executeFunc: func(step flow.Step) *core.CommandResult {
+				if _, ok := step.(*flow.TapOnPointStep); ok {
+					tappedAtCoords = true
+					return core.SuccessResult("tapped at point", nil)
+				}
+				return core.ErrorResult(fmt.Errorf("element not found: id=\"radio_group\""), "")
+			},
+		},
+		info: &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2340},
+	}
+
+	// Root rect spans the full physical screen. radio_group is laid out in
+	// the lazy-ListView cache buffer at logical y ≈ 826 → physical y ≈ 2271.
+	semanticsDump := `SemanticsNode#0
+ Rect.fromLTRB(0.0, 0.0, 1080.0, 2340.0)
+ scaled by 2.75x
+ ├─SemanticsNode#1
+   Rect.fromLTRB(0.0, 0.0, 392.7, 850.9)
+   ├─SemanticsNode#17
+     Rect.fromLTRB(0.0, 800.0, 392.7, 850.9)
+     identifier: "radio_group"
+`
+
+	wsURL, cleanup := startMockVMService(t, semanticsDump)
+	defer cleanup()
+
+	client, err := Connect(wsURL)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer client.Close()
+
+	fd := &FlutterDriver{inner: inner, client: client}
+	fd.findTimeoutMs = 2000 // keep test fast
+
+	step := &flow.TapOnStep{}
+	step.Selector.ID = "radio_group"
+	step.StepType = flow.StepTapOn
+
+	result := fd.Execute(step)
+
+	if result.Success {
+		t.Fatalf("expected failure for offscreen tap, got success")
+	}
+	if tappedAtCoords {
+		t.Fatalf("offscreen element should not have been tapped at coordinates")
+	}
+	if result.Error == nil {
+		t.Fatalf("expected error to be set, got nil")
+	}
+	if !contains(result.Error.Error(), "scrollUntilVisible") {
+		t.Errorf("error should mention scrollUntilVisible, got: %v", result.Error)
+	}
+	if !contains(result.Error.Error(), "outside the visible viewport") {
+		t.Errorf("error should explain viewport, got: %v", result.Error)
+	}
+}
+
+// mockDriverWithPlatform overrides GetPlatformInfo to return real screen size.
+type mockDriverWithPlatform struct {
+	mockDriver
+	info *core.PlatformInfo
+}
+
+func (m *mockDriverWithPlatform) GetPlatformInfo() *core.PlatformInfo {
+	return m.info
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}

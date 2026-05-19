@@ -1,9 +1,13 @@
 package uiautomator2
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -32,6 +36,7 @@ type MockUIA2Client struct {
 	activeElementFunc  func() (*uiautomator2.Element, error)
 	sourceFunc         func() (string, error)
 	sendKeyActionsFunc func(text string) error
+	screenshotFunc     func() ([]byte, error)
 
 	// Tracking
 	clickCalls          []struct{ X, Y int }
@@ -138,6 +143,9 @@ func (m *MockUIA2Client) SendKeyActions(text string) error {
 }
 
 func (m *MockUIA2Client) Screenshot() ([]byte, error) {
+	if m.screenshotFunc != nil {
+		return m.screenshotFunc()
+	}
 	return m.screenshotData, m.screenshotErr
 }
 
@@ -324,55 +332,113 @@ func TestBuildSelectorsRegexPattern(t *testing.T) {
 }
 
 func TestBuildSelectorsID(t *testing.T) {
+	// buildSelectors (non-tap path, preferClickable=false) for an id-only
+	// selector now emits two strategies: exact resourceId first, then
+	// substring resourceIdMatches as fallback.
 	sel := flow.Selector{ID: "login_btn"}
 	strategies, err := buildSelectors(sel, 17000)
 	if err != nil {
 		t.Fatalf("buildSelectors failed: %v", err)
 	}
 
-	if len(strategies) != 1 {
-		t.Errorf("expected 1 strategy, got %d", len(strategies))
+	if len(strategies) != 2 {
+		t.Fatalf("expected 2 strategies (exact + substring), got %d", len(strategies))
 	}
 
-	s := strategies[0]
-	if !strings.Contains(s.Value, "resourceIdMatches") {
-		t.Error("expected resourceIdMatches in selector")
+	// First strategy must be EXACT match — preventing the silent-wrong-element
+	// bug where lazy-rendered ListView contents tripped the substring scan.
+	if !strings.Contains(strategies[0].Value, `resourceId("login_btn")`) {
+		t.Errorf("expected exact resourceId first, got: %s", strategies[0].Value)
+	}
+	if strings.Contains(strategies[0].Value, "resourceIdMatches") {
+		t.Errorf("first strategy must not be a substring match, got: %s", strategies[0].Value)
+	}
+
+	// Second strategy is the substring fallback.
+	if !strings.Contains(strategies[1].Value, `resourceIdMatches(".*login_btn.*")`) {
+		t.Errorf("expected substring fallback second, got: %s", strategies[1].Value)
+	}
+}
+
+func TestBuildSelectorsForTapID(t *testing.T) {
+	// Tap path (preferClickable=true) for an id-only selector emits four
+	// strategies: exact+clickable, exact, substring+clickable, substring.
+	// Order matters — clickable variants of each match level go first so a
+	// tap on a labeled wrapper still prefers the actual button when present.
+	sel := flow.Selector{ID: "login_btn"}
+	strategies, err := buildSelectorsForTap(sel, 17000)
+	if err != nil {
+		t.Fatalf("buildSelectorsForTap failed: %v", err)
+	}
+
+	if len(strategies) != 4 {
+		t.Fatalf("expected 4 strategies (exact+click, exact, substr+click, substr), got %d", len(strategies))
+	}
+
+	cases := []struct {
+		idx    int
+		want   string
+		notWant string
+	}{
+		{0, `resourceId("login_btn").clickable(true)`, "resourceIdMatches"},
+		{1, `resourceId("login_btn")`, "resourceIdMatches"},
+		{2, `resourceIdMatches(".*login_btn.*").clickable(true)`, ""},
+		{3, `resourceIdMatches(".*login_btn.*")`, ""},
+	}
+	for _, c := range cases {
+		if !strings.Contains(strategies[c.idx].Value, c.want) {
+			t.Errorf("strategy[%d] missing %q: %s", c.idx, c.want, strategies[c.idx].Value)
+		}
+		if c.notWant != "" && strings.Contains(strategies[c.idx].Value, c.notWant) {
+			t.Errorf("strategy[%d] unexpectedly contains %q: %s", c.idx, c.notWant, strategies[c.idx].Value)
+		}
+	}
+
+	// Also verify the exact pair comes before the substring pair — the
+	// load-bearing ordering for the bug fix.
+	exactIdx := strings.Index(strategies[1].Value, `resourceId("login_btn")`)
+	substringIdx := strings.Index(strategies[2].Value, `resourceIdMatches`)
+	if exactIdx < 0 || substringIdx < 0 {
+		t.Fatal("expected pair[1]=exact and pair[2]=substring")
 	}
 }
 
 func TestBuildSelectorsIDRegex(t *testing.T) {
-	// Regex ID pattern — wrapped with .* and quotes-only escaping (regex chars preserved)
+	// Regex ID pattern — non-regex chars are escaped only for quotes; regex
+	// chars are preserved. Both exact and substring strategies now emit,
+	// but the substring variant (which respects user-supplied regex chars
+	// via resourceIdMatches) is the relevant one for regex IDs.
 	sel := flow.Selector{ID: `item_\d+`}
 	strategies, err := buildSelectors(sel, 5000)
 	if err != nil {
 		t.Fatalf("buildSelectors failed: %v", err)
 	}
 
-	if len(strategies) != 1 {
-		t.Errorf("expected 1 strategy, got %d", len(strategies))
+	if len(strategies) != 2 {
+		t.Fatalf("expected 2 strategies, got %d", len(strategies))
 	}
 
-	s := strategies[0]
-	if !strings.Contains(s.Value, "resourceIdMatches") {
-		t.Error("expected resourceIdMatches in selector")
+	// The substring strategy preserves regex metacharacters.
+	if !strings.Contains(strategies[1].Value, "resourceIdMatches") {
+		t.Error("expected resourceIdMatches in substring strategy")
 	}
-	// Regex chars should NOT be escaped
-	if !strings.Contains(s.Value, `\d+`) {
-		t.Errorf("expected regex pattern preserved in selector, got: %s", s.Value)
+	if !strings.Contains(strategies[1].Value, `\d+`) {
+		t.Errorf("expected regex pattern preserved, got: %s", strategies[1].Value)
 	}
 }
 
 func TestBuildSelectorsIDLiteral(t *testing.T) {
-	// Literal ID should be wrapped with .* for partial matching
+	// Literal ID — substring strategy still wraps with .* for users who
+	// rely on the legacy substring behaviour, but exact is now tried first.
 	sel := flow.Selector{ID: "login_btn"}
 	strategies, err := buildSelectors(sel, 5000)
 	if err != nil {
 		t.Fatalf("buildSelectors failed: %v", err)
 	}
 
-	s := strategies[0]
-	if !strings.Contains(s.Value, `".*login_btn.*"`) {
-		t.Errorf("literal ID should be wrapped with .*, got: %s", s.Value)
+	// Substring fallback (index 1) — preserve the .* wrap.
+	if !strings.Contains(strategies[1].Value, `".*login_btn.*"`) {
+		t.Errorf("literal ID substring fallback should be wrapped with .*, got: %s", strategies[1].Value)
 	}
 }
 
@@ -608,6 +674,194 @@ func TestExecuteTapOnPointError(t *testing.T) {
 
 	if result.Success {
 		t.Error("expected failure")
+	}
+}
+
+func TestExecuteTapOnPointWithDuration(t *testing.T) {
+	client := &MockUIA2Client{}
+	driver := New(client, nil, nil)
+
+	step := &flow.TapOnPointStep{X: 100, Y: 200, DurationMs: 500}
+	result := driver.Execute(step)
+
+	if !result.Success {
+		t.Fatalf("expected success, got error: %v", result.Error)
+	}
+	if len(client.clickCalls) != 0 {
+		t.Errorf("did not expect Click; duration should route to LongClick. Click calls: %d", len(client.clickCalls))
+	}
+	if len(client.longClickCalls) != 1 {
+		t.Fatalf("expected 1 LongClick call, got %d", len(client.longClickCalls))
+	}
+	got := client.longClickCalls[0]
+	if got.X != 100 || got.Y != 200 || got.Duration != 500 {
+		t.Errorf("LongClick = (%d,%d,%d), want (100,200,500)", got.X, got.Y, got.Duration)
+	}
+}
+
+func TestWaitForAnimationToEnd_StaticReturnsImmediately(t *testing.T) {
+	// Encode a tiny solid-colour PNG; both screenshots return identical bytes.
+	buf := encodeTinyPNG(t, 10, 10, 0x80)
+	client := &MockUIA2Client{screenshotData: buf}
+	driver := New(client, nil, nil)
+
+	step := &flow.WaitForAnimationToEndStep{}
+	step.TimeoutMs = 1000
+	step.StepType = flow.StepWaitForAnimationToEnd
+
+	start := time.Now()
+	result := driver.Execute(step)
+	elapsed := time.Since(start)
+
+	if !result.Success {
+		t.Fatalf("expected success, got %v", result.Error)
+	}
+	// Static screen should return in under one timeout's worth.
+	if elapsed > 800*time.Millisecond {
+		t.Errorf("static screen returned after %v, want < 800ms", elapsed)
+	}
+	if !strings.Contains(result.Message, "Animation ended") {
+		t.Errorf("message = %q, want it to contain 'Animation ended'", result.Message)
+	}
+}
+
+func TestWaitForAnimationToEnd_HonoursTimeout(t *testing.T) {
+	// Screen never settles: alternate between two distinct images on every call.
+	imgA := encodeTinyPNG(t, 10, 10, 0x00)
+	imgB := encodeTinyPNG(t, 10, 10, 0xFF)
+	var calls int
+	client := &MockUIA2Client{
+		screenshotFunc: func() ([]byte, error) {
+			calls++
+			if calls%2 == 0 {
+				return imgB, nil
+			}
+			return imgA, nil
+		},
+	}
+	driver := New(client, nil, nil)
+
+	step := &flow.WaitForAnimationToEndStep{}
+	step.TimeoutMs = 500
+	step.StepType = flow.StepWaitForAnimationToEnd
+
+	start := time.Now()
+	result := driver.Execute(step)
+	elapsed := time.Since(start)
+
+	if !result.Success {
+		t.Fatalf("step should soft-pass even on timeout, got error %v", result.Error)
+	}
+	if elapsed < 450*time.Millisecond {
+		t.Errorf("returned after %v — should have polled until ~500ms timeout", elapsed)
+	}
+	if !strings.Contains(result.Message, "did not settle") {
+		t.Errorf("message = %q, want it to contain 'did not settle'", result.Message)
+	}
+}
+
+// encodeTinyPNG produces a small solid-fill PNG. Used to drive the
+// screenshot-comparison animation loop deterministically.
+func encodeTinyPNG(t *testing.T, w, h int, gray byte) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			img.Set(x, y, color.RGBA{R: gray, G: gray, B: gray, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode png: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func TestExecuteOpenNotifications(t *testing.T) {
+	shell := &MockShellExecutor{}
+	driver := New(&MockUIA2Client{}, nil, shell)
+
+	step := &flow.OpenNotificationsStep{}
+	step.StepType = flow.StepOpenNotifications
+	result := driver.Execute(step)
+
+	if !result.Success {
+		t.Fatalf("expected success, got error: %v", result.Error)
+	}
+	if len(shell.commands) != 1 || shell.commands[0] != "cmd statusbar expand-notifications" {
+		t.Errorf("expected `cmd statusbar expand-notifications`, got %v", shell.commands)
+	}
+}
+
+func TestExecuteOpenNotificationsShellError(t *testing.T) {
+	shell := &MockShellExecutor{err: errors.New("permission denied")}
+	driver := New(&MockUIA2Client{}, nil, shell)
+
+	step := &flow.OpenNotificationsStep{}
+	step.StepType = flow.StepOpenNotifications
+	result := driver.Execute(step)
+
+	if result.Success {
+		t.Error("expected failure when shell errors")
+	}
+}
+
+func TestExecuteRemoveMedia(t *testing.T) {
+	shell := &MockShellExecutor{}
+	driver := New(&MockUIA2Client{}, nil, shell)
+
+	step := &flow.RemoveMediaStep{}
+	step.StepType = flow.StepRemoveMedia
+	result := driver.Execute(step)
+
+	if !result.Success {
+		t.Fatalf("expected success, got error: %v", result.Error)
+	}
+	// Both providers attempted; mock returns success for both.
+	if len(shell.commands) != 2 {
+		t.Errorf("expected 2 pm clear attempts, got %d: %v", len(shell.commands), shell.commands)
+	}
+}
+
+func TestExecuteRemoveMediaNoShell(t *testing.T) {
+	driver := New(&MockUIA2Client{}, nil, nil)
+
+	step := &flow.RemoveMediaStep{}
+	step.StepType = flow.StepRemoveMedia
+	result := driver.Execute(step)
+
+	if result.Success {
+		t.Error("expected failure when no shell executor")
+	}
+}
+
+func TestExecuteOpenNotificationsNoShell(t *testing.T) {
+	driver := New(&MockUIA2Client{}, nil, nil)
+
+	step := &flow.OpenNotificationsStep{}
+	step.StepType = flow.StepOpenNotifications
+	result := driver.Execute(step)
+
+	if result.Success {
+		t.Error("expected failure when no shell executor")
+	}
+}
+
+func TestExecuteTapOnPointWithLongPress(t *testing.T) {
+	client := &MockUIA2Client{}
+	driver := New(client, nil, nil)
+
+	step := &flow.TapOnPointStep{X: 50, Y: 75, LongPress: true}
+	result := driver.Execute(step)
+
+	if !result.Success {
+		t.Fatalf("expected success, got error: %v", result.Error)
+	}
+	if len(client.longClickCalls) != 1 {
+		t.Fatalf("expected 1 LongClick call, got %d", len(client.longClickCalls))
+	}
+	if client.longClickCalls[0].Duration != 1000 {
+		t.Errorf("default longPress duration = %d, want 1000", client.longClickCalls[0].Duration)
 	}
 }
 

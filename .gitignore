@@ -49,4 +49,12 @@ scripts/
 docs_local/
 research/
 examples/
-PLAN-cloud-provider.md
+
+# Internal planning / research files. Kept local to avoid creating
+# cross-repo backlinks via GitHub's automatic org/repo#N indexing.
+PLAN-*.md
+RESEARCH-*.md
+DOC-GAPS.md
+LANDING-DOC-UPDATES-*.md
+SAUCE-LABS-HOOKS.md
+ROADMAP.md

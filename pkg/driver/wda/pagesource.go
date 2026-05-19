@@ -176,6 +176,24 @@ func FilterOutOfBounds(elements []*ParsedElement, screenWidth, screenHeight int)
 	return result
 }
 
+// HasVisibleDescendant reports whether any descendant of elem (any depth)
+// is marked visible. Used to rescue elements XCUITest reports as
+// visible="false" but which clearly host visible content — e.g. React
+// Native <View testID="..."> wrappers, which have no own visual content
+// so XCUITest can't classify them as visible even when on screen.
+// A hidden-screen container (no visible descendants) returns false.
+func HasVisibleDescendant(elem *ParsedElement) bool {
+	for _, child := range elem.Children {
+		if child.Displayed {
+			return true
+		}
+		if HasVisibleDescendant(child) {
+			return true
+		}
+	}
+	return false
+}
+
 // FilterBySelector filters elements by selector properties.
 func FilterBySelector(elements []*ParsedElement, sel flow.Selector) []*ParsedElement {
 	var result []*ParsedElement

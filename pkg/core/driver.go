@@ -96,6 +96,11 @@ type ElementInfo struct {
 	Class              string            `json:"class,omitempty"`
 	AccessibilityLabel string            `json:"accessibilityLabel,omitempty"`
 	Attributes         map[string]string `json:"attributes,omitempty"`
+	// MatchNote explains a non-default match path the driver took to find the
+	// element (e.g. "rescued: container marked visible=false but hosts visible
+	// descendants" on iOS for RN container testIDs). Surfaced in step messages
+	// and the JSON report so users know they're relying on relaxed matching.
+	MatchNote string `json:"matchNote,omitempty"`
 }
 
 // Bounds represents element position and size

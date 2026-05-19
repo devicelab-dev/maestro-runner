@@ -912,6 +912,116 @@ func TestRunner_RunFlowStep_WhenCondition(t *testing.T) {
 	}
 }
 
+func TestRunner_RunFlowStep_WhenFalse_RunsElseSteps(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	var tapTargets []string
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			if _, ok := step.(*flow.AssertVisibleStep); ok {
+				// When condition: not visible → falls to else branch.
+				return &core.CommandResult{Success: false}
+			}
+			if t, ok := step.(*flow.TapOnStep); ok {
+				tapTargets = append(tapTargets, t.Selector.Text)
+			}
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	mainTap := &flow.TapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepTapOn}}
+	mainTap.Selector.Text = "MainBranch"
+	elseTap := &flow.TapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepTapOn}}
+	elseTap.Selector.Text = "ElseBranch"
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "RunFlow Else Test"},
+			Steps: []flow.Step{
+				&flow.RunFlowStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepRunFlow},
+					When: &flow.Condition{
+						Visible: &flow.Selector{Text: "Logout"},
+					},
+					Steps:     []flow.Step{mainTap},
+					ElseSteps: []flow.Step{elseTap},
+				},
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+	if len(tapTargets) != 1 || tapTargets[0] != "ElseBranch" {
+		t.Errorf("expected only ElseBranch tap, got %v", tapTargets)
+	}
+}
+
+func TestRunner_RunFlowStep_WhenTrue_RunsMainBranch(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	var tapTargets []string
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			if _, ok := step.(*flow.AssertVisibleStep); ok {
+				return &core.CommandResult{Success: true} // when condition met
+			}
+			if t, ok := step.(*flow.TapOnStep); ok {
+				tapTargets = append(tapTargets, t.Selector.Text)
+			}
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	runner := New(driver, RunnerConfig{
+		OutputDir:   tmpDir,
+		Parallelism: 0,
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+	})
+
+	mainTap := &flow.TapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepTapOn}}
+	mainTap.Selector.Text = "MainBranch"
+	elseTap := &flow.TapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepTapOn}}
+	elseTap.Selector.Text = "ElseBranch"
+
+	flows := []flow.Flow{
+		{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "RunFlow When True Test"},
+			Steps: []flow.Step{
+				&flow.RunFlowStep{
+					BaseStep: flow.BaseStep{StepType: flow.StepRunFlow},
+					When:     &flow.Condition{Visible: &flow.Selector{Text: "Logout"}},
+					Steps:    []flow.Step{mainTap},
+					ElseSteps: []flow.Step{elseTap},
+				},
+			},
+		},
+	}
+
+	if _, err := runner.Run(context.Background(), flows); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(tapTargets) != 1 || tapTargets[0] != "MainBranch" {
+		t.Errorf("expected only MainBranch tap, got %v", tapTargets)
+	}
+}
+
 func TestRunner_RunFlowStep_NoFileOrSteps(t *testing.T) {
 	tmpDir := t.TempDir()
 

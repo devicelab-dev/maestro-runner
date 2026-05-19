@@ -32,7 +32,7 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 	// pointer-events:none" cases that visibility doesn't cover, and gives a
 	// short window for state to settle if the page just enabled the control.
 	if err := d.waitForActionable(elem, defaultActionableTimeoutMs); err != nil {
-		return errorResult(err, fmt.Sprintf("Element not actionable: %s", step.Selector.DescribeQuoted()))
+		return errorResult(err, fmt.Sprintf("Element not actionable: %s — %v", step.Selector.DescribeQuoted(), err))
 	}
 
 	// Handle <option> elements: select the option via its parent <select> instead of clicking
@@ -225,6 +225,10 @@ func (d *Driver) doubleTapOn(step *flow.DoubleTapOnStep) *core.CommandResult {
 		return errorResult(err, fmt.Sprintf("Failed to find element %s", step.Selector.DescribeQuoted()))
 	}
 
+	if err := d.waitForActionable(elem, defaultActionableTimeoutMs); err != nil {
+		return errorResult(err, fmt.Sprintf("Element not actionable: %s", step.Selector.DescribeQuoted()))
+	}
+
 	// Iframe / shadow-root branch — same coord-translation issue as tapOn.
 	// Top-frame elements keep the existing Rod path (correct for them).
 	inIframe, _ := elem.Eval(`() => window.__maestro._isInIframe(this)`)
@@ -251,6 +255,10 @@ func (d *Driver) longPressOn(step *flow.LongPressOnStep) *core.CommandResult {
 	elem, info, err := d.findElement(step.Selector, isOptional(step.Selector.Optional), step.TimeoutMs)
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to find element %s", step.Selector.DescribeQuoted()))
+	}
+
+	if err := d.waitForActionable(elem, defaultActionableTimeoutMs); err != nil {
+		return errorResult(err, fmt.Sprintf("Element not actionable: %s", step.Selector.DescribeQuoted()))
 	}
 
 	// Iframe / shadow-root branch — coord translation + hit-target verify.
@@ -479,6 +487,9 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		elem, _, err := d.findElement(step.Selector, isOptional(step.Selector.Optional), step.TimeoutMs)
 		if err != nil {
 			return errorResult(err, fmt.Sprintf("Failed to find element %s", step.Selector.DescribeQuoted()))
+		}
+		if err := d.waitForActionable(elem, defaultActionableTimeoutMs); err != nil {
+			return errorResult(err, fmt.Sprintf("Element not actionable: %s", step.Selector.DescribeQuoted()))
 		}
 		if err := elem.Input(step.Text); err != nil {
 			return errorResult(err, "Failed to input text")
@@ -716,8 +727,44 @@ func (d *Driver) back(step *flow.BackStep) *core.CommandResult {
 	return successResult("Navigated back", nil)
 }
 
-// pressKey presses a keyboard key.
+// pressKey presses a keyboard key, optionally combined with modifiers via
+// "+" syntax (e.g. "Ctrl+S", "Cmd+Shift+P"). The last token is the main key;
+// preceding tokens are modifiers held down while the main key is pressed.
 func (d *Driver) pressKey(step *flow.PressKeyStep) *core.CommandResult {
+	tokens := strings.Split(step.Key, "+")
+	for i := range tokens {
+		tokens[i] = strings.TrimSpace(tokens[i])
+	}
+
+	if len(tokens) > 1 {
+		mainName := tokens[len(tokens)-1]
+		mainKey := mapKey(mainName)
+		if mainKey == 0 && len(mainName) == 1 {
+			mainKey = input.Key(strings.ToLower(mainName)[0])
+		}
+		if mainKey == 0 {
+			return errorResult(fmt.Errorf("unknown key: %s", mainName), fmt.Sprintf("Unknown key in combo: %s", mainName))
+		}
+
+		var modifiers []input.Key
+		for _, mod := range tokens[:len(tokens)-1] {
+			m := mapModifier(mod)
+			if m == 0 {
+				return errorResult(fmt.Errorf("unknown modifier: %s", mod), fmt.Sprintf("Unknown modifier: %s", mod))
+			}
+			modifiers = append(modifiers, m)
+		}
+
+		ka := d.page.KeyActions()
+		ka = ka.Press(modifiers...)
+		ka = ka.Type(mainKey)
+		ka = ka.Release(modifiers...)
+		if err := ka.Do(); err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to press combo: %s", step.Key))
+		}
+		return successResult(fmt.Sprintf("Pressed combo: %s", step.Key), nil)
+	}
+
 	key := mapKey(step.Key)
 	if key == 0 {
 		return errorResult(fmt.Errorf("unknown key: %s", step.Key), "Unknown key")
@@ -728,6 +775,22 @@ func (d *Driver) pressKey(step *flow.PressKeyStep) *core.CommandResult {
 	}
 
 	return successResult(fmt.Sprintf("Pressed key: %s", step.Key), nil)
+}
+
+// mapModifier maps a modifier name to its left-side input.Key.
+// Accepts "ctrl", "control", "shift", "alt", "option", "meta", "cmd", "command", "win".
+func mapModifier(name string) input.Key {
+	switch strings.ToLower(name) {
+	case "ctrl", "control":
+		return input.ControlLeft
+	case "shift":
+		return input.ShiftLeft
+	case "alt", "option":
+		return input.AltLeft
+	case "meta", "cmd", "command", "win":
+		return input.MetaLeft
+	}
+	return 0
 }
 
 // launchApp navigates to the app URL.
@@ -998,9 +1061,14 @@ func (d *Driver) waitUntilNotVisible(sel flow.Selector, timeoutMs int) *core.Com
 	)
 }
 
-// waitForAnimationToEnd waits for the DOM to stabilize.
+// waitForAnimationToEnd waits for the DOM to stabilize. Honors step.TimeoutMs;
+// falls back to 15s (matches the upstream Maestro default) when unset.
 func (d *Driver) waitForAnimationToEnd(step *flow.WaitForAnimationToEndStep) *core.CommandResult {
-	p := d.page.Timeout(10 * time.Second)
+	timeoutMs := step.TimeoutMs
+	if timeoutMs <= 0 {
+		timeoutMs = 15000
+	}
+	p := d.page.Timeout(time.Duration(timeoutMs) * time.Millisecond)
 	if err := p.WaitDOMStable(300*time.Millisecond, 0); err != nil {
 		return errorResult(err, "DOM did not stabilize")
 	}
@@ -1982,5 +2050,10 @@ func (d *Driver) waitForActionable(elem *rod.Element, timeoutMs int) error {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	return fmt.Errorf("element not actionable within %dms (visible + enabled + pointer-events check)", timeoutMs)
+	// Surface the most recent rejection reason for easier debugging.
+	reason := "unknown"
+	if r, err := elem.Eval(`() => String(window.__maestroLastRejection || 'unknown')`); err == nil && r != nil {
+		reason = r.Value.Str()
+	}
+	return fmt.Errorf("element not actionable within %dms (last rejection: %s)", timeoutMs, reason)
 }

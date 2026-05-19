@@ -55,6 +55,20 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		return successResult(fmt.Sprintf("Tapped at relative point (%.0f, %.0f) on element", x, y), info)
 	}
 
+	// If duration is set (or longPress: true), hold the press for that long.
+	if step.DurationMs > 0 || step.LongPress {
+		durationSec := float64(step.DurationMs) / 1000.0
+		if durationSec <= 0 {
+			durationSec = 1.0
+		}
+		x := float64(info.Bounds.X + info.Bounds.Width/2)
+		y := float64(info.Bounds.Y + info.Bounds.Height/2)
+		if err := d.client.LongPress(x, y, durationSec); err != nil {
+			return errorResult(err, fmt.Sprintf("Press for %.2fs failed", durationSec))
+		}
+		return successResult("Pressed element", info)
+	}
+
 	// Determine if element is a text field (needs focus verification)
 	isTextField := strings.Contains(info.Class, "TextField")
 
@@ -129,7 +143,10 @@ func (d *Driver) longPressOn(step *flow.LongPressOnStep) *core.CommandResult {
 	x := float64(info.Bounds.X + info.Bounds.Width/2)
 	y := float64(info.Bounds.Y + info.Bounds.Height/2)
 
-	duration := 1.0 // default 1 second
+	duration := float64(step.DurationMs) / 1000.0
+	if duration <= 0 {
+		duration = 1.0 // default 1 second
+	}
 
 	if err := d.client.LongPress(x, y, duration); err != nil {
 		return errorResult(err, "Long press failed")
@@ -158,6 +175,17 @@ func (d *Driver) tapOnPoint(step *flow.TapOnPointStep) *core.CommandResult {
 		y = float64(step.Y)
 	}
 
+	if step.DurationMs > 0 || step.LongPress {
+		durationSec := float64(step.DurationMs) / 1000.0
+		if durationSec <= 0 {
+			durationSec = 1.0
+		}
+		if err := d.client.LongPress(x, y, durationSec); err != nil {
+			return errorResult(err, fmt.Sprintf("Press at point for %.2fs failed", durationSec))
+		}
+		return successResult(fmt.Sprintf("Pressed at (%.0f, %.0f)", x, y), nil)
+	}
+
 	if err := d.client.Tap(x, y); err != nil {
 		return errorResult(err, "Tap on point failed")
 	}
@@ -173,7 +201,11 @@ func (d *Driver) assertVisible(step *flow.AssertVisibleStep) *core.CommandResult
 		return errorResult(err, fmt.Sprintf("Element not visible: %s", selectorDesc(step.Selector)))
 	}
 
-	return successResult("Element is visible", info)
+	msg := "Element is visible"
+	if info != nil && info.MatchNote != "" {
+		msg = "Element is visible (" + info.MatchNote + ")"
+	}
+	return successResult(msg, info)
 }
 
 func (d *Driver) assertNotVisible(step *flow.AssertNotVisibleStep) *core.CommandResult {
@@ -1207,14 +1239,32 @@ func (d *Driver) waitUntil(step *flow.WaitUntilStep) *core.CommandResult {
 	}
 }
 
-func (d *Driver) waitForAnimationToEnd(_ *flow.WaitForAnimationToEndStep) *core.CommandResult {
-	// NOTE: waitForAnimationToEnd is not fully implemented.
-	// Maestro uses screenshot comparison which is complex to implement correctly.
-	// For now, we pass this step with a warning.
-	return &core.CommandResult{
-		Success: true,
-		Message: "WARNING: waitForAnimationToEnd is not fully implemented - step passed without animation check",
+func (d *Driver) waitForAnimationToEnd(step *flow.WaitForAnimationToEndStep) *core.CommandResult {
+	timeoutMs := step.TimeoutMs
+	if timeoutMs <= 0 {
+		timeoutMs = 15000
 	}
+	const threshold = 0.005
+
+	deadline := time.Now().Add(time.Duration(timeoutMs) * time.Millisecond)
+	start := time.Now()
+	for time.Now().Before(deadline) {
+		prev, err := d.client.Screenshot()
+		if err != nil {
+			return errorResult(err, fmt.Sprintf("Screenshot failed: %v", err))
+		}
+		curr, err := d.client.Screenshot()
+		if err != nil {
+			return errorResult(err, fmt.Sprintf("Screenshot failed: %v", err))
+		}
+		diff := core.ImageDifference(prev, curr)
+		if diff <= threshold {
+			elapsed := time.Since(start)
+			return successResult(fmt.Sprintf("Animation ended (%.1f%% diff, %dms)", diff*100, elapsed.Milliseconds()), nil)
+		}
+	}
+
+	return successResult(fmt.Sprintf("Animation did not settle within %dms — continuing", timeoutMs), nil)
 }
 
 // Media

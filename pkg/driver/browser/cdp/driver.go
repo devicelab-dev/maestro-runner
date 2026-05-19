@@ -30,12 +30,13 @@ const (
 
 // Config holds browser driver configuration.
 type Config struct {
-	Headless  bool
-	URL       string // Initial URL to navigate to
-	ChromeBin string // Path to Chrome binary (empty = auto-download)
-	Browser   string // "chrome", "chromium", or path to binary (default: chromium)
-	ViewportW int
-	ViewportH int
+	Headless    bool
+	URL         string // Initial URL to navigate to
+	ChromeBin   string // Path to Chrome binary (empty = auto-download)
+	Browser     string // "chrome", "chromium", or path to binary (default: chromium)
+	UserDataDir string // Persistent profile directory (empty = ephemeral profile)
+	ViewportW   int
+	ViewportH   int
 }
 
 // Driver implements core.Driver for desktop browser testing using Rod + CDP.
@@ -104,6 +105,11 @@ func New(cfg Config) (*Driver, error) {
 		Set("disable-background-timer-throttling").
 		Set("disable-component-update").
 		Set("password-store", "basic")
+	if cfg.UserDataDir != "" {
+		// Persistent profile: cookies / localStorage / extensions survive
+		// across runs. Caller is responsible for the directory's lifecycle.
+		l = l.Set("user-data-dir", cfg.UserDataDir)
+	}
 	if chromeBin != "" {
 		l = l.Bin(chromeBin)
 	} else {

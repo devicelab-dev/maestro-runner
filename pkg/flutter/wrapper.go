@@ -387,6 +387,31 @@ func (d *FlutterDriver) tryReconnectIOS() error {
 func (d *FlutterDriver) executeFlutterResult(step flow.Step, fr *flutterSearchResult) *core.CommandResult {
 	cx, cy := fr.cx, fr.cy
 
+	// Viewport check: Flutter's widget/semantics trees include lazy ListView
+	// items that are laid out in the cache-extent buffer (just past the
+	// visible viewport). Their reported coordinates may still fall within
+	// the device screen bounds, but a tap there lands on the system nav bar
+	// or on a different widget that is actually painted at that position.
+	// Reject when the tap point is in the system-bar safe area or fully
+	// outside the screen, with a clear error so the user knows to scroll.
+	if !fr.isSuffix && shouldRejectAsOffscreen(d.inner.GetPlatformInfo(), cx, cy) {
+		sel := extractSelector(step)
+		describe := ""
+		if sel != nil {
+			describe = sel.Describe()
+		}
+		info := d.inner.GetPlatformInfo()
+		sw, sh := 0, 0
+		if info != nil {
+			sw, sh = info.ScreenWidth, info.ScreenHeight
+		}
+		logger.Info("Flutter fallback: rejecting offscreen tap (node #%d at %d,%d on %dx%d screen)", fr.node.ID, cx, cy, sw, sh)
+		return core.ErrorResult(
+			fmt.Errorf("element %s located by Flutter VM service at (%d,%d) but that's outside the visible viewport of the %dx%d screen — element is likely in a lazy ListView cache buffer; use scrollUntilVisible to bring it into view first", describe, cx, cy, sw, sh),
+			"",
+		)
+	}
+
 	if fr.isSuffix {
 		rightEdge := int(fr.node.Rect.Right * fr.pixelRatio)
 		cx = rightEdge - int(12*fr.pixelRatio)
@@ -407,6 +432,25 @@ func (d *FlutterDriver) executeFlutterResult(step flow.Step, fr *flutterSearchRe
 	}
 
 	return d.executeWithCoordinates(step, fr.node, cx, cy, fr.bounds)
+}
+
+// shouldRejectAsOffscreen decides whether a Flutter-located tap point is
+// likely outside the visible viewport (system-bar safe-area buffer, or fully
+// off the screen). Permissive when screen size is unknown.
+//
+// Safe-area heuristic: top 3% (status bar / notch) and bottom 5% (nav bar /
+// gesture area). Tappable content rarely lands here; when it does, the
+// inner driver usually sees it directly without needing Flutter fallback.
+func shouldRejectAsOffscreen(info *core.PlatformInfo, cx, cy int) bool {
+	if info == nil || info.ScreenWidth <= 0 || info.ScreenHeight <= 0 {
+		return false
+	}
+	if cx < 0 || cx >= info.ScreenWidth || cy < 0 || cy >= info.ScreenHeight {
+		return true
+	}
+	topInset := info.ScreenHeight * 3 / 100
+	bottomInset := info.ScreenHeight - info.ScreenHeight*5/100
+	return cy < topInset || cy > bottomInset
 }
 
 // searchSemanticsTree searches the parsed semantics tree for matching nodes.

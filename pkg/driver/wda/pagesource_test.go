@@ -655,3 +655,39 @@ func TestFilterOutOfBounds(t *testing.T) {
 		}
 	}
 }
+
+// TestHasVisibleDescendant covers the rescue heuristic for RN container
+// testIDs vs hidden-but-still-mounted screens.
+func TestHasVisibleDescendant(t *testing.T) {
+	// RN-style container: parent visible=false, child visible=true
+	rnChild := &ParsedElement{Name: "child", Displayed: true}
+	rnContainer := &ParsedElement{Name: "rn-container", Displayed: false, Children: []*ParsedElement{rnChild}}
+	rnChild.Parent = rnContainer
+
+	if !HasVisibleDescendant(rnContainer) {
+		t.Error("RN container with visible child should be rescuable")
+	}
+
+	// Hidden screen: container visible=false, all descendants visible=false
+	hiddenChild := &ParsedElement{Name: "login-button", Displayed: false}
+	hiddenInner := &ParsedElement{Name: "form", Displayed: false, Children: []*ParsedElement{hiddenChild}}
+	hiddenChild.Parent = hiddenInner
+	hiddenContainer := &ParsedElement{Name: "login-screen", Displayed: false, Children: []*ParsedElement{hiddenInner}}
+	hiddenInner.Parent = hiddenContainer
+
+	if HasVisibleDescendant(hiddenContainer) {
+		t.Error("hidden screen with all-invisible descendants must NOT be rescuable")
+	}
+	if HasVisibleDescendant(hiddenChild) {
+		t.Error("leaf invisible element must NOT be rescuable")
+	}
+
+	// Deep nesting: visible descendant several levels down still rescues
+	leaf := &ParsedElement{Name: "deep-text", Displayed: true}
+	mid := &ParsedElement{Name: "mid", Displayed: false, Children: []*ParsedElement{leaf}}
+	root := &ParsedElement{Name: "root", Displayed: false, Children: []*ParsedElement{mid}}
+	if !HasVisibleDescendant(root) {
+		t.Error("deep visible descendant should rescue ancestor")
+	}
+}
+
