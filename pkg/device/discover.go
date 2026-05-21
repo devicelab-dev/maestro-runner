@@ -2,7 +2,6 @@ package device
 
 import (
 	"bytes"
-	"os/exec"
 	"strings"
 )
 
@@ -20,7 +19,7 @@ func ListDevices() ([]ConnectedDevice, error) {
 		return nil, err
 	}
 
-	cmd := exec.Command(adbPath, "devices")
+	cmd := execCommand(adbPath, "devices")
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 

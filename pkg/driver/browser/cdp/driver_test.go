@@ -2181,6 +2181,127 @@ func TestFindByAXTreeHiddenElement(t *testing.T) {
 	}
 }
 
+// TestFindByAXTreeSkipsNonRenderableTags is the 1.1.15 regression guard
+// for saucedemo/demoblaze where SPAs put the route label into
+// document.title — the AX tree's accessible-name search surfaced
+// <title>, the actionability gate then rejected it because <title>
+// has display:none. The finder now skips non-renderable tags
+// (<title>, <script>, <style>, etc.) so the cascade can reach the
+// actual visible button.
+func TestFindByAXTreeSkipsNonRenderableTags(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		// document.title shares text with the on-page button.
+		// Pre-1.1.15 the AX-tree finder could surface <title>; post-fix
+		// it must skip <title> and return the button.
+		fmt.Fprint(w, `<!DOCTYPE html>
+<html>
+<head><title>Back to products</title></head>
+<body>
+  <button aria-label="Back to products">Back to products</button>
+</body>
+</html>`)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	d := newTestDriver(t, ts.URL)
+	defer d.Close()
+
+	_, info, err := d.findByAXTree("Back to products", "button", flow.Selector{Text: "Back to products"})
+	if err != nil {
+		t.Fatalf("findByAXTree should find the button despite <title> sharing the same text: %v", err)
+	}
+	if info == nil || !info.Visible {
+		t.Fatal("expected the resolved element to be the visible button")
+	}
+}
+
+// TestIsNonRenderableTagDirect exercises the helper directly across the
+// tag set we want to filter out, plus a control case.
+func TestIsNonRenderableTagDirect(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<!DOCTYPE html>
+<html>
+<head>
+  <title id="t">Doc Title</title>
+  <script id="s" type="application/ld+json">{"name":"x"}</script>
+  <style id="y">body{color:red}</style>
+  <meta id="m" name="x" content="y">
+  <link id="l" rel="icon" href="data:,">
+</head>
+<body>
+  <button id="b">Visible</button>
+</body>
+</html>`)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	d := newTestDriver(t, ts.URL)
+	defer d.Close()
+
+	type c struct {
+		selector string
+		want     bool
+	}
+	for _, tt := range []c{
+		{"#t", true},   // <title>
+		{"#s", true},   // <script>
+		{"#y", true},   // <style>
+		{"#m", true},   // <meta>
+		{"#l", true},   // <link>
+		{"#b", false},  // <button> — should be renderable
+		{"body", false},
+	} {
+		elem, err := d.page.Element(tt.selector)
+		if err != nil {
+			t.Errorf("could not find %s: %v", tt.selector, err)
+			continue
+		}
+		if got := isNonRenderableTag(elem); got != tt.want {
+			t.Errorf("isNonRenderableTag(%s) = %v, want %v", tt.selector, got, tt.want)
+		}
+	}
+}
+
+// TestAXNodeToElementWalksUpTextNode exercises the path where the AX
+// tree returns a #text node handle: axNodeToElement must walk up to
+// the parent Element so callers can dispatch real clicks on it.
+func TestAXNodeToElementWalksUpTextNode(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		// Button whose accessible name comes from a child text node.
+		// Without the walk-up, findByAXTree could return the #text
+		// handle, which Rod's Click() refuses.
+		fmt.Fprint(w, `<!DOCTYPE html><html><body><button id="b">Press me</button></body></html>`)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	d := newTestDriver(t, ts.URL)
+	defer d.Close()
+
+	_, info, err := d.findByAXTree("Press me", "button", flow.Selector{Text: "Press me"})
+	if err != nil {
+		t.Fatalf("findByAXTree: %v", err)
+	}
+	if info == nil {
+		t.Fatal("expected non-nil ElementInfo")
+	}
+	// We can't assert the underlying tagName from ElementInfo, but we can
+	// verify the bounds are non-zero, which would not be the case if a
+	// #text handle leaked through (a text node has zero own bounds in
+	// most layout situations).
+	if info.Bounds.Width == 0 || info.Bounds.Height == 0 {
+		t.Errorf("expected non-zero bounds (Element handle); got %+v", info.Bounds)
+	}
+}
+
 func TestNewInvalidChromeBin(t *testing.T) {
 	_, err := New(Config{
 		Headless:  true,

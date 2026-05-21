@@ -517,3 +517,104 @@ func TestExpandVariablesWithError(t *testing.T) {
 		t.Errorf("expected result to contain 'Value:', got %q", result)
 	}
 }
+
+// TestSetVariables covers the bulk setter (delegates to SetVariable per key).
+func TestSetVariables(t *testing.T) {
+	e := New()
+	defer e.Close()
+	e.SetVariables(map[string]interface{}{
+		"USER":  "alice",
+		"COUNT": 42,
+		"BOOL":  true,
+	})
+	v, err := e.EvalString(`USER + ":" + COUNT + ":" + BOOL`)
+	if err != nil {
+		t.Fatalf("EvalString: %v", err)
+	}
+	if v != "alice:42:true" {
+		t.Errorf("got %q", v)
+	}
+}
+
+// TestSetGetCopiedText covers the copyTextFrom integration setter/getter.
+func TestSetGetCopiedText(t *testing.T) {
+	e := New()
+	defer e.Close()
+	if got := e.GetCopiedText(); got != "" {
+		t.Errorf("default GetCopiedText should be empty, got %q", got)
+	}
+	e.SetCopiedText("hello clip")
+	if got := e.GetCopiedText(); got != "hello clip" {
+		t.Errorf("after Set: got %q", got)
+	}
+	// maestro.copiedText reflects the setter
+	out, err := e.EvalString(`maestro.copiedText`)
+	if err != nil {
+		t.Fatalf("EvalString: %v", err)
+	}
+	if out != "hello clip" {
+		t.Errorf("maestro.copiedText = %q, want %q", out, "hello clip")
+	}
+}
+
+// TestSetPlatform exposes maestro.platform.
+func TestSetPlatform(t *testing.T) {
+	e := New()
+	defer e.Close()
+	e.SetPlatform("android")
+	out, err := e.EvalString(`maestro.platform`)
+	if err != nil {
+		t.Fatalf("EvalString: %v", err)
+	}
+	if out != "android" {
+		t.Errorf("maestro.platform = %q", out)
+	}
+}
+
+// TestGetOutput collects the output side-effects (from output.foo = "bar").
+func TestGetOutput(t *testing.T) {
+	e := New()
+	defer e.Close()
+	if err := e.RunScript(`output.x = "1"; output.y = 2`); err != nil {
+		t.Fatalf("RunScript: %v", err)
+	}
+	out := e.GetOutput()
+	if out["x"] != "1" || out["y"] == nil {
+		t.Errorf("GetOutput: %+v", out)
+	}
+}
+
+// TestRunScript is the void variant of Eval.
+func TestRunScript(t *testing.T) {
+	e := New()
+	defer e.Close()
+	if err := e.RunScript(`var x = 5; output.result = x * 2`); err != nil {
+		t.Fatalf("RunScript: %v", err)
+	}
+	if e.GetOutput()["result"] == nil {
+		t.Error("output.result was not set")
+	}
+
+	// Syntax error path
+	if err := e.RunScript(`}}{{ invalid`); err == nil {
+		t.Error("invalid script should fail")
+	}
+}
+
+// TestDefineUndefinedIfMissing ensures undefined variables become accessible.
+func TestDefineUndefinedIfMissing(t *testing.T) {
+	e := New()
+	defer e.Close()
+	e.DefineUndefinedIfMissing("MY_VAR")
+	// Now accessing MY_VAR shouldn't throw; it's defined as undefined.
+	out, err := e.EvalString(`typeof MY_VAR`)
+	if err != nil {
+		t.Fatalf("EvalString: %v", err)
+	}
+	if out != "undefined" {
+		t.Errorf("expected 'undefined', got %q", out)
+	}
+
+	// Calling again is idempotent (no-op).
+	e.DefineUndefinedIfMissing("MY_VAR")
+}

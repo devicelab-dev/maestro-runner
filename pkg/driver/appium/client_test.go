@@ -64,6 +64,196 @@ func TestClient_Connect(t *testing.T) {
 	}
 }
 
+// TestClient_Connect_SkipsGrantLoopWhenAutoGrantSet verifies the
+// 1.1.15+ optimisation: when the caller passes
+// `appium:autoGrantPermissions: true`, we skip our own pm grant loop
+// so the session boots cleanly on hosts (e.g. Sauce) that disable
+// `adb_shell`. Counterpart test below proves the loop still runs
+// without the cap.
+func TestClient_Connect_SkipsGrantLoopWhenAutoGrantSet(t *testing.T) {
+	scriptCalls := make(map[string]int)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/session" && r.Method == "POST":
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{
+					"sessionId": "ag-session",
+					"capabilities": map[string]interface{}{
+						"platformName": "Android",
+					},
+				},
+			})
+		case r.URL.Path == "/session/ag-session/window/rect":
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 1080.0, "height": 1920.0},
+			})
+		case r.URL.Path == "/session/ag-session/execute/sync":
+			var body struct {
+				Script string `json:"script"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			scriptCalls[body.Script]++
+			writeJSON(w, map[string]interface{}{"value": nil})
+		case r.URL.Path == "/session/ag-session/appium/device/start_activity":
+			writeJSON(w, map[string]interface{}{"value": nil})
+		default:
+			writeJSON(w, map[string]interface{}{"value": nil})
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL)
+	err := client.Connect(map[string]interface{}{
+		"platformName":                  "Android",
+		"appium:appPackage":             "com.test.app",
+		"appium:appActivity":            ".MainActivity",
+		"appium:noReset":                false,
+		"appium:autoGrantPermissions":   true,
+	})
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+
+	if scriptCalls["mobile: shell"] != 0 {
+		t.Errorf("autoGrantPermissions=true should skip the pm grant loop; got %d mobile: shell calls", scriptCalls["mobile: shell"])
+	}
+}
+
+// TestClient_Connect_RunsGrantLoopWithoutAutoGrant verifies that the
+// legacy `mobile: shell pm grant` loop still fires for callers who
+// haven't opted into `appium:autoGrantPermissions: true`.
+func TestClient_Connect_RunsGrantLoopWithoutAutoGrant(t *testing.T) {
+	scriptCalls := make(map[string]int)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/session" && r.Method == "POST":
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{
+					"sessionId":    "ng-session",
+					"capabilities": map[string]interface{}{"platformName": "Android"},
+				},
+			})
+		case r.URL.Path == "/session/ng-session/window/rect":
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 1080.0, "height": 1920.0},
+			})
+		case r.URL.Path == "/session/ng-session/execute/sync":
+			var body struct {
+				Script string `json:"script"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			scriptCalls[body.Script]++
+			writeJSON(w, map[string]interface{}{"value": nil})
+		default:
+			writeJSON(w, map[string]interface{}{"value": nil})
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL)
+	err := client.Connect(map[string]interface{}{
+		"platformName":      "Android",
+		"appium:appPackage": "com.test.app",
+		"appium:noReset":    false,
+	})
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+
+	// Expect one mobile: shell per known runtime permission.
+	want := len(getAllPermissions())
+	if scriptCalls["mobile: shell"] != want {
+		t.Errorf("expected %d mobile: shell pm grant calls; got %d", want, scriptCalls["mobile: shell"])
+	}
+}
+
+// TestClient_ClearApp_AndroidPrefersClearAppNative verifies the
+// 1.1.16 swap: Android ClearApp now uses native `mobile: clearApp`
+// (no adb_shell required) and only falls back to `mobile: shell pm
+// clear` when the native call fails.
+func TestClient_ClearApp_AndroidPrefersClearAppNative(t *testing.T) {
+	scriptCalls := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/session/sess/appium/device/terminate_app":
+			writeJSON(w, map[string]interface{}{"value": nil})
+		case "/session/sess/execute/sync":
+			var body struct {
+				Script string `json:"script"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			scriptCalls = append(scriptCalls, body.Script)
+			writeJSON(w, map[string]interface{}{"value": nil})
+		default:
+			writeJSON(w, map[string]interface{}{"value": nil})
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL)
+	client.sessionID = "sess"
+	client.platform = "android"
+
+	if err := client.ClearAppData("com.test.app"); err != nil {
+		t.Fatalf("ClearApp failed: %v", err)
+	}
+
+	// Expect mobile: clearApp, NOT mobile: shell.
+	if len(scriptCalls) != 1 || scriptCalls[0] != "mobile: clearApp" {
+		t.Errorf("expected only mobile: clearApp call; got %v", scriptCalls)
+	}
+}
+
+// TestClient_ClearApp_AndroidFallsBackToShellOnNativeFailure verifies
+// the fallback path: when the Appium server doesn't implement
+// `mobile: clearApp` (older versions), we fall back to the legacy
+// `mobile: shell pm clear` so existing setups don't regress.
+func TestClient_ClearApp_AndroidFallsBackToShellOnNativeFailure(t *testing.T) {
+	scriptCalls := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/session/sess/appium/device/terminate_app":
+			writeJSON(w, map[string]interface{}{"value": nil})
+		case "/session/sess/execute/sync":
+			var body struct {
+				Script string `json:"script"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			scriptCalls = append(scriptCalls, body.Script)
+			if body.Script == "mobile: clearApp" {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				writeJSON(w, map[string]interface{}{"value": map[string]interface{}{
+					"error":   "unknown method",
+					"message": "mobile: clearApp not supported",
+				}})
+				return
+			}
+			writeJSON(w, map[string]interface{}{"value": nil})
+		default:
+			writeJSON(w, map[string]interface{}{"value": nil})
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL)
+	client.sessionID = "sess"
+	client.platform = "android"
+
+	if err := client.ClearAppData("com.test.app"); err != nil {
+		t.Fatalf("ClearApp failed: %v", err)
+	}
+
+	if len(scriptCalls) != 2 {
+		t.Fatalf("expected 1 native attempt + 1 shell fallback (2 calls); got %d: %v", len(scriptCalls), scriptCalls)
+	}
+	if scriptCalls[0] != "mobile: clearApp" {
+		t.Errorf("first call should be mobile: clearApp; got %q", scriptCalls[0])
+	}
+	if scriptCalls[1] != "mobile: shell" {
+		t.Errorf("second call should be mobile: shell fallback; got %q", scriptCalls[1])
+	}
+}
+
 func TestClient_Disconnect(t *testing.T) {
 	deleteCalled := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

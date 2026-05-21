@@ -740,3 +740,69 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+// TestWrap covers the Wrap constructor (just field assignment).
+func TestWrap(t *testing.T) {
+	inner := &mockDriver{}
+	d := Wrap(inner, nil, nil, "com.app", "/tmp/sock")
+	if d == nil {
+		t.Fatal("Wrap returned nil")
+	}
+	fd, ok := d.(*FlutterDriver)
+	if !ok {
+		t.Fatal("expected *FlutterDriver")
+	}
+	if fd.inner != inner {
+		t.Error("inner field not preserved")
+	}
+	if fd.appID != "com.app" || fd.socketPath != "/tmp/sock" {
+		t.Errorf("Wrap fields: appID=%q socketPath=%q", fd.appID, fd.socketPath)
+	}
+}
+
+// TestWrapIOS covers the iOS variant constructor.
+func TestWrapIOS(t *testing.T) {
+	inner := &mockDriver{}
+	d := WrapIOS(inner, nil, "ABC-UDID", "com.app")
+	if d == nil {
+		t.Fatal("WrapIOS returned nil")
+	}
+	fd := d.(*FlutterDriver)
+	if !fd.isIOS {
+		t.Error("isIOS should be true after WrapIOS")
+	}
+	if fd.udid != "ABC-UDID" || fd.appID != "com.app" {
+		t.Errorf("WrapIOS fields: udid=%q appID=%q", fd.udid, fd.appID)
+	}
+}
+
+// TestFlutterDriver_PassThroughs exercises the small delegators.
+func TestFlutterDriver_PassThroughs(t *testing.T) {
+	inner := &mockDriver{}
+	d := Wrap(inner, nil, nil, "com.app", "/tmp/sock")
+
+	// Screenshot, Hierarchy delegate to inner (return nil, nil per the mock).
+	if _, err := d.Screenshot(); err != nil {
+		t.Errorf("Screenshot: %v", err)
+	}
+	if _, err := d.Hierarchy(); err != nil {
+		t.Errorf("Hierarchy: %v", err)
+	}
+	if d.GetState() == nil {
+		t.Error("GetState returned nil")
+	}
+	if d.GetPlatformInfo() == nil {
+		t.Error("GetPlatformInfo returned nil")
+	}
+
+	// SetFindTimeout / SetWaitForIdleTimeout / SetContext are no-error setters.
+	d.SetFindTimeout(1234)
+	fd := d.(*FlutterDriver)
+	if fd.findTimeoutMs != 1234 {
+		t.Errorf("findTimeoutMs not stored: %d", fd.findTimeoutMs)
+	}
+	if err := d.SetWaitForIdleTimeout(50); err != nil {
+		t.Errorf("SetWaitForIdleTimeout: %v", err)
+	}
+	d.SetContext(context.Background())
+}

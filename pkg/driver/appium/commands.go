@@ -892,6 +892,11 @@ func parsePercentageCoords(coord string) (float64, float64, error) {
 // grantPermissions grants permissions via mobile: shell pm grant.
 // If the permissions map is provided, only those are granted (keys are permission names).
 // If empty/nil, all common runtime permissions are granted.
+//
+// Note: `mobile: shell` requires Appium's `adb_shell` insecure feature to
+// be enabled. On hosts that disable it (e.g. Sauce Labs by default), pass
+// `appium:autoGrantPermissions: true` in caps so Appium grants declared
+// permissions during install, and avoid using this step explicitly.
 func (d *Driver) grantPermissions(appID string, permissions map[string]string) {
 	if len(permissions) > 0 {
 		for perm := range permissions {

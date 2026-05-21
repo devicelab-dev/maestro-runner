@@ -5843,3 +5843,28 @@ func TestDriverAlertActionField(t *testing.T) {
 		t.Errorf("Expected '', got '%s'", driver.alertAction)
 	}
 }
+
+// TestSelectorLog covers the small helper used by the actionability
+// rescue path to emit identifiable log lines per selector.
+func TestSelectorLog(t *testing.T) {
+	emptySel := flow.Selector{}
+	cases := []struct {
+		name string
+		sel  flow.Selector
+		want string
+	}{
+		{"id", flow.Selector{ID: "home-screen"}, `id="home-screen"`},
+		{"text", flow.Selector{Text: "Sign In"}, `text="Sign In"`},
+		// id wins over text when both set
+		{"id wins over text", flow.Selector{ID: "x", Text: "y"}, `id="x"`},
+		// Empty selector falls back to Describe()
+		{"empty falls back to Describe", emptySel, emptySel.Describe()},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := selectorLog(c.sel); got != c.want {
+				t.Errorf("selectorLog(%+v) = %q, want %q", c.sel, got, c.want)
+			}
+		})
+	}
+}

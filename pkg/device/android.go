@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -91,7 +90,7 @@ func (e *NoDevicesError) Error() string {
 // detectDeviceSerial finds the first connected device serial.
 // If no devices found, returns NoDevicesError with helpful suggestions.
 func detectDeviceSerial(adbPath string) (string, error) {
-	cmd := exec.Command(adbPath, "devices")
+	cmd := execCommand(adbPath, "devices")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("adb devices failed: %w\nHint: Is adb server running? Try: adb start-server", err)
@@ -162,7 +161,7 @@ func listAvailableAVDs() []string {
 	}
 
 	// Run emulator -list-avds
-	cmd := exec.Command(emulatorPath, "-list-avds")
+	cmd := execCommand(emulatorPath, "-list-avds")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil
@@ -200,7 +199,7 @@ func findEmulatorBinary() string {
 	}
 
 	// Try PATH
-	if path, err := exec.LookPath("emulator"); err == nil {
+	if path, err := execLookPath("emulator"); err == nil {
 		return path
 	}
 
@@ -362,7 +361,7 @@ func (d *AndroidDevice) adb(args ...string) (string, error) {
 	}
 	cmdArgs = append(cmdArgs, args...)
 
-	cmd := exec.Command(d.adbPath, cmdArgs...)
+	cmd := execCommand(d.adbPath, cmdArgs...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -402,7 +401,7 @@ func (d *AndroidDevice) isConnected() bool {
 // findADB locates the ADB binary.
 func findADB() (string, error) {
 	// Try PATH first
-	if path, err := exec.LookPath("adb"); err == nil {
+	if path, err := execLookPath("adb"); err == nil {
 		return path, nil
 	}
 

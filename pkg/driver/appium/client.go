@@ -158,13 +158,30 @@ func (c *Client) Connect(capabilities map[string]interface{}) error {
 
 		// Grant all permissions and launch app (autoLaunch was disabled above)
 		if androidAppPackage != "" {
-			for _, perm := range getAllPermissions() {
-				// Ignore errors - permission might not be declared by the app
-				if _, err := c.ExecuteMobile("shell", map[string]interface{}{
-					"command": "pm",
-					"args":    []string{"grant", androidAppPackage, perm},
-				}); err != nil {
-					logger.Debug("grant %s failed (expected if not declared): %v", perm, err)
+			// If the caller already passed `appium:autoGrantPermissions: true`,
+			// Appium grants the app's declared permissions natively during the
+			// install/launch phase — no work for us at session-start time.
+			// Skip the explicit loop. This is the only path that works on
+			// Appium hosts that disable the `adb_shell` insecure feature
+			// (e.g. Sauce Labs by default): the customer sets the cap and
+			// maestro-runner stops trying to grant via shell.
+			autoGrant := false
+			if v, ok := capabilities["appium:autoGrantPermissions"].(bool); ok && v {
+				autoGrant = true
+			} else if v, ok := capabilities["autoGrantPermissions"].(bool); ok && v {
+				autoGrant = true
+			}
+			if !autoGrant {
+				for _, perm := range getAllPermissions() {
+					// Ignore errors - permission might not be declared by the app,
+					// or the host may block `adb_shell` (in which case set
+					// `appium:autoGrantPermissions: true` in caps instead).
+					if _, err := c.ExecuteMobile("shell", map[string]interface{}{
+						"command": "pm",
+						"args":    []string{"grant", androidAppPackage, perm},
+					}); err != nil {
+						logger.Debug("grant %s failed (expected if not declared or shell blocked): %v", perm, err)
+					}
 				}
 			}
 			if androidAppActivity != "" {
@@ -570,7 +587,14 @@ func (c *Client) ClearAppData(appID string) error {
 		return err
 	}
 
-	// Android: use mobile: shell to run pm clear (same as native driver)
+	// Android: use mobile: clearApp (native, no adb_shell required).
+	// Falls back to mobile: shell pm clear on older Appium servers where
+	// the native command isn't implemented.
+	if _, err := c.ExecuteMobile("clearApp", map[string]interface{}{"appId": appID}); err == nil {
+		return nil
+	} else {
+		logger.Debug("mobile: clearApp unavailable (%v) — falling back to mobile: shell pm clear", err)
+	}
 	_, err := c.post(c.sessionPath()+"/execute/sync", map[string]interface{}{
 		"script": "mobile: shell",
 		"args": []interface{}{map[string]interface{}{
