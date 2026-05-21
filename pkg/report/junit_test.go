@@ -634,3 +634,31 @@ func TestBuildJUnitXMLNoEndTime(t *testing.T) {
 		t.Errorf("expected time=0.000 when no end time\nGot:\n%s", xml)
 	}
 }
+
+func TestBuildJUnitXMLCustomProperties(t *testing.T) {
+	now := time.Now()
+	index := &Index{
+		Version:   "1.0.0",
+		Status:    StatusPassed,
+		StartTime: now,
+		Device:    Device{ID: "test", Name: "Test", Platform: "android"},
+		Summary:   Summary{Total: 1, Passed: 1},
+		Flows: []FlowEntry{
+			{
+				Index: 0, ID: "flow-000", Name: "Test",
+				SourceFile: "test.yaml", DataFile: "flows/flow-000.json",
+				Status: StatusPassed, Properties: map[string]string{"testID": "Test-1234"},
+			},
+		},
+	}
+
+	flows := []FlowDetail{
+		{ID: "flow-000", Name: "Test", Commands: []Command{}},
+	}
+
+	xml := buildJUnitXML(index, flows)
+
+	if !strings.Contains(xml, `property name="testID" value="Test-1234"`) {
+		t.Errorf("expected custom property\nGot:\n%s", xml)
+	}
+}
