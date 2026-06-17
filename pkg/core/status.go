@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2024 DeviceLab
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 package core
 
 // StepStatus represents the execution status of a step

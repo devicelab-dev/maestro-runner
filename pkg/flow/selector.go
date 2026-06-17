@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2024 DeviceLab
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 // Package flow handles parsing and representation of Maestro YAML flow files.
 package flow
 

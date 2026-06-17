@@ -1,3 +1,7 @@
+% SPDX-FileCopyrightText: 2024 DeviceLab
+%
+% SPDX-License-Identifier: LicenseRef-maestro-runner
+
 #import "SyntheticTyping.h"
 #import <UIKit/UIKit.h>
 #import "PrivateHeaders/XCTest/XCSynthesizedEventRecord.h"

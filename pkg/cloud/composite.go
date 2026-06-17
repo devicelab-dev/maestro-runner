@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2024 DeviceLab
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 // Package cloud — composite provider.
 //
 // Composite fans every Provider hook out to several providers at once, so a

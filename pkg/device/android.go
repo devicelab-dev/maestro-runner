@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2024 DeviceLab
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 // Package device provides Android device management via ADB.
 package device
 

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2024 DeviceLab
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 // Package executor orchestrates flow execution, connecting drivers to reports.
 package executor
 

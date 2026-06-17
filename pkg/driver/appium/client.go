@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2024 DeviceLab
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 // Package appium implements core.Driver using Appium server via W3C WebDriver protocol.
 package appium
 

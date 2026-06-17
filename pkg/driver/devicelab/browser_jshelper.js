@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2024 DeviceLab
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 (function() {
   // Override alert/confirm/prompt — on page-level Chrome Android CDP connections,
   // a native dialog freezes ALL CDP commands including Page.handleJavaScriptDialog.

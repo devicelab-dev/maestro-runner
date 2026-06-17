@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2024 DeviceLab
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 // Package devicelab_ios provides the Go client for the devicelab-ios-runner
 // XCUITest-based iOS driver. The runner source lives at
 // /Users/omnarayan/work/support-tools/devicelab-ios-runner and is a verbatim

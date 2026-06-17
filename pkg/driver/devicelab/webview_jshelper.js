@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2024 DeviceLab
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 window.__maestro = {
   findByText: function(text) {
     var lower = text.toLowerCase();

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2024 DeviceLab
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 // Package maestro provides a WebSocket-based client for the DeviceLab on-device driver.
 // It implements the UIA2Client interface from pkg/driver/uiautomator2 using a
 // bidirectional WebSocket protocol instead of HTTP, enabling batched operations

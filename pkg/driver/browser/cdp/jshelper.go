@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2024 DeviceLab
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 // Package cdp provides a browser automation driver using Rod (go-rod/rod) + CDP.
 package cdp
 

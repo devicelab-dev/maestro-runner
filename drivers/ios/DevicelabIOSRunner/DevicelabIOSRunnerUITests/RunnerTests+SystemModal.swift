@@ -1,3 +1,8 @@
+// SPDX-FileCopyrightText: 2026 Callstack
+// SPDX-FileCopyrightText: 2024 DeviceLab
+//
+// SPDX-License-Identifier: LicenseRef-agent-device
+
 import XCTest
 
 extension RunnerTests {

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2024 DeviceLab
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 // Package cloud — Appium session exporter.
 //
 // SessionExporter is an always-on (opt-in) Provider that publishes the live

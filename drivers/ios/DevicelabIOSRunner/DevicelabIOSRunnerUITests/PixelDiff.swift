@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2024 DeviceLab
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 // Local file (not in upstream agent-device). Computes the fraction of
 // differing pixels between two UIImages by drawing each into a raw RGBA
 // byte buffer via CGContext and comparing those buffers directly. Used
