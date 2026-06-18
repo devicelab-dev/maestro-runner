@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Callstack
-// SPDX-FileCopyrightText: 2024 DeviceLab
+// SPDX-FileCopyrightText: 2024–2026 DeviceLab
 //
 // SPDX-License-Identifier: LicenseRef-agent-device
 
