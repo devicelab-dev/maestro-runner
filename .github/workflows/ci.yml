@@ -51,6 +51,9 @@ jobs:
         with:
           version: latest
 
+      - name: REUSE Compliance Check
+        uses: fsfe/reuse-action@v6
+
   build:
     name: Build
     runs-on: ubuntu-latest
