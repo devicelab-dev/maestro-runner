@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024–2026 DeviceLab and the Project Contributors
+// SPDX-FileCopyrightText: 2026 DeviceLab and the Project Contributors
 //
 // SPDX-License-Identifier: LicenseRef-maestro-runner
 
