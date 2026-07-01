@@ -191,10 +191,15 @@ type TapOnPointStep struct {
 }
 
 // SwipeStep performs a swipe gesture.
+//
+// `Selector` anchors the swipe on an element. It is populated from either the
+// `from:` YAML key (matching upstream Maestro syntax) or the historical
+// `selector:` key. Custom `UnmarshalYAML` handles the mapping — both keys
+// resolve to the same field, with `from:` taking precedence if both are set.
 type SwipeStep struct {
 	BaseStep              `yaml:",inline"`
 	Direction             string    `yaml:"direction"` // UP, DOWN, LEFT, RIGHT
-	Selector              *Selector `yaml:"selector"`
+	Selector              *Selector `yaml:"-"`
 	Start                 string    `yaml:"start"`    // "x%, y%"
 	End                   string    `yaml:"end"`      // "x%, y%"
 	StartX                int       `yaml:"startX"`   // Absolute X start
@@ -204,6 +209,34 @@ type SwipeStep struct {
 	Duration              int       `yaml:"duration"` // Duration in ms
 	Speed                 int       `yaml:"speed"`    // Speed 0-100
 	WaitToSettleTimeoutMs int       `yaml:"waitToSettleTimeoutMs"`
+}
+
+// UnmarshalYAML decodes SwipeStep and maps both `from:` (upstream Maestro
+// spelling) and `selector:` (historical) to the `Selector` field. Without
+// this, `from: {id: X}` was silently discarded and direction-swipes fell
+// through to a screen-percentage swipe that ignores the anchor element.
+// See devicelab-dev/maestro-runner#112.
+func (s *SwipeStep) UnmarshalYAML(node *yaml.Node) error {
+	type swipeAlias SwipeStep
+	var a swipeAlias
+	if err := node.Decode(&a); err != nil {
+		return err
+	}
+	*s = SwipeStep(a)
+
+	var anchor struct {
+		From     *Selector `yaml:"from"`
+		Selector *Selector `yaml:"selector"`
+	}
+	if err := node.Decode(&anchor); err != nil {
+		return err
+	}
+	if anchor.From != nil {
+		s.Selector = anchor.From
+	} else if anchor.Selector != nil {
+		s.Selector = anchor.Selector
+	}
+	return nil
 }
 
 // ScrollStep scrolls the screen.
