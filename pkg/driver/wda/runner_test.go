@@ -168,10 +168,15 @@ func TestRunner_Port(t *testing.T) {
 }
 
 func TestRunner_Destination(t *testing.T) {
+	// Fake UDID — isSimulator() runs `simctl get_app_container` which won't
+	// match → we get the real-device branch ("platform=iOS,id=<udid>").
+	// Pinning platform explicitly is the workaround for the Xcode 26 / iOS 26
+	// destination-ambiguity bug that stalls test-without-building (the
+	// resolver returns both arm64 and x86_64 entries for a sim UDID, picks
+	// the wrong one, and testmanagerd never spawns the test bundle).
 	runner := &Runner{deviceUDID: "my-device-udid"}
-
 	dest := runner.destination()
-	expected := "id=my-device-udid"
+	expected := "platform=iOS,id=my-device-udid"
 
 	if dest != expected {
 		t.Errorf("expected destination %q, got %q", expected, dest)

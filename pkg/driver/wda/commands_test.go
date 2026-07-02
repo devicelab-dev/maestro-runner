@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -1692,14 +1693,14 @@ func TestSetWaitForIdleTimeoutEnable(t *testing.T) {
 		if r.Method == "POST" && strings.Contains(r.URL.Path, "/appium/settings") {
 			body, _ := io.ReadAll(r.Body)
 			var req map[string]interface{}
-			json.Unmarshal(body, &req)
+			_ = json.Unmarshal(body, &req)
 			if s, ok := req["settings"].(map[string]interface{}); ok {
 				settingsReceived = s
 			}
-			json.NewEncoder(w).Encode(map[string]interface{}{"value": nil, "sessionId": "s1"})
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"value": nil, "sessionId": "s1"})
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]interface{}{"value": nil, "sessionId": "s1"})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"value": nil, "sessionId": "s1"})
 	}))
 	defer server.Close()
 
@@ -1728,14 +1729,14 @@ func TestSetWaitForIdleTimeoutDisable(t *testing.T) {
 		if r.Method == "POST" && strings.Contains(r.URL.Path, "/appium/settings") {
 			body, _ := io.ReadAll(r.Body)
 			var req map[string]interface{}
-			json.Unmarshal(body, &req)
+			_ = json.Unmarshal(body, &req)
 			if s, ok := req["settings"].(map[string]interface{}); ok {
 				settingsReceived = s
 			}
-			json.NewEncoder(w).Encode(map[string]interface{}{"value": nil, "sessionId": "s1"})
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"value": nil, "sessionId": "s1"})
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]interface{}{"value": nil, "sessionId": "s1"})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"value": nil, "sessionId": "s1"})
 	}))
 	defer server.Close()
 
@@ -1761,7 +1762,7 @@ func TestSetWaitForIdleTimeoutDefault(t *testing.T) {
 		if r.Method == "POST" && strings.Contains(r.URL.Path, "/appium/settings") {
 			called = true
 		}
-		json.NewEncoder(w).Encode(map[string]interface{}{"value": nil, "sessionId": "s1"})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"value": nil, "sessionId": "s1"})
 	}))
 	defer server.Close()
 
@@ -4796,5 +4797,130 @@ func TestLaunchAppReusesExistingSession(t *testing.T) {
 	}
 	if !launchCalled {
 		t.Error("Expected app launch to be called")
+	}
+}
+
+// =============================================================================
+// setLocation tests
+// =============================================================================
+
+// withFakeExec swaps the package execCommand seam for the duration of a test.
+// Captured invocations are appended to *gotArgs so tests can assert on them.
+func withFakeExec(t *testing.T, gotArgs *[][]string, fail bool) {
+	t.Helper()
+	prev := execCommand
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		*gotArgs = append(*gotArgs, append([]string{name}, args...))
+		if fail {
+			return exec.Command("false")
+		}
+		return exec.Command("true")
+	}
+	t.Cleanup(func() { execCommand = prev })
+}
+
+func TestSetLocationMissingCoordinates(t *testing.T) {
+	driver := &Driver{info: &core.PlatformInfo{Platform: "ios", IsSimulator: true}, udid: "SIM-UDID"}
+
+	cases := []struct{ lat, lon string }{
+		{"", "1"},
+		{"1", ""},
+		{"", ""},
+	}
+	for _, c := range cases {
+		result := driver.setLocation(&flow.SetLocationStep{Latitude: c.lat, Longitude: c.lon})
+		if result.Success {
+			t.Errorf("expected failure for lat=%q lon=%q", c.lat, c.lon)
+		}
+	}
+}
+
+func TestSetLocationInvalidLatitude(t *testing.T) {
+	driver := &Driver{info: &core.PlatformInfo{Platform: "ios", IsSimulator: true}, udid: "SIM-UDID"}
+	result := driver.setLocation(&flow.SetLocationStep{Latitude: "not-a-number", Longitude: "1.0"})
+	if result.Success {
+		t.Fatal("expected failure for invalid latitude")
+	}
+	if !strings.Contains(result.Message, "Invalid latitude") {
+		t.Errorf("expected 'Invalid latitude' in message, got: %s", result.Message)
+	}
+}
+
+func TestSetLocationInvalidLongitude(t *testing.T) {
+	driver := &Driver{info: &core.PlatformInfo{Platform: "ios", IsSimulator: true}, udid: "SIM-UDID"}
+	result := driver.setLocation(&flow.SetLocationStep{Latitude: "1.0", Longitude: "not-a-number"})
+	if result.Success {
+		t.Fatal("expected failure for invalid longitude")
+	}
+	if !strings.Contains(result.Message, "Invalid longitude") {
+		t.Errorf("expected 'Invalid longitude' in message, got: %s", result.Message)
+	}
+}
+
+func TestSetLocationRealDeviceUnsupported(t *testing.T) {
+	driver := &Driver{info: &core.PlatformInfo{Platform: "ios", IsSimulator: false}, udid: "REAL-UDID"}
+	result := driver.setLocation(&flow.SetLocationStep{Latitude: "37.7749", Longitude: "-122.4194"})
+	if result.Success {
+		t.Fatal("expected setLocation to fail on real device")
+	}
+	if !strings.Contains(result.Message, "real device") {
+		t.Errorf("expected message to mention real device, got: %s", result.Message)
+	}
+}
+
+func TestSetLocationNilInfoUnsupported(t *testing.T) {
+	driver := &Driver{info: nil, udid: "any"}
+	result := driver.setLocation(&flow.SetLocationStep{Latitude: "1.0", Longitude: "2.0"})
+	if result.Success {
+		t.Fatal("expected failure when PlatformInfo is nil")
+	}
+}
+
+func TestSetLocationSimulatorMissingUDID(t *testing.T) {
+	driver := &Driver{info: &core.PlatformInfo{Platform: "ios", IsSimulator: true}}
+	result := driver.setLocation(&flow.SetLocationStep{Latitude: "1.0", Longitude: "2.0"})
+	if result.Success {
+		t.Fatal("expected failure when UDID is empty")
+	}
+	if !strings.Contains(result.Message, "UDID") {
+		t.Errorf("expected message to mention UDID, got: %s", result.Message)
+	}
+}
+
+func TestSetLocationSimulatorSuccess(t *testing.T) {
+	var calls [][]string
+	withFakeExec(t, &calls, false)
+
+	driver := &Driver{info: &core.PlatformInfo{Platform: "ios", IsSimulator: true}, udid: "SIM-UDID"}
+	result := driver.setLocation(&flow.SetLocationStep{Latitude: "37.7749", Longitude: "-122.4194"})
+	if !result.Success {
+		t.Fatalf("expected success, got: %s", result.Message)
+	}
+
+	if len(calls) != 1 {
+		t.Fatalf("expected exactly one exec call, got %d", len(calls))
+	}
+	want := []string{"xcrun", "simctl", "location", "SIM-UDID", "set", "37.774900,-122.419400"}
+	if len(calls[0]) != len(want) {
+		t.Fatalf("expected %d args, got %d: %v", len(want), len(calls[0]), calls[0])
+	}
+	for i, w := range want {
+		if calls[0][i] != w {
+			t.Errorf("arg[%d]: expected %q, got %q", i, w, calls[0][i])
+		}
+	}
+}
+
+func TestSetLocationSimulatorSimctlError(t *testing.T) {
+	var calls [][]string
+	withFakeExec(t, &calls, true)
+
+	driver := &Driver{info: &core.PlatformInfo{Platform: "ios", IsSimulator: true}, udid: "SIM-UDID"}
+	result := driver.setLocation(&flow.SetLocationStep{Latitude: "1.0", Longitude: "2.0"})
+	if result.Success {
+		t.Fatal("expected failure when simctl exits non-zero")
+	}
+	if !strings.Contains(result.Message, "Failed to set simulator location") {
+		t.Errorf("expected failure message, got: %s", result.Message)
 	}
 }

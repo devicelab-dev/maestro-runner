@@ -3424,24 +3424,31 @@ func TestSwipeWithSelectorDirection(t *testing.T) {
 				"value": map[string]int{"x": 0, "y": 100, "width": 500, "height": 800},
 			})
 		},
-		"POST /appium/gestures/swipe": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w, map[string]interface{}{"value": nil})
-		},
 	})
 	defer server.Close()
 
 	client := newMockHTTPClient(server.URL)
-	driver := New(client.Client, nil, nil)
+	// Selector-anchored direction swipes now route through `adb input swipe`
+	// (see swipe() in commands.go), so the driver needs a shell executor.
+	shell := &MockShellExecutor{}
+	driver := New(client.Client, nil, shell)
 
 	sel := flow.Selector{ID: "container"}
-	step := &flow.SwipeStep{Direction: "left", Selector: &sel}
+	step := &flow.SwipeStep{Direction: "left", Selector: &sel, Duration: 500}
 	result := driver.swipe(step)
 
 	if !result.Success {
 		t.Errorf("expected success, got error: %v", result.Error)
 	}
-	if !strings.Contains(result.Message, "left") {
-		t.Errorf("expected 'left' in message, got: %s", result.Message)
+	// Element bounds: x=0, y=100, w=500, h=800. `left` starts inside the
+	// element (90% X) and ends 10% past its left edge — for x=0 the end
+	// clamps to 0. Y is 50% within the bounds → (450, 500) → (0, 500).
+	if len(shell.commands) != 1 {
+		t.Fatalf("expected exactly 1 shell command, got %d: %v", len(shell.commands), shell.commands)
+	}
+	want := "input swipe 450 500 0 500 500"
+	if !strings.Contains(shell.commands[0], want) {
+		t.Errorf("expected shell command containing %q, got: %s", want, shell.commands[0])
 	}
 }
 
@@ -4180,6 +4187,10 @@ func TestIsElementOnScreen(t *testing.T) {
 		{"entirely above screen", core.Bounds{X: 100, Y: -300, Width: 200, Height: 200}, false},
 		{"zero width", core.Bounds{X: 100, Y: 100, Width: 0, Height: 200}, false},
 		{"zero height", core.Bounds{X: 100, Y: 100, Width: 200, Height: 0}, false},
+		{"negative width", core.Bounds{X: 100, Y: 100, Width: -50, Height: 200}, false},
+		// Malformed clipped rect (top>bottom → negative height): degenerate, must
+		// count as off-screen so scrollUntilVisible keeps scrolling.
+		{"negative height (clipped)", core.Bounds{X: 270, Y: 2300, Width: 810, Height: -26}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -92,6 +92,10 @@ func (fr *FlowRunner) Run() FlowResult {
 		fr.driver.SetFindTimeout(fr.flow.Config.CommandTimeout)
 	}
 
+	// Apply the global condition-check timeout for when:/while: checks. 0 keeps
+	// the engine's fast default; --condition-timeout / config overrides it (#110).
+	fr.script.SetConditionTimeout(fr.config.ConditionTimeout)
+
 	// Apply waitForIdleTimeout with priority:
 	// Flow config > CLI flag > Workspace config > Cap file > Default (5000ms)
 	// fr.config.WaitForIdleTimeout already has CLI > Workspace > Cap > Default applied
@@ -120,8 +124,19 @@ func (fr *FlowRunner) Run() FlowResult {
 	// Ensure a WDA session exists before execution starts.
 	// If launchApp runs later, it reuses this session and updates settings.
 	// Use Unwrap to reach through wrapper layers (e.g. FlutterDriver).
-	if ensurer, ok := core.Unwrap(fr.driver).(core.SessionEnsurer); ok {
-		appID := fr.flow.Config.EffectiveAppID()
+	innerDriver := core.Unwrap(fr.driver)
+	// Let the driver inspect the flow before session creation. The WDA
+	// driver uses this to register XCTest's alert monitor only when the
+	// flow contains a launchApp step (matches maestro's behavior of
+	// auto-handling permission alerts only when permissions are configured).
+	if preparer, ok := innerDriver.(core.FlowAware); ok {
+		preparer.PrepareForFlow(fr.collectStepsForPrepare())
+	}
+	if ensurer, ok := innerDriver.(core.SessionEnsurer); ok {
+		// Expand ${VAR} placeholders in top-level appId so CLI -e variables
+		// substitute correctly (the YAML's appId field doesn't go through
+		// ExpandStep — that runs on step selectors, not flow config).
+		appID := fr.script.ExpandVariables(fr.flow.Config.EffectiveAppID())
 		if appID != "" {
 			if err := ensurer.EnsureSession(appID); err != nil {
 				logger.Warn("failed to ensure session: %v", err)
@@ -350,26 +365,33 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 		fr.subCommands = nil
 		result = fr.executeRunFlow(s)
 
-	// App lifecycle steps - inject flow's appId/url if not specified
+	// App lifecycle steps - inject flow's appId/url if not specified.
+	// ExpandStep above runs BEFORE the config copy, so any ${VAR} in the
+	// flow's top-level `appId:` would otherwise leak through unexpanded.
+	// Re-expand after the copy so CLI -e variables substitute correctly.
 	case *flow.LaunchAppStep:
 		if s.AppID == "" {
 			s.AppID = fr.flow.Config.EffectiveAppID()
 		}
+		s.AppID = fr.script.ExpandVariables(s.AppID)
 		result = fr.driver.Execute(step)
 	case *flow.StopAppStep:
 		if s.AppID == "" {
 			s.AppID = fr.flow.Config.EffectiveAppID()
 		}
+		s.AppID = fr.script.ExpandVariables(s.AppID)
 		result = fr.driver.Execute(step)
 	case *flow.KillAppStep:
 		if s.AppID == "" {
 			s.AppID = fr.flow.Config.EffectiveAppID()
 		}
+		s.AppID = fr.script.ExpandVariables(s.AppID)
 		result = fr.driver.Execute(step)
 	case *flow.ClearStateStep:
 		if s.AppID == "" {
 			s.AppID = fr.flow.Config.EffectiveAppID()
 		}
+		s.AppID = fr.script.ExpandVariables(s.AppID)
 		result = fr.driver.Execute(step)
 
 	// EvalBrowserScript - execute JS in browser, store output variable
@@ -552,6 +574,60 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 	return status, errorMsg, stepDuration
 }
 
+// maxPrepareScanDepth bounds runFlow expansion during pre-session scanning so a
+// cyclic or deeply nested subflow graph can't loop forever.
+const maxPrepareScanDepth = 10
+
+// collectStepsForPrepare returns the steps a FlowAware driver should inspect
+// before session creation, in execution order: the onFlowStart hook steps
+// followed by the body, with runFlow subflows (inline and file-based) expanded
+// inline. This lets the WDA driver find the launchApp that actually launches the
+// app — and its permissions — even when it lives in onFlowStart or a runFlow
+// subflow, instead of only the main body (#108). On a physical iOS device that
+// gap left defaultAlertAction empty, so system permission dialogs weren't
+// auto-accepted and could wedge the device; it also diverged from the simulator.
+//
+// onFlowStart comes first so a driver that takes the first launchApp selects the
+// one reached first at runtime. runFlow wrappers are dropped and their children
+// inlined; file-based subflows are parsed best-effort (parse errors are ignored
+// here — they surface during execution). A visited set + depth cap guard cycles.
+func (fr *FlowRunner) collectStepsForPrepare() []flow.Step {
+	var out []flow.Step
+	seen := make(map[string]bool)
+
+	var expand func(steps []flow.Step, depth int)
+	expand = func(steps []flow.Step, depth int) {
+		if depth > maxPrepareScanDepth {
+			return
+		}
+		for _, s := range steps {
+			rf, ok := s.(*flow.RunFlowStep)
+			if !ok {
+				out = append(out, s)
+				continue
+			}
+			// Inline subflow steps are already parsed.
+			if len(rf.Steps) > 0 {
+				expand(rf.Steps, depth+1)
+			}
+			// File-based subflow: parse it to reach its launchApp.
+			if rf.File != "" {
+				path := fr.script.ResolvePath(rf.File)
+				if !seen[path] {
+					seen[path] = true
+					if sub, err := flow.ParseFile(path); err == nil {
+						expand(sub.Steps, depth+1)
+					}
+				}
+			}
+		}
+	}
+
+	expand(fr.flow.Config.OnFlowStart, 0)
+	expand(fr.flow.Steps, 0)
+	return out
+}
+
 // executeRepeat handles repeat step execution.
 func (fr *FlowRunner) executeRepeat(step *flow.RepeatStep) *core.CommandResult {
 	hasWhile := step.While.Visible != nil || step.While.NotVisible != nil || step.While.Script != ""
@@ -560,7 +636,14 @@ func (fr *FlowRunner) executeRepeat(step *flow.RepeatStep) *core.CommandResult {
 	if hasWhile && step.Times == "" {
 		defaultTimes = 1000 // Max iterations for while loops without explicit times
 	}
-	times := fr.script.ParseInt(step.Times, defaultTimes)
+	times, err := fr.script.ParseIntStrict(step.Times, defaultTimes)
+	if err != nil {
+		return &core.CommandResult{
+			Success: false,
+			Error:   err,
+			Message: fmt.Sprintf("repeat: invalid 'times' value: %v", err),
+		}
+	}
 	if times <= 0 {
 		times = 1
 	}
@@ -575,9 +658,14 @@ func (fr *FlowRunner) executeRepeat(step *flow.RepeatStep) *core.CommandResult {
 			}
 		}
 
-		// Check while condition
+		// Check while condition. Expand a fresh copy of the condition each
+		// iteration: step.While keeps the pristine ${...} template so a loop
+		// body that mutates the interpolated variable is picked up next pass
+		// (in-place expansion would replace the template after iteration 1).
 		if hasWhile {
-			if !fr.script.CheckCondition(fr.ctx, step.While, fr.driver) {
+			whileCond := step.While
+			fr.script.ExpandCondition(&whileCond)
+			if !fr.script.CheckCondition(fr.ctx, whileCond, fr.driver) {
 				break // Condition no longer met
 			}
 		}
@@ -605,7 +693,14 @@ func (fr *FlowRunner) executeRepeat(step *flow.RepeatStep) *core.CommandResult {
 
 // executeRetry handles retry step execution.
 func (fr *FlowRunner) executeRetry(step *flow.RetryStep) *core.CommandResult {
-	maxRetries := fr.script.ParseInt(step.MaxRetries, 3)
+	maxRetries, err := fr.script.ParseIntStrict(step.MaxRetries, 3)
+	if err != nil {
+		return &core.CommandResult{
+			Success: false,
+			Error:   err,
+			Message: fmt.Sprintf("retry: invalid 'maxRetries' value: %v", err),
+		}
+	}
 
 	// Apply env variables with restore
 	defer fr.script.withEnvVars(step.Env)()

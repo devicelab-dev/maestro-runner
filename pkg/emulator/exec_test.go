@@ -21,7 +21,7 @@ func fakeExecError() func(name string, args ...string) *exec.Cmd {
 // fakeExecPerCmd dispatches stdout by command-args prefix match.
 // First match wins. Use the FIRST argument (the binary name like "adb") plus
 // the first sub-arg if you need to disambiguate. Unmatched calls run "false".
-func fakeExecPerCmd(cases map[string]string) func(name string, args ...string) *exec.Cmd {
+func fakeExecPerCmd(cases map[string]string) func(name string, args ...string) *exec.Cmd { //nolint:unused
 	return func(name string, args ...string) *exec.Cmd {
 		key := name
 		if len(args) > 0 {

@@ -7,6 +7,113 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.19] - 2026-07-01
+
+A reporter-driven follow-up focused on executor/`runScript` parity with Maestro and iOS simulator ergonomics. Headlines: `runScript`'s JavaScript environment now matches Maestro (env vars are scoped per script and undeclared variables read as `undefined` instead of throwing), `when:`/`while:` condition checks resolve **fast by default** instead of blocking on the 7s optional-find timeout, and `--auto-start-emulator` finally works for iOS simulators. Plus an iOS runner build-cache correctness fix.
+
+### Fixed
+- **`runScript` env leaked across scripts; optional vars threw `ReferenceError`** — `runScript` env vars were applied as sticky globals that were never cleared, so a value set in one script bled into the next; and referencing an env var that wasn't provided this run threw `ReferenceError: X is not defined`. Env is now scoped to the single script run and restored afterward, and undeclared identifiers evaluate to `undefined` (matching Maestro's GraalJS behavior), so `someVar || default` and `typeof someVar` work for optional env vars. Real globals and the script's own declarations are untouched. Reported by [@rafaelnobrekz](https://github.com/rafaelnobrekz) ([#109](https://github.com/devicelab-dev/maestro-runner/issues/109)).
+- **`--auto-start-emulator` errored for iOS simulators** — the iOS WDA pre-check decided simulator-vs-real-device before any simulator was started and didn't account for `--auto-start-emulator`, so `--platform ios --parallel 2 --auto-start-emulator` exited demanding `--team-id` before the (working) auto-start path could boot the simulators. `--auto-start-emulator` and `--start-simulator` now count as simulator targets on iOS (a real device can't be auto-created), so neither requires `--team-id` or `--app-file`. Reported by [@rafaelnobrekz](https://github.com/rafaelnobrekz) ([#111](https://github.com/devicelab-dev/maestro-runner/issues/111)).
+- **DeviceLab iOS runner build cache could serve a stale build** — the cache keyed on the simulator iOS version alone, so a release shipping updated runner sources into the same `sim-ios<ver>` slot would reuse the previous build. The cache key now also includes a content hash of the vendored runner source, so it invalidates exactly when the runner changes and is reused otherwise.
+
+### Changed
+- **`when:`/`while:` condition checks are fast by default** — a `runFlow` `when:` (or `repeat` `while:`) condition with no explicit timeout fell through to the driver's 7s optional-find timeout, so every unmet condition blocked ~7s (a flow with several optional `when:` branches paid 7s each). These checks now use a short default timeout (1000ms); a present element still resolves immediately, only an unmet condition is bounded. Tunable globally with `--condition-timeout` (env `MAESTRO_CONDITION_TIMEOUT`) and still overridable per condition with `timeout:`. Reported by [@rafaelnobrekz](https://github.com/rafaelnobrekz) ([#110](https://github.com/devicelab-dev/maestro-runner/issues/110)).
+- **Faster cold DeviceLab iOS runner builds** — the runner now builds against the concrete booted simulator (`-destination platform=iOS Simulator,id=<udid>`) instead of a generic destination, so `xcodebuild` skips re-planning an abstract device.
+
+### Contributors
+Thanks to everyone who reported issues that shaped this release:
+- [@rafaelnobrekz](https://github.com/rafaelnobrekz) — `runScript` env scope + undeclared vars ([#109](https://github.com/devicelab-dev/maestro-runner/issues/109)), fast `when:`/`while:` condition checks ([#110](https://github.com/devicelab-dev/maestro-runner/issues/110)), iOS `--auto-start-emulator` ([#111](https://github.com/devicelab-dev/maestro-runner/issues/111))
+
+## [1.1.18] - 2026-06-24
+
+A reporter-driven correctness release. The headline theme is **tap and scroll geometry on Android** — taps and `scrollUntilVisible` no longer treat on-screen elements near the bottom edge (or with a momentarily inverted first-frame rect) as off-screen, so bottom-anchored buttons, tall-dialog actions, and below-the-fold list items resolve reliably. Alongside that: the **"Update available" banner now prints a working install URL**, iOS real-device permission dialogs arm correctly when `launchApp` lives in `onFlowStart`/`runFlow`, variable interpolation works in `repeat` `while:` conditions and `runScript` env, WDA failures surface the closest on-screen texts, and JUnit reports keep flow subdirectories in the `file` property.
+
+### Fixed
+- **Update banner printed a 404 install URL** — the "Update available" notice told users to run `curl ... https://open.devicelab.dev/maestro-runner/install`, but the path segments were swapped and that URL 404s. It now points at the working `https://open.devicelab.dev/install/maestro-runner`. Reported by [@George-Anton-Tarazi](https://github.com/George-Anton-Tarazi) ([#102](https://github.com/devicelab-dev/maestro-runner/issues/102)).
+- **Android: taps rejected near the bottom edge of the display** — `boundsTappable` compared full-display element bounds against the on-device-reported *usable* height (e.g. `1080x2204` on a `2340`-tall screen), so `AlertDialog` buttons in tall dialogs and bottom-anchored FABs became untappable on the DeviceLab driver even though UIAutomator2 tapped them fine. Taps are now validated against the *physical* display size (`wm size`, cached), matching the coordinate space the accessibility hierarchy produces. Reported and fixed by [@MarioRial22](https://github.com/MarioRial22) ([#100](https://github.com/devicelab-dev/maestro-runner/issues/100), [#101](https://github.com/devicelab-dev/maestro-runner/issues/101)).
+- **Android: `scrollUntilVisible` looped on elements already on screen** — `isElementOnScreen` used the usable height while element bounds are in full-display coords, so an item in the bottom system-bar band (e.g. the last nav-drawer item) was treated as off-screen and the scroll loop ran to its cap on a visible element. It now validates against the physical display, same as the tap guard.
+- **Android: `scrollUntilVisible` short-circuited on a malformed rect** — `isElementOnScreen` rejected only zero-area bounds, not negative ones, so a clipped below-the-fold child reported with `top > bottom` (a negative-height rect) was accepted as "on screen" and the scroll never happened. Both the DeviceLab and UIAutomator2 drivers now treat non-positive width/height as off-screen, mirroring the tap-side guard.
+- **Android: keyboard not dismissed when Appium `hide_keyboard` no-ops** — Appium's `/appium/device/hide_keyboard` returns success without closing the keyboard on some devices (notably several Samsung models), so the next coordinate tap hit the keyboard overlay. `hideKeyboard` now verifies via `dumpsys` and, only while the keyboard is confirmed still up, falls back to `KEYCODE_BACK` (gated so it can't trigger a stray back-navigation). Reported by [@satishs22](https://github.com/satishs22) ([#42](https://github.com/devicelab-dev/maestro-runner/issues/42)).
+- **iOS real device: permission dialogs not armed from `onFlowStart`/`runFlow` `launchApp`** — `PrepareForFlow` scanned only the main flow body, so a `launchApp` with permissions declared in `onFlowStart` or a `runFlow` subflow never armed `defaultAlertAction` on a real device; system permission dialogs weren't auto-accepted and could wedge the device (diverging from the simulator). It now scans a flattened, execution-ordered view (`onFlowStart` + body, with `runFlow` subflows expanded and cycle-guarded), and warns when a real-device launch declares unsupported mixed permissions. Reported by [@seanadkinson](https://github.com/seanadkinson) ([#108](https://github.com/devicelab-dev/maestro-runner/issues/108)).
+- **Variable interpolation in `repeat` `while:` conditions and `runScript` env** — `${output.*}`/`${VAR}` in a `repeat` `while:` selector are now expanded each iteration, and `runScript` env values are expanded before the script runs (matching `defineVariables`/`runFlow` and vanilla Maestro). `repeat` `times` and retry `maxRetries` now reject non-numeric values instead of silently defaulting to zero. Reported by [@pk1m](https://github.com/pk1m) ([#97](https://github.com/devicelab-dev/maestro-runner/issues/97)) and [@rafaelnobrekz](https://github.com/rafaelnobrekz) ([#107](https://github.com/devicelab-dev/maestro-runner/issues/107)).
+- **WDA: surface closest on-screen texts on a missing text selector** — when a text selector isn't found, the page-source path now appends the closest on-screen texts (Dice-bigram ranked, quoted so PUA/invisible glyphs are visible) instead of masking the page-source error behind the WDA predicate error. Text matching also NFC-normalizes both sides so composed/decomposed accents match. Reported by [@HugoGresse](https://github.com/HugoGresse) ([#89](https://github.com/devicelab-dev/maestro-runner/issues/89)).
+- **JUnit report flattened flow subdirectories** — the `file` property used `filepath.Base(SourceFile)`, collapsing e.g. `authentication/flow.yaml` to `flow.yaml` and breaking CI tools that locate the source by path. It is now reported relative to the working directory, preserving subdirectories. Reported by [@ceopaludetto](https://github.com/ceopaludetto) ([#96](https://github.com/devicelab-dev/maestro-runner/issues/96)).
+
+### Changed
+- **CI hardening** — migrated the deprecated `nhooyr.io/websocket` to `github.com/coder/websocket` (drop-in), cleared `golangci-lint` findings (`errcheck`, `gosimple`, `staticcheck`), and stabilized the headless Chromium browser tests on GitHub runners (disable the setuid sandbox under CI). No user-facing behavior change.
+
+### Contributors
+Thanks to everyone who shaped this release.
+
+**Code contributions:**
+- [@MarioRial22](https://github.com/MarioRial22) — Android tap validation against the physical display ([#101](https://github.com/devicelab-dev/maestro-runner/pull/101), reported in [#100](https://github.com/devicelab-dev/maestro-runner/issues/100)), `scrollUntilVisible` malformed-rect rejection ([#103](https://github.com/devicelab-dev/maestro-runner/pull/103)), and CI lint + browser-test stabilization ([#104](https://github.com/devicelab-dev/maestro-runner/pull/104))
+
+**Reported by:**
+- [@George-Anton-Tarazi](https://github.com/George-Anton-Tarazi) — broken update banner install URL ([#102](https://github.com/devicelab-dev/maestro-runner/issues/102))
+- [@seanadkinson](https://github.com/seanadkinson) — iOS real-device permission dialogs from `onFlowStart`/`runFlow` ([#108](https://github.com/devicelab-dev/maestro-runner/issues/108))
+- [@satishs22](https://github.com/satishs22) — Android keyboard dismissal ([#42](https://github.com/devicelab-dev/maestro-runner/issues/42))
+- [@HugoGresse](https://github.com/HugoGresse) — WDA closest on-screen texts ([#89](https://github.com/devicelab-dev/maestro-runner/issues/89))
+- [@pk1m](https://github.com/pk1m) — `repeat` `while:` interpolation ([#97](https://github.com/devicelab-dev/maestro-runner/issues/97))
+- [@rafaelnobrekz](https://github.com/rafaelnobrekz) — `runScript` env interpolation ([#107](https://github.com/devicelab-dev/maestro-runner/issues/107))
+- [@ceopaludetto](https://github.com/ceopaludetto) — JUnit subdirectory paths ([#96](https://github.com/devicelab-dev/maestro-runner/issues/96))
+
+## [1.1.17] - 2026-06-12
+
+A reporter-driven reliability release centred on Android tap/find correctness, plus a new Appium session-export hook. Headlines: elements living in a **separate window** — `AlertDialog`s, runtime-permission prompts, drawers, and Material dropdown/spinner popups — are now found instead of reported missing; taps can no longer fire **off-screen** from a malformed first-frame rect; the Android lazy tap-retry is **disabled by default** (it could re-tap across a navigation boundary onto the next screen); and live Appium sessions can be published to a well-known file for external tools.
+
+### Added
+- **`--appium-session-file <path>`** (env `MAESTRO_APPIUM_SESSION_FILE`) — publishes the live Appium session(s) (`sessionId` + `appiumUrl` per device) to a single JSON file so external tools can attach without polling report artifacts. Off by default. One entry per device (parallel runs share one file, no clobbering), new-session-per-flow updates in place, and the file is rewritten atomically (temp + rename) so readers never see a partial file. Requested by [@ssharma007-dev](https://github.com/ssharma007-dev) ([#91](https://github.com/devicelab-dev/maestro-runner/issues/91)).
+  ```bash
+  maestro-runner --driver appium --appium-session-file /tmp/sessions.json test flows/
+  ```
+
+### Fixed
+- **DeviceLab Android: find elements inside dialogs / permission prompts / drawers** — the on-device agent searched only the focused window, so a control rendered in a separate accessibility window (e.g. an `AlertDialog`'s **OK**/**Discard** button, a runtime-permission prompt, or a drawer) was reported "not found" even though it was on screen. The agent now searches every window (topmost first) when the focused window misses. Bundled agent APK refreshed. Reported by [@simon-kuzin](https://github.com/simon-kuzin) ([#90](https://github.com/devicelab-dev/maestro-runner/issues/90)).
+- **uiautomator2: dropdown / spinner popup items not in the hierarchy** — the default driver only exposed the focused window, so items in a Material `ExposedDropdownMenu`, a `Spinner`, or any `ListPopupWindow` (and `AlertDialog`s / permission prompts) were invisible and `tapOn` failed with "no such element" even with the popup on screen. maestro-runner now enables the server's `enableMultiWindows` setting, matching stock Maestro's all-windows traversal. Reported by [@ConorGarry](https://github.com/ConorGarry) ([#93](https://github.com/devicelab-dev/maestro-runner/issues/93)).
+- **DeviceLab Android: off-screen tap from a malformed first-frame rect** — `FindAndClick` took its tap point from whatever rect the find returned; a just-opened bottom sheet's first laid-out frame could yield a clipped rect (top > bottom, negative height) or one translated below the viewport, so the tap fired off-screen and was lost, desyncing the flow. The tap path now rejects a non-positive-width/height or off-screen-centre rect and keeps polling for a settled frame (mirroring the assert-side viewport check). Reported by [@laiskajoonas](https://github.com/laiskajoonas) ([#94](https://github.com/devicelab-dev/maestro-runner/issues/94)).
+
+### Changed
+- **DeviceLab Android: lazy tap-retry disabled by default** — the lazy retry re-issued a tap when "the tree hash was unchanged since the tap and the target was still findable", treating that as "the tap had no effect". That predicate cannot distinguish a dropped tap from a successful one whose effect is async (submit-then-navigate) or that merely disables the source button, so it could re-issue a tap across a navigation boundary and land on the next screen's CTA. It is now off by default; opt back in with `MAESTRO_DEVICELAB_LAZY_RETRY=1`. Reported by [@laiskajoonas](https://github.com/laiskajoonas) ([#95](https://github.com/devicelab-dev/maestro-runner/issues/95)).
+
+## [1.1.16] - 2026-05-31
+
+Another reporter-driven reliability + parity release, with a notable new capability: an **experimental native iOS DeviceLab driver**. Headlines: `takeScreenshot` gains Maestro-compatible `cropOn` cropping across every driver, a new `--artifacts` flag controls when screenshots/hierarchy are captured, `setLocation` now works on iOS simulators, Android DeviceLab tap reliability on React Native navigation jumped from ~20/38 to 37/38 on the React Navigation example suite, and the iOS startup path is far more resilient under CI load.
+
+### Added
+- **`takeScreenshot` `cropOn` selector (all drivers)** — pass a selector under `cropOn` to crop the screenshot to the matched element's bounds instead of the whole screen. Same YAML shape as Maestro, so existing flows are portable. Element bounds are scaled to the captured image resolution (e.g. the DeviceLab Android agent downscales frames) before cropping, and the input image format is preserved. Reported by [@TheUltDev](https://github.com/TheUltDev) ([#88](https://github.com/devicelab-dev/maestro-runner/issues/88)).
+  ```yaml
+  - takeScreenshot:
+      path: "login-button"
+      cropOn:
+        id: "login-button"
+  ```
+- **`--artifacts {always|on-failure|never}` flag** — controls when per-step screenshots and the UI hierarchy are captured. `on-failure` (default) keeps the previous behaviour; `always` captures before/after every step for visual debugging; `never` disables capture for the fastest, smallest reports.
+- **iOS DeviceLab driver (experimental)** — a native XCUITest-based iOS driver, invoked with `--driver devicelab --platform ios`. The runner is vendored as source and built with Xcode on first run (cached per iOS version/device type afterwards), mirroring WDA. Passes the TestHive auth suite; still maturing versus WDA on complex React Native navigation, so **WDA remains the default and recommended iOS driver**.
+- **`setLocation` on iOS simulators** — routes through `xcrun simctl location <udid> set <lat>,<lon>` (the same mechanism Maestro uses), on both the WDA and DeviceLab iOS drivers. Real iOS devices return an explicit "unsupported" error (Apple exposes no public GPS-override API for physical devices). Reported by [@HugoGresse](https://github.com/HugoGresse) ([#82](https://github.com/devicelab-dev/maestro-runner/issues/82)).
+- **`--android-tcp-forward` flag** — forces TCP-to-TCP `adb forward` for the Android drivers, for sandboxed environments that block `localfilesystem:`/`localabstract:` forwards. Auto-enabled when `$DEVICEFARM_DEVICE_UDID` is present, fixing "server not ready" failures on AWS Device Farm. Reported by [@pk1m](https://github.com/pk1m) ([#83](https://github.com/devicelab-dev/maestro-runner/issues/83)).
+
+### Changed
+- **Android DeviceLab tap reliability on React Native navigation** — pre-tap settle is now applied to *all* tap selectors (ID-based taps used to bypass the settle path and could fire at mid-animation/off-screen bounds), plus a lazy-retry on `assertVisible`/`inputText` that re-issues a tap when the prior tap clearly had no effect. Took the React Navigation example E2E suite from ~20/38 to a steady 37/38.
+- **Lazy-retry gated on tree-hash unchanged** — the lazy-retry now skips when the screen changed since the tap (e.g. a failed-login error rendering), eliminating a wasted retry window on flows whose tapped control legitimately persists. Cuts ~2s off negative-path flows (TestHive Invalid Password 9.5s → 7.4s) with no loss of the navigation reliability gains (37/38 unchanged).
+- **iOS startup resilience under CI** — startup timeout raised to 600s and the simulator is now shutdown/booted between retry attempts to clear a wedged CoreSimulator daemon; both WDA and the iOS DeviceLab driver gained stall-detection that auto-retries a hung `xcodebuild` instead of waiting out the full timeout.
+- **Appium honours user-set `appium:autoLaunch`** — the driver only forces `autoLaunch=false` when the caller hasn't specified it, so launch-time capabilities like `appium:processArguments` (e.g. `DYLD_INSERT_LIBRARIES` for Applitools NML) take effect again. Reported by [@kavithamahesh](https://github.com/kavithamahesh) ([#86](https://github.com/devicelab-dev/maestro-runner/issues/86)).
+- **iOS alert handling default** — `alertAction` now defaults to empty (was implicitly "accept"); flows that don't configure permissions keep in-app alerts interactable, while explicit permission config still auto-accepts. Reported by [@j-ezeh](https://github.com/j-ezeh) ([#64](https://github.com/devicelab-dev/maestro-runner/issues/64)).
+- **Appium driver is friendlier to locked-down hosts** (e.g. Sauce Labs) where local filesystem/port access is restricted.
+
+### Fixed
+- **Android file-picker taps (API 31+)** — the bundled DeviceLab agent was refreshed so the brief DOWN→UP touch duration is applied on all API levels, restoring the non-zero touch needed to dispatch open-document intents from `RecyclerView` file-picker items on Android 12+. Reported by [@LandonPatmore](https://github.com/LandonPatmore) ([#87](https://github.com/devicelab-dev/maestro-runner/issues/87)).
+- **Android DeviceLab `displayed=false` filtering** — elements reported as not-visible-to-user are now skipped to match Maestro's pass-through behaviour (fixes false "element exists but is not visible" and material-top-tabs cases).
+- **Case-insensitive regex selectors over-escaped** — `text: '.*For You.*'` was being treated as a literal string; regex metacharacters are no longer escaped in the `textMatches`/`descriptionMatches` fallback.
+
+### Contributors
+Thanks to everyone who reported issues that shaped this release:
+- [@TheUltDev](https://github.com/TheUltDev) — `takeScreenshot` `cropOn` ([#88](https://github.com/devicelab-dev/maestro-runner/issues/88))
+- [@HugoGresse](https://github.com/HugoGresse) — iOS `setLocation` ([#82](https://github.com/devicelab-dev/maestro-runner/issues/82))
+- [@LandonPatmore](https://github.com/LandonPatmore) — Android file-picker taps ([#87](https://github.com/devicelab-dev/maestro-runner/issues/87))
+- [@kavithamahesh](https://github.com/kavithamahesh) — Appium `processArguments` ([#86](https://github.com/devicelab-dev/maestro-runner/issues/86))
+- [@pk1m](https://github.com/pk1m) — AWS Device Farm support ([#83](https://github.com/devicelab-dev/maestro-runner/issues/83))
+- [@j-ezeh](https://github.com/j-ezeh) — iOS alert handling ([#64](https://github.com/devicelab-dev/maestro-runner/issues/64))
+
 ## [1.1.15] - 2026-05-19
 
 A broad reliability + ergonomics release driven mostly by real-user reports across iOS, Android, Flutter and web. Highlights: assertVisible now recognises React Native container testIDs on iOS, Android scroll is rewired to `adb input swipe` for cross-skin reliability (OneUI in particular), `waitForAnimationToEnd` actually polls instead of returning 0 ms, web tap is gated by a Playwright-style actionability check, and browser console errors auto-surface in the flow report.

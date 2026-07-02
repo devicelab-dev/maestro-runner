@@ -35,10 +35,13 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		return result
 	}
 
-	// For text-based taps, use FindAndClick —
+	// For text- AND id-based taps, use FindAndClick —
 	// single atomic Java call: find node + coordinate click at center.
-	// No stale nodes, no performAction, no parent walk-up.
-	if step.Selector.Text != "" && step.Point == "" && !step.Selector.HasRelativeSelector() {
+	// No stale nodes, no performAction, no parent walk-up. Routing id
+	// selectors through this path gives them the same tree-signature
+	// settle that text selectors get (agent's findAndClick → findElement
+	// with settle=true), so id taps don't fire mid-animation.
+	if (step.Selector.Text != "" || step.Selector.ID != "") && step.Point == "" && !step.Selector.HasRelativeSelector() {
 		// Browser mode: find via CDP and click via CDP
 		if d.isBrowserMode() {
 			return d.tapOnBrowser(step)
@@ -75,6 +78,10 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 				}
 
 				for _, s := range strategies {
+					// Capture the pre-tap tree hash so a later failing
+					// assertion can detect "tap had no effect" and retry.
+					d.recordTap(step.Selector)
+
 					elem, err := d.client.FindAndClick(s.Strategy, s.Value)
 					if err == nil {
 						info := &core.ElementInfo{
@@ -84,9 +91,52 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 						if t, err := elem.Text(); err == nil {
 							info.Text = t
 						}
+						rectOK := false
 						if rect, err := elem.Rect(); err == nil {
 							info.Bounds = core.Bounds{X: rect.X, Y: rect.Y, Width: rect.Width, Height: rect.Height}
+							rectOK = true
 						}
+						logger.Info("[devicelab] FindAndClick hit for %s via %s=%s: bounds=[%d,%d][%d,%d] (w=%d h=%d) center=(%d,%d)",
+							step.Selector.Describe(), s.Strategy, s.Value,
+							info.Bounds.X, info.Bounds.Y,
+							info.Bounds.X+info.Bounds.Width, info.Bounds.Y+info.Bounds.Height,
+							info.Bounds.Width, info.Bounds.Height,
+							info.Bounds.X+info.Bounds.Width/2, info.Bounds.Y+info.Bounds.Height/2)
+
+						// #94: reject a tap whose rect is malformed (non-positive
+						// width/height) or whose centre lies off-screen, and keep
+						// polling. The agent's id-find path applies no on-screen
+						// filter, so a just-opened bottom sheet's first laid-out
+						// frame yields a clipped rect (top>bottom) and FindAndClick
+						// injects the tap off-screen — a no-op that leaves the flow
+						// desynced. A settled frame a moment later taps the real
+						// target. (Mirrors the assert-side viewport check from #39.)
+						if rectOK {
+							// Validate against the FULL physical display (same coordinate
+							// space as info.Bounds, which come from the accessibility
+							// hierarchy). screenSize() can report the USABLE height (minus
+							// the status bar), which wrongly condemns on-screen bottom
+							// buttons/FABs whose centre sits in the bottom band.
+							if sw, sh, serr := d.tappableScreenSize(); serr == nil && !boundsTappable(info.Bounds, sw, sh) {
+								logger.Info("[devicelab] tap rejected (off-screen/malformed rect) for %s: w=%d h=%d center=(%d,%d) screen=%dx%d — re-polling",
+									step.Selector.Describe(), info.Bounds.Width, info.Bounds.Height,
+									info.Bounds.X+info.Bounds.Width/2, info.Bounds.Y+info.Bounds.Height/2, sw, sh)
+								lastErr = fmt.Errorf("element rect not tappable (w=%d h=%d center=(%d,%d) screen=%dx%d)",
+									info.Bounds.Width, info.Bounds.Height,
+									info.Bounds.X+info.Bounds.Width/2, info.Bounds.Y+info.Bounds.Height/2, sw, sh)
+								time.Sleep(50 * time.Millisecond)
+								break
+							}
+						}
+
+						// Post-tap verification candidates (all wired but
+						// NOT called — empirically none reliably distinguish
+						// "tap had effect" from "tap fired ripple only" on
+						// the React Navigation showcase app):
+						//   d.tapHadEffectViaWindowUpdate("")  // Maestro's isWindowUpdating
+						//   d.tapHadEffect()                   // element-presence check
+						// Both produce false positives (ripples count) and
+						// false negatives (buttons persist across screens).
 						return successResult("Tapped on element", info)
 					}
 					lastErr = err
@@ -107,6 +157,12 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 	if info == nil {
 		return errorResult(fmt.Errorf("nil element info"), "Element info is nil")
 	}
+
+	logger.Info("[devicelab] tap target for %s: bounds=[%d,%d][%d,%d] (w=%d h=%d)",
+		step.Selector.Describe(),
+		info.Bounds.X, info.Bounds.Y,
+		info.Bounds.X+info.Bounds.Width, info.Bounds.Y+info.Bounds.Height,
+		info.Bounds.Width, info.Bounds.Height)
 
 	// If Point is specified WITH selector, tap at relative position within element bounds
 	if step.Point != "" && info.Bounds.Width > 0 {
@@ -144,6 +200,19 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 	}
 
 	return successResult("Tapped on element", info)
+}
+
+// boundsTappable reports whether b is a real on-screen rectangle whose centre
+// can be tapped. It rejects a malformed rect (non-positive width/height — e.g.
+// a clipped first-frame rect with top>bottom) and one whose centre falls
+// outside the display. Used to avoid injecting a lost off-screen tap (#94).
+func boundsTappable(b core.Bounds, screenW, screenH int) bool {
+	if b.Width <= 0 || b.Height <= 0 {
+		return false
+	}
+	cx := b.X + b.Width/2
+	cy := b.Y + b.Height/2
+	return cx >= 0 && cx < screenW && cy >= 0 && cy < screenH
 }
 
 // tapOnBrowser handles tapOn entirely via CDP for Chrome browser mode.
@@ -295,7 +364,7 @@ func (d *Driver) assertVisible(step *flow.AssertVisibleStep) *core.CommandResult
 		return d.assertVisibleBrowser(step.Selector, timeout)
 	}
 
-	_, info, err := d.findElementFast(step.Selector, step.IsOptional(), step.TimeoutMs)
+	_, info, err := d.findElementFastWithLazyRetry(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Element not visible: %v", err))
 	}
@@ -425,7 +494,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 	}
 
 	if !step.Selector.IsEmpty() {
-		elem, _, err := d.findElement(step.Selector, step.IsOptional(), step.TimeoutMs)
+		elem, _, err := d.findElementWithLazyRetry(step.Selector, step.IsOptional(), step.TimeoutMs)
 		if err != nil {
 			return errorResult(err, fmt.Sprintf("Element not found: %v", err))
 		}
@@ -596,7 +665,7 @@ func (d *Driver) hideKeyboard(_ *flow.HideKeyboardStep) *core.CommandResult {
 	// Retry up to 3 times — the on-device agent tries KEYCODE_ESCAPE first
 	// (keyboard-only, no navigation side-effects), then falls back to KEYCODE_BACK.
 	for attempt := 0; attempt < 3; attempt++ {
-		d.client.HideKeyboard()
+		_ = d.client.HideKeyboard()
 
 		// Wait for keyboard to actually disappear (animation ~300ms).
 		deadline := time.Now().Add(500 * time.Millisecond)
@@ -682,7 +751,12 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	}
 	deadline := time.Now().Add(timeout)
 
-	width, height, err := d.screenSize()
+	// Use the FULL physical display (same coordinate space as the hierarchy bounds). An element
+	// in the bottom system-bar band — e.g. the last nav-drawer item, centre y in
+	// (usableHeight, physicalHeight] — is genuinely on screen and tappable (see boundsTappable),
+	// so isElementOnScreen must NOT treat it as off-screen; otherwise scrollUntilVisible loops to
+	// the scroll cap on a last item that is already shown. Falls back to screenSize().
+	width, height, err := d.tappableScreenSize()
 	if err != nil {
 		return errorResult(err, "Failed to get screen size")
 	}
@@ -771,10 +845,15 @@ func (d *Driver) scrollByAdb(direction string, screenWidth, screenHeight int, pe
 const scrollDurationMs = 300
 
 // isElementOnScreen reports whether an element's bounds overlap the visible
-// viewport. Zero-area bounds count as off-screen.
+// viewport. Malformed bounds — non-positive width/height, e.g. a clipped
+// below-the-fold ScrollView child reported with top>bottom (negative height) —
+// count as off-screen, matching boundsTappable's #94 guard. Without this,
+// scrollUntilVisible short-circuits to success on a degenerate rect that tapOn
+// then refuses to tap ("element rect not tappable"), looping to the deadline
+// instead of scrolling the element fully into view.
 func isElementOnScreen(info *core.ElementInfo, screenWidth, screenHeight int) bool {
 	b := info.Bounds
-	if b.Width == 0 || b.Height == 0 {
+	if b.Width <= 0 || b.Height <= 0 {
 		return false
 	}
 	return b.X+b.Width > 0 && b.X < screenWidth && b.Y+b.Height > 0 && b.Y < screenHeight
@@ -1652,6 +1731,22 @@ func (d *Driver) takeScreenshot(step *flow.TakeScreenshotStep) *core.CommandResu
 		return errorResult(err, fmt.Sprintf("Failed to take screenshot: %v", err))
 	}
 
+	if step.CropOn != nil {
+		_, info, findErr := d.findElement(*step.CropOn, false, 0)
+		if findErr != nil || info == nil {
+			return errorResult(findErr, fmt.Sprintf("cropOn: element not found: %v", findErr))
+		}
+		sw, sh, dimErr := d.screenSize()
+		if dimErr != nil {
+			return errorResult(dimErr, "cropOn requires screen dimensions")
+		}
+		cropped, cropErr := core.CropScreenshot(data, info.Bounds, sw, sh)
+		if cropErr != nil {
+			return errorResult(cropErr, fmt.Sprintf("cropOn: %v", cropErr))
+		}
+		data = cropped
+	}
+
 	return &core.CommandResult{
 		Success: true,
 		Message: "Screenshot captured",
@@ -1786,6 +1881,11 @@ func (d *Driver) waitUntil(step *flow.WaitUntilStep) *core.CommandResult {
 	ctx, cancel := context.WithTimeout(d.parentContext(), timeout)
 	defer cancel()
 
+	// extendedWaitUntil intentionally does NOT use lazy retry: the user
+	// explicitly asked for a long wait, so re-tapping the previous step's
+	// target would corrupt state for persistent buttons (e.g. Preload
+	// Details which stays on screen but triggers an async update — we
+	// saw this break Native Stack - Preload Flow with triple-taps).
 	for {
 		select {
 		case <-ctx.Done():

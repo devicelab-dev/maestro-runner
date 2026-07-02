@@ -60,18 +60,55 @@ func NewDriver(client *Client, info *core.PlatformInfo, udid string) *Driver {
 		client: client,
 		info:   info,
 		udid:   udid,
-		// Default to "accept" so the WDA alerts monitor is enabled at session
-		// creation. WDA only registers the monitor when defaultAlertAction is
-		// in the session capabilities (see FBSessionCommands.m); setting it
-		// later via /appium/settings just changes the value and cannot start
-		// the monitor retroactively. EnsureSession runs before any launchApp
-		// step, so without this default a real-device session would be created
-		// with no monitor and permission dialogs (e.g. notifications) would
-		// block the flow. launchApp may override based on explicit permissions.
-		// Matches Maestro's documented default of accepting all permissions.
-		alertAction:  "accept",
+		// Default to "" so WDA's alerts monitor is NOT registered at session
+		// creation. We rely on PrepareForFlow (core.FlowAware) to set this to
+		// "accept"/"dismiss" if the flow has a launchApp step BEFORE
+		// EnsureSession runs — see PrepareForFlow below.
+		//
+		// Rationale: WDA only registers the alerts monitor when
+		// defaultAlertAction is in the session-creation capabilities (see
+		// FBSessionCommands.m). Setting it later via /appium/settings just
+		// changes the value and cannot start the monitor retroactively. The
+		// previous "always accept" default ($COMMIT 2702939, Refs #64) fixed
+		// permission-dialog auto-handling but also caused WDA to auto-dismiss
+		// in-app confirmation alerts ("Discard changes?" etc.). Pre-scanning
+		// the flow gives us the right monitor state without that regression
+		// and matches upstream maestro's behavior (SystemPermissionHelper
+		// short-circuits when no permissions are configured).
+		alertAction:  "",
 		warnedFields: make(map[string]bool),
 	}
+}
+
+// PrepareForFlow implements core.FlowAware. Called once before EnsureSession,
+// it scans the flow's steps for a LaunchAppStep and sets d.alertAction to the
+// resolved value (so the WDA alerts monitor is registered with the right
+// behavior at session creation). Flows without launchApp leave alertAction
+// at "", which means no monitor is registered and in-app dialogs aren't
+// auto-handled.
+func (d *Driver) PrepareForFlow(steps []flow.Step) {
+	for _, s := range steps {
+		launchApp, ok := s.(*flow.LaunchAppStep)
+		if !ok {
+			continue
+		}
+		d.alertAction = resolveAlertAction(launchApp.Permissions)
+
+		// Real-device safety net (#108): system permission dialogs are
+		// auto-handled ONLY via WDA's defaultAlertAction, which needs a single
+		// accept/dismiss. Mixed permissions (e.g. camera=allow, location=deny)
+		// resolve to "" → no monitor → a permission prompt hangs the flow and the
+		// un-dismissed SpringBoard alert can wedge later runs. The simulator
+		// doesn't hit this (permissions are pre-granted via simctl). Warn so the
+		// failure isn't silent. An explicit `unset` is an intentional opt-out and
+		// stays silent.
+		if d.alertAction == "" && d.info != nil && !d.info.IsSimulator &&
+			len(launchApp.Permissions) > 0 && !hasAllValue(launchApp.Permissions, "unset") {
+			logger.Warn("[wda] launchApp declares mixed permissions; on a real iOS device WDA can only auto-accept or auto-dismiss ALL permission dialogs, so they won't be auto-handled and may block the flow (and can wedge the device). Use permissions: { all: allow } (or { all: deny }), or add an explicit acceptAlert/dismissAlert step where the prompt appears.")
+		}
+		return
+	}
+	// No launchApp in this flow — leave alertAction at "" (no auto-handling).
 }
 
 // EnsureSession creates a WDA session if one doesn't exist.
@@ -246,6 +283,8 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	// Device control
 	case *flow.SetOrientationStep:
 		result = d.setOrientation(s)
+	case *flow.SetLocationStep:
+		result = d.setLocation(s)
 	case *flow.OpenLinkStep:
 		result = d.openLink(s)
 	case *flow.OpenBrowserStep:
@@ -523,11 +562,15 @@ func (d *Driver) findElementForTapWithContext(ctx context.Context, sel flow.Sele
 
 			if textExistsErr != nil {
 				// Text not found via WDA at all - try page source as fallback
-				if info, err := d.findElementByPageSourceOnce(sel); err == nil {
+				info, psErr := d.findElementByPageSourceOnce(sel)
+				if psErr == nil {
 					return info, nil
 				}
-				// Still not found - keep polling
-				lastErr = textExistsErr
+				// Still not found - keep polling. Surface both failures:
+				// the page-source reason (with closest-text hints) is the
+				// actionable one; hiding it behind the predicate error sent
+				// issue #89's diagnosis down the wrong path.
+				lastErr = fmt.Errorf("%w; page source: %v", textExistsErr, psErr)
 				continue
 			}
 
@@ -665,6 +708,7 @@ func (d *Driver) findElementQuick(sel flow.Selector, timeoutMs int) (*core.Eleme
 // wrapper views that XCUITest can't classify as accessible but which clearly
 // contain visible content. Hidden-but-still-mounted screens (all descendants
 // invisible) are correctly excluded.
+//nolint:unused
 func filterVisibleOrHostingVisible(candidates []*ParsedElement) []*ParsedElement {
 	out := candidates[:0]
 	for _, c := range candidates {
@@ -682,7 +726,7 @@ func rescueNote(elem *ParsedElement) string {
 	if elem.Displayed {
 		return ""
 	}
-	return "matched via visible descendant (container marked visible=false by XCUITest)"
+	return "XCUITest reported visible=false but bounds within screen viewport — accepted"
 }
 
 // selectorLog returns a compact string describing a selector for log lines.
@@ -763,6 +807,16 @@ func (d *Driver) findElementByWDA(sel flow.Selector) (*core.ElementInfo, error) 
 
 // getElementInfo gets element info from WDA element ID.
 // Fetches text, rect, displayed status, and element name in parallel for speed.
+//
+// Visibility policy: XCUITest's `displayed` flag is unreliable on React Native
+// testID-bearing wrappers — it returns false even when the visible content
+// paints at the same bounds via a sibling node. Rather than trust the flag,
+// we apply a single bounds-based rule that works for tap / type / assertVisible
+// alike:
+//   - displayed=true → accept (XCUITest agrees, no override needed)
+//   - displayed=false AND bounds are within the screen viewport (>=10% visible)
+//     → accept, set MatchNote noting we overrode XCUITest's opinion based on bounds
+//   - displayed=false AND bounds are off-screen → reject (genuinely not visible)
 func (d *Driver) getElementInfo(elemID string) (*core.ElementInfo, error) {
 	info := &core.ElementInfo{
 		ID:      elemID,
@@ -806,11 +860,28 @@ func (d *Driver) getElementInfo(elemID string) (*core.ElementInfo, error) {
 	if nameErr == nil {
 		info.Class = elemName
 	}
-	// Reject off-screen elements so callers don't interact with invisible UI.
-	if dispErr == nil && !displayed {
-		return nil, fmt.Errorf("element exists but is not visible on screen")
-	}
 	info.Visible = dispErr == nil && displayed
+
+	if dispErr == nil && !displayed {
+		// XCUITest says off-screen. Check bounds geometrically — if they're
+		// inside the viewport, override XCUITest and accept the element with
+		// a MatchNote so the report records the override.
+		if rectErr != nil {
+			return nil, fmt.Errorf("element exists but is not visible on screen (no bounds)")
+		}
+		screenW, screenH, sErr := d.screenSize()
+		if sErr != nil {
+			return nil, fmt.Errorf("element exists but is not visible on screen (screen size unavailable)")
+		}
+		if info.Bounds.VisiblePercentage(screenW, screenH) < 0.1 {
+			return nil, fmt.Errorf("element exists but is not visible on screen (bounds outside viewport)")
+		}
+		info.MatchNote = fmt.Sprintf(
+			"XCUITest displayed=false but bounds (%d,%d %dx%d) within viewport %dx%d — proceeding",
+			info.Bounds.X, info.Bounds.Y, info.Bounds.Width, info.Bounds.Height, screenW, screenH,
+		)
+		logger.Info("[wda] elemID=%s — %s", elemID, info.MatchNote)
+	}
 
 	return info, nil
 }
@@ -904,9 +975,8 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector, allElements []*Parse
 		candidates = FilterContainsDescendants(candidates, allElements, sel.ContainsDescendants)
 	}
 
-	// Same phased visibility check as findElementByPageSourceOnce.
-	candidates = filterVisibleOrHostingVisible(candidates)
-
+	// Bounds-based visibility (FilterOutOfBounds already applied above);
+	// XCUITest's `visible="false"` is unreliable on RN testID wrappers.
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no elements match selector")
 	}
@@ -949,14 +1019,17 @@ func (d *Driver) findElementByPageSourceOnce(sel flow.Selector) (*core.ElementIn
 
 	candidates := FilterBySelector(allElements, sel)
 
-	// Phase 1: prefer elements WDA marks visible="true".
-	// Phase 2: rescue elements WDA marked visible="false" *only if* they
-	// host a visible descendant. This recovers React Native <View testID="..">
-	// wrappers (visible content inside, container itself non-accessible) while
-	// still rejecting hidden-but-still-mounted screens (all descendants invisible).
-	candidates = filterVisibleOrHostingVisible(candidates)
-
+	// XCUITest's `visible="false"` is unreliable on React Native testID-bearing
+	// wrappers — it can return false even when bounds host visible sibling
+	// content. We rely on bounds (already enforced by FilterOutOfBounds above)
+	// rather than XCUITest's opinion. When accepting a visible="false" element
+	// we tag a MatchNote so the report records the override (see rescueNote).
 	if len(candidates) == 0 {
+		if sel.Text != "" {
+			if closest := ClosestTexts(allElements, sel.Text, 3); len(closest) > 0 {
+				return nil, fmt.Errorf("no elements match selector; closest on-screen texts: %s", strings.Join(closest, ", "))
+			}
+		}
 		return nil, fmt.Errorf("no elements match selector")
 	}
 

@@ -179,6 +179,16 @@ func FilterBySelector(elements []*ParsedElement, sel flow.Selector) []*ParsedEle
 		if !matchesSelector(elem, sel) {
 			continue
 		}
+		// Skip elements that the accessibility tree marks not visible to
+		// the user (displayed="false"). React Navigation routinely leaves
+		// off-active-pane content in the tree with displayed=false; if we
+		// return those as matches, assertVisible fails with "element exists
+		// but is not visible" — what we actually want is for the search to
+		// continue past them, matching only what the user can see. Matches
+		// Maestro's pass-through behaviour for displayed=false nodes.
+		if !elem.Displayed {
+			continue
+		}
 		result = append(result, elem)
 	}
 

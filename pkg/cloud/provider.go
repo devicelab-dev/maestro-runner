@@ -11,6 +11,7 @@ import "sync"
 const (
 	MetaAppiumURL = "appiumURL"
 	MetaSessionID = "sessionID"
+	MetaDeviceID  = "deviceID"
 )
 
 // Provider abstracts cloud device provider operations.

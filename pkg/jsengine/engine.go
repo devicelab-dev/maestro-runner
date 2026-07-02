@@ -305,6 +305,20 @@ func (e *Engine) SetVariables(vars map[string]interface{}) {
 	}
 }
 
+// UnsetVariable removes a global so it no longer resolves as a defined value.
+// Used to tear down per-runScript env vars after the script returns, so they
+// don't leak into later scripts (matches Maestro's per-script env scope).
+func (e *Engine) UnsetVariable(name string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	delete(e.variables, name)
+	if err := e.runtime.GlobalObject().Delete(name); err != nil {
+		// Fall back to undefined if the property can't be deleted.
+		_ = e.runtime.Set(name, goja.Undefined())
+	}
+}
+
 // SetCopiedText sets the copiedText value (from copyTextFrom command)
 func (e *Engine) SetCopiedText(text string) {
 	e.mu.Lock()

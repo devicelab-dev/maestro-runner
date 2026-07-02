@@ -356,11 +356,38 @@ func (d *Driver) eraseText(step *flow.EraseTextStep) *core.CommandResult {
 }
 
 func (d *Driver) hideKeyboard(_ *flow.HideKeyboardStep) *core.CommandResult {
-	if err := d.client.HideKeyboard(); err != nil {
-		// Don't fail - keyboard may not be visible
-		return successResult("Hide keyboard (may not have been visible)", nil)
+	// Appium's /appium/device/hide_keyboard is a no-op on some devices (notably
+	// several Samsung models): it returns success without closing the keyboard,
+	// so the next coordinate tap lands on the keyboard overlay (#42). We verify
+	// with dumpsys and, while the keyboard is still shown, fall back to a key
+	// event.
+	//
+	// KEYCODE_BACK dismisses the IME when it is open and only triggers back-
+	// navigation when the keyboard is NOT shown — so we send it ONLY after
+	// confirming the keyboard is still up, which is what keeps it from navigating
+	// away (the side effect reported on the devicelab driver).
+
+	// If we can confirm the keyboard isn't shown, there's nothing to do.
+	if d.device != nil && !d.isKeyboardVisible() {
+		return successResult("Keyboard not visible", nil)
 	}
-	return successResult("Keyboard hidden", nil)
+
+	_ = d.client.HideKeyboard()
+	if d.waitKeyboardHidden() {
+		return successResult("Keyboard hidden", nil)
+	}
+
+	// Appium's call didn't take. Fall back to BACK, but only while the keyboard
+	// is still shown so we can't trigger a stray back-navigation.
+	if d.isKeyboardVisible() {
+		if err := d.client.PressKeyCode(uiautomator2.KeyCodeBack); err == nil && d.waitKeyboardHidden() {
+			return successResult("Keyboard hidden (via back key)", nil)
+		}
+	}
+
+	// Couldn't confirm dismissal — don't fail the step (the keyboard may already
+	// be gone on a device we can't inspect).
+	return successResult("Hide keyboard (dismissal not confirmed)", nil)
 }
 
 func (d *Driver) inputRandom(step *flow.InputRandomStep) *core.CommandResult {
@@ -523,10 +550,12 @@ func (d *Driver) scrollByAdb(direction string, screenWidth, screenHeight int, pe
 }
 
 // isElementOnScreen reports whether an element's bounds overlap the visible
-// viewport. Zero-area bounds count as off-screen.
+// viewport. Malformed bounds (non-positive width/height — e.g. a clipped rect
+// with top>bottom) count as off-screen, so scrollUntilVisible keeps scrolling
+// instead of declaring success on a degenerate rect.
 func isElementOnScreen(info *core.ElementInfo, screenWidth, screenHeight int) bool {
 	b := info.Bounds
-	if b.Width == 0 || b.Height == 0 {
+	if b.Width <= 0 || b.Height <= 0 {
 		return false
 	}
 	return b.X+b.Width > 0 && b.X < screenWidth && b.Y+b.Height > 0 && b.Y < screenHeight
@@ -570,25 +599,21 @@ func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
 		direction = "up"
 	}
 
-	uiaDir := mapDirection(direction)
-
-	// If selector specified, swipe within that element's bounds
+	// If selector specified, derive swipe coordinates from the element's
+	// bounds and route through the same ADB `input swipe` path used by
+	// screen-percentage swipes. `SwipeInArea` (the previous path) does not
+	// honor `step.Duration`, producing a fast flick — sufficient for scroll
+	// containers but too fast for native drag targets (Compose sliders,
+	// custom drag-handlers), which discard the gesture. Using the ADB path
+	// with an element-derived start/end matches classic Maestro's semantics.
 	if step.Selector != nil && !step.Selector.IsEmpty() {
 		_, info, err := d.findElement(*step.Selector, step.IsOptional(), step.TimeoutMs)
 		if err != nil {
 			return errorResult(err, fmt.Sprintf("Element not found for swipe: %v", err))
 		}
 		if info != nil && info.Bounds.Width > 0 {
-			area := uiautomator2.NewRect(
-				info.Bounds.X,
-				info.Bounds.Y,
-				info.Bounds.Width,
-				info.Bounds.Height,
-			)
-			if err := d.client.SwipeInArea(area, uiaDir, 0.7, 0); err != nil {
-				return errorResult(err, fmt.Sprintf("Failed to swipe in element: %v", err))
-			}
-			return successResult(fmt.Sprintf("Swiped %s in element", direction), info)
+			startX, startY, endX, endY := swipeCoordsInBounds(direction, info.Bounds)
+			return d.swipeWithAbsoluteCoords(startX, startY, endX, endY, step.Duration)
 		}
 	}
 
@@ -598,6 +623,43 @@ func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
 		return errorResult(err, "Failed to get screen size")
 	}
 	return d.swipeWithMaestroCoordinates(direction, width, height, step.Duration)
+}
+
+// swipeCoordsInBounds returns absolute start/end coordinates for a
+// direction-based swipe anchored on an element. The swipe starts inside
+// the element (so the touch is captured by that element) and ends past
+// the opposite edge (so drag-based targets like native sliders reach
+// their extreme value). This matches classic Maestro's semantics on the
+// two common use cases:
+//   - scroll containers: touch starts inside and moves outward, scrolling
+//     the container by the drag distance
+//   - drag targets (sliders, drag handles): the release position past
+//     the edge pins the drag target to its extreme in that direction
+//
+// Negative coordinates are clamped to 0 (screen origin) so `adb input
+// swipe` receives on-screen coordinates even for elements flush against
+// a screen edge.
+func swipeCoordsInBounds(direction string, b core.Bounds) (startX, startY, endX, endY int) {
+	clamp := func(v int) int {
+		if v < 0 {
+			return 0
+		}
+		return v
+	}
+	pctX := func(p int) int { return clamp(b.X + b.Width*p/100) }
+	pctY := func(p int) int { return clamp(b.Y + b.Height*p/100) }
+	switch direction {
+	case "up":
+		return pctX(50), pctY(90), pctX(50), pctY(-10)
+	case "down":
+		return pctX(50), pctY(10), pctX(50), pctY(110)
+	case "left":
+		return pctX(90), pctY(50), pctX(-10), pctY(50)
+	case "right":
+		return pctX(10), pctY(50), pctX(110), pctY(50)
+	default:
+		return pctX(50), pctY(50), pctX(50), pctY(0)
+	}
 }
 
 // findScrollableElement waits for and finds a scrollable element.
@@ -1444,6 +1506,22 @@ func (d *Driver) takeScreenshot(step *flow.TakeScreenshotStep) *core.CommandResu
 	data, err := d.client.Screenshot()
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to take screenshot: %v", err))
+	}
+
+	if step.CropOn != nil {
+		_, info, findErr := d.findElement(*step.CropOn, false, 0)
+		if findErr != nil || info == nil {
+			return errorResult(findErr, fmt.Sprintf("cropOn: element not found: %v", findErr))
+		}
+		sw, sh, dimErr := d.screenSize()
+		if dimErr != nil {
+			return errorResult(dimErr, "cropOn requires screen dimensions")
+		}
+		cropped, cropErr := core.CropScreenshot(data, info.Bounds, sw, sh)
+		if cropErr != nil {
+			return errorResult(cropErr, fmt.Sprintf("cropOn: %v", cropErr))
+		}
+		data = cropped
 	}
 
 	// Return screenshot data; caller handles saving to file if path specified

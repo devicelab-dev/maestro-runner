@@ -44,6 +44,11 @@ var GlobalFlags = []cli.Flag{
 		EnvVars: []string{"APPIUM_URL"},
 	},
 	&cli.StringFlag{
+		Name:    "appium-session-file",
+		Usage:   "Write live Appium session info (sessionId, appiumUrl per device) to this JSON file for external tools to attach. Empty = disabled.",
+		EnvVars: []string{"MAESTRO_APPIUM_SESSION_FILE"},
+	},
+	&cli.StringFlag{
 		Name:    "caps",
 		Usage:   "Path to Appium capabilities JSON file",
 		EnvVars: []string{"APPIUM_CAPS"},

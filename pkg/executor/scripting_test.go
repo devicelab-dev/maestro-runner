@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
@@ -188,6 +189,36 @@ func TestScriptEngine_RunScript_WithEnv(t *testing.T) {
 	}
 }
 
+// TestScriptEngine_RunScript_EnvValuesAreExpanded reproduces #107: env values
+// passed to runScript must be variable-expanded (like defineVariables/runFlow
+// env), so an exec string referencing an outer variable and prior output
+// resolves before the script reads it — instead of leaking literal ${...}.
+func TestScriptEngine_RunScript_EnvValuesAreExpanded(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	// Outer variable, as if injected by a runFlow env.
+	se.SetVariable("MOCK_FILE", "Login.json")
+	// Prior runScript discovered a port and stored it in output.
+	if err := se.RunScript("output.mock_port = 8888", nil); err != nil {
+		t.Fatalf("seed script: %v", err)
+	}
+
+	// Second runScript: env value interpolates both the outer variable and
+	// the prior output. The script copies exec to output so we can assert it.
+	err := se.RunScript("output.cmd = exec", map[string]string{
+		"exec": "mockoon-cli start --data ../mocks/${MOCK_FILE} --port ${output.mock_port}",
+	})
+	if err != nil {
+		t.Fatalf("RunScript() error = %v", err)
+	}
+
+	want := "mockoon-cli start --data ../mocks/Login.json --port 8888"
+	if got := se.GetVariable("cmd"); got != want {
+		t.Errorf("expanded exec = %q, want %q (literal ${...} leaked = bug)", got, want)
+	}
+}
+
 func TestScriptEngine_RunScript_Error(t *testing.T) {
 	se := NewScriptEngine()
 	defer se.Close()
@@ -195,6 +226,157 @@ func TestScriptEngine_RunScript_Error(t *testing.T) {
 	err := se.RunScript("invalid javascript {{{{", nil)
 	if err == nil {
 		t.Error("RunScript() with invalid JS should return error")
+	}
+}
+
+// --- Regression tests for issue #110: fast when/while condition checks ---
+
+// captureVisibleTimeout runs a `when: visible:` check through CheckCondition and
+// returns the TimeoutMs the engine handed the driver for the visibility lookup.
+func captureVisibleTimeout(t *testing.T, se *ScriptEngine, cond flow.Condition) int {
+	t.Helper()
+	got := -1
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			if vs, ok := step.(*flow.AssertVisibleStep); ok {
+				got = vs.TimeoutMs
+			}
+			return &core.CommandResult{Success: false} // not visible → condition false
+		},
+	}
+	se.CheckCondition(context.Background(), cond, driver)
+	return got
+}
+
+// TestCheckCondition_FastDefaultTimeout reproduces #110: an unmet `when:`
+// condition must use the short default, not the driver's 7s optional-find
+// timeout (passing 0 would defer to that).
+func TestCheckCondition_FastDefaultTimeout(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	got := captureVisibleTimeout(t, se, flow.Condition{Visible: &flow.Selector{Text: "Nope"}})
+	if got != defaultConditionTimeoutMs {
+		t.Errorf("when-condition timeout = %d, want fast default %d (0 would defer to the 7s optional-find timeout)", got, defaultConditionTimeoutMs)
+	}
+}
+
+// TestCheckCondition_PerConditionTimeoutWins verifies an explicit per-condition
+// timeout still overrides the default.
+func TestCheckCondition_PerConditionTimeoutWins(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	got := captureVisibleTimeout(t, se, flow.Condition{Visible: &flow.Selector{Text: "Nope"}, Timeout: 250})
+	if got != 250 {
+		t.Errorf("per-condition timeout = %d, want 250", got)
+	}
+}
+
+// TestSetConditionTimeout verifies the global override and that a non-positive
+// value is ignored (keeps the existing default).
+func TestSetConditionTimeout(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetConditionTimeout(2500)
+	if got := captureVisibleTimeout(t, se, flow.Condition{Visible: &flow.Selector{Text: "Nope"}}); got != 2500 {
+		t.Errorf("after SetConditionTimeout(2500), timeout = %d, want 2500", got)
+	}
+	se.SetConditionTimeout(0) // ignored
+	if got := captureVisibleTimeout(t, se, flow.Condition{Visible: &flow.Selector{Text: "Nope"}}); got != 2500 {
+		t.Errorf("SetConditionTimeout(0) should be ignored; timeout = %d, want 2500", got)
+	}
+}
+
+// --- Regression tests for issue #109: script env behavior vs Maestro ---
+
+// TestScriptEngine_RunScript_EnvDoesNotLeak reproduces #109: an env var set on
+// one runScript must NOT persist into the next runScript (Maestro gives each
+// script a fresh env scope). Before the fix, env was set as a sticky global.
+func TestScriptEngine_RunScript_EnvDoesNotLeak(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	// First script provides returnValue via env.
+	if err := se.RunScript("output.first = returnValue", map[string]string{
+		"returnValue": "mock_port",
+	}); err != nil {
+		t.Fatalf("first RunScript: %v", err)
+	}
+	if got := se.GetVariable("first"); got != "mock_port" {
+		t.Fatalf("first = %q, want %q", got, "mock_port")
+	}
+
+	// Second script does NOT provide returnValue. It must read as undefined,
+	// not the leaked "mock_port" from the previous run.
+	if err := se.RunScript(
+		`output.second = (typeof returnValue === 'undefined') ? "GONE" : returnValue`, nil,
+	); err != nil {
+		t.Fatalf("second RunScript: %v", err)
+	}
+	if got := se.GetVariable("second"); got != "GONE" {
+		t.Errorf("returnValue leaked across runScript calls: second = %q, want %q", got, "GONE")
+	}
+}
+
+// TestScriptEngine_RunScript_EnvRestoresPriorValue ensures a pre-existing
+// variable shadowed by a runScript env value is restored afterward, not unset.
+func TestScriptEngine_RunScript_EnvRestoresPriorValue(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("TOKEN", "original")
+	if err := se.RunScript("output.seen = TOKEN", map[string]string{"TOKEN": "override"}); err != nil {
+		t.Fatalf("RunScript: %v", err)
+	}
+	if got := se.GetVariable("seen"); got != "override" {
+		t.Errorf("inside script TOKEN = %q, want %q", got, "override")
+	}
+	if got := se.GetVariable("TOKEN"); got != "original" {
+		t.Errorf("after script TOKEN = %q, want restored %q", got, "original")
+	}
+}
+
+// TestScriptEngine_RunScript_UndeclaredEnvIsUndefined reproduces #109: a script
+// reusable across scenarios references optional env vars that aren't always
+// provided. An unprovided one must read as undefined (so `x || default` and
+// `typeof x` work), matching Maestro — not throw ReferenceError. This is the
+// reporter's shell_client.js pattern, with `async` omitted from env.
+func TestScriptEngine_RunScript_UndeclaredEnvIsUndefined(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	script := `
+var is_async = false;
+if (typeof async !== 'undefined') { is_async = async; }
+output.body = JSON.stringify({ command: exec, async: async || false });
+`
+	if err := se.RunScript(script, map[string]string{"exec": "echo hi"}); err != nil {
+		t.Fatalf("unprovided env var must not throw, got: %v", err)
+	}
+	want := `{"command":"echo hi","async":false}`
+	if got := se.GetVariable("body"); got != want {
+		t.Errorf("body = %q, want %q", got, want)
+	}
+}
+
+// TestScriptEngine_RunScript_LocalFunctionNotClobbered guards that the
+// undeclared-safety pre-definition doesn't shadow a function the script itself
+// declares (a local declaration must win over the predefined-undefined global).
+func TestScriptEngine_RunScript_LocalFunctionNotClobbered(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	script := `
+function double(n) { return n * 2; }
+output.result = double(21);
+`
+	if err := se.RunScript(script, nil); err != nil {
+		t.Fatalf("RunScript: %v", err)
+	}
+	if got := se.GetVariable("result"); got != "42" {
+		t.Errorf("result = %q, want %q (local function clobbered by pre-define?)", got, "42")
 	}
 }
 
@@ -413,6 +595,65 @@ func TestScriptEngine_ParseInt(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("ParseInt(%q, %d) = %d, want %d", tt.input, tt.defVal, got, tt.expected)
 		}
+	}
+}
+
+func TestScriptEngine_ParseIntStrict(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+	se.SetVariable("count", "5")
+
+	tests := []struct {
+		input   string
+		defVal  int
+		want    int
+		wantErr bool
+	}{
+		{"10", 0, 10, false},
+		{"${count}", 0, 5, false},
+		{"10_000", 0, 10000, false},
+		{"", 42, 42, false},   // unspecified → default, no error
+		{"  ", 42, 42, false}, // whitespace-only → default, no error
+		{"abc", 99, 99, true}, // garbage → default + error
+		{"5s", 7, 7, true},    // trailing unit → error (not silently 5)
+	}
+
+	for _, tt := range tests {
+		got, err := se.ParseIntStrict(tt.input, tt.defVal)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("ParseIntStrict(%q) err = %v, wantErr %v", tt.input, err, tt.wantErr)
+		}
+		if got != tt.want {
+			t.Errorf("ParseIntStrict(%q, %d) = %d, want %d", tt.input, tt.defVal, got, tt.want)
+		}
+	}
+}
+
+func TestExecuteRepeat_InvalidTimes(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+	fr := &FlowRunner{ctx: context.Background(), driver: &mockDriver{}, script: se}
+
+	result := fr.executeRepeat(&flow.RepeatStep{Times: "abc"})
+	if result.Success {
+		t.Error("expected failure for non-numeric times, got success")
+	}
+	if !strings.Contains(result.Message, "invalid 'times'") {
+		t.Errorf("message = %q, want it to mention invalid 'times'", result.Message)
+	}
+}
+
+func TestExecuteRetry_InvalidMaxRetries(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+	fr := &FlowRunner{ctx: context.Background(), driver: &mockDriver{}, script: se}
+
+	result := fr.executeRetry(&flow.RetryStep{MaxRetries: "five"})
+	if result.Success {
+		t.Error("expected failure for non-numeric maxRetries, got success")
+	}
+	if !strings.Contains(result.Message, "invalid 'maxRetries'") {
+		t.Errorf("message = %q, want it to mention invalid 'maxRetries'", result.Message)
 	}
 }
 
@@ -2068,5 +2309,95 @@ func TestScriptEngine_ExpandStep_RunFlowStep_NilWhen(t *testing.T) {
 
 	if step.File != "test.yaml" {
 		t.Errorf("File = %q, want %q", step.File, "test.yaml")
+	}
+}
+
+func TestScriptEngine_ExpandCondition(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("IDX", "3")
+	se.SetVariable("LABEL", "Done")
+	se.SetVariable("PLAT", "ios")
+
+	cond := &flow.Condition{
+		Visible:    &flow.Selector{ID: "tab-${IDX}"},
+		NotVisible: &flow.Selector{Text: "${LABEL}"},
+		Script:     "${IDX} > 0",
+		Platform:   "${PLAT}",
+	}
+
+	se.ExpandCondition(cond)
+
+	if cond.Visible.ID != "tab-3" {
+		t.Errorf("Visible.ID = %q, want %q", cond.Visible.ID, "tab-3")
+	}
+	if cond.NotVisible.Text != "Done" {
+		t.Errorf("NotVisible.Text = %q, want %q", cond.NotVisible.Text, "Done")
+	}
+	if cond.Script != "3 > 0" {
+		t.Errorf("Script = %q, want %q", cond.Script, "3 > 0")
+	}
+	if cond.Platform != "ios" {
+		t.Errorf("Platform = %q, want %q", cond.Platform, "ios")
+	}
+}
+
+func TestScriptEngine_ExpandCondition_Nil(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+	se.ExpandCondition(nil) // must not panic
+}
+
+// TestExecuteRepeat_WhileInterpolation reproduces issue #97: a `while:`
+// condition that interpolates a variable mutated by the loop body must be
+// re-expanded with the current value each iteration. The loop body bumps
+// output.i, and the while selector is id=tab-${output.i}; the driver reports
+// tab-1 and tab-2 visible but not tab-3, so the loop must run exactly twice
+// and query the freshly-interpolated id each pass — never the literal template.
+func TestExecuteRepeat_WhileInterpolation(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+	if err := se.RunScript("output.i = 1", nil); err != nil {
+		t.Fatalf("seed script failed: %v", err)
+	}
+
+	var queriedIDs []string
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			if av, ok := step.(*flow.AssertVisibleStep); ok {
+				queriedIDs = append(queriedIDs, av.Selector.ID)
+				// tab-1 and tab-2 are "visible"; tab-3 is not.
+				visible := av.Selector.ID == "tab-1" || av.Selector.ID == "tab-2"
+				return &core.CommandResult{Success: visible}
+			}
+			return &core.CommandResult{Success: true}
+		},
+	}
+
+	fr := &FlowRunner{ctx: context.Background(), driver: driver, script: se}
+
+	step := &flow.RepeatStep{
+		Times: "10",
+		While: flow.Condition{Visible: &flow.Selector{ID: "tab-${output.i}"}},
+		Steps: []flow.Step{
+			&flow.EvalScriptStep{Script: "output.i = output.i + 1"},
+		},
+	}
+
+	result := fr.executeRepeat(step)
+	if !result.Success {
+		t.Fatalf("executeRepeat failed: %v", result.Error)
+	}
+
+	// Loop runs while tab-1 (i=1) and tab-2 (i=2) are visible, stops at tab-3.
+	want := []string{"tab-1", "tab-2", "tab-3"}
+	if len(queriedIDs) != len(want) {
+		t.Fatalf("queried IDs = %v, want %v", queriedIDs, want)
+	}
+	for i, id := range want {
+		if queriedIDs[i] != id {
+			t.Errorf("query %d = %q, want %q (literal template leaked = re-expansion broken)", i, queriedIDs[i], id)
+		}
 	}
 }

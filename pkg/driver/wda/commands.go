@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1128,6 +1129,58 @@ func (d *Driver) setOrientation(step *flow.SetOrientationStep) *core.CommandResu
 	return successResult(fmt.Sprintf("Set orientation to %s", step.Orientation), nil)
 }
 
+// setLocation sets the device's simulated GPS location.
+//   - Simulator: runs `xcrun simctl location <udid> set <lat>,<lon>` —
+//     same mechanism Maestro uses (LocalSimulatorUtils.kt).
+//   - Real device: returns an unsupported error. Apple's public tooling
+//     (devicectl / instruments / WDA) doesn't expose a way to override GPS
+//     on a real device, so there's nothing to call into; Maestro's own
+//     real-device path is a `TODO("Not yet implemented")` stub for the
+//     same reason.
+func (d *Driver) setLocation(step *flow.SetLocationStep) *core.CommandResult {
+	if step.Latitude == "" || step.Longitude == "" {
+		return errorResult(
+			fmt.Errorf("latitude and longitude required"),
+			"setLocation requires both latitude and longitude",
+		)
+	}
+
+	lat, err := strconv.ParseFloat(step.Latitude, 64)
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("Invalid latitude: %s", step.Latitude))
+	}
+	lon, err := strconv.ParseFloat(step.Longitude, 64)
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("Invalid longitude: %s", step.Longitude))
+	}
+
+	if d.info == nil || !d.info.IsSimulator {
+		return errorResult(
+			fmt.Errorf("setLocation not supported on iOS real devices"),
+			"setLocation isn't supported on iOS real devices: Apple's public tooling "+
+				"(devicectl / instruments / WDA) doesn't expose a way to override GPS on "+
+				"a real device. Run the flow on an iOS simulator, or mock location at the app level.",
+		)
+	}
+
+	if d.udid == "" {
+		return errorResult(
+			fmt.Errorf("device UDID not configured"),
+			"setLocation requires a simulator UDID",
+		)
+	}
+
+	cmd := execCommand("xcrun", "simctl", "location", d.udid, "set", fmt.Sprintf("%f,%f", lat, lon))
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return errorResult(
+			fmt.Errorf("simctl location: %w: %s", err, strings.TrimSpace(string(output))),
+			"Failed to set simulator location",
+		)
+	}
+
+	return successResult(fmt.Sprintf("Set location to (%.6f, %.6f)", lat, lon), nil)
+}
+
 func (d *Driver) openLink(step *flow.OpenLinkStep) *core.CommandResult {
 	link := step.Link
 	if link == "" {
@@ -1273,6 +1326,22 @@ func (d *Driver) takeScreenshot(step *flow.TakeScreenshotStep) *core.CommandResu
 	data, err := d.client.Screenshot()
 	if err != nil {
 		return errorResult(err, "Screenshot failed")
+	}
+
+	if step.CropOn != nil {
+		info, findErr := d.findElement(*step.CropOn, false, 0)
+		if findErr != nil || info == nil {
+			return errorResult(findErr, fmt.Sprintf("cropOn: element not found: %v", findErr))
+		}
+		sw, sh, dimErr := d.screenSize()
+		if dimErr != nil {
+			return errorResult(dimErr, "cropOn requires screen dimensions")
+		}
+		cropped, cropErr := core.CropScreenshot(data, info.Bounds, sw, sh)
+		if cropErr != nil {
+			return errorResult(cropErr, fmt.Sprintf("cropOn: %v", cropErr))
+		}
+		data = cropped
 	}
 
 	return &core.CommandResult{

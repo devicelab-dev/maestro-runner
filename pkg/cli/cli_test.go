@@ -32,7 +32,7 @@ func (m *mockDriver) GetState() *core.StateSnapshot         { return nil }
 func (m *mockDriver) GetPlatformInfo() *core.PlatformInfo   { return m.platformInfo }
 func (m *mockDriver) SetFindTimeout(int)                    {}
 func (m *mockDriver) SetWaitForIdleTimeout(int) error       { return nil }
-func (m *mockDriver) SetContext(context.Context)             {}
+func (m *mockDriver) SetContext(context.Context)            {}
 
 func TestResolveOutputDir_Default(t *testing.T) {
 	dir, err := resolveOutputDir("", false)
@@ -80,6 +80,23 @@ func TestResolveOutputDir_FlattenWithoutOutput(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "--flatten requires --output") {
 		t.Errorf("expected error about --flatten requiring --output, got: %v", err)
+	}
+}
+
+func TestParseArtifactMode(t *testing.T) {
+	cases := map[string]executor.ArtifactMode{
+		"always":     executor.ArtifactAlways,
+		"ALWAYS":     executor.ArtifactAlways,
+		"  always  ": executor.ArtifactAlways,
+		"never":      executor.ArtifactNever,
+		"on-failure": executor.ArtifactOnFailure,
+		"":           executor.ArtifactOnFailure,
+		"garbage":    executor.ArtifactOnFailure,
+	}
+	for in, want := range cases {
+		if got := parseArtifactMode(in); got != want {
+			t.Errorf("parseArtifactMode(%q) = %v, want %v", in, got, want)
+		}
 	}
 }
 
@@ -2350,5 +2367,31 @@ func TestIsSocketInUse_SocketAndPidWithDeadProcess(t *testing.T) {
 	// Socket exists + dead PID -> stale, not in use
 	if isSocketInUse(socketPath) {
 		t.Error("expected socket with dead owner PID to not be in use")
+	}
+}
+
+// --- Regression tests for issue #111: --auto-start-emulator on iOS sims ---
+
+// TestIOSTargetsSimulator verifies the WDA team-id/app-file pre-check treats
+// simulator-implying flags as simulators. Before the fix, --auto-start-emulator
+// fell through to hasBootedSimulator() (false, since nothing is booted yet) and
+// the run errored demanding --team-id before auto-start could boot any sim.
+// These cases short-circuit before any system call, so the test is hermetic.
+func TestIOSTargetsSimulator(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  *RunConfig
+		want bool
+	}{
+		{"auto-start-emulator implies simulator (#111)", &RunConfig{Platform: "ios", AutoStartEmulator: true}, true},
+		{"start-simulator implies simulator", &RunConfig{Platform: "ios", StartSimulator: "iPhone 15"}, true},
+		{"auto-start with parallel still a simulator", &RunConfig{Platform: "ios", AutoStartEmulator: true, Parallel: 2}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := iosTargetsSimulator(tc.cfg); got != tc.want {
+				t.Errorf("iosTargetsSimulator() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

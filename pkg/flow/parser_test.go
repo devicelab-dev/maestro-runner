@@ -946,6 +946,71 @@ func TestParse_SwipeWithAllFields(t *testing.T) {
 	}
 }
 
+// See devicelab-dev/maestro-runner#112 — `from: {id: X}` used to be silently
+// discarded, causing direction-swipes to ignore the anchor and fall through
+// to a screen-percentage swipe.
+func TestParse_SwipeFromKeyPopulatesSelector(t *testing.T) {
+	yaml := `
+- swipe:
+    from:
+      id: 'SliderTestID'
+    direction: LEFT
+    duration: 1500
+`
+	flow, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	swipe := flow.Steps[0].(*SwipeStep)
+	if swipe.Selector == nil {
+		t.Fatal("Selector is nil — `from:` was not parsed")
+	}
+	if swipe.Selector.ID != "SliderTestID" {
+		t.Errorf("Selector.ID=%q, want SliderTestID", swipe.Selector.ID)
+	}
+	if swipe.Direction != "LEFT" {
+		t.Errorf("Direction=%q, want LEFT", swipe.Direction)
+	}
+}
+
+// Historical `selector:` key remains supported for backward compatibility.
+func TestParse_SwipeSelectorKeyStillWorks(t *testing.T) {
+	yaml := `
+- swipe:
+    selector:
+      id: 'MyListView'
+    direction: DOWN
+`
+	flow, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	swipe := flow.Steps[0].(*SwipeStep)
+	if swipe.Selector == nil || swipe.Selector.ID != "MyListView" {
+		t.Fatalf("expected Selector.ID=MyListView, got %+v", swipe.Selector)
+	}
+}
+
+// `from:` wins if both keys are present.
+func TestParse_SwipeFromPrecedenceOverSelector(t *testing.T) {
+	yaml := `
+- swipe:
+    from:
+      id: 'PrimaryAnchor'
+    selector:
+      id: 'FallbackAnchor'
+    direction: LEFT
+`
+	flow, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	swipe := flow.Steps[0].(*SwipeStep)
+	if swipe.Selector == nil || swipe.Selector.ID != "PrimaryAnchor" {
+		t.Fatalf("expected Selector.ID=PrimaryAnchor (from), got %+v", swipe.Selector)
+	}
+}
+
 func TestParse_ScrollUntilVisibleWithAllFields(t *testing.T) {
 	yaml := `
 - scrollUntilVisible:

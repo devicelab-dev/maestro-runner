@@ -67,6 +67,42 @@ func buildJUnitXML(index *Index, flows []FlowDetail) string {
 	return b.String()
 }
 
+// relSourceFile returns the flow's source path for the JUnit `file` property,
+// preserving its subdirectories (e.g. "authentication/flow.yaml") instead of
+// flattening it to the bare filename (#96). It reports the path relative to the
+// working directory — which, for a config/workspace run, is where the flow tree
+// (and config.yaml) lives — so CI tools like action-junit-report can locate the
+// file. Falls back to the original path if it can't be made relative (e.g. the
+// flow lives outside the working tree).
+func relSourceFile(sourceFile string) string {
+	if sourceFile == "" {
+		return sourceFile
+	}
+	abs, err := filepath.Abs(sourceFile)
+	if err != nil {
+		return sourceFile
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return sourceFile
+	}
+	// Resolve symlinks on both sides so a symlinked working directory (e.g.
+	// macOS /tmp -> /private/tmp) doesn't defeat the relative computation.
+	// Best-effort: in a real run the flow file still exists at report time, so
+	// it resolves; if it doesn't, we compare the lexical paths.
+	if r, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = r
+	}
+	if r, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = r
+	}
+	rel, err := filepath.Rel(cwd, abs)
+	if err != nil || rel == "" || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		return sourceFile
+	}
+	return filepath.ToSlash(rel)
+}
+
 // buildTestCase builds a single <testcase> element.
 func buildTestCase(entry *FlowEntry, detail *FlowDetail, index *Index) string {
 	var tcTime float64
@@ -85,7 +121,7 @@ func buildTestCase(entry *FlowEntry, detail *FlowDetail, index *Index) string {
 	b.WriteString("      <properties>\n")
 	b.WriteString(fmt.Sprintf(
 		`        <property name="file" value="%s"/>`+"\n",
-		xmlEscape(filepath.Base(entry.SourceFile)),
+		xmlEscape(relSourceFile(entry.SourceFile)),
 	))
 
 	dev := resolveDevice(entry, index)

@@ -410,7 +410,9 @@ func TestCommandResultToError(t *testing.T) {
 		t.Errorf("commandResultToError(no error) = %v, want nil", got)
 	}
 
-	// Test result with error and message
+	// Test result with error and message — message wraps the underlying
+	// cause so debugging surfaces the original error reason without losing
+	// the friendly wrapper.
 	result = &core.CommandResult{
 		Success: false,
 		Error:   &testError{msg: "element not found"},
@@ -420,8 +422,9 @@ func TestCommandResultToError(t *testing.T) {
 	if got == nil {
 		t.Fatal("commandResultToError() = nil, want error")
 	}
-	if got.Message != "Could not find login button" {
-		t.Errorf("Message = %q, want %q", got.Message, "Could not find login button")
+	want := "Could not find login button (cause: element not found)"
+	if got.Message != want {
+		t.Errorf("Message = %q, want %q", got.Message, want)
 	}
 }
 

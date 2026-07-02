@@ -733,6 +733,28 @@ func TestExecuteSetOrientation(t *testing.T) {
 	}
 }
 
+// TestExecuteSetLocation tests setLocation is routed through Execute (real-device
+// path returns the unsupported error rather than the default "step type not
+// supported on iOS" fallback that was reported in issue #82).
+func TestExecuteSetLocation(t *testing.T) {
+	server := mockWDAServerForDriver()
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.SetLocationStep{Latitude: "37.7749", Longitude: "-122.4194"}
+	result := driver.Execute(step)
+
+	if result.Success {
+		t.Fatal("expected setLocation to fail on default (non-simulator) test driver")
+	}
+	// Must NOT hit the default "Step type '*flow.SetLocationStep' is not supported on iOS"
+	// branch — the dispatch case should route to setLocation and produce the real-device
+	// unsupported error instead.
+	if strings.Contains(result.Message, "is not supported on iOS") {
+		t.Errorf("setLocation hit default unsupported branch — dispatch case missing: %s", result.Message)
+	}
+}
+
 // TestExecuteOpenLink tests link opening
 func TestExecuteOpenLink(t *testing.T) {
 	server := mockWDAServerForDriver()
@@ -5821,16 +5843,16 @@ func TestSimpleSelectorWithIDAndIndex(t *testing.T) {
 	}
 }
 
-// TestDriverAlertActionField tests that alertAction field can be set on Driver.
+// TestDriverAlertActionField tests that alertAction defaults to "" (no
+// auto-handling at session creation). PrepareForFlow opts back in to
+// "accept"/"dismiss" when the flow has a launchApp step.
 func TestDriverAlertActionField(t *testing.T) {
 	client := &Client{}
 	info := &core.PlatformInfo{Platform: "ios"}
 	driver := NewDriver(client, info, "test-udid")
 
-	// Default to "accept" so EnsureSession enables WDA's alerts monitor —
-	// matches Maestro's documented default of accepting all permissions.
-	if driver.alertAction != "accept" {
-		t.Errorf("Expected default alertAction 'accept', got '%s'", driver.alertAction)
+	if driver.alertAction != "" {
+		t.Errorf("Expected default alertAction '', got '%s'", driver.alertAction)
 	}
 
 	driver.alertAction = "dismiss"
@@ -5838,10 +5860,55 @@ func TestDriverAlertActionField(t *testing.T) {
 		t.Errorf("Expected 'dismiss', got '%s'", driver.alertAction)
 	}
 
-	driver.alertAction = ""
-	if driver.alertAction != "" {
-		t.Errorf("Expected '', got '%s'", driver.alertAction)
+	driver.alertAction = "accept"
+	if driver.alertAction != "accept" {
+		t.Errorf("Expected 'accept', got '%s'", driver.alertAction)
 	}
+}
+
+// TestDriver_PrepareForFlow tests that PrepareForFlow scans for a
+// LaunchAppStep and sets alertAction to match resolveAlertAction's verdict.
+func TestDriver_PrepareForFlow(t *testing.T) {
+	mk := func() *Driver {
+		return NewDriver(&Client{}, &core.PlatformInfo{Platform: "ios"}, "test-udid")
+	}
+
+	t.Run("no launchApp leaves alertAction empty", func(t *testing.T) {
+		d := mk()
+		d.PrepareForFlow([]flow.Step{&flow.StopAppStep{}, &flow.OpenLinkStep{}})
+		if d.alertAction != "" {
+			t.Errorf("Expected '', got %q", d.alertAction)
+		}
+	})
+
+	t.Run("launchApp with no permissions sets accept", func(t *testing.T) {
+		d := mk()
+		d.PrepareForFlow([]flow.Step{&flow.LaunchAppStep{}})
+		if d.alertAction != "accept" {
+			t.Errorf("Expected 'accept', got %q", d.alertAction)
+		}
+	})
+
+	t.Run("launchApp with all-deny sets dismiss", func(t *testing.T) {
+		d := mk()
+		d.PrepareForFlow([]flow.Step{
+			&flow.LaunchAppStep{Permissions: map[string]string{"all": "deny"}},
+		})
+		if d.alertAction != "dismiss" {
+			t.Errorf("Expected 'dismiss', got %q", d.alertAction)
+		}
+	})
+
+	t.Run("first launchApp wins when multiple present", func(t *testing.T) {
+		d := mk()
+		d.PrepareForFlow([]flow.Step{
+			&flow.LaunchAppStep{Permissions: map[string]string{"all": "allow"}},
+			&flow.LaunchAppStep{Permissions: map[string]string{"all": "deny"}},
+		})
+		if d.alertAction != "accept" {
+			t.Errorf("Expected 'accept' (first launchApp wins), got %q", d.alertAction)
+		}
+	})
 }
 
 // TestSelectorLog covers the small helper used by the actionability
@@ -5866,5 +5933,47 @@ func TestSelectorLog(t *testing.T) {
 				t.Errorf("selectorLog(%+v) = %q, want %q", c.sel, got, c.want)
 			}
 		})
+	}
+}
+
+// TestPrepareForFlow_AlertAction verifies which launchApp permissions arm WDA's
+// alert monitor (#108 follow-up). The flow runner already feeds PrepareForFlow a
+// flattened slice (body + onFlowStart + expanded runFlow), so here we cover how a
+// launchApp's permissions map to d.alertAction, including the mixed-permissions
+// case that, on a real device, leaves it empty (and triggers the warning).
+func TestPrepareForFlow_AlertAction(t *testing.T) {
+	cases := []struct {
+		name        string
+		isSimulator bool
+		perms       map[string]string
+		want        string
+	}{
+		{"no permissions defaults to accept", true, nil, "accept"},
+		{"all allow -> accept", true, map[string]string{"all": "allow"}, "accept"},
+		{"all deny -> dismiss", true, map[string]string{"all": "deny"}, "dismiss"},
+		{"all unset -> empty (opt-out)", true, map[string]string{"all": "unset"}, ""},
+		// Mixed permissions resolve to empty on both, but only warn on real device.
+		{"mixed -> empty (simulator)", true, map[string]string{"camera": "allow", "location": "deny"}, ""},
+		{"mixed -> empty (real device, warns)", false, map[string]string{"camera": "allow", "location": "deny"}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d := &Driver{info: &core.PlatformInfo{Platform: "ios", IsSimulator: c.isSimulator}}
+			d.PrepareForFlow([]flow.Step{
+				&flow.LaunchAppStep{AppID: "com.example", Permissions: c.perms},
+			})
+			if d.alertAction != c.want {
+				t.Errorf("alertAction = %q, want %q", d.alertAction, c.want)
+			}
+		})
+	}
+}
+
+// TestPrepareForFlow_NoLaunchApp leaves the monitor off (alertAction stays "").
+func TestPrepareForFlow_NoLaunchApp(t *testing.T) {
+	d := &Driver{info: &core.PlatformInfo{Platform: "ios"}}
+	d.PrepareForFlow([]flow.Step{&flow.TapOnStep{}, &flow.BackStep{}})
+	if d.alertAction != "" {
+		t.Errorf("alertAction = %q, want empty (no launchApp = no monitor)", d.alertAction)
 	}
 }

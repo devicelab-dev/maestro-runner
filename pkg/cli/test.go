@@ -145,6 +145,12 @@ Examples:
 			EnvVars: []string{"MAESTRO_WAIT_FOR_IDLE_TIMEOUT"},
 		},
 		&cli.IntFlag{
+			Name:    "condition-timeout",
+			Usage:   "Default timeout in ms for when:/while: condition checks (default 1000). Override per condition with `timeout:`.",
+			Value:   1000,
+			EnvVars: []string{"MAESTRO_CONDITION_TIMEOUT"},
+		},
+		&cli.IntFlag{
 			Name:    "typing-frequency",
 			Usage:   "WDA typing speed in keys/sec (default 30). Lower values help React Native apps.",
 			Value:   30,
@@ -154,12 +160,32 @@ Examples:
 			Name:  "no-flutter-fallback",
 			Usage: "Disable automatic Flutter VM Service fallback",
 		},
+		&cli.BoolFlag{
+			Name:  "android-tcp-forward",
+			Usage: "Force TCP-to-TCP adb forward for Android drivers (auto-enabled when $DEVICEFARM_DEVICE_UDID is set; needed on AWS Device Farm and similar sandboxes that block localfilesystem:/localabstract: forwards)",
+		},
+		&cli.StringFlag{
+			Name:  "artifacts",
+			Usage: "When to capture screenshots/hierarchy: on-failure (default), always, never",
+			Value: "on-failure",
+		},
 
 		// Emulator management flags (start-emulator, auto-start-emulator,
 		// shutdown-after, boot-timeout) are global flags defined in cli.go.
 
 	},
 	Action: runTest,
+}
+
+func parseArtifactMode(s string) executor.ArtifactMode {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "always":
+		return executor.ArtifactAlways
+	case "never":
+		return executor.ArtifactNever
+	default:
+		return executor.ArtifactOnFailure
+	}
 }
 
 // parseDevices parses the --device flag value into a slice of device UDIDs.
@@ -448,7 +474,7 @@ type RunConfig struct {
 	Parallel int // Number of devices to use (0 = single device mode)
 
 	// Execution
-	Continuous bool
+	Continuous  bool
 	Headed      bool   // Show browser window (web only, default is headless)
 	Browser     string // chrome, chromium, or path to binary (web only)
 	UserDataDir string // Persistent Chrome profile directory (web only)
@@ -461,13 +487,19 @@ type RunConfig struct {
 	AppID    string // App bundle ID or package name
 
 	// Driver
-	Driver       string                 // uiautomator2, appium
-	AppiumURL    string                 // Appium server URL
-	CapsFile     string                 // Appium capabilities JSON file path
-	Capabilities map[string]interface{} // Parsed Appium capabilities
+	Driver    string // uiautomator2, appium
+	AppiumURL string // Appium server URL
+	// AppiumSessionFile, when set, makes maestro-runner publish live Appium
+	// session info (sessionId + appiumUrl per device) to this JSON file via the
+	// session-export provider, so external tools can attach without polling
+	// reports. Runs alongside any detected cloud provider. See issue #91.
+	AppiumSessionFile string
+	CapsFile          string                 // Appium capabilities JSON file path
+	Capabilities      map[string]interface{} // Parsed Appium capabilities
 
 	// Driver settings
 	WaitForIdleTimeout int    // Wait for device idle in ms (0 = disabled, default 200)
+	ConditionTimeout   int    // Default timeout (ms) for when:/while: condition checks (default 1000)
 	TypingFrequency    int    // WDA typing frequency in keys/sec (0 = use WDA default of 60)
 	TeamID             string // Apple Development Team ID for WDA code signing
 	WDABundleID        string // Custom WDA bundle identifier
@@ -488,6 +520,17 @@ type RunConfig struct {
 
 	// Flutter
 	NoFlutterFallback bool // Disable automatic Flutter VM Service fallback
+
+	// Android driver — TCP forward override
+	// Forces TCP-to-TCP adb forward instead of the Unix-socket forward
+	// we use on Linux/Mac. Auto-enabled when $DEVICEFARM_DEVICE_UDID is
+	// set (AWS Device Farm). Use the flag to opt in manually for other
+	// sandboxed environments that block localfilesystem:/localabstract:
+	// forwards.
+	AndroidTCPForward bool
+
+	// Artifacts
+	Artifacts executor.ArtifactMode // When to capture screenshots/hierarchy
 
 	// Cloud provider (detected from AppiumURL, nil if not a cloud provider)
 	CloudProvider cloud.Provider
@@ -653,9 +696,11 @@ func runTest(c *cli.Context) error {
 		AppID:              appID,
 		Driver:             getString("driver"),
 		AppiumURL:          getString("appium-url"),
+		AppiumSessionFile:  getString("appium-session-file"),
 		CapsFile:           capsFile,
 		Capabilities:       caps,
 		WaitForIdleTimeout: getInt("wait-for-idle-timeout"),
+		ConditionTimeout:   getInt("condition-timeout"),
 		TypingFrequency:    getInt("typing-frequency"),
 		TeamID:             getString("team-id"),
 		WDABundleID:        getString("wda-bundle-id"),
@@ -668,6 +713,8 @@ func runTest(c *cli.Context) error {
 		NoAppInstall:       getBool("no-app-install"),
 		NoDriverInstall:    getBool("no-driver-install"),
 		NoFlutterFallback:  getBool("no-flutter-fallback"),
+		AndroidTCPForward:  getBool("android-tcp-forward"),
+		Artifacts:          parseArtifactMode(getString("artifacts")),
 	}
 
 	// Apply waitForIdleTimeout with priority:
@@ -795,9 +842,7 @@ func executeTest(cfg *RunConfig) error {
 	// Appium handles everything via capabilities — no --app-file or --team-id needed.
 	if strings.EqualFold(cfg.Platform, "ios") && cfg.Driver != "appium" {
 		// team-id is only required for real devices, not simulators.
-		isSimTarget := cfg.StartSimulator != "" ||
-			(len(cfg.Devices) > 0 && isIOSSimulator(cfg.Devices[0])) ||
-			(len(cfg.Devices) == 0 && hasBootedSimulator())
+		isSimTarget := iosTargetsSimulator(cfg)
 		if cfg.TeamID == "" && !isSimTarget {
 			return fmt.Errorf("iOS with WDA driver requires --team-id for code signing (real devices only)\n" +
 				"Usage: maestro-runner --platform ios --team-id <APPLE_TEAM_ID> test <flow-files>\n" +
@@ -1316,13 +1361,14 @@ func executeSingleDevice(cfg *RunConfig, flows []flow.Flow) (*executor.RunResult
 	runner := executor.New(driver, executor.RunnerConfig{
 		OutputDir:          cfg.OutputDir,
 		Parallelism:        0,
-		Artifacts:          executor.ArtifactOnFailure,
+		Artifacts:          cfg.Artifacts,
 		Device:             deviceInfo,
 		App:                buildAppReport(driver),
 		RunnerVersion:      Version,
 		DriverName:         driverName,
 		Env:                cfg.Env,
 		WaitForIdleTimeout: cfg.WaitForIdleTimeout,
+		ConditionTimeout:   cfg.ConditionTimeout,
 		TypingFrequency:    cfg.TypingFrequency,
 		DeviceInfo:         &deviceInfo,
 		OnFlowStart:        onFlowStartWithCloud(cfg),
@@ -1357,13 +1403,14 @@ func ExecuteFlowWithDriver(driver core.Driver, cfg *RunConfig, f flow.Flow) (*ex
 	runner := executor.New(driver, executor.RunnerConfig{
 		OutputDir:          cfg.OutputDir,
 		Parallelism:        0,
-		Artifacts:          executor.ArtifactOnFailure,
+		Artifacts:          cfg.Artifacts,
 		Device:             deviceInfo,
 		App:                buildAppReport(driver),
 		RunnerVersion:      Version,
 		DriverName:         driverName,
 		Env:                cfg.Env,
 		WaitForIdleTimeout: cfg.WaitForIdleTimeout,
+		ConditionTimeout:   cfg.ConditionTimeout,
 		TypingFrequency:    cfg.TypingFrequency,
 		DeviceInfo:         &deviceInfo,
 		OnFlowStart:        onFlowStartWithCloud(cfg),
@@ -1675,13 +1722,14 @@ func executeAppiumSingleSession(cfg *RunConfig, flows []flow.Flow) (*executor.Ru
 	runner := executor.New(driver, executor.RunnerConfig{
 		OutputDir:          cfg.OutputDir,
 		Parallelism:        0,
-		Artifacts:          executor.ArtifactOnFailure,
+		Artifacts:          cfg.Artifacts,
 		Device:             deviceInfo,
 		App:                buildAppReport(driver),
 		RunnerVersion:      Version,
 		DriverName:         "appium",
 		Env:                cfg.Env,
 		WaitForIdleTimeout: cfg.WaitForIdleTimeout,
+		ConditionTimeout:   cfg.ConditionTimeout,
 		TypingFrequency:    cfg.TypingFrequency,
 		DeviceInfo:         &deviceInfo,
 		OnFlowStart:        onFlowStartWithCloud(cfg),
@@ -1876,13 +1924,23 @@ func createAppiumDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	info := driver.GetPlatformInfo()
 	logger.Info("Appium session created successfully: %s", info.DeviceID)
 
-	// Detect cloud provider and extract metadata
+	// Build the provider chain: detected cloud provider (if any) + the session
+	// exporter (if --appium-session-file is set). Composite runs them all, so a
+	// cloud provider and the session file work together. See issue #91.
+	var providers []cloud.Provider
 	if p := cloud.Detect(cfg.AppiumURL); p != nil {
-		cfg.CloudProvider = p
+		providers = append(providers, p)
+	}
+	if cfg.AppiumSessionFile != "" {
+		providers = append(providers, cloud.NewSessionExporter(cfg.AppiumSessionFile))
+	}
+	if cp := cloud.Composite(providers...); cp != nil {
+		cfg.CloudProvider = cp
 		cfg.CloudMeta = make(map[string]string)
-		p.ExtractMeta(driver.SessionID(), driver.SessionCaps(), cfg.CloudMeta)
+		cp.ExtractMeta(driver.SessionID(), driver.SessionCaps(), cfg.CloudMeta)
 		cfg.CloudMeta[cloud.MetaAppiumURL] = strings.TrimSpace(cfg.AppiumURL)
-		logger.Info("Cloud provider detected: %s", p.Name())
+		cfg.CloudMeta[cloud.MetaDeviceID] = info.DeviceID
+		logger.Info("Cloud provider(s): %s", cp.Name())
 	}
 
 	// Print session details
@@ -2442,13 +2500,14 @@ func createParallelRunner(cfg *RunConfig, workers []executor.DeviceWorker, platf
 	runnerConfig := executor.RunnerConfig{
 		OutputDir:          cfg.OutputDir,
 		Parallelism:        0,
-		Artifacts:          executor.ArtifactOnFailure,
+		Artifacts:          cfg.Artifacts,
 		Device:             deviceInfo,
 		App:                buildAppReport(firstDriver),
 		RunnerVersion:      Version,
 		DriverName:         driverName,
 		Env:                cfg.Env,
 		WaitForIdleTimeout: cfg.WaitForIdleTimeout,
+		ConditionTimeout:   cfg.ConditionTimeout,
 		TypingFrequency:    cfg.TypingFrequency,
 		// Callbacks will be set per-worker in parallel.go with device info
 	}

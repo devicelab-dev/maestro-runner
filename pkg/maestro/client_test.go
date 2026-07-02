@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 // mockServer creates an httptest.Server that upgrades to WebSocket
@@ -258,7 +258,7 @@ func TestClientCallWithParams(t *testing.T) {
 		// Verify params were passed
 		params, _ := json.Marshal(req.Params)
 		var p map[string]interface{}
-		json.Unmarshal(params, &p)
+		_ = json.Unmarshal(params, &p)
 
 		x, _ := p["x"].(float64)
 		y, _ := p["y"].(float64)

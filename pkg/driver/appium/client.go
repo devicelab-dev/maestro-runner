@@ -48,20 +48,32 @@ func (c *Client) Connect(capabilities map[string]interface{}) error {
 	// For iOS: disable auto-launch to prevent double-launch (once by Appium session,
 	// once by flow's launchApp). Double-launch causes duplicate permission alerts
 	// that interfere with element focus during text input.
+	//
+	// EXCEPT when the user explicitly set appium:autoLaunch in their caps file.
+	// Some workflows require Appium to launch the app during session creation —
+	// notably appium:processArguments (DYLD_INSERT_LIBRARIES for Applitools NML,
+	// etc.) only takes effect on the Appium-initiated launch. Overriding the
+	// user's autoLaunch=true would silently strip those side-effects.
 	if p, ok := capabilities["platformName"].(string); ok && strings.EqualFold(p, "ios") {
-		capabilities["appium:autoLaunch"] = false
+		if _, userSet := capabilities["appium:autoLaunch"]; !userSet {
+			capabilities["appium:autoLaunch"] = false
+		}
 	}
 
 	// For Android with clearState (noReset=false): disable auto-launch so we can
 	// grant permissions via pm grant before the app starts (avoids permission popups).
 	// When noReset is true (default), permissions persist across sessions so this isn't needed.
+	// Same caveat as iOS — respect the user's explicit autoLaunch setting so that
+	// appium:processArguments and similar launch-time-only capabilities still apply.
 	var androidAppPackage, androidAppActivity string
 	if p, ok := capabilities["platformName"].(string); ok && strings.EqualFold(p, "android") {
 		if noReset, ok := capabilities["appium:noReset"].(bool); ok && !noReset {
 			if pkg, ok := capabilities["appium:appPackage"].(string); ok && pkg != "" {
 				androidAppPackage = pkg
 				androidAppActivity, _ = capabilities["appium:appActivity"].(string)
-				capabilities["appium:autoLaunch"] = false
+				if _, userSet := capabilities["appium:autoLaunch"]; !userSet {
+					capabilities["appium:autoLaunch"] = false
+				}
 			}
 		}
 	}

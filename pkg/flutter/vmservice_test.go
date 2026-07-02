@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 // mockVMServiceHandler handles JSON-RPC requests for testing.
@@ -69,7 +69,7 @@ func (h *mockVMServiceHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 				"error":   map[string]interface{}{"code": -32601, "message": "method not found"},
 			}
 			respData, _ := json.Marshal(resp)
-			conn.Write(ctx, websocket.MessageText, respData)
+			_ = conn.Write(ctx, websocket.MessageText, respData)
 			continue
 		}
 
@@ -79,7 +79,7 @@ func (h *mockVMServiceHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 			"result":  result,
 		}
 		respData, _ := json.Marshal(resp)
-		conn.Write(ctx, websocket.MessageText, respData)
+		_ = conn.Write(ctx, websocket.MessageText, respData)
 	}
 }
 
@@ -211,7 +211,7 @@ func TestConnectNoFlutterIsolate(t *testing.T) {
 				"result":  result,
 			}
 			respData, _ := json.Marshal(resp)
-			conn.Write(ctx, websocket.MessageText, respData)
+			_ = conn.Write(ctx, websocket.MessageText, respData)
 		}
 	})
 	server := httptest.NewServer(handler)
@@ -241,7 +241,7 @@ func TestCallRPCError(t *testing.T) {
 			}
 
 			var req jsonRPCRequest
-			json.Unmarshal(data, &req)
+			_ = json.Unmarshal(data, &req)
 
 			resp := map[string]interface{}{
 				"jsonrpc": "2.0",
@@ -249,7 +249,7 @@ func TestCallRPCError(t *testing.T) {
 				"error":   map[string]interface{}{"code": -32000, "message": "test error"},
 			}
 			respData, _ := json.Marshal(resp)
-			conn.Write(ctx, websocket.MessageText, respData)
+			_ = conn.Write(ctx, websocket.MessageText, respData)
 		}
 	})
 	server := httptest.NewServer(handler)

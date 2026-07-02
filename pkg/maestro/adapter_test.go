@@ -104,7 +104,7 @@ func TestAdapterClick(t *testing.T) {
 		}
 		params, _ := json.Marshal(req.Params)
 		var p map[string]interface{}
-		json.Unmarshal(params, &p)
+		_ = json.Unmarshal(params, &p)
 		if p["x"].(float64) != 100 || p["y"].(float64) != 200 {
 			t.Errorf("expected x=100,y=200, got %v,%v", p["x"], p["y"])
 		}

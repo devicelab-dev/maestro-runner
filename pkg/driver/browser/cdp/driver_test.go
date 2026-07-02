@@ -3712,7 +3712,7 @@ func TestUploadFile(t *testing.T) {
 
 	// Create a temp file to upload
 	tmpFile := t.TempDir() + "/test-upload.txt"
-	os.WriteFile(tmpFile, []byte("test content"), 0o600)
+	_ = os.WriteFile(tmpFile, []byte("test content"), 0o600)
 
 	step := &flow.UploadFileStep{
 		BaseStep: flow.BaseStep{StepType: flow.StepUploadFile},
@@ -3743,8 +3743,8 @@ func TestUploadFileMultiple(t *testing.T) {
 	defer d.Close()
 
 	dir := t.TempDir()
-	os.WriteFile(dir+"/a.txt", []byte("a"), 0o600)
-	os.WriteFile(dir+"/b.txt", []byte("b"), 0o600)
+	_ = os.WriteFile(dir+"/a.txt", []byte("a"), 0o600)
+	_ = os.WriteFile(dir+"/b.txt", []byte("b"), 0o600)
 
 	step := &flow.UploadFileStep{
 		BaseStep: flow.BaseStep{StepType: flow.StepUploadFile},
@@ -4586,7 +4586,7 @@ func TestRunBrowserScript(t *testing.T) {
 	// Create a temp JS file
 	tmpDir := t.TempDir()
 	scriptPath := filepath.Join(tmpDir, "test-script.js")
-	os.WriteFile(scriptPath, []byte(`return document.title;`), 0644)
+	_ = os.WriteFile(scriptPath, []byte(`return document.title;`), 0644)
 
 	result := d.runBrowserScript(&flow.RunBrowserScriptStep{
 		File: scriptPath,
@@ -4608,7 +4608,7 @@ func TestRunBrowserScriptWithEnv(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	scriptPath := filepath.Join(tmpDir, "env-script.js")
-	os.WriteFile(scriptPath, []byte(`return window.__env.API_KEY;`), 0644)
+	_ = os.WriteFile(scriptPath, []byte(`return window.__env.API_KEY;`), 0644)
 
 	result := d.runBrowserScript(&flow.RunBrowserScriptStep{
 		File: scriptPath,

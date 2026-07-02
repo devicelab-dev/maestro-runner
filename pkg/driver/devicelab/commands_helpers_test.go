@@ -575,7 +575,7 @@ func TestOpenLink(t *testing.T) {
 	// browser=true path — force browser via BROWSABLE category
 	shell.commands = nil
 	browser := true
-	res = driver.openLink(&flow.OpenLinkStep{Link: "https://example.com", Browser: &browser})
+	_ = driver.openLink(&flow.OpenLinkStep{Link: "https://example.com", Browser: &browser})
 	if !strings.Contains(shell.commands[0], "BROWSABLE") {
 		t.Errorf("openLink with browser=true should add BROWSABLE category: %s", shell.commands[0])
 	}
@@ -681,7 +681,7 @@ func TestStartStopRecording(t *testing.T) {
 	}
 
 	shell.commands = nil
-	res = driver.startRecording(&flow.StartRecordingStep{Path: "/sdcard/my.mp4"})
+	_ = driver.startRecording(&flow.StartRecordingStep{Path: "/sdcard/my.mp4"})
 	if !strings.Contains(shell.commands[0], "/sdcard/my.mp4") {
 		t.Errorf("expected custom path, got %s", shell.commands[0])
 	}
@@ -1791,7 +1791,7 @@ func (s *scriptedClient) SendKeyActions(text string) error {
 }
 
 // helper: build a cached Element with text + bounds + action callbacks.
-func makeCachedElement(text string, rect uiautomator2.ElementRect, sendKeys func(string) error) *uiautomator2.Element {
+func makeCachedElement(text string, rect uiautomator2.ElementRect, sendKeys func(string) error) *uiautomator2.Element { //nolint:unused
 	elem := uiautomator2.NewCachedElement("elem-id", text, rect)
 	if sendKeys != nil {
 		elem.SetSendKeysFunc(sendKeys)

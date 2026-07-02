@@ -238,6 +238,19 @@ type SessionEnsurer interface {
 	EnsureSession(appID string) error
 }
 
+// FlowAware is an optional interface drivers can implement to inspect the
+// upcoming flow before session creation. The WDA driver uses this to decide
+// whether to register XCTest's alert monitor at session creation — only flows
+// that include a launchApp step (implicitly permissions: all=allow by default)
+// need the monitor. Flows without launchApp keep the monitor off so in-app
+// confirmation dialogs aren't auto-dismissed.
+type FlowAware interface {
+	// PrepareForFlow is called once, before EnsureSession, with the flow's
+	// top-level step list. Drivers should treat unrecognized step types as
+	// no-ops and never error.
+	PrepareForFlow(steps []flow.Step)
+}
+
 // Unwrap returns the innermost driver, stripping any wrapper layers
 // (e.g. FlutterDriver). Use this to access optional interfaces that
 // wrappers may not forward.

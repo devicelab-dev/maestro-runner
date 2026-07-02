@@ -105,6 +105,12 @@ func New(cfg Config) (*Driver, error) {
 		Set("disable-background-timer-throttling").
 		Set("disable-component-update").
 		Set("password-store", "basic")
+	// Chrome's setuid sandbox relies on user namespaces, which CI runners
+	// (e.g. GitHub Actions) restrict — causing the zygote to abort on launch.
+	// Disable the sandbox only under CI or when explicitly requested.
+	if os.Getenv("CI") != "" || os.Getenv("MAESTRO_NO_SANDBOX") != "" {
+		l = l.Set("no-sandbox")
+	}
 	if cfg.UserDataDir != "" {
 		// Persistent profile: cookies / localStorage / extensions survive
 		// across runs. Caller is responsible for the directory's lifecycle.

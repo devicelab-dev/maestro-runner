@@ -1,0 +1,1817 @@
+import XCTest
+
+extension RunnerTests {
+  struct TouchVisualizationFrame {
+    let x: Double
+    let y: Double
+    let referenceWidth: Double
+    let referenceHeight: Double
+  }
+
+  struct DragVisualizationFrame {
+    let x: Double
+    let y: Double
+    let x2: Double
+    let y2: Double
+    let referenceWidth: Double
+    let referenceHeight: Double
+  }
+
+  struct DragPoints {
+    let x: Double
+    let y: Double
+    let x2: Double
+    let y2: Double
+  }
+
+  struct SelectorElementMatch {
+    let element: XCUIElement?
+    let isAmbiguous: Bool
+  }
+
+  enum TextTypingRepairMode {
+    case none
+    case append
+    case replacement
+  }
+
+  enum TextEntryTiming {
+    static let focusTimeout: TimeInterval = 0.4
+    static let repairReadinessTimeout: TimeInterval = 1.0
+    static let readinessTimeout: TimeInterval = 2.0
+    static let hardwareKeyboardFallbackTimeout: TimeInterval = 0.35
+    static let pollInterval: TimeInterval = 0.02
+    static let warmupValueTimeout: TimeInterval = 0.4
+    static let verificationStabilityWindow: TimeInterval = 0.2
+  }
+
+  struct TextEntryResult {
+    let verified: Bool?
+    let repaired: Bool
+    let expectedText: String?
+    let observedText: String?
+  }
+
+  struct TextEntryTarget {
+    let element: XCUIElement?
+    let refreshPoint: CGPoint?
+    let prefersFocusedElement: Bool
+
+    func withElement(_ nextElement: XCUIElement?) -> TextEntryTarget {
+      guard let nextElement else {
+        return self
+      }
+      let frame = nextElement.frame
+      let point = frame.isEmpty ? refreshPoint : CGPoint(x: frame.midX, y: frame.midY)
+      return TextEntryTarget(
+        element: nextElement,
+        refreshPoint: point,
+        prefersFocusedElement: prefersFocusedElement
+      )
+    }
+  }
+
+  // MARK: - Navigation Gestures
+
+  func tapInAppBackControl(app: XCUIApplication) -> Bool {
+#if os(macOS)
+    if let back = macOSNavigationBackElement(app: app) {
+      tapElementCenter(app: app, element: back)
+      return true
+    }
+    return false
+#elseif os(tvOS)
+    _ = pressTvRemote(.menu)
+    return true
+#else
+    let buttons = app.navigationBars.buttons.allElementsBoundByIndex
+    if let back = buttons.first(where: { $0.isHittable }) {
+      back.tap()
+      return true
+    }
+    return false
+#endif
+  }
+
+  func performBackGesture(app: XCUIApplication) {
+    if pressTvRemote(.menu) {
+      return
+    }
+    performCoordinateBackGesture(app: app)
+  }
+
+  private func performCoordinateBackGesture(app: XCUIApplication) {
+#if !os(tvOS)
+    let target = app.windows.firstMatch.exists ? app.windows.firstMatch : app
+    let start = target.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5))
+    let end = target.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5))
+    start.press(forDuration: 0.05, thenDragTo: end)
+#endif
+  }
+
+  func performSystemBackAction(app: XCUIApplication) -> Bool {
+#if os(macOS)
+    return false
+#else
+    if pressTvRemote(.menu) {
+      return true
+    }
+    performBackGesture(app: app)
+    return true
+#endif
+  }
+
+  func performAppSwitcherGesture(app: XCUIApplication) {
+    if pressTvRemote(.home) {
+      sleepFor(resolveTvRemoteDoublePressDelay())
+      _ = pressTvRemote(.home)
+      return
+    }
+    performCoordinateAppSwitcherGesture(app: app)
+  }
+
+  private func performCoordinateAppSwitcherGesture(app: XCUIApplication) {
+#if !os(tvOS)
+    let target = app.windows.firstMatch.exists ? app.windows.firstMatch : app
+    let start = target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.99))
+    let end = target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+    start.press(forDuration: 0.6, thenDragTo: end)
+#endif
+  }
+
+  func pressHomeButton() {
+#if os(macOS)
+    return
+#else
+    if pressTvRemote(.home) {
+      return
+    }
+    XCUIDevice.shared.press(.home)
+#endif
+  }
+
+  func rotateDevice(to orientationName: String) -> Bool {
+#if os(macOS) || os(tvOS)
+    return false
+#else
+    switch orientationName {
+    case "portrait":
+      XCUIDevice.shared.orientation = .portrait
+    case "portrait-upside-down":
+      XCUIDevice.shared.orientation = .portraitUpsideDown
+    case "landscape-left":
+      XCUIDevice.shared.orientation = .landscapeLeft
+    case "landscape-right":
+      XCUIDevice.shared.orientation = .landscapeRight
+    default:
+      return false
+    }
+    sleepFor(0.2)
+    return true
+#endif
+  }
+
+  func findElement(app: XCUIApplication, text: String) -> XCUIElement? {
+    let predicate = NSPredicate(format: "label CONTAINS[c] %@ OR identifier CONTAINS[c] %@ OR value CONTAINS[c] %@", text, text, text)
+    let element = app.descendants(matching: .any).matching(predicate).firstMatch
+    return element.exists ? element : nil
+  }
+
+  func findElement(app: XCUIApplication, selectorKey: String, selectorValue: String) -> SelectorElementMatch {
+    let value = selectorValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !value.isEmpty else {
+      return SelectorElementMatch(element: nil, isAmbiguous: false)
+    }
+    let predicate: NSPredicate
+    switch selectorKey {
+    case "id":
+      predicate = NSPredicate(format: "identifier ==[c] %@", value)
+    case "label":
+      predicate = NSPredicate(format: "label ==[c] %@", value)
+    case "value":
+      predicate = NSPredicate(format: "value ==[c] %@", value)
+    case "text":
+      predicate = NSPredicate(format: "label ==[c] %@ OR identifier ==[c] %@ OR value ==[c] %@", value, value, value)
+    default:
+      return SelectorElementMatch(element: nil, isAmbiguous: false)
+    }
+
+    var matchedElement: XCUIElement?
+    let matches = app.descendants(matching: .any).matching(predicate).allElementsBoundByIndex
+    for element in matches where element.exists {
+      guard element.isHittable else {
+        continue
+      }
+      guard matchedElement == nil else {
+        return SelectorElementMatch(element: nil, isAmbiguous: true)
+      }
+      matchedElement = element
+    }
+    return SelectorElementMatch(element: matchedElement, isAmbiguous: false)
+  }
+
+  // MARK: - Liberal find-and-act
+  //
+  // The existing `findElement(selectorKey:selectorValue:)` above requires
+  // EXACT NSPredicate match + isHittable=true. That's too strict for many
+  // RN flows where target text is long (e.g. "What is Lorem Ipsum?") or
+  // non-hittable (StaticText headings). The Go-side snapshot+filter path
+  // is liberal (substring + case-insensitive + prefer-editable-inputs) but
+  // expensive (two HTTP round-trips: snapshot + tap, with 300-node cap).
+  //
+  // treeSignature builds a stable hash of the accessibility tree's
+  // geometry — the bits we care about for "is the UI ready for
+  // interaction": element type, identifier, label, and integer-rounded
+  // frame. Iterates depth-first, hashes each node into a Hasher, returns
+  // the final hash. Sub-pixel jitter from CALayer hairlines or display-
+  // link timing doesn't count as "still animating" (frames are rounded
+  // to int).
+  func treeSignature(of snapshot: XCUIElementSnapshot) -> UInt64 {
+    var hasher = Hasher()
+    func walk(_ s: XCUIElementSnapshot) {
+      hasher.combine(s.elementType.rawValue)
+      hasher.combine(s.identifier)
+      hasher.combine(s.label)
+      hasher.combine(Int(s.frame.origin.x))
+      hasher.combine(Int(s.frame.origin.y))
+      hasher.combine(Int(s.frame.size.width))
+      hasher.combine(Int(s.frame.size.height))
+      for child in s.children { walk(child) }
+    }
+    walk(snapshot)
+    return UInt64(bitPattern: Int64(hasher.finalize()))
+  }
+
+  // tryTapAlertButton handles the very common case of "tap a button in an
+  // active UIAlertController". Alerts present in a separate UIWindow, so
+  // their button frames don't translate to the main app's coordinate space —
+  // tapAt(x, y) using those frames misses the button. Tapping the
+  // XCUIElement directly lets XCTest do the window-coordinate math.
+  //
+  // Returns nil if no alert is present or no alert button matches; caller
+  // should then fall through to the main snapshot+tap path.
+  func tryTapAlertButton(
+    app: XCUIApplication,
+    selectorKey: String,
+    selectorValue: String
+  ) -> Response? {
+    let needle = selectorValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    if needle.isEmpty {
+      return nil
+    }
+    let alertQuery = app.alerts
+    let alertCount = alertQuery.count
+    if alertCount == 0 {
+      return nil
+    }
+    let needleLower = needle.lowercased()
+
+    for i in 0..<alertCount {
+      let alert = alertQuery.element(boundBy: i)
+      if !alert.exists {
+        continue
+      }
+      // Score candidate buttons: 0=exact-on-target-attribute, 1=substring-on-target,
+      // 2=any-other-match. For selectorKey "id", target attribute is identifier;
+      // for "text"/"label", target is label.
+      var best: (XCUIElement, Int)? = nil
+      let buttons = alert.buttons.allElementsBoundByIndex
+      for button in buttons {
+        if !button.exists { continue }
+        let label = button.label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let identifier = button.identifier.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var score: Int? = nil
+        switch selectorKey {
+        case "id":
+          if identifier == needleLower { score = 0 }
+          else if identifier.contains(needleLower) && !identifier.isEmpty { score = 1 }
+          else if label == needleLower { score = 0 }
+          else if label.contains(needleLower) && !label.isEmpty { score = 2 }
+        default: // "text", "label", anything else
+          if label == needleLower { score = 0 }
+          else if identifier == needleLower { score = 0 }
+          else if label.contains(needleLower) && !label.isEmpty { score = 1 }
+          else if identifier.contains(needleLower) && !identifier.isEmpty { score = 2 }
+        }
+        if let s = score {
+          if best == nil || s < best!.1 {
+            best = (button, s)
+          }
+        }
+      }
+      guard let (matchedButton, _) = best else { continue }
+      // Capture button frame (in screen coords) for response.
+      let frame = matchedButton.frame
+      let x = Double(frame.midX)
+      let y = Double(frame.midY)
+      let touchFrame = resolvedTouchVisualizationFrame(app: app, x: x, y: y)
+      let timing = measureGesture {
+        matchedButton.tap()
+      }
+      // Alert taps trigger a dismiss → underlying cascade (e.g. an
+      // alert "Discard" can kick off a navigation pop). There's a
+      // brief moment of "false stability" right after the alert
+      // dismisses but before the cascade animation actually starts.
+      // Wait for the tree to truly settle so the next tap (which
+      // will only do a pre-tap settle) doesn't get dropped by the
+      // gesture system mid-cascade.
+      waitForTreeStable(app: app, timeoutSeconds: 0.8)
+      return Response(
+        ok: true,
+        data: DataPayload(
+          message: "tapped alert button",
+          gestureStartUptimeMs: timing.gestureStartUptimeMs,
+          gestureEndUptimeMs: timing.gestureEndUptimeMs,
+          x: touchFrame.x,
+          y: touchFrame.y,
+          referenceWidth: touchFrame.referenceWidth,
+          referenceHeight: touchFrame.referenceHeight
+        )
+      )
+    }
+    return nil
+  }
+
+  // waitForTreeStable polls app.snapshot() until two consecutive
+  // snapshots produce the same tree signature, or the budget expires.
+  // Same idea as the awaitIdle command but inline — used by paths that
+  // need to wait for animation completion right where they are (e.g.
+  // tryTapAlertButton after dismissing an alert, before returning).
+  func waitForTreeStable(app: XCUIApplication, timeoutSeconds: TimeInterval) {
+    let started = Date()
+    var prevSig: UInt64? = nil
+    while Date().timeIntervalSince(started) < timeoutSeconds {
+      guard let snap = try? app.snapshot() else { return }
+      let sig = treeSignature(of: snap)
+      if let prev = prevSig, prev == sig {
+        return
+      }
+      prevSig = sig
+    }
+  }
+
+  // findLiberalMatch walks the XCUI tree, applies the same selector
+  // semantics as the Go-side (substring + case-insensitive + exact-match-
+  // preference + prefer-editable-inputs ranking), and returns the best
+  // match.
+  //
+  // The loop ALSO doubles as the animation-end gate: it walks the tree,
+  // and in the same pass computes a tree signature (hash of all node
+  // geometries). When two consecutive snapshots produce the same
+  // signature → the screen has settled → the match's frame is trustworthy
+  // and we can return.
+  //
+  // Why this is one loop and not "find then refresh-frame": doing it in
+  // one walk per iteration saves O(N) per iteration vs the previous
+  // two-pass design (one walk to find, separate walks to verify frame
+  // stability). It also ensures the matched element comes from the SAME
+  // snapshot we judged stable — no race window between "screen settled"
+  // and "use match from older snapshot".
+  //
+  // Budget: up to 600ms (~15 iters of ~40ms each). For a fully static
+  // screen the loop exits at iter 2 (~80ms). Mid-animation extends until
+  // tree stops changing or budget exhausted (then we tap at whatever
+  // frame we last saw, same fallback as before).
+
+  struct LiberalMatchResult {
+    let matched: XCUIElementSnapshot?
+    let walkedNodes: [SnapshotNode]
+  }
+
+  func findLiberalMatch(
+    app: XCUIApplication,
+    selectorKey: String,
+    selectorValue: String
+  ) -> LiberalMatchResult {
+    let needle = selectorValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    if needle.isEmpty {
+      return LiberalMatchResult(matched: nil, walkedNodes: [])
+    }
+    let needleLower = needle.lowercased()
+
+    func typeRank(_ t: XCUIElement.ElementType) -> Int {
+      switch t {
+      case .textField, .secureTextField, .searchField, .textView: return 0
+      case .button, .link, .cell, .menuItem, .switch, .checkBox: return 1
+      default: return 2
+      }
+    }
+
+    func nodeMatchKind(label: String, identifier: String, valueText: String) -> Int? {
+      let labLower = label.lowercased()
+      let idLower = identifier.lowercased()
+      let valLower = valueText.lowercased()
+      switch selectorKey {
+      case "text":
+        if labLower == needleLower || valLower == needleLower || idLower == needleLower {
+          return 0
+        }
+        if labLower.contains(needleLower) || valLower.contains(needleLower) || idLower.contains(needleLower) {
+          return 1
+        }
+        return nil
+      case "id":
+        if idLower == needleLower { return 0 }
+        if idLower.contains(needleLower) { return 1 }
+        return nil
+      case "label":
+        if labLower == needleLower { return 0 }
+        if labLower.contains(needleLower) { return 1 }
+        return nil
+      default:
+        return nil
+      }
+    }
+
+    // walkOnce: one snapshot, one DFS — produces (match-candidates,
+    // tree-signature, flat node list) in a single pass. We accumulate
+    // hash bits into a Hasher as we visit each node and collect matches
+    // along the way.
+    func walkOnce(root: XCUIElementSnapshot) -> (XCUIElementSnapshot?, UInt64, [SnapshotNode]) {
+      var hasher = Hasher()
+      var allNodes: [SnapshotNode] = []
+      var matches: [(XCUIElementSnapshot, Int, Int)] = []
+
+      func walk(_ snap: XCUIElementSnapshot, depth: Int, parentIdx: Int?) {
+        // Tree-signature contribution: geometry + identity bits.
+        hasher.combine(snap.elementType.rawValue)
+        hasher.combine(snap.identifier)
+        hasher.combine(snap.label)
+        hasher.combine(Int(snap.frame.origin.x))
+        hasher.combine(Int(snap.frame.origin.y))
+        hasher.combine(Int(snap.frame.size.width))
+        hasher.combine(Int(snap.frame.size.height))
+
+        // Match-candidate collection + flat-node serialisation.
+        let label = snap.label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let identifier = snap.identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        let valueText = String(describing: snap.value ?? "")
+          .trimmingCharacters(in: .whitespacesAndNewlines)
+        let nodeIdx = allNodes.count
+        allNodes.append(SnapshotNode(
+          index: nodeIdx,
+          type: elementTypeName(snap.elementType),
+          label: label.isEmpty ? nil : label,
+          identifier: identifier.isEmpty ? nil : identifier,
+          value: valueText.isEmpty ? nil : valueText,
+          placeholderValue: nil,
+          rect: snapshotRect(from: snap.frame),
+          enabled: snap.isEnabled,
+          focused: nil,
+          selected: snap.isSelected ? true : nil,
+          hittable: false,
+          depth: depth,
+          parentIndex: parentIdx,
+          hiddenContentAbove: nil,
+          hiddenContentBelow: nil
+        ))
+        if let kind = nodeMatchKind(label: label, identifier: identifier, valueText: valueText) {
+          if !snap.frame.isNull && !snap.frame.isEmpty {
+            matches.append((snap, kind, typeRank(snap.elementType)))
+          }
+        }
+        for child in snap.children {
+          walk(child, depth: depth + 1, parentIdx: nodeIdx)
+        }
+      }
+      walk(root, depth: 0, parentIdx: nil)
+
+      matches.sort { ($0.1, $0.2) < ($1.1, $1.2) }
+      let sig = UInt64(bitPattern: Int64(hasher.finalize()))
+      return (matches.first?.0, sig, allNodes)
+    }
+
+    let started = Date()
+    let timeout = 0.6  // 600ms budget for animation-end + find
+    var prevSig: UInt64? = nil
+    var lastMatch: XCUIElementSnapshot? = nil
+    var lastNodes: [SnapshotNode] = []
+
+    for _ in 0..<15 {
+      let root: XCUIElementSnapshot
+      do {
+        root = try app.snapshot()
+      } catch {
+        return LiberalMatchResult(matched: lastMatch, walkedNodes: lastNodes)
+      }
+      let (match, sig, nodes) = walkOnce(root: root)
+      lastMatch = match
+      lastNodes = nodes
+      // Two consecutive identical signatures = settled. Match's frame
+      // came from THIS snapshot, so it's trustworthy.
+      if let prev = prevSig, prev == sig {
+        return LiberalMatchResult(matched: match, walkedNodes: nodes)
+      }
+      prevSig = sig
+      if Date().timeIntervalSince(started) > timeout {
+        break
+      }
+    }
+    // Budget exhausted — return the last walk's data. Same fallback the
+    // previous code took on timeout.
+    return LiberalMatchResult(matched: lastMatch, walkedNodes: lastNodes)
+  }
+
+  func queryElement(app: XCUIApplication, selectorKey: String, selectorValue: String) -> Response {
+    let match = findElement(app: app, selectorKey: selectorKey, selectorValue: selectorValue)
+    if match.isAmbiguous {
+      return Response(ok: false, error: ErrorPayload(code: "AMBIGUOUS_MATCH", message: "selector matched multiple elements"))
+    }
+    guard let element = match.element else {
+      return Response(ok: true, data: DataPayload(found: false, nodes: []))
+    }
+
+    let label = element.label.trimmingCharacters(in: .whitespacesAndNewlines)
+    let identifier = element.identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+    let valueText = String(describing: element.value ?? "")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    let placeholder = element.placeholderValue?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    let node = SnapshotNode(
+      index: 0,
+      type: elementTypeName(element.elementType),
+      label: label.isEmpty ? nil : label,
+      identifier: identifier.isEmpty ? nil : identifier,
+      value: valueText.isEmpty ? nil : valueText,
+      placeholderValue: (placeholder?.isEmpty ?? true) ? nil : placeholder,
+      rect: snapshotRect(from: element.frame),
+      enabled: element.isEnabled,
+      focused: nil,
+      selected: element.isSelected ? true : nil,
+      hittable: element.isHittable,
+      depth: 0,
+      parentIndex: nil,
+      hiddenContentAbove: nil,
+      hiddenContentBelow: nil
+    )
+    return Response(
+      ok: true,
+      data: DataPayload(
+        text: readableText(for: element),
+        found: true,
+        nodes: [node]
+      )
+    )
+  }
+
+  func readTextAt(app: XCUIApplication, x: Double, y: Double) -> String? {
+    let point = CGPoint(x: x, y: y)
+    let candidates = app.descendants(matching: .any).allElementsBoundByIndex
+      .filter { element in
+        element.exists && !element.frame.isEmpty && element.frame.contains(point)
+      }
+      .sorted { left, right in
+        let leftArea = max(1, left.frame.width * left.frame.height)
+        let rightArea = max(1, right.frame.width * right.frame.height)
+        if leftArea != rightArea {
+          return leftArea < rightArea
+        }
+        if left.frame.minY != right.frame.minY {
+          return left.frame.minY < right.frame.minY
+        }
+        if left.frame.minX != right.frame.minX {
+          return left.frame.minX < right.frame.minX
+        }
+        return left.elementType.rawValue < right.elementType.rawValue
+      }
+
+    for element in candidates where prefersExpandedTextRead(element) {
+      if let text = readableText(for: element) {
+        return text
+      }
+    }
+    for element in candidates {
+      if let text = readableText(for: element) {
+        return text
+      }
+    }
+    return nil
+  }
+
+  func clearTextInput(_ element: XCUIElement) {
+#if !os(tvOS)
+    moveCaretToEnd(element: element)
+#endif
+    let count = estimatedDeleteCount(for: element)
+    let deletes = String(repeating: XCUIKeyboardKey.delete.rawValue, count: count)
+    element.typeText(deletes)
+  }
+
+  func textInputAt(app: XCUIApplication, x: Double, y: Double) -> XCUIElement? {
+    let point = CGPoint(x: x, y: y)
+    var matched: XCUIElement?
+    let exceptionMessage = RunnerObjCExceptionCatcher.catchException({
+      // Type-filter via NSPredicate first — XCTest can evaluate this on
+      // the accessibility tree without iterating every descendant. The
+      // .any descendants + allElementsBoundByIndex form walks the entire
+      // tree O(n) — ~10s on dense screens, enough to time out the Go-side
+      // 10s callTimeout for inputText (NSPR/SPR Push-Input scenario).
+      let editablePredicate = NSPredicate(format:
+        "elementType == %d OR elementType == %d OR elementType == %d OR elementType == %d",
+        XCUIElement.ElementType.textField.rawValue,
+        XCUIElement.ElementType.secureTextField.rawValue,
+        XCUIElement.ElementType.searchField.rawValue,
+        XCUIElement.ElementType.textView.rawValue
+      )
+      let editableQuery = app.descendants(matching: .any).matching(editablePredicate)
+      // Fallback when no editable contains the point: prefer the only
+      // visible editable on screen. Common Maestro pattern: tap a button
+      // that navigates to an Input screen, then inputText — the button's
+      // old coords don't intersect the new screen's TextField, but the
+      // TextField is the obvious target.
+      let allEditables = editableQuery.allElementsBoundByIndex.filter { $0.exists }
+      let candidates = allEditables.filter { element in
+        let frame = element.frame
+        return !frame.isEmpty && frame.contains(point)
+      }
+      if candidates.isEmpty {
+        // No editable at the point. If exactly one editable is on screen,
+        // it's the intended target.
+        let onScreen = allEditables.filter { !$0.frame.isEmpty }
+        if onScreen.count == 1 {
+          matched = onScreen.first
+        }
+        return
+      }
+      let sorted = candidates
+        .sorted { left, right in
+          let leftArea = max(1, left.frame.width * left.frame.height)
+          let rightArea = max(1, right.frame.width * right.frame.height)
+          if leftArea != rightArea {
+            return leftArea < rightArea
+          }
+          if left.frame.minY != right.frame.minY {
+            return left.frame.minY < right.frame.minY
+          }
+          if left.frame.minX != right.frame.minX {
+            return left.frame.minX < right.frame.minX
+          }
+          return left.elementType.rawValue < right.elementType.rawValue
+        }
+      matched = sorted.first
+    })
+    if let exceptionMessage {
+      NSLog(
+        "AGENT_DEVICE_RUNNER_TEXT_INPUT_AT_POINT_IGNORED_EXCEPTION=%@",
+        exceptionMessage
+      )
+      return nil
+    }
+    return matched
+  }
+
+  func focusedTextInput(app: XCUIApplication) -> XCUIElement? {
+    var focused: XCUIElement?
+    let exceptionMessage = RunnerObjCExceptionCatcher.catchException({
+      let candidate = app
+        .descendants(matching: .any)
+        .matching(NSPredicate(format: "hasKeyboardFocus == 1"))
+        .firstMatch
+      guard candidate.exists else { return }
+
+      switch candidate.elementType {
+      case .textField, .secureTextField, .searchField, .textView:
+        focused = candidate
+      default:
+        return
+      }
+    })
+    if let exceptionMessage {
+      NSLog(
+        "AGENT_DEVICE_RUNNER_FOCUSED_INPUT_QUERY_IGNORED_EXCEPTION=%@",
+        exceptionMessage
+      )
+      return nil
+    }
+    return focused
+  }
+
+  func stabilizeTextInputBeforeTyping(app: XCUIApplication, target: XCUIElement?) -> XCUIElement? {
+#if os(tvOS)
+    return target
+#else
+    let latest = target
+    let deadline = Date().addingTimeInterval(TextEntryTiming.focusTimeout)
+    while Date() < deadline {
+      if let focused = focusedTextInput(app: app) {
+        return focused
+      }
+      sleepFor(TextEntryTiming.pollInterval)
+    }
+    return latest
+#endif
+  }
+
+  func focusTextInputForTextEntry(app: XCUIApplication, x: Double?, y: Double?, identifier: String? = nil) -> TextEntryTarget {
+    // Local edit (not in upstream agent-device). When the caller supplies
+    // an `identifier` hint, resolve the editable element via the XCTest
+    // query DSL (predicate-based, indexed) instead of walking the full
+    // descendant tree via textInputAt's allElementsBoundByIndex. Saves
+    // ~1.4s per type call on dense screens. Falls back to the upstream
+    // x/y path when the identifier is empty or doesn't resolve to a text
+    // input.
+    if let identifier, !identifier.isEmpty {
+      var matched: XCUIElement?
+      _ = RunnerObjCExceptionCatcher.catchException({
+        // Composite predicate: identifier + element type filter. RN often
+        // gives the SAME testID to a wrapper Image (search icon) and the
+        // inner TextField — `firstMatch` on identifier alone can land on
+        // the wrong one. Constraining the predicate to editable types
+        // skips the icon directly without a slow descendant fallback.
+        let editablePredicate = NSPredicate(format:
+          "identifier == %@ AND (elementType == %d OR elementType == %d OR elementType == %d OR elementType == %d)",
+          identifier,
+          XCUIElement.ElementType.textField.rawValue,
+          XCUIElement.ElementType.secureTextField.rawValue,
+          XCUIElement.ElementType.searchField.rawValue,
+          XCUIElement.ElementType.textView.rawValue
+        )
+        let candidate = app.descendants(matching: .any).matching(editablePredicate).firstMatch
+        if candidate.exists {
+          matched = candidate
+          return
+        }
+        // Identifier didn't match any editable directly. Try matching the
+        // identifier loosely (any type) and look for an editable
+        // descendant — this catches RN's wrapper-view-with-inner-textinput
+        // pattern when both have different ids.
+        let looseMatch = app.descendants(matching: .any)
+          .matching(NSPredicate(format: "identifier == %@", identifier))
+          .firstMatch
+        guard looseMatch.exists else { return }
+        let typeFilter = NSPredicate(format:
+          "elementType == %d OR elementType == %d OR elementType == %d OR elementType == %d",
+          XCUIElement.ElementType.textField.rawValue,
+          XCUIElement.ElementType.secureTextField.rawValue,
+          XCUIElement.ElementType.searchField.rawValue,
+          XCUIElement.ElementType.textView.rawValue
+        )
+        let inner = looseMatch.descendants(matching: .any).matching(typeFilter).firstMatch
+        if inner.exists {
+          matched = inner
+        }
+      })
+      if let matched {
+        let frame = matched.frame
+        let refreshPoint: CGPoint?
+        if !frame.isEmpty {
+          _ = tapAt(app: app, x: frame.midX, y: frame.midY)
+          refreshPoint = CGPoint(x: frame.midX, y: frame.midY)
+        } else if let x, let y {
+          _ = tapAt(app: app, x: x, y: y)
+          refreshPoint = CGPoint(x: x, y: y)
+        } else {
+          refreshPoint = nil
+        }
+        // Local edit: skip stabilizeTextInputBeforeTyping (up to 400ms
+        // polling focusedTextInput) and waitForTextEntryReadiness (up to
+        // 2000ms polling keyboard visibility). Both exist for the
+        // x/y / unknown-target path, where the runner has to guess which
+        // element got tapped. We resolved the element by identifier and
+        // just tapped it — XCUI's typeText / synthetic-typing path will
+        // handle keyboard timing itself.
+        return TextEntryTarget(
+          element: matched,
+          refreshPoint: refreshPoint,
+          prefersFocusedElement: false
+        )
+      }
+      // Identifier didn't resolve — fall through to x/y / focused-element path.
+    }
+
+    guard let x, let y else {
+      let focused = waitForTextEntryReadiness(
+        app: app,
+        target: TextEntryTarget(
+          element: focusedTextInput(app: app),
+          refreshPoint: nil,
+          prefersFocusedElement: true
+        )
+      )
+      return TextEntryTarget(element: focused, refreshPoint: nil, prefersFocusedElement: true)
+    }
+
+    let target = textInputAt(app: app, x: x, y: y)
+    let requestedPoint = CGPoint(x: x, y: y)
+    if let target {
+      let frame = target.frame
+      if !frame.isEmpty {
+        _ = tapAt(app: app, x: frame.midX, y: frame.midY)
+      } else {
+        _ = tapAt(app: app, x: x, y: y)
+      }
+    } else {
+      _ = tapAt(app: app, x: x, y: y)
+    }
+    let stabilized = stabilizeTextInputBeforeTyping(app: app, target: target)
+    let element = waitForTextEntryReadiness(
+      app: app,
+      target: TextEntryTarget(
+        element: stabilized ?? target,
+        refreshPoint: requestedPoint,
+        prefersFocusedElement: false
+      )
+    ) ?? stabilized ?? target
+    return TextEntryTarget(
+      element: element,
+      refreshPoint: textEntryRefreshPoint(for: element) ?? requestedPoint,
+      prefersFocusedElement: false
+    )
+  }
+
+  func resolveTextEntryMode(_ command: Command) -> TextTypingRepairMode {
+    switch command.textEntryMode {
+    case "append":
+      return .append
+    case "replace":
+      return .replacement
+    default:
+      return command.clearFirst == true ? .replacement : .none
+    }
+  }
+
+  func typeTextReliably(
+    app: XCUIApplication,
+    target: TextEntryTarget,
+    text: String,
+    delaySeconds: Double,
+    repairMode: TextTypingRepairMode = .none
+  ) -> TextEntryResult {
+    guard !text.isEmpty else {
+      return TextEntryResult(verified: true, repaired: false, expectedText: "", observedText: "")
+    }
+    var activeTarget = target
+    let initialTarget = resolveTextEntryElement(app: app, target: activeTarget)
+    activeTarget = activeTarget.withElement(initialTarget)
+    let currentText = editableTextValue(for: initialTarget, treatingPlaceholderAsEmpty: true)
+    let initialText = repairMode == .append ? currentText : nil
+    let expectedText = expectedTextEntryValue(typedText: text, mode: repairMode, initialText: initialText)
+
+    if repairMode == .replacement {
+      guard let replacementTarget = initialTarget else {
+        return TextEntryResult(verified: nil, repaired: false, expectedText: expectedText, observedText: nil)
+      }
+      if currentText == nil || currentText?.isEmpty == false {
+        clearTextInput(replacementTarget)
+        activeTarget = activeTarget.withElement(replacementTarget)
+      }
+    }
+
+    func typeIntoCurrentTarget(_ value: String) -> XCUIElement? {
+      // Local edit (not in upstream agent-device). SecureTextField on RN
+      // iOS doesn't respond to coordinate-taps for focus transfer, AND
+      // its hasKeyboardFocus query throws or returns false. Two-part fix:
+      //   1. element.tap() to force OS first-responder onto the field
+      //   2. DLSendSyntheticTyping to inject characters at the HID layer
+      // For non-secure fields we keep upstream's app.typeText behaviour.
+      // We tried universalizing synthetic typing but it regressed Login
+      // flows — without the explicit pre-tap, synthetic events fire
+      // before the field has stable first-responder and characters land
+      // in the wrong field. app.typeText handles the focus dance
+      // implicitly and is more robust for non-secure fields.
+      let currentTarget = resolveTextEntryElement(app: app, target: activeTarget)
+      let isSecureField = currentTarget?.elementType == .secureTextField
+      if isSecureField, let secure = currentTarget {
+        _ = RunnerObjCExceptionCatcher.catchException({
+          secure.tap()
+        })
+        sleepFor(0.05)
+        var typingError: NSError?
+        let ok = DLSendSyntheticTyping(value, 240, &typingError)
+        if !ok {
+          NSLog(
+            "DEVICELAB_RUNNER_SYNTHETIC_TYPING_FAILED message=%@ fallback=app.typeText",
+            typingError?.localizedDescription ?? "(no error)"
+          )
+          app.typeText(value)
+        }
+        return currentTarget
+      }
+      app.typeText(value)
+      return currentTarget ?? resolveTextEntryElement(app: app, target: activeTarget)
+    }
+
+    func waitForWarmupValue(_ expectedValue: String?, target: TextEntryTarget) {
+      guard let expectedValue else {
+        sleepFor(TextEntryTiming.pollInterval)
+        return
+      }
+      let deadline = Date().addingTimeInterval(TextEntryTiming.warmupValueTimeout)
+      while Date() < deadline {
+        if editableTextValue(for: resolveTextEntryElement(app: app, target: target)) == expectedValue {
+          return
+        }
+        sleepFor(TextEntryTiming.pollInterval)
+      }
+    }
+
+    let characters = Array(text)
+    if delaySeconds > 0 && characters.count > 1 {
+      var typedTarget: XCUIElement?
+      for (index, character) in characters.enumerated() {
+        typedTarget = typeIntoCurrentTarget(String(character)) ?? typedTarget
+        if index + 1 < characters.count {
+          sleepFor(delaySeconds)
+        }
+      }
+      if repairMode == .none {
+        return TextEntryResult(verified: nil, repaired: false, expectedText: nil, observedText: nil)
+      }
+      let repairResult = repairTextEntryIfNeeded(
+        app: app,
+        target: activeTarget.withElement(typedTarget),
+        expectedText: expectedText,
+        repairMode: repairMode
+      )
+      return verifyTextEntry(
+        app: app,
+        target: activeTarget.withElement(typedTarget),
+        expectedText: expectedText,
+        repaired: repairResult.repaired
+      )
+    }
+
+    let typedTarget: XCUIElement?
+    if repairMode != .none && characters.count > 1 {
+      let firstCharacter = String(characters[0])
+      var firstTypedTarget = typeIntoCurrentTarget(firstCharacter)
+      activeTarget = activeTarget.withElement(firstTypedTarget)
+      let warmupExpectedText = expectedTextEntryValue(
+        typedText: firstCharacter,
+        mode: repairMode,
+        initialText: initialText
+      )
+      waitForWarmupValue(warmupExpectedText, target: activeTarget)
+      let remainingText = String(characters.dropFirst())
+      firstTypedTarget = typeIntoCurrentTarget(remainingText) ?? firstTypedTarget
+      typedTarget = firstTypedTarget
+    } else {
+      typedTarget = typeIntoCurrentTarget(text)
+    }
+    if repairMode == .none {
+      return TextEntryResult(verified: nil, repaired: false, expectedText: nil, observedText: nil)
+    }
+    let repairResult = repairTextEntryIfNeeded(
+      app: app,
+      target: activeTarget.withElement(typedTarget),
+      expectedText: expectedText,
+      repairMode: repairMode
+    )
+    return verifyTextEntry(
+      app: app,
+      target: activeTarget.withElement(typedTarget),
+      expectedText: expectedText,
+      repaired: repairResult.repaired
+    )
+  }
+
+  private func repairTextEntryIfNeeded(
+    app: XCUIApplication,
+    target: TextEntryTarget,
+    expectedText: String?,
+    repairMode: TextTypingRepairMode
+  ) -> TextEntryResult {
+#if os(iOS)
+    guard let targetElement = resolveTextEntryElement(app: app, target: target) else {
+      return TextEntryResult(verified: nil, repaired: false, expectedText: expectedText, observedText: nil)
+    }
+    guard let expectedText else {
+      let observedText = editableTextValue(for: targetElement)
+      return TextEntryResult(verified: nil, repaired: false, expectedText: nil, observedText: observedText)
+    }
+    guard shouldRepairTextEntry(
+      app: app,
+      target: target,
+      expectedText: expectedText,
+      repairMode: repairMode
+    ) else {
+      return verifyTextEntry(app: app, target: target, expectedText: expectedText, repaired: false)
+    }
+
+    guard let repairTarget = resolveTextEntryElement(app: app, target: target) else {
+      return TextEntryResult(verified: nil, repaired: false, expectedText: expectedText, observedText: nil)
+    }
+    let observedText = editableTextValue(for: repairTarget) ?? ""
+    NSLog(
+      "AGENT_DEVICE_RUNNER_REPAIR_TEXT_ENTRY expectedLength=%d observedLength=%d",
+      expectedText.count,
+      observedText.count
+    )
+    clearTextInput(repairTarget)
+    app.typeText(expectedText)
+    return verifyTextEntry(app: app, target: target, expectedText: expectedText, repaired: true)
+#else
+    return TextEntryResult(verified: nil, repaired: false, expectedText: expectedText, observedText: nil)
+#endif
+  }
+
+  private func verifyTextEntry(
+    app: XCUIApplication,
+    target: TextEntryTarget,
+    expectedText: String?,
+    repaired: Bool
+  ) -> TextEntryResult {
+    let targetElement = resolveTextEntryElement(app: app, target: target)
+    guard let expectedText else {
+      return TextEntryResult(
+        verified: nil,
+        repaired: repaired,
+        expectedText: nil,
+        observedText: editableTextValue(for: targetElement)
+      )
+    }
+    guard let observedText = editableTextValue(for: targetElement) else {
+      return TextEntryResult(verified: nil, repaired: repaired, expectedText: expectedText, observedText: nil)
+    }
+    guard observedText == expectedText else {
+      return TextEntryResult(
+        verified: false,
+        repaired: repaired,
+        expectedText: expectedText,
+        observedText: observedText
+      )
+    }
+    let stableDeadline = Date().addingTimeInterval(TextEntryTiming.verificationStabilityWindow)
+    var latestObservedText = observedText
+    while Date() < stableDeadline {
+      sleepFor(TextEntryTiming.pollInterval)
+      guard let nextObservedText = editableTextValue(for: resolveTextEntryElement(app: app, target: target)) else {
+        return TextEntryResult(verified: nil, repaired: repaired, expectedText: expectedText, observedText: nil)
+      }
+      latestObservedText = nextObservedText
+      guard nextObservedText == expectedText else {
+        return TextEntryResult(
+          verified: false,
+          repaired: repaired,
+          expectedText: expectedText,
+          observedText: nextObservedText
+        )
+      }
+    }
+    return TextEntryResult(
+      verified: true,
+      repaired: repaired,
+      expectedText: expectedText,
+      observedText: latestObservedText
+    )
+  }
+
+  private func expectedTextEntryValue(
+    typedText: String,
+    mode: TextTypingRepairMode,
+    initialText: String?
+  ) -> String? {
+    switch mode {
+    case .none:
+      return nil
+    case .append:
+      guard let initialText else {
+        return nil
+      }
+      return initialText + typedText
+    case .replacement:
+      return typedText
+    }
+  }
+
+  private func shouldRepairTextEntry(
+    app: XCUIApplication,
+    target: TextEntryTarget,
+    expectedText: String,
+    repairMode: TextTypingRepairMode
+  ) -> Bool {
+#if os(iOS)
+    var latestObservedText: String?
+    let deadline = Date().addingTimeInterval(TextEntryTiming.verificationStabilityWindow)
+    repeat {
+      guard let observedText = editableTextValue(for: resolveTextEntryElement(app: app, target: target)) else {
+        return false
+      }
+      if observedText == expectedText {
+        return false
+      }
+      latestObservedText = observedText
+      if !isRepairableTextEntryMismatch(
+        observedText: observedText,
+        expectedText: expectedText,
+        repairMode: repairMode
+      ) {
+        return false
+      }
+      sleepFor(TextEntryTiming.pollInterval)
+    } while Date() < deadline
+
+    guard let latestObservedText else {
+      return false
+    }
+    guard latestObservedText != expectedText else {
+      return false
+    }
+    return isRepairableTextEntryMismatch(
+      observedText: latestObservedText,
+      expectedText: expectedText,
+      repairMode: repairMode
+    )
+#else
+    return false
+#endif
+  }
+
+  private func isRepairableTextEntryMismatch(
+    observedText: String,
+    expectedText: String,
+    repairMode: TextTypingRepairMode
+  ) -> Bool {
+    guard observedText != expectedText else {
+      return false
+    }
+    if repairMode == .replacement {
+      return true
+    }
+    return observedText.isEmpty || isLikelyDroppedCharacterTextEntryMismatch(
+      observedText: observedText,
+      expectedText: expectedText
+    )
+  }
+
+  private func isLikelyDroppedCharacterTextEntryMismatch(observedText: String, expectedText: String) -> Bool {
+    guard observedText.count < expectedText.count else {
+      return false
+    }
+    let missingCharacterCount = expectedText.count - observedText.count
+    guard missingCharacterCount <= max(2, expectedText.count / 4) else {
+      return false
+    }
+    var expectedIndex = expectedText.startIndex
+    for character in observedText {
+      guard let matchIndex = expectedText[expectedIndex...].firstIndex(of: character) else {
+        return false
+      }
+      expectedIndex = expectedText.index(after: matchIndex)
+    }
+    return true
+  }
+
+  private func resolveTextEntryElement(app: XCUIApplication, target: TextEntryTarget) -> XCUIElement? {
+    if target.prefersFocusedElement {
+      if let focused = focusedTextInput(app: app) {
+        return focused
+      }
+      if let element = target.element, element.exists {
+        return element
+      }
+    } else {
+      if let element = target.element, element.exists {
+        return element
+      }
+    }
+    if let refreshPoint = target.refreshPoint,
+       let refreshed = textInputAt(app: app, x: refreshPoint.x, y: refreshPoint.y) {
+      return refreshed
+    }
+    if let focused = focusedTextInput(app: app) {
+      return focused
+    }
+    return nil
+  }
+
+  private func waitForTextEntryReadiness(
+    app: XCUIApplication,
+    target: TextEntryTarget,
+    timeout: TimeInterval = TextEntryTiming.readinessTimeout
+  ) -> XCUIElement? {
+#if os(iOS)
+    var latest = resolveTextEntryElement(app: app, target: target)
+    let deadline = Date().addingTimeInterval(timeout)
+    let hardwareKeyboardFallback = Date().addingTimeInterval(
+      min(TextEntryTiming.hardwareKeyboardFallbackTimeout, timeout)
+    )
+    var sawSoftwareKeyboard = false
+    while Date() < deadline {
+      if let focused = focusedTextInput(app: app) {
+        latest = focused
+        if isKeyboardVisible(app: app) {
+          return focused
+        }
+      }
+      sawSoftwareKeyboard = sawSoftwareKeyboard || keyboardElementExists(app: app)
+      if !sawSoftwareKeyboard && Date() >= hardwareKeyboardFallback && latest != nil {
+        return latest
+      }
+      sleepFor(TextEntryTiming.pollInterval)
+    }
+    return focusedTextInput(app: app) ?? latest
+#else
+    return resolveTextEntryElement(app: app, target: target)
+#endif
+  }
+
+  private func textEntryRefreshPoint(for element: XCUIElement?) -> CGPoint? {
+    guard let element else {
+      return nil
+    }
+    let frame = element.frame
+    guard !frame.isEmpty else {
+      return nil
+    }
+    return CGPoint(x: frame.midX, y: frame.midY)
+  }
+
+  func isKeyboardVisible(app: XCUIApplication) -> Bool {
+    return visibleKeyboardFrame(app: app) != nil
+  }
+
+  private func keyboardElementExists(app: XCUIApplication) -> Bool {
+#if os(iOS)
+    var exists = false
+    let exceptionMessage = RunnerObjCExceptionCatcher.catchException({
+      exists = app.keyboards.firstMatch.exists
+    })
+    if let exceptionMessage {
+      NSLog(
+        "AGENT_DEVICE_RUNNER_KEYBOARD_EXISTS_IGNORED_EXCEPTION=%@",
+        exceptionMessage
+      )
+      return false
+    }
+    return exists
+#else
+    return false
+#endif
+  }
+
+  func dismissKeyboard(app: XCUIApplication) -> (wasVisible: Bool, dismissed: Bool, visible: Bool) {
+    let wasVisible = isKeyboardVisible(app: app)
+    guard wasVisible else {
+      return (wasVisible: false, dismissed: false, visible: false)
+    }
+
+#if os(tvOS)
+    _ = pressTvRemote(.menu)
+    sleepFor(0.2)
+    let visible = isKeyboardVisible(app: app)
+    return (wasVisible: true, dismissed: !visible, visible: visible)
+#else
+    let keyboard = app.keyboards.firstMatch
+    keyboard.swipeDown()
+    sleepFor(0.2)
+    if !isKeyboardVisible(app: app) {
+      return (wasVisible: true, dismissed: true, visible: false)
+    }
+
+    if tapKeyboardDismissControl(app: app) {
+      sleepFor(0.2)
+      let visible = isKeyboardVisible(app: app)
+      return (wasVisible: true, dismissed: !visible, visible: visible)
+    }
+
+    return (wasVisible: true, dismissed: false, visible: isKeyboardVisible(app: app))
+#endif
+  }
+
+  private func tapKeyboardDismissControl(app: XCUIApplication) -> Bool {
+#if os(tvOS)
+    return false
+#else
+    guard let keyboardFrame = visibleKeyboardFrame(app: app) else {
+      return false
+    }
+    for label in ["Hide keyboard", "Dismiss keyboard", "Done"] {
+      let candidates = [
+        app.keyboards.buttons[label],
+        app.keyboards.keys[label],
+        app.keyboards.toolbars.buttons[label],
+      ]
+      if let hittable = candidates.first(where: { $0.exists && $0.isHittable }) {
+        hittable.tap()
+        return true
+      }
+
+      let toolbarButtonPredicate = NSPredicate(
+        format: "label == %@ OR identifier == %@",
+        label,
+        label
+      )
+      let toolbarButtons = app.toolbars.buttons
+        .matching(toolbarButtonPredicate)
+        .allElementsBoundByIndex
+      if let hittable = toolbarButtons.first(where: {
+        $0.exists && $0.isHittable && isKeyboardAccessoryControl($0, keyboardFrame: keyboardFrame)
+      }) {
+        hittable.tap()
+        return true
+      }
+    }
+    return false
+#endif
+  }
+
+  private func isKeyboardAccessoryControl(_ element: XCUIElement, keyboardFrame: CGRect) -> Bool {
+    let frame = element.frame
+    guard !frame.isEmpty && !keyboardFrame.isEmpty else {
+      return false
+    }
+    return frame.intersects(keyboardFrame) || abs(frame.maxY - keyboardFrame.minY) <= 80
+  }
+
+  private func moveCaretToEnd(element: XCUIElement) {
+#if os(tvOS)
+    return
+#else
+    let frame = element.frame
+    guard !frame.isEmpty else {
+      element.tap()
+      return
+    }
+    let origin = element.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+    let target = origin.withOffset(
+      CGVector(dx: max(2, frame.width - 4), dy: max(2, frame.height / 2))
+    )
+    target.tap()
+#endif
+  }
+
+  private func estimatedDeleteCount(for element: XCUIElement) -> Int {
+    let valueText = normalizedElementText(element.value)
+    let base = valueText.isEmpty ? 24 : (valueText.count + 8)
+    return max(24, min(120, base))
+  }
+
+  private func normalizedElementText(_ value: Any?) -> String {
+    String(describing: value ?? "")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private func editableTextValue(
+    for element: XCUIElement?,
+    treatingPlaceholderAsEmpty: Bool = false
+  ) -> String? {
+    guard let element else {
+      return nil
+    }
+    switch element.elementType {
+    case .textField, .searchField, .textView:
+      let value = String(describing: element.value ?? "")
+      if treatingPlaceholderAsEmpty && isPlaceholderValue(value, for: element) {
+        return ""
+      }
+      return value
+    case .secureTextField:
+      return nil
+    default:
+      return nil
+    }
+  }
+
+  private func isPlaceholderValue(_ value: String, for element: XCUIElement) -> Bool {
+    let normalizedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalizedValue.isEmpty else {
+      return false
+    }
+    guard let placeholder = element.placeholderValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !placeholder.isEmpty else {
+      return false
+    }
+    return normalizedValue == placeholder
+  }
+
+  private func readableText(for element: XCUIElement) -> String? {
+    let label = element.label.trimmingCharacters(in: .whitespacesAndNewlines)
+    let identifier = element.identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+    let valueText = String(describing: element.value ?? "")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    switch element.elementType {
+    case .textField, .secureTextField, .searchField, .textView:
+      if !valueText.isEmpty { return valueText }
+      if !label.isEmpty { return label }
+      return identifier.isEmpty ? nil : identifier
+    default:
+      if !label.isEmpty { return label }
+      if !valueText.isEmpty { return valueText }
+      return identifier.isEmpty ? nil : identifier
+    }
+  }
+
+  private func prefersExpandedTextRead(_ element: XCUIElement) -> Bool {
+    switch element.elementType {
+    case .textField, .secureTextField, .searchField, .textView:
+      return true
+    default:
+      return false
+    }
+  }
+
+  func findScopeElement(app: XCUIApplication, scope: String) -> XCUIElement? {
+    let predicate = NSPredicate(
+      format: "label CONTAINS[c] %@ OR identifier CONTAINS[c] %@",
+      scope,
+      scope
+    )
+    let element = app.descendants(matching: .any).matching(predicate).firstMatch
+    return element.exists ? element : nil
+  }
+
+  func tapAt(app: XCUIApplication, x: Double, y: Double) -> RunnerInteractionOutcome {
+    if let outcome = selectFocusedTvElement(app: app, point: CGPoint(x: x, y: y), action: "tap") {
+      return outcome
+    }
+    return performCoordinateTap(app: app, x: x, y: y)
+  }
+
+  func mouseClickAt(app: XCUIApplication, x: Double, y: Double, button: String) throws {
+#if os(macOS)
+    let coordinate = interactionCoordinate(app: app, x: x, y: y)
+    switch button {
+    case "primary":
+      coordinate.tap()
+    case "secondary":
+      coordinate.rightClick()
+    case "middle":
+      throw NSError(
+        domain: "AgentDeviceRunner",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "middle mouse button is not supported"]
+      )
+    default:
+      throw NSError(
+        domain: "AgentDeviceRunner",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "unsupported mouse button: \(button)"]
+      )
+    }
+#elseif os(tvOS)
+    throw NSError(
+      domain: "AgentDeviceRunner",
+      code: 1,
+      userInfo: [NSLocalizedDescriptionKey: "mouseClick is not supported on tvOS"]
+    )
+#else
+    throw NSError(
+      domain: "AgentDeviceRunner",
+      code: 1,
+      userInfo: [NSLocalizedDescriptionKey: "mouseClick is only supported on macOS"]
+    )
+#endif
+  }
+
+  func doubleTapAt(app: XCUIApplication, x: Double, y: Double) -> RunnerInteractionOutcome {
+    if let outcome = selectFocusedTvElement(app: app, point: CGPoint(x: x, y: y), action: "double tap") {
+      guard case .performed = outcome else { return outcome }
+      sleepFor(0.1)
+      _ = pressTvRemote(.select)
+      return .performed
+    }
+    return performCoordinateDoubleTap(app: app, x: x, y: y)
+  }
+
+  func longPressAt(app: XCUIApplication, x: Double, y: Double, duration: TimeInterval) -> RunnerInteractionOutcome {
+    if let outcome = longSelectFocusedTvElement(app: app, point: CGPoint(x: x, y: y), duration: duration) {
+      return outcome
+    }
+    return performCoordinateLongPress(app: app, x: x, y: y, duration: duration)
+  }
+
+  func dragAt(
+    app: XCUIApplication,
+    x: Double,
+    y: Double,
+    x2: Double,
+    y2: Double,
+    holdDuration: TimeInterval
+  ) -> RunnerInteractionOutcome {
+    // tvOS has no coordinate drag. Preserve the direction as a focus move.
+    let dx = x2 - x
+    let dy = y2 - y
+    let button: TvRemoteButton = abs(dx) > abs(dy)
+      ? (dx > 0 ? .right : .left)
+      : (dy > 0 ? .down : .up)
+    if pressTvRemote(button) {
+      return .performed
+    }
+    return performCoordinateDrag(app: app, x: x, y: y, x2: x2, y2: y2, holdDuration: holdDuration)
+  }
+
+  func keyboardAvoidingDragPoints(
+    app: XCUIApplication,
+    x: Double,
+    y: Double,
+    x2: Double,
+    y2: Double
+  ) -> DragPoints {
+    let original = DragPoints(x: x, y: y, x2: x2, y2: y2)
+#if os(iOS)
+    guard let keyboardFrame = visibleKeyboardFrame(app: app) else {
+      return original
+    }
+    let minX = min(x, x2)
+    let minY = min(y, y2)
+    let gestureBounds = CGRect(
+      x: CGFloat(minX),
+      y: CGFloat(minY),
+      width: CGFloat(max(abs(x2 - x), 1)),
+      height: CGFloat(max(abs(y2 - y), 1))
+    )
+    guard gestureBounds.intersects(keyboardFrame) else {
+      return original
+    }
+
+    let window = app.windows.firstMatch
+    let appFrame = window.exists && !window.frame.isEmpty ? window.frame : app.frame
+    guard !appFrame.isEmpty else {
+      return original
+    }
+
+    let padding: Double = 12
+    let targetMaxY = Double(keyboardFrame.minY) - padding
+    let currentMaxY = max(y, y2)
+    let shift = currentMaxY - targetMaxY
+    guard shift > 0 else {
+      return original
+    }
+
+    let adjustedY = y - shift
+    let adjustedY2 = y2 - shift
+    guard min(adjustedY, adjustedY2) >= Double(appFrame.minY) + padding else {
+      return original
+    }
+
+    NSLog(
+      "AGENT_DEVICE_RUNNER_KEYBOARD_AVOIDING_DRAG from=(%.1f,%.1f)->(%.1f,%.1f) adjusted=(%.1f,%.1f)->(%.1f,%.1f) keyboardMinY=%.1f",
+      x,
+      y,
+      x2,
+      y2,
+      x,
+      adjustedY,
+      x2,
+      adjustedY2,
+      Double(keyboardFrame.minY)
+    )
+    return DragPoints(x: x, y: adjustedY, x2: x2, y2: adjustedY2)
+#else
+    return original
+#endif
+  }
+
+  func resolvedTouchVisualizationFrame(app: XCUIApplication, x: Double, y: Double) -> TouchVisualizationFrame {
+    let appFrame = app.frame
+    let referenceFrame = resolvedTouchReferenceFrame(app: app, appFrame: appFrame)
+    let originX = appFrame.isEmpty ? referenceFrame.minX : appFrame.minX
+    let originY = appFrame.isEmpty ? referenceFrame.minY : appFrame.minY
+    return TouchVisualizationFrame(
+      x: originX + x,
+      y: originY + y,
+      referenceWidth: referenceFrame.width,
+      referenceHeight: referenceFrame.height
+    )
+  }
+
+  func resolvedDragVisualizationFrame(
+    app: XCUIApplication,
+    x: Double,
+    y: Double,
+    x2: Double,
+    y2: Double
+  ) -> DragVisualizationFrame {
+    let start = resolvedTouchVisualizationFrame(app: app, x: x, y: y)
+    let end = resolvedTouchVisualizationFrame(app: app, x: x2, y: y2)
+    return DragVisualizationFrame(
+      x: start.x,
+      y: start.y,
+      x2: end.x,
+      y2: end.y,
+      referenceWidth: start.referenceWidth,
+      referenceHeight: start.referenceHeight
+    )
+  }
+
+  func resolvedTouchReferenceFrame(app: XCUIApplication, appFrame: CGRect) -> CGRect {
+    let window = app.windows.firstMatch
+    if window.exists {
+      let windowFrame = window.frame
+      if !windowFrame.isEmpty {
+        return frameAvoidingKeyboard(app: app, frame: windowFrame)
+      }
+    }
+    if !appFrame.isEmpty {
+      return frameAvoidingKeyboard(app: app, frame: appFrame)
+    }
+    return CGRect(x: 0, y: 0, width: 0, height: 0)
+  }
+
+  private func frameAvoidingKeyboard(app: XCUIApplication, frame: CGRect) -> CGRect {
+#if os(iOS)
+    guard let keyboardFrame = visibleKeyboardFrame(app: app), !frame.isEmpty else {
+      return frame
+    }
+    let intersection = frame.intersection(keyboardFrame)
+    guard !intersection.isNull && intersection.height > 0 else {
+      return frame
+    }
+    let keyboardCoverage = intersection.width / max(frame.width, 1)
+    guard keyboardCoverage >= 0.5 else {
+      return frame
+    }
+    let safeHeight = keyboardFrame.minY - frame.minY
+    guard safeHeight >= frame.height * 0.25 else {
+      return frame
+    }
+    return CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: safeHeight)
+#else
+    return frame
+#endif
+  }
+
+  private func visibleKeyboardFrame(app: XCUIApplication) -> CGRect? {
+#if os(iOS)
+    var frame: CGRect?
+    let exceptionMessage = RunnerObjCExceptionCatcher.catchException({
+      let keyboard = app.keyboards.firstMatch
+      guard keyboard.exists else { return }
+      let keyboardFrame = keyboard.frame
+      guard !keyboardFrame.isEmpty else { return }
+      frame = keyboardFrame
+    })
+    if let exceptionMessage {
+      NSLog(
+        "AGENT_DEVICE_RUNNER_KEYBOARD_FRAME_IGNORED_EXCEPTION=%@",
+        exceptionMessage
+      )
+      return nil
+    }
+    return frame
+#else
+    return nil
+#endif
+  }
+
+  func runSeries(count: Int, pauseMs: Double, operation: (Int) -> Void) {
+    let total = max(count, 1)
+    let pause = max(pauseMs, 0)
+    for idx in 0..<total {
+      operation(idx)
+      if idx < total - 1 && pause > 0 {
+        sleepFor(pause / 1000.0)
+      }
+    }
+  }
+
+  func swipe(app: XCUIApplication, direction: String) -> DragVisualizationFrame? {
+    if performTvRemoteSwipeIfAvailable(direction: direction) {
+      let frame = resolvedTouchReferenceFrame(app: app, appFrame: app.frame)
+      let midX = frame.midX
+      let midY = frame.midY
+      return DragVisualizationFrame(
+        x: midX,
+        y: midY,
+        x2: midX,
+        y2: midY,
+        referenceWidth: frame.width,
+        referenceHeight: frame.height
+      )
+    }
+    return nil
+  }
+
+  private func performTvRemoteSwipeIfAvailable(direction: String) -> Bool {
+    switch direction {
+    case "up":
+      return pressTvRemote(.up)
+    case "down":
+      return pressTvRemote(.down)
+    case "left":
+      return pressTvRemote(.left)
+    case "right":
+      return pressTvRemote(.right)
+    default:
+      return false
+    }
+  }
+
+  func pinch(app: XCUIApplication, scale: Double, x: Double?, y: Double?) -> RunnerInteractionOutcome {
+    return performCoordinatePinch(app: app, scale: scale, x: x, y: y)
+  }
+
+  private func performCoordinatePinch(app: XCUIApplication, scale: Double, x: Double?, y: Double?) -> RunnerInteractionOutcome {
+#if os(tvOS)
+    return .unsupported("pinch is not supported on tvOS")
+#else
+    let target = app.windows.firstMatch.exists ? app.windows.firstMatch : app
+
+    // Use double-tap + drag gesture for reliable map zoom
+    // Zoom in (scale > 1): tap then drag UP
+    // Zoom out (scale < 1): tap then drag DOWN
+
+    // Determine center point (use provided x/y or screen center)
+    let centerX = x.map { $0 / target.frame.width } ?? 0.5
+    let centerY = y.map { $0 / target.frame.height } ?? 0.5
+    let center = target.coordinate(withNormalizedOffset: CGVector(dx: centerX, dy: centerY))
+
+    // Calculate drag distance based on scale (clamped to reasonable range)
+    // Larger scale = more drag distance
+    let dragAmount: CGFloat
+    if scale > 1.0 {
+      // Zoom in: drag up (negative Y direction in normalized coords)
+      dragAmount = min(0.4, CGFloat(scale - 1.0) * 0.2)
+    } else {
+      // Zoom out: drag down (positive Y direction)
+      dragAmount = min(0.4, CGFloat(1.0 - scale) * 0.4)
+    }
+
+    let endY = scale > 1.0 ? (centerY - Double(dragAmount)) : (centerY + Double(dragAmount))
+    let endPoint = target.coordinate(withNormalizedOffset: CGVector(dx: centerX, dy: max(0.1, min(0.9, endY))))
+
+    // Tap first (first tap of double-tap)
+    center.tap()
+
+    // Immediately press and drag (second tap + drag)
+    center.press(forDuration: 0.05, thenDragTo: endPoint)
+    return .performed
+#endif
+  }
+
+  private func interactionRoot(app: XCUIApplication) -> XCUIElement {
+    let windows = app.windows.allElementsBoundByIndex
+    if let window = windows.first(where: { $0.exists && !$0.frame.isEmpty }) {
+      return window
+    }
+    return app
+  }
+
+  private func performCoordinateTap(app: XCUIApplication, x: Double, y: Double) -> RunnerInteractionOutcome {
+#if os(tvOS)
+    return .unsupported("coordinate tap is not supported on tvOS; move focus with swipe or scroll, then select the focused element")
+#else
+    interactionCoordinate(app: app, x: x, y: y).tap()
+    return .performed
+#endif
+  }
+
+  private func performCoordinateDoubleTap(app: XCUIApplication, x: Double, y: Double) -> RunnerInteractionOutcome {
+#if os(tvOS)
+    return .unsupported("coordinate double tap is not supported on tvOS; move focus with swipe or scroll, then select the focused element")
+#else
+    interactionCoordinate(app: app, x: x, y: y).doubleTap()
+    return .performed
+#endif
+  }
+
+  private func performCoordinateLongPress(app: XCUIApplication, x: Double, y: Double, duration: TimeInterval) -> RunnerInteractionOutcome {
+#if os(tvOS)
+    return .unsupported("coordinate long press is not supported on tvOS; move focus with swipe or scroll, then long-select the focused element")
+#else
+    interactionCoordinate(app: app, x: x, y: y).press(forDuration: duration)
+    return .performed
+#endif
+  }
+
+  private func performCoordinateDrag(
+    app: XCUIApplication,
+    x: Double,
+    y: Double,
+    x2: Double,
+    y2: Double,
+    holdDuration: TimeInterval
+  ) -> RunnerInteractionOutcome {
+#if os(tvOS)
+    return .unsupported("coordinate drag is not supported on tvOS")
+#else
+    let start = interactionCoordinate(app: app, x: x, y: y)
+    let end = interactionCoordinate(app: app, x: x2, y: y2)
+    start.press(forDuration: holdDuration, thenDragTo: end)
+    return .performed
+#endif
+  }
+
+#if !os(tvOS)
+  private func interactionCoordinate(app: XCUIApplication, x: Double, y: Double) -> XCUICoordinate {
+    let root = interactionRoot(app: app)
+    let origin = root.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+    let rootFrame = root.frame
+    let offsetX = x - Double(rootFrame.origin.x)
+    let offsetY = y - Double(rootFrame.origin.y)
+    return origin.withOffset(CGVector(dx: offsetX, dy: offsetY))
+  }
+#endif
+
+  private func tapElementCenter(app: XCUIApplication, element: XCUIElement) {
+    let frame = element.frame
+    if !frame.isEmpty {
+      _ = tapAt(app: app, x: frame.midX, y: frame.midY)
+      return
+    }
+#if !os(tvOS)
+    element.tap()
+#endif
+  }
+
+  private func macOSNavigationBackElement(app: XCUIApplication) -> XCUIElement? {
+    let predicate = NSPredicate(
+      format: "identifier == %@ OR label == %@",
+      "go back",
+      "Back"
+    )
+    let element = app.descendants(matching: .any).matching(predicate).firstMatch
+    return element.exists ? element : nil
+  }
+}

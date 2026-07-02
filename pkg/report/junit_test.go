@@ -111,8 +111,8 @@ func TestGenerateJUnit(t *testing.T) {
 		`<testsuite name="maestro-runner" tests="2" failures="0" skipped="0"`,
 		`<testcase name="Login Test" classname="Login Test" time="5.000"`,
 		`<testcase name="Signup Test" classname="Signup Test" time="3.000"`,
-		`<property name="file" value="login.yaml"/>`,
-		`<property name="file" value="signup.yaml"/>`,
+		`<property name="file" value="flows/login.yaml"/>`,
+		`<property name="file" value="flows/signup.yaml"/>`,
 		`<property name="device.name" value="Pixel 6"/>`,
 		`<property name="device.platform" value="android"/>`,
 		`</testsuites>`,
@@ -130,6 +130,110 @@ func TestGenerateJUnit(t *testing.T) {
 	}
 	if strings.Contains(xml, "<skipped") {
 		t.Error("passed tests should not contain <skipped>")
+	}
+}
+
+// TestJUnitFilePropertyKeepsSubdirectories is the #96 regression: the JUnit
+// `file` property must keep the flow's subdirectory (e.g. authentication/flow.yaml)
+// instead of being flattened to the bare filename. It mirrors the reported setup
+// — flows discovered under a workspace dir, so SourceFile is an absolute path and
+// the runner is invoked from that dir — by chdir'ing into a temp workspace with a
+// real flow file.
+func TestJUnitFilePropertyKeepsSubdirectories(t *testing.T) {
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	ws := t.TempDir() // workspace = config.yaml dir
+	if err := os.MkdirAll(filepath.Join(ws, "authentication"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "authentication", "flow.yaml"), []byte("- launchApp\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(ws); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	end := now.Add(time.Second)
+	d := int64(1000)
+	index := &Index{
+		StartTime: now,
+		EndTime:   &end,
+		Device:    Device{Name: "Pixel 9", Platform: "android"},
+		Summary:   Summary{Total: 1, Passed: 1},
+		Flows: []FlowEntry{{
+			Index: 0, ID: "flow-000", Name: "Sign In",
+			SourceFile: filepath.Join(ws, "authentication", "flow.yaml"), // absolute, as flow discovery produces
+			DataFile:   "flows/flow-000.json",
+			Status:     StatusPassed, Duration: &d,
+			Commands: CommandSummary{Total: 1, Passed: 1},
+		}},
+	}
+	if err := os.MkdirAll(filepath.Join(ws, "flows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWriteJSON(filepath.Join(ws, "report.json"), index); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWriteJSON(filepath.Join(ws, "flows", "flow-000.json"),
+		FlowDetail{ID: "flow-000", Name: "Sign In", StartTime: now, Duration: &d}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := GenerateJUnit(ws); err != nil {
+		t.Fatalf("GenerateJUnit: %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(ws, "junit-report.xml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	xml := string(content)
+
+	if !strings.Contains(xml, `<property name="file" value="authentication/flow.yaml"/>`) {
+		t.Errorf("expected file property to keep the subdirectory; got:\n%s", xml)
+	}
+	if strings.Contains(xml, `<property name="file" value="flow.yaml"/>`) {
+		t.Error("file property was flattened to the bare filename (the #96 bug)")
+	}
+}
+
+// TestRelSourceFile covers the path-relativization helper directly, from a
+// chdir'd temp working dir with real files (so symlink resolution is consistent).
+func TestRelSourceFile(t *testing.T) {
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", "a.yaml"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := relSourceFile(filepath.Join(dir, "sub", "a.yaml")); got != "sub/a.yaml" {
+		t.Errorf("absolute under cwd: got %q, want %q", got, "sub/a.yaml")
+	}
+	if got := relSourceFile("sub/a.yaml"); got != "sub/a.yaml" {
+		t.Errorf("relative path: got %q, want %q", got, "sub/a.yaml")
+	}
+	if got := relSourceFile(""); got != "" {
+		t.Errorf("empty: got %q, want empty", got)
+	}
+	// Outside the working tree: keep the original rather than emitting "../..".
+	outside := filepath.Join(filepath.Dir(orig), "elsewhere", "c.yaml")
+	if got := relSourceFile(outside); got != outside {
+		t.Errorf("outside cwd: got %q, want original %q", got, outside)
 	}
 }
 
@@ -441,7 +545,7 @@ func TestXMLEscapeInFlowNames(t *testing.T) {
 	checks := []string{
 		`name="Login &amp; &quot;Signup&quot; &lt;test&gt;"`,
 		`value="Test &lt;Device&gt;"`,
-		`value="login &amp; signup.yaml"`,
+		`value="flows/login &amp; signup.yaml"`,
 	}
 	for _, check := range checks {
 		if !strings.Contains(xml, check) {

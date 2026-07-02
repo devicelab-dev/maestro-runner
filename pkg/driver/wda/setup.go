@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/devicelab-dev/maestro-runner/pkg/config"
 )
 
 const (
@@ -18,30 +20,35 @@ const (
 	WDARepoURL = "https://github.com/appium/WebDriverAgent/archive/refs/tags/v%s.zip"
 )
 
-// Setup ensures WDA is available. Downloads if missing.
+// Setup verifies the bundled WebDriverAgent is present and returns its path.
+// Releases ship WDA inside drivers/ios/; a missing bundle indicates a broken
+// install. We deliberately do NOT auto-download as a fallback — fetching
+// "latest" from GitHub at runtime would deliver an untested WDA version,
+// introduce a hidden network dependency, and make test runs non-reproducible.
+// Use `maestro-runner wda update` to refresh WDA explicitly.
 func Setup() (string, error) {
 	wdaPath, err := GetWDAPath()
 	if err != nil {
 		return "", err
 	}
 
-	// Check if bundled WDA exists
 	projectPath := filepath.Join(wdaPath, "WebDriverAgent.xcodeproj")
 	if _, err := os.Stat(projectPath); err != nil {
-		// WDA not found, download the latest version
-		fmt.Println("WebDriverAgent not found. Downloading...")
-		if err := UpdateWDA(); err != nil {
-			return "", fmt.Errorf("failed to download WebDriverAgent: %w", err)
-		}
+		return "", fmt.Errorf(
+			"WebDriverAgent not found at %s — bundled WDA missing from install.\n"+
+				"Reinstall maestro-runner, or run `maestro-runner wda update` to fetch it",
+			wdaPath,
+		)
 	}
 
 	return wdaPath, nil
 }
 
 // GetWDAPath returns the path where WDA is bundled in the project.
+// Resolves via config.GetDriversDir so it works regardless of CWD: prefers
+// $MAESTRO_RUNNER_HOME, then binary-relative (<binary-dir>/..), then CWD.
 func GetWDAPath() (string, error) {
-	// Use bundled WDA in drivers/ios directory (version-agnostic path)
-	return filepath.Join(".", "drivers", "ios", "WebDriverAgent"), nil
+	return filepath.Join(config.GetDriversDir("ios"), "WebDriverAgent"), nil
 }
 
 // GetLocalWDAVersion reads the version from the bundled WDA's package.json.
