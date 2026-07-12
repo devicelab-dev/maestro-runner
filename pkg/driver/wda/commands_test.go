@@ -4685,6 +4685,7 @@ func TestStopAppEmptyBundleID(t *testing.T) {
 func TestEnsureSessionCreatesSessionWhenNone(t *testing.T) {
 	var sessionCreated bool
 	var settingsUpdated bool
+	var settingsBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		path := r.URL.Path
@@ -4698,6 +4699,8 @@ func TestEnsureSessionCreatesSessionWhenNone(t *testing.T) {
 		}
 		if strings.Contains(path, "/appium/settings") && r.Method == "POST" {
 			settingsUpdated = true
+			body, _ := io.ReadAll(r.Body)
+			settingsBody = string(body)
 			jsonResponse(w, map[string]interface{}{"status": 0})
 			return
 		}
@@ -4718,6 +4721,9 @@ func TestEnsureSessionCreatesSessionWhenNone(t *testing.T) {
 	}
 	if !settingsUpdated {
 		t.Error("Expected settings to be updated after session creation")
+	}
+	if !strings.Contains(settingsBody, `"snapshotMaxDepth":60`) {
+		t.Errorf("Expected snapshotMaxDepth=60, got %s", settingsBody)
 	}
 }
 
@@ -4750,6 +4756,7 @@ func TestEnsureSessionSkipsWhenSessionExists(t *testing.T) {
 func TestLaunchAppReusesExistingSession(t *testing.T) {
 	var sessionCreated bool
 	var settingsUpdated bool
+	var settingsBody string
 	var launchCalled bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -4764,6 +4771,8 @@ func TestLaunchAppReusesExistingSession(t *testing.T) {
 		}
 		if strings.Contains(path, "/appium/settings") && r.Method == "POST" {
 			settingsUpdated = true
+			body, _ := io.ReadAll(r.Body)
+			settingsBody = string(body)
 			jsonResponse(w, map[string]interface{}{"status": 0})
 			return
 		}
@@ -4794,6 +4803,9 @@ func TestLaunchAppReusesExistingSession(t *testing.T) {
 	}
 	if !settingsUpdated {
 		t.Error("Expected UpdateSettings to be called for existing session")
+	}
+	if !strings.Contains(settingsBody, `"snapshotMaxDepth":60`) {
+		t.Errorf("Expected snapshotMaxDepth=60, got %s", settingsBody)
 	}
 	if !launchCalled {
 		t.Error("Expected app launch to be called")

@@ -820,6 +820,7 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 	// reusing a session from a previous flow with different permissions.
 	sessionSettings := map[string]interface{}{
 		"shouldWaitForQuiescence": false,
+		"snapshotMaxDepth":        60,
 		"waitForIdleTimeout":      0,
 		"defaultAlertAction":      d.alertAction,
 	}

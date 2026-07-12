@@ -124,6 +124,7 @@ func (d *Driver) EnsureSession(appID string) error {
 	// Disable quiescence to prevent XCTest crashes
 	_ = d.client.UpdateSettings(map[string]interface{}{
 		"shouldWaitForQuiescence": false,
+		"snapshotMaxDepth":        60,
 		"waitForIdleTimeout":      0,
 	})
 	return nil
