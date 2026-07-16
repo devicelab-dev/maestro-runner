@@ -496,6 +496,11 @@ type RunConfig struct {
 	AppiumSessionFile string
 	CapsFile          string                 // Appium capabilities JSON file path
 	Capabilities      map[string]interface{} // Parsed Appium capabilities
+	// NewCommandTimeout, when > 0, sets appium:newCommandTimeout (seconds) for the
+	// Appium session unless the --caps file already specifies it (an explicit caps
+	// value is authoritative). Sourced from --new-command-timeout /
+	// MAESTRO_NEW_COMMAND_TIMEOUT. See issue #124.
+	NewCommandTimeout int
 
 	// Driver settings
 	WaitForIdleTimeout int    // Wait for device idle in ms (0 = disabled, default 200)
@@ -699,6 +704,7 @@ func runTest(c *cli.Context) error {
 		AppiumSessionFile:  getString("appium-session-file"),
 		CapsFile:           capsFile,
 		Capabilities:       caps,
+		NewCommandTimeout:  getInt("new-command-timeout"),
 		WaitForIdleTimeout: getInt("wait-for-idle-timeout"),
 		ConditionTimeout:   getInt("condition-timeout"),
 		TypingFrequency:    getInt("typing-frequency"),
@@ -1901,6 +1907,19 @@ func createAppiumDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	// Auto-grant permissions by default (user can override with false in caps file)
 	if caps["appium:autoGrantPermissions"] == nil {
 		caps["appium:autoGrantPermissions"] = true
+	}
+	// Honor a user-supplied appium:newCommandTimeout. An explicit value in the
+	// --caps file is authoritative and is never overridden. When it is absent and
+	// --new-command-timeout / MAESTRO_NEW_COMMAND_TIMEOUT is set, inject it so the
+	// session command timeout can be raised without editing the caps file — e.g.
+	// cloud --parallel runs where the earliest-created sessions idle during the
+	// serial pre-creation phase and would otherwise be reaped. See issue #124.
+	if cfg.NewCommandTimeout > 0 {
+		_, hasPrefixed := caps["appium:newCommandTimeout"]
+		_, hasBare := caps["newCommandTimeout"]
+		if !hasPrefixed && !hasBare {
+			caps["appium:newCommandTimeout"] = cfg.NewCommandTimeout
+		}
 	}
 
 	// Add waitForIdleTimeout to capabilities for session creation
