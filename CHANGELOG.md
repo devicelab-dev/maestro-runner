@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`--new-command-timeout <seconds>`** (env `MAESTRO_NEW_COMMAND_TIMEOUT`) — sets `appium:newCommandTimeout` on the Appium session when the caps file does not already specify it; an explicit value in `--caps` stays authoritative. Raising it matters on cloud `--parallel` runs, where the earliest sessions sit idle through the serial pre-creation phase and would otherwise be reaped at the server default, failing the first flow with `invalid session id`. Off by default. Contributed by [@JSap0914](https://github.com/JSap0914), requested by [@devrchoi](https://github.com/devrchoi) ([#124](https://github.com/devicelab-dev/maestro-runner/issues/124)).
+  ```bash
+  maestro-runner --driver appium --caps caps.json --new-command-timeout 300 --parallel 4 test flows/
+  ```
+
 ## [1.1.25] - 2026-08-25
 
 This release is about **the first five minutes and the oldest complaints**: a `doctor` that says exactly what your machine is missing, a `devices` listing, a `screenshot` command, `runShell` for the one adb call every suite eventually needs, and an `inputText` that checks what actually landed in the field. It is also about **gestures that behave like a user's finger**: a real `dragAndDrop` on every driver — press, hold until the item lifts, move slowly, settle, release — and a `scrollUntilVisible` that stops when the element is actually visible instead of one pixel in. Flutter apps go from barely drivable to ahead of WDA on the DeviceLab iOS driver, `--step-delay` slows any flow down for demos and animation-heavy apps, and JUnit reports carry test-tracking properties and failure artifacts into CI.
