@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`--new-command-timeout <seconds>`** (env `MAESTRO_NEW_COMMAND_TIMEOUT`) — sets `appium:newCommandTimeout` for the Appium session when it isn't already specified in `--caps`. An explicit `appium:newCommandTimeout` in the caps file stays authoritative and is never overridden. This lets you raise the session command timeout without editing the caps file — e.g. cloud `--parallel` runs where the earliest-created sessions sit idle during the serial pre-creation phase and would otherwise be reaped at the server default, failing the first flow with `invalid session id`. Off by default (`0` = leave unset). Requested by [@devrchoi](https://github.com/devrchoi) ([#124](https://github.com/devicelab-dev/maestro-runner/issues/124)).
+  ```bash
+  maestro-runner --driver appium --caps caps.json --new-command-timeout 300 --parallel 4 test flows/
+  ```
+
 ## [1.1.19] - 2026-07-01
 
 A reporter-driven follow-up focused on executor/`runScript` parity with Maestro and iOS simulator ergonomics. Headlines: `runScript`'s JavaScript environment now matches Maestro (env vars are scoped per script and undeclared variables read as `undefined` instead of throwing), `when:`/`while:` condition checks resolve **fast by default** instead of blocking on the 7s optional-find timeout, and `--auto-start-emulator` finally works for iOS simulators. Plus an iOS runner build-cache correctness fix.
