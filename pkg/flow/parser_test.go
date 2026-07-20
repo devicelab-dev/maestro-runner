@@ -182,6 +182,7 @@ func TestParse_AllStepTypes(t *testing.T) {
 		{"waitForRequest mapping", `- waitForRequest: {url: "*/api/submit", method: POST, output: reqBody}`, StepWaitForRequest},
 		{"clearNetworkMocks", `- clearNetworkMocks:`, StepClearNetworkMocks},
 		{"takeScreenshot", `- takeScreenshot: "screen.png"`, StepTakeScreenshot},
+		{"assertScreenshot", `- assertScreenshot: "screen.png"`, StepAssertScreenshot},
 		{"startRecording", `- startRecording: "video.mp4"`, StepStartRecording},
 		{"stopRecording", `- stopRecording: "video.mp4"`, StepStopRecording},
 		{"addMedia", `- addMedia: {files: ["img.png"]}`, StepAddMedia},
@@ -203,6 +204,50 @@ func TestParse_AllStepTypes(t *testing.T) {
 				t.Errorf("expected type %v, got %v", tc.stepType, flow.Steps[0].Type())
 			}
 		})
+	}
+}
+
+func TestParse_AssertScreenshotStep(t *testing.T) {
+	yaml := `
+- assertScreenshot:
+    path: screenshots/banner.png
+    cropOn:
+      id: banner
+    thresholdPercentage: 98.5
+`
+
+	parsed, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	step, ok := parsed.Steps[0].(*AssertScreenshotStep)
+	if !ok {
+		t.Fatalf("expected AssertScreenshotStep, got %T", parsed.Steps[0])
+	}
+	if step.Path != "screenshots/banner.png" {
+		t.Errorf("Path = %q, want %q", step.Path, "screenshots/banner.png")
+	}
+	if step.CropOn == nil || step.CropOn.ID != "banner" {
+		t.Errorf("CropOn = %#v, want selector with id banner", step.CropOn)
+	}
+	if step.ThresholdPercentage != 98.5 {
+		t.Errorf("ThresholdPercentage = %v, want 98.5", step.ThresholdPercentage)
+	}
+}
+
+func TestParse_AssertScreenshotStep_DefaultThreshold(t *testing.T) {
+	parsed, err := Parse([]byte(`- assertScreenshot: splash.png`), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	step, ok := parsed.Steps[0].(*AssertScreenshotStep)
+	if !ok {
+		t.Fatalf("expected AssertScreenshotStep, got %T", parsed.Steps[0])
+	}
+	if step.ThresholdPercentage != 95 {
+		t.Errorf("ThresholdPercentage = %v, want 95", step.ThresholdPercentage)
 	}
 }
 

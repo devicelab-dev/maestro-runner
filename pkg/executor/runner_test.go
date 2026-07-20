@@ -1,8 +1,12 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"image"
+	imagecolor "image/color"
+	"image/png"
 	"os"
 	"path/filepath"
 	"sync"
@@ -1008,9 +1012,9 @@ func TestRunner_RunFlowStep_WhenTrue_RunsMainBranch(t *testing.T) {
 			Config:     flow.Config{Name: "RunFlow When True Test"},
 			Steps: []flow.Step{
 				&flow.RunFlowStep{
-					BaseStep: flow.BaseStep{StepType: flow.StepRunFlow},
-					When:     &flow.Condition{Visible: &flow.Selector{Text: "Logout"}},
-					Steps:    []flow.Step{mainTap},
+					BaseStep:  flow.BaseStep{StepType: flow.StepRunFlow},
+					When:      &flow.Condition{Visible: &flow.Selector{Text: "Logout"}},
+					Steps:     []flow.Step{mainTap},
 					ElseSteps: []flow.Step{elseTap},
 				},
 			},
@@ -2315,7 +2319,7 @@ func TestRunner_TakeScreenshotStep_Success(t *testing.T) {
 
 	flows := []flow.Flow{
 		{
-			SourcePath: "test.yaml",
+			SourcePath: filepath.Join(tmpDir, "test.yaml"),
 			Config:     flow.Config{Name: "Screenshot Test"},
 			Steps: []flow.Step{
 				&flow.TakeScreenshotStep{
@@ -2339,6 +2343,13 @@ func TestRunner_TakeScreenshotStep_Success(t *testing.T) {
 	screenshotPath := filepath.Join(tmpDir, "assets", "flow-000", "cmd-000-my-screenshot.png")
 	if _, err := os.Stat(screenshotPath); err != nil {
 		t.Errorf("screenshot file not created at %s: %v", screenshotPath, err)
+	}
+
+	requestedPath := filepath.Join(tmpDir, "my-screenshot.png")
+	if data, err := os.ReadFile(requestedPath); err != nil {
+		t.Errorf("requested screenshot file not created at %s: %v", requestedPath, err)
+	} else if !bytes.Equal(data, screenshotData) {
+		t.Error("requested screenshot file does not contain captured data")
 	}
 }
 
@@ -2535,4 +2546,102 @@ func TestRunner_TakeScreenshotStep_EmptyData(t *testing.T) {
 	if result.Status != report.StatusPassed {
 		t.Errorf("Status = %v, want %v", result.Status, report.StatusPassed)
 	}
+}
+
+func TestRunner_AssertScreenshotStep(t *testing.T) {
+	reference := encodeTestPNG(t, []imagecolor.RGBA{
+		{R: 255, A: 255},
+		{G: 255, A: 255},
+	})
+	withinTolerance := encodeTestPNG(t, []imagecolor.RGBA{
+		{R: 240, A: 255},
+		{G: 240, A: 255},
+	})
+	mismatch := encodeTestPNG(t, []imagecolor.RGBA{
+		{B: 255, A: 255},
+		{G: 255, A: 255},
+	})
+
+	tests := []struct {
+		name           string
+		captured       []byte
+		expectedStatus report.Status
+	}{
+		{
+			name:           "image within Maestro color tolerance passes",
+			captured:       withinTolerance,
+			expectedStatus: report.StatusPassed,
+		},
+		{
+			name:           "image below threshold fails",
+			captured:       mismatch,
+			expectedStatus: report.StatusFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(tmpDir, "reference.png"), reference, 0o644); err != nil {
+				t.Fatalf("write reference image: %v", err)
+			}
+
+			driver := &mockDriver{
+				executeFunc: func(step flow.Step) *core.CommandResult {
+					if _, ok := step.(*flow.AssertScreenshotStep); ok {
+						return &core.CommandResult{Success: true, Data: tt.captured}
+					}
+					return &core.CommandResult{Success: true}
+				},
+			}
+			runner := New(driver, RunnerConfig{
+				OutputDir:   filepath.Join(tmpDir, "output"),
+				Artifacts:   ArtifactNever,
+				Device:      report.Device{ID: "test", Platform: "android"},
+				App:         report.App{ID: "com.test"},
+				Parallelism: 0,
+			})
+			flows := []flow.Flow{{
+				SourcePath: filepath.Join(tmpDir, "test.yaml"),
+				Config:     flow.Config{Name: "Assert Screenshot Test"},
+				Steps: []flow.Step{&flow.AssertScreenshotStep{
+					BaseStep:            flow.BaseStep{StepType: flow.StepAssertScreenshot},
+					Path:                "reference",
+					ThresholdPercentage: 100,
+				}},
+			}}
+
+			result, err := runner.Run(context.Background(), flows)
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if result.Status != tt.expectedStatus {
+				t.Errorf("Status = %v, want %v", result.Status, tt.expectedStatus)
+			}
+
+			diffPath := filepath.Join(tmpDir, "reference_diff.png")
+			if tt.expectedStatus == report.StatusFailed {
+				if _, err := os.Stat(diffPath); err != nil {
+					t.Errorf("expected diff image at %s: %v", diffPath, err)
+				}
+			} else if _, err := os.Stat(diffPath); err == nil {
+				t.Errorf("unexpected diff image written at %s", diffPath)
+			}
+		})
+	}
+}
+
+func encodeTestPNG(t *testing.T, pixels []imagecolor.RGBA) []byte {
+	t.Helper()
+
+	img := image.NewRGBA(image.Rect(0, 0, len(pixels), 1))
+	for x, pixel := range pixels {
+		img.SetRGBA(x, 0, pixel)
+	}
+
+	var data bytes.Buffer
+	if err := png.Encode(&data, img); err != nil {
+		t.Fatalf("encode PNG: %v", err)
+	}
+	return data.Bytes()
 }

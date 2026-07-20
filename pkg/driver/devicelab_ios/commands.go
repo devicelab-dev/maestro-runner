@@ -46,6 +46,8 @@ func (d *Driver) executeStep(step flow.Step) *core.CommandResult {
 		return d.handleAssertNotVisible(s)
 	case *flow.TakeScreenshotStep:
 		return d.handleTakeScreenshot(s)
+	case *flow.AssertScreenshotStep:
+		return d.handleTakeScreenshot(&flow.TakeScreenshotStep{CropOn: s.CropOn})
 	case *flow.PressKeyStep:
 		return d.handlePressKey(s)
 	case *flow.WaitForAnimationToEndStep:

@@ -567,6 +567,8 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	// Media
 	case *flow.TakeScreenshotStep:
 		result = d.takeScreenshot(s)
+	case *flow.AssertScreenshotStep:
+		result = d.takeScreenshot(&flow.TakeScreenshotStep{CropOn: s.CropOn})
 	case *flow.StartRecordingStep:
 		result = d.startRecording(s)
 	case *flow.StopRecordingStep:

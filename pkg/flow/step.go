@@ -100,11 +100,12 @@ const (
 	StepClearNetworkMocks    StepType = "clearNetworkMocks"
 
 	// Media
-	StepTakeScreenshot StepType = "takeScreenshot"
-	StepStartRecording StepType = "startRecording"
-	StepStopRecording  StepType = "stopRecording"
-	StepAddMedia       StepType = "addMedia"
-	StepRemoveMedia    StepType = "removeMedia"
+	StepTakeScreenshot   StepType = "takeScreenshot"
+	StepAssertScreenshot StepType = "assertScreenshot"
+	StepStartRecording   StepType = "startRecording"
+	StepStopRecording    StepType = "stopRecording"
+	StepAddMedia         StepType = "addMedia"
+	StepRemoveMedia      StepType = "removeMedia"
 
 	// Other
 	StepPressKey              StepType = "pressKey"
@@ -783,6 +784,14 @@ type TakeScreenshotStep struct {
 	BaseStep `yaml:",inline"`
 	Path     string    `yaml:"path"`
 	CropOn   *Selector `yaml:"cropOn,omitempty"`
+}
+
+// AssertScreenshotStep compares a screenshot with a reference image.
+type AssertScreenshotStep struct {
+	BaseStep            `yaml:",inline"`
+	Path                string    `yaml:"path"`
+	CropOn              *Selector `yaml:"cropOn,omitempty"`
+	ThresholdPercentage float64   `yaml:"thresholdPercentage"`
 }
 
 // StartRecordingStep starts recording.

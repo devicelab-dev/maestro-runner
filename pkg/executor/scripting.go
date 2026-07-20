@@ -700,6 +700,12 @@ func (se *ScriptEngine) ExpandStep(step flow.Step) {
 		s.Link = se.ExpandVariables(s.Link)
 	case *flow.PressKeyStep:
 		s.Key = se.ExpandVariables(s.Key)
+	case *flow.TakeScreenshotStep:
+		s.Path = se.ExpandVariables(s.Path)
+		s.CropOn = se.expandSelector(s.CropOn)
+	case *flow.AssertScreenshotStep:
+		s.Path = se.ExpandVariables(s.Path)
+		s.CropOn = se.expandSelector(s.CropOn)
 	case *flow.RunFlowStep:
 		s.File = se.ExpandVariables(s.File)
 		s.ElseFile = se.ExpandVariables(s.ElseFile)

@@ -252,7 +252,7 @@ func isStepType(key string) bool {
 		StepInputText, StepInputRandom, StepInputRandomEmail, StepInputRandomNumber,
 		StepInputRandomPersonName, StepInputRandomText,
 		StepEraseText, StepCopyTextFrom, StepPasteText, StepSetClipboard,
-		StepAssertVisible, StepAssertNotVisible, StepAssertTrue, StepAssertCondition,
+		StepAssertVisible, StepAssertNotVisible, StepAssertTrue, StepAssertCondition, StepAssertScreenshot,
 		StepAssertNoDefectsWithAI, StepAssertWithAI, StepExtractTextWithAI, StepWaitUntil,
 		StepLaunchApp, StepStopApp, StepKillApp, StepClearState, StepClearKeychain, StepSetPermissions,
 		StepSetLocation, StepSetOrientation, StepSetAirplaneMode, StepToggleAirplaneMode,
@@ -867,6 +867,19 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 			s.Path = valueNode.Value
 		} else if err := valueNode.Decode(&s); err != nil {
 			return nil, wrapParseError(sourcePath, valueNode.Line, err)
+		}
+		s.StepType = stepType
+		return &s, nil
+
+	case StepAssertScreenshot:
+		var s AssertScreenshotStep
+		if valueNode.Kind == yaml.ScalarNode {
+			s.Path = valueNode.Value
+		} else if err := valueNode.Decode(&s); err != nil {
+			return nil, wrapParseError(sourcePath, valueNode.Line, err)
+		}
+		if s.ThresholdPercentage == 0 {
+			s.ThresholdPercentage = 95.0
 		}
 		s.StepType = stepType
 		return &s, nil

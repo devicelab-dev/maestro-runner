@@ -1489,7 +1489,7 @@ func (d *Driver) openLink(step *flow.OpenLinkStep) *core.CommandResult {
 // ============================================================================
 
 func (d *Driver) takeScreenshot(step *flow.TakeScreenshotStep) *core.CommandResult {
-	data, err := d.client.Screenshot()
+	data, err := d.Screenshot()
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to take screenshot: %v", err))
 	}

@@ -216,6 +216,11 @@ func (d *AndroidDevice) Shell(cmd string) (string, error) {
 	return d.adb("shell", cmd)
 }
 
+// Screenshot captures the physical display through ADB.
+func (d *AndroidDevice) Screenshot() ([]byte, error) {
+	return d.adbOutput("exec-out", "screencap", "-p")
+}
+
 // Install installs an APK on the device.
 func (d *AndroidDevice) Install(apkPath string) error {
 	_, err := d.adb("install", "-r", "-g", apkPath)
@@ -355,6 +360,11 @@ func (d *AndroidDevice) Info() (DeviceInfo, error) {
 
 // adb executes an ADB command.
 func (d *AndroidDevice) adb(args ...string) (string, error) {
+	out, err := d.adbOutput(args...)
+	return string(out), err
+}
+
+func (d *AndroidDevice) adbOutput(args ...string) ([]byte, error) {
 	cmdArgs := make([]string, 0, len(args)+2)
 	if d.serial != "" {
 		cmdArgs = append(cmdArgs, "-s", d.serial)
@@ -371,10 +381,10 @@ func (d *AndroidDevice) adb(args ...string) (string, error) {
 		if errMsg == "" {
 			errMsg = stdout.String()
 		}
-		return "", fmt.Errorf("adb %s: %w: %s", strings.Join(args, " "), err, errMsg)
+		return nil, fmt.Errorf("adb %s: %w: %s", strings.Join(args, " "), err, errMsg)
 	}
 
-	return stdout.String(), nil
+	return stdout.Bytes(), nil
 }
 
 // waitForDevice waits for the device to be available.

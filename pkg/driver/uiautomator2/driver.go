@@ -19,6 +19,10 @@ type ShellExecutor interface {
 	Shell(cmd string) (string, error)
 }
 
+type screenshotExecutor interface {
+	Screenshot() ([]byte, error)
+}
+
 // UIA2Client defines the interface for UIAutomator2 client operations.
 // Implemented by uiautomator2.Client. Allows mocking in tests.
 type UIA2Client interface {
@@ -225,6 +229,8 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	// Media
 	case *flow.TakeScreenshotStep:
 		result = d.takeScreenshot(s)
+	case *flow.AssertScreenshotStep:
+		result = d.takeScreenshot(&flow.TakeScreenshotStep{CropOn: s.CropOn})
 	case *flow.StartRecordingStep:
 		result = d.startRecording(s)
 	case *flow.StopRecordingStep:
@@ -256,6 +262,11 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 
 // Screenshot captures the current screen as PNG.
 func (d *Driver) Screenshot() ([]byte, error) {
+	if device, ok := d.device.(screenshotExecutor); ok {
+		if data, err := device.Screenshot(); err == nil && len(data) > 0 {
+			return data, nil
+		}
+	}
 	return d.client.Screenshot()
 }
 

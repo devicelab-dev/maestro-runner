@@ -198,6 +198,8 @@ func (d *Driver) executeStep(step flow.Step) *core.CommandResult {
 		return d.inputRandom(s)
 	case *flow.TakeScreenshotStep:
 		return d.takeScreenshot(s)
+	case *flow.AssertScreenshotStep:
+		return d.takeScreenshot(&flow.TakeScreenshotStep{CropOn: s.CropOn})
 	default:
 		return errorResult(fmt.Errorf("unsupported step type: %T", step), "")
 	}
