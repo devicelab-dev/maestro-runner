@@ -2631,6 +2631,117 @@ func TestRunner_AssertScreenshotStep(t *testing.T) {
 	}
 }
 
+func TestRunner_AssertScreenshotStep_SeedsMissingBaseline(t *testing.T) {
+	tmpDir := t.TempDir()
+	captured := encodeTestPNG(t, []imagecolor.RGBA{
+		{R: 10, A: 255},
+		{G: 20, A: 255},
+	})
+
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			if _, ok := step.(*flow.AssertScreenshotStep); ok {
+				return &core.CommandResult{Success: true, Data: captured}
+			}
+			return &core.CommandResult{Success: true}
+		},
+	}
+	runner := New(driver, RunnerConfig{
+		OutputDir:   filepath.Join(tmpDir, "output"),
+		Artifacts:   ArtifactNever,
+		Device:      report.Device{ID: "test", Platform: "android"},
+		App:         report.App{ID: "com.test"},
+		Parallelism: 0,
+	})
+	flows := []flow.Flow{{
+		SourcePath: filepath.Join(tmpDir, "test.yaml"),
+		Config:     flow.Config{Name: "Seed Baseline Test"},
+		Steps: []flow.Step{&flow.AssertScreenshotStep{
+			BaseStep:            flow.BaseStep{StepType: flow.StepAssertScreenshot},
+			Path:                "baselines/new-screen",
+			ThresholdPercentage: 100,
+		}},
+	}}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Status != report.StatusPassed {
+		t.Fatalf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+
+	baselinePath := filepath.Join(tmpDir, "baselines", "new-screen.png")
+	data, err := os.ReadFile(baselinePath)
+	if err != nil {
+		t.Fatalf("expected baseline at %s: %v", baselinePath, err)
+	}
+	if !bytes.Equal(data, captured) {
+		t.Error("seeded baseline does not match captured screenshot")
+	}
+}
+
+func TestRunner_AssertScreenshotStep_UpdateScreenshotsOverwritesBaseline(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldBaseline := encodeTestPNG(t, []imagecolor.RGBA{
+		{R: 255, A: 255},
+		{G: 255, A: 255},
+	})
+	updated := encodeTestPNG(t, []imagecolor.RGBA{
+		{B: 255, A: 255},
+		{G: 255, A: 255},
+	})
+	baselinePath := filepath.Join(tmpDir, "reference.png")
+	if err := os.WriteFile(baselinePath, oldBaseline, 0o644); err != nil {
+		t.Fatalf("write baseline: %v", err)
+	}
+
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			if _, ok := step.(*flow.AssertScreenshotStep); ok {
+				return &core.CommandResult{Success: true, Data: updated}
+			}
+			return &core.CommandResult{Success: true}
+		},
+	}
+	runner := New(driver, RunnerConfig{
+		OutputDir:         filepath.Join(tmpDir, "output"),
+		Artifacts:         ArtifactNever,
+		UpdateScreenshots: true,
+		Device:            report.Device{ID: "test", Platform: "android"},
+		App:               report.App{ID: "com.test"},
+		Parallelism:       0,
+	})
+	flows := []flow.Flow{{
+		SourcePath: filepath.Join(tmpDir, "test.yaml"),
+		Config:     flow.Config{Name: "Update Baseline Test"},
+		Steps: []flow.Step{&flow.AssertScreenshotStep{
+			BaseStep:            flow.BaseStep{StepType: flow.StepAssertScreenshot},
+			Path:                "reference",
+			ThresholdPercentage: 100,
+		}},
+	}}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Status != report.StatusPassed {
+		t.Fatalf("Status = %v, want %v", result.Status, report.StatusPassed)
+	}
+
+	data, err := os.ReadFile(baselinePath)
+	if err != nil {
+		t.Fatalf("read updated baseline: %v", err)
+	}
+	if !bytes.Equal(data, updated) {
+		t.Error("baseline was not overwritten by --update-screenshots")
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, "reference_diff.png")); err == nil {
+		t.Error("unexpected diff image when updating screenshots")
+	}
+}
+
 func encodeTestPNG(t *testing.T, pixels []imagecolor.RGBA) []byte {
 	t.Helper()
 

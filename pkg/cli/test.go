@@ -169,6 +169,11 @@ Examples:
 			Usage: "When to capture screenshots/hierarchy: on-failure (default), always, never",
 			Value: "on-failure",
 		},
+		&cli.BoolFlag{
+			Name:    "update-screenshots",
+			Usage:   "Overwrite existing assertScreenshot baselines with the current screen (missing baselines are always seeded on first run)",
+			EnvVars: []string{"MAESTRO_UPDATE_SCREENSHOTS"},
+		},
 
 		// Emulator management flags (start-emulator, auto-start-emulator,
 		// shutdown-after, boot-timeout) are global flags defined in cli.go.
@@ -532,6 +537,9 @@ type RunConfig struct {
 	// Artifacts
 	Artifacts executor.ArtifactMode // When to capture screenshots/hierarchy
 
+	// UpdateScreenshots overwrites existing assertScreenshot baselines.
+	UpdateScreenshots bool
+
 	// Cloud provider (detected from AppiumURL, nil if not a cloud provider)
 	CloudProvider cloud.Provider
 	CloudMeta     map[string]string
@@ -715,6 +723,7 @@ func runTest(c *cli.Context) error {
 		NoFlutterFallback:  getBool("no-flutter-fallback"),
 		AndroidTCPForward:  getBool("android-tcp-forward"),
 		Artifacts:          parseArtifactMode(getString("artifacts")),
+		UpdateScreenshots:  getBool("update-screenshots"),
 	}
 
 	// Apply waitForIdleTimeout with priority:
@@ -1362,6 +1371,7 @@ func executeSingleDevice(cfg *RunConfig, flows []flow.Flow) (*executor.RunResult
 		OutputDir:          cfg.OutputDir,
 		Parallelism:        0,
 		Artifacts:          cfg.Artifacts,
+		UpdateScreenshots:  cfg.UpdateScreenshots,
 		Device:             deviceInfo,
 		App:                buildAppReport(driver),
 		RunnerVersion:      Version,
@@ -1404,6 +1414,7 @@ func ExecuteFlowWithDriver(driver core.Driver, cfg *RunConfig, f flow.Flow) (*ex
 		OutputDir:          cfg.OutputDir,
 		Parallelism:        0,
 		Artifacts:          cfg.Artifacts,
+		UpdateScreenshots:  cfg.UpdateScreenshots,
 		Device:             deviceInfo,
 		App:                buildAppReport(driver),
 		RunnerVersion:      Version,
@@ -1729,6 +1740,7 @@ func executeAppiumSingleSession(cfg *RunConfig, flows []flow.Flow) (*executor.Ru
 		OutputDir:          cfg.OutputDir,
 		Parallelism:        0,
 		Artifacts:          cfg.Artifacts,
+		UpdateScreenshots:  cfg.UpdateScreenshots,
 		Device:             deviceInfo,
 		App:                buildAppReport(driver),
 		RunnerVersion:      Version,
@@ -2597,6 +2609,7 @@ func createParallelRunner(cfg *RunConfig, workers []executor.DeviceWorker, platf
 		OutputDir:          cfg.OutputDir,
 		Parallelism:        0,
 		Artifacts:          cfg.Artifacts,
+		UpdateScreenshots:  cfg.UpdateScreenshots,
 		Device:             deviceInfo,
 		App:                buildAppReport(firstDriver),
 		RunnerVersion:      Version,

@@ -638,13 +638,43 @@ func (fr *FlowRunner) executeAssertScreenshot(step *flow.AssertScreenshotStep) *
 	if filepath.Ext(referencePath) == "" {
 		referencePath += ".png"
 	}
+
 	referenceData, err := os.ReadFile(referencePath)
 	if err != nil {
-		err = fmt.Errorf("read reference screenshot %q: %w", referencePath, err)
+		if !os.IsNotExist(err) {
+			err = fmt.Errorf("read reference screenshot %q: %w", referencePath, err)
+			return &core.CommandResult{
+				Success: false,
+				Error:   err,
+				Message: err.Error(),
+			}
+		}
+		if writeErr := writeScreenshotBaseline(referencePath, capturedData); writeErr != nil {
+			return &core.CommandResult{
+				Success: false,
+				Error:   writeErr,
+				Message: writeErr.Error(),
+			}
+		}
 		return &core.CommandResult{
-			Success: false,
-			Error:   err,
-			Message: fmt.Sprintf("Reference screenshot not found: %s", referencePath),
+			Success: true,
+			Message: fmt.Sprintf("Baseline screenshot created: %s", referencePath),
+			Data:    capturedData,
+		}
+	}
+
+	if fr.config.UpdateScreenshots {
+		if writeErr := writeScreenshotBaseline(referencePath, capturedData); writeErr != nil {
+			return &core.CommandResult{
+				Success: false,
+				Error:   writeErr,
+				Message: writeErr.Error(),
+			}
+		}
+		return &core.CommandResult{
+			Success: true,
+			Message: fmt.Sprintf("Baseline screenshot updated: %s", referencePath),
+			Data:    capturedData,
 		}
 	}
 
@@ -692,6 +722,16 @@ func (fr *FlowRunner) executeAssertScreenshot(step *flow.AssertScreenshotStep) *
 		),
 		Data: capturedData,
 	}
+}
+
+func writeScreenshotBaseline(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create screenshot baseline directory for %q: %w", path, err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write screenshot baseline %q: %w", path, err)
+	}
+	return nil
 }
 
 // maxPrepareScanDepth bounds runFlow expansion during pre-session scanning so a
