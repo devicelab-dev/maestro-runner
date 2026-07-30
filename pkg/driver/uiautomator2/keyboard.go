@@ -123,35 +123,54 @@ func (d *Driver) consumeInputFlag() bool {
 
 var errKeyboardOpen = fmt.Errorf("keyboard is open — add a `- hideKeyboard` step before this step")
 
+// keyboardSettleWindow bounds how long checkKeyboardBlocking re-samples geometry before
+// declaring the element covered. Windows with SOFT_INPUT_ADJUST_RESIZE (e.g. a plain
+// AlertDialog whose body scrolls) relayout a few frames after the IME appears or after
+// typing: on the first frame the target still reports covered bounds, then the window
+// shrinks and the target rises above the keyboard. A single-shot check reads that stale
+// first frame and rejects a perfectly tappable element (#127, same class on this driver).
+// Var (not const) so tests can shrink it.
+var keyboardSettleWindow = 2 * time.Second
+
+// keyboardSettlePoll is the re-sample cadence while waiting for the geometry to settle.
+const keyboardSettlePoll = 50 * time.Millisecond
+
+// keyboardStillCovering is the per-sample verdict: true only when the keyboard is visible
+// AND a tap on the element's center would land on it.
+func keyboardStillCovering(element core.Bounds, keyboard *core.Bounds) bool {
+	return keyboard != nil && tapWouldHitKeyboard(element, *keyboard)
+}
+
 // checkKeyboardBlocking checks if the keyboard overlaps the target element after an input step.
 // UIA2 finds elements via the accessibility tree even when the keyboard covers them,
 // but coordinate taps land on the keyboard overlay instead. This detects that case and
-// fails fast with a helpful hint instead of silently tapping the keyboard.
+// fails with a helpful hint instead of silently tapping the keyboard. It re-samples until
+// the layout settles (shared core loop), so an IME-resize relayout that lifts the element
+// above the keyboard an instant later isn't rejected on the stale first frame.
 // Returns nil if this check doesn't apply or element is not blocked — caller should proceed normally.
 func (d *Driver) checkKeyboardBlocking(wasInput bool, sel flow.Selector) *core.CommandResult {
 	if !wasInput {
 		return nil
 	}
 
-	// Find element (UIA2 will find it even behind keyboard)
-	_, info, err := d.findElementOnce(sel)
-	if err != nil || info == nil {
-		// Element genuinely not found — let caller do the full-timeout find
+	blocked, kbTop, centerY := core.SettleKeyboardBlocking(
+		func() (core.Bounds, bool) {
+			// Find element (UIA2 will find it even behind keyboard)
+			_, info, err := d.findElementOnce(sel)
+			if err != nil || info == nil {
+				// Element genuinely not found — let caller do the full-timeout find
+				return core.Bounds{}, false
+			}
+			return info.Bounds, true
+		},
+		d.getKeyboardBounds,
+		keyboardStillCovering,
+		keyboardSettleWindow, keyboardSettlePoll,
+	)
+	if !blocked {
 		return nil
 	}
-
-	// Element found — check if keyboard overlaps its bounds
-	kbBounds := d.getKeyboardBounds()
-	if kbBounds == nil {
-		return nil
-	}
-
-	if tapWouldHitKeyboard(info.Bounds, *kbBounds) {
-		_, cy := info.Bounds.Center()
-		return errorResult(errKeyboardOpen,
-			fmt.Sprintf("Element found but keyboard is covering it (keyboard top: %d, element center Y: %d) — add a `- hideKeyboard` step before this step",
-				kbBounds.Y, cy))
-	}
-
-	return nil
+	return errorResult(errKeyboardOpen,
+		fmt.Sprintf("Element found but keyboard is covering it (keyboard top: %d, element center Y: %d) — add a `- hideKeyboard` step before this step",
+			kbTop, centerY))
 }

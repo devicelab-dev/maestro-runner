@@ -519,6 +519,31 @@ func TestClient_GetOrientation(t *testing.T) {
 	}
 }
 
+// TestClient_Keepalive verifies the keepalive ping issues a session-scoped GET
+// that resets the server's newCommandTimeout idle timer (#124).
+func TestClient_Keepalive(t *testing.T) {
+	var hits int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/session/test-session/orientation" && r.Method == "GET" {
+			hits++
+			writeJSON(w, map[string]interface{}{"value": "PORTRAIT"})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL)
+	client.sessionID = "test-session"
+
+	if err := client.Keepalive(); err != nil {
+		t.Fatalf("Keepalive failed: %v", err)
+	}
+	if hits != 1 {
+		t.Errorf("expected 1 session-scoped GET, got %d", hits)
+	}
+}
+
 func TestClient_SetOrientation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/session/test-session/orientation" && r.Method == "POST" {

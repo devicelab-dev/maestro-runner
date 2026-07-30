@@ -197,9 +197,39 @@ func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
 	}
 
 	// Direction-based swipe
-	direction := strings.ToLower(step.Direction)
-	if direction == "" {
-		direction = "up"
+	direction, err := core.NormalizeSwipeDirection(step.Direction)
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("Invalid swipe direction: %s", step.Direction))
+	}
+
+	duration := step.Duration
+	if duration <= 0 {
+		duration = 500
+	}
+
+	// If a from:/selector element is specified, anchor the swipe on the
+	// element's bounds so drag targets (sliders, drag handles) receive the
+	// gesture, and honour `duration:` — parity with the uiautomator2 /
+	// devicelab fix (#114).
+	if step.Selector != nil && !step.Selector.IsEmpty() {
+		timeout := time.Duration(step.TimeoutMs) * time.Millisecond
+		if timeout <= 0 {
+			timeout = d.getFindTimeout()
+		}
+		info, err := d.findElement(*step.Selector, timeout)
+		if err != nil {
+			return errorResult(err, fmt.Sprintf("Element not found for swipe: %s", step.Selector.Describe()))
+		}
+		if info != nil && info.Bounds.Width > 0 {
+			startX, startY, endX, endY, err := core.SwipeCoordsInBounds(direction, info.Bounds, w, h)
+			if err != nil {
+				return errorResult(err, fmt.Sprintf("Invalid swipe direction: %s", step.Direction))
+			}
+			if err := d.client.Swipe(startX, startY, endX, endY, duration); err != nil {
+				return errorResult(err, "Failed to swipe")
+			}
+			return successResult(fmt.Sprintf("Swiped %s in element", direction), info)
+		}
 	}
 
 	// Swipe coordinates match Maestro behavior:
@@ -226,7 +256,7 @@ func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
 		return errorResult(fmt.Errorf("invalid direction: %s", direction), "")
 	}
 
-	if err := d.client.Swipe(startX, startY, endX, endY, 500); err != nil {
+	if err := d.client.Swipe(startX, startY, endX, endY, duration); err != nil {
 		return errorResult(err, "Failed to swipe")
 	}
 
@@ -302,6 +332,29 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 	text := step.Text
 
+	// Inline selector: find the element and type into it directly — parity
+	// with the uiautomator2/devicelab drivers, which already honour it.
+	// Guard against the YAML artifact where InputTextStep.Text and
+	// Selector.Text share the `text:` key (map form), which would otherwise
+	// send us hunting for an element whose text equals the input value.
+	selectorIsReal := !step.Selector.IsEmpty() && step.Selector.Text != text
+	if selectorIsReal {
+		timeout := time.Duration(step.TimeoutMs) * time.Millisecond
+		if timeout <= 0 {
+			timeout = d.getFindTimeout()
+		}
+		info, err := d.findElement(step.Selector, timeout)
+		if err != nil {
+			return errorResult(err, fmt.Sprintf("Element not found: %s", step.Selector.Describe()))
+		}
+		if info != nil && info.ID != "" {
+			if err := d.client.ElementSendKeys(info.ID, text); err != nil {
+				return errorResult(err, "Failed to input text")
+			}
+			return successResult(fmt.Sprintf("Input text: %s", text), info)
+		}
+	}
+
 	if d.platform == "ios" {
 		// On iOS, use ElementSendKeys (POST /element/{id}/value) which internally
 		// calls WDA's fb_typeText. This atomically handles focus (taps the element
@@ -328,8 +381,25 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 			}
 		}
 	} else {
-		if err := d.client.SendKeys(text); err != nil {
-			return errorResult(err, "Failed to input text")
+		// Android: prefer element-scoped typing into the focused element
+		// (POST /element/{id}/value). Blind W3C key actions silently no-op
+		// on WebView DOM inputs — the keystrokes never reach the page, but
+		// the call still reports success (#122). Element send-keys routes
+		// through accessibility ACTION_SET_TEXT, which Chrome translates
+		// into a real DOM value change with input/change events. The
+		// UiAutomator2 server appends rather than replaces, preserving
+		// type-into-focused semantics. Fall back to blind key actions when
+		// no element has focus.
+		typed := false
+		if elemID, err := d.client.GetActiveElement(); err == nil && elemID != "" {
+			if err := d.client.ElementSendKeys(elemID, text); err == nil {
+				typed = true
+			}
+		}
+		if !typed {
+			if err := d.client.SendKeys(text); err != nil {
+				return errorResult(err, "Failed to input text")
+			}
 		}
 	}
 

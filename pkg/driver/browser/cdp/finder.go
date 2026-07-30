@@ -142,6 +142,10 @@ func (d *Driver) findByID(sel flow.Selector) (*rod.Element, *core.ElementInfo, e
 	selectors := []string{
 		"#" + cssEscape(sel.ID),
 		fmt.Sprintf("[data-testid=%q]", sel.ID),
+		// Flutter web renders a widget's Semantics `identifier` as the
+		// flt-semantics-identifier attribute, so a maestro `id:` should match
+		// it — this is how you target Flutter web widgets by test id.
+		fmt.Sprintf("[flt-semantics-identifier=%q]", sel.ID),
 		fmt.Sprintf("[id*=%q]", sel.ID),
 		fmt.Sprintf("[name=%q]", sel.ID),
 		fmt.Sprintf("[aria-label=%q]", sel.ID),

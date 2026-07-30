@@ -182,6 +182,7 @@ func TestParse_AllStepTypes(t *testing.T) {
 		{"waitForRequest mapping", `- waitForRequest: {url: "*/api/submit", method: POST, output: reqBody}`, StepWaitForRequest},
 		{"clearNetworkMocks", `- clearNetworkMocks:`, StepClearNetworkMocks},
 		{"takeScreenshot", `- takeScreenshot: "screen.png"`, StepTakeScreenshot},
+		{"assertScreenshot", `- assertScreenshot: "screen.png"`, StepAssertScreenshot},
 		{"startRecording", `- startRecording: "video.mp4"`, StepStartRecording},
 		{"stopRecording", `- stopRecording: "video.mp4"`, StepStopRecording},
 		{"addMedia", `- addMedia: {files: ["img.png"]}`, StepAddMedia},
@@ -203,6 +204,50 @@ func TestParse_AllStepTypes(t *testing.T) {
 				t.Errorf("expected type %v, got %v", tc.stepType, flow.Steps[0].Type())
 			}
 		})
+	}
+}
+
+func TestParse_AssertScreenshotStep(t *testing.T) {
+	yaml := `
+- assertScreenshot:
+    path: screenshots/banner.png
+    cropOn:
+      id: banner
+    thresholdPercentage: 98.5
+`
+
+	parsed, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	step, ok := parsed.Steps[0].(*AssertScreenshotStep)
+	if !ok {
+		t.Fatalf("expected AssertScreenshotStep, got %T", parsed.Steps[0])
+	}
+	if step.Path != "screenshots/banner.png" {
+		t.Errorf("Path = %q, want %q", step.Path, "screenshots/banner.png")
+	}
+	if step.CropOn == nil || step.CropOn.ID != "banner" {
+		t.Errorf("CropOn = %#v, want selector with id banner", step.CropOn)
+	}
+	if step.ThresholdPercentage != 98.5 {
+		t.Errorf("ThresholdPercentage = %v, want 98.5", step.ThresholdPercentage)
+	}
+}
+
+func TestParse_AssertScreenshotStep_DefaultThreshold(t *testing.T) {
+	parsed, err := Parse([]byte(`- assertScreenshot: splash.png`), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	step, ok := parsed.Steps[0].(*AssertScreenshotStep)
+	if !ok {
+		t.Fatalf("expected AssertScreenshotStep, got %T", parsed.Steps[0])
+	}
+	if step.ThresholdPercentage != 95 {
+		t.Errorf("ThresholdPercentage = %v, want 95", step.ThresholdPercentage)
 	}
 }
 
@@ -1356,6 +1401,23 @@ func TestSplitYAMLDocuments(t *testing.T) {
 			content:  "   \n  \n  ",
 			expected: 0,
 		},
+		{
+			// #119: a header comment ending in "->" must not flip the
+			// splitter into multiline mode and swallow the --- separator.
+			name:     "comment ending in arrow before separator",
+			content:  "appId: com.app\n# navigation: Library ->\ntags:\n  - e2e\n---\n- launchApp",
+			expected: 2,
+		},
+		{
+			name:     "comment ending in pipe before separator",
+			content:  "appId: com.app\n# see table |\n---\n- launchApp",
+			expected: 2,
+		},
+		{
+			name:     "plain value ending in arrow before separator",
+			content:  "appId: com.app\nname: Library ->\n---\n- launchApp",
+			expected: 2,
+		},
 	}
 
 	for _, tc := range tests {
@@ -1365,6 +1427,73 @@ func TestSplitYAMLDocuments(t *testing.T) {
 				t.Errorf("splitYAMLDocuments() returned %d parts, want %d", len(parts), tc.expected)
 			}
 		})
+	}
+}
+
+// TestParse_ArrowCommentHeader is the end-to-end regression for #119: the
+// full file from the issue report must parse with config and steps intact.
+func TestParse_ArrowCommentHeader(t *testing.T) {
+	content := `appId: com.example.app
+name: "x"
+# navigation: Library ->
+tags:
+  - e2e
+---
+- launchApp
+`
+	f, err := Parse([]byte(content), "bug.yaml")
+	if err != nil {
+		t.Fatalf("Parse() error: %v", err)
+	}
+	if f.Config.AppID != "com.example.app" {
+		t.Errorf("AppID = %q, want com.example.app", f.Config.AppID)
+	}
+	if len(f.Steps) != 1 {
+		t.Errorf("got %d steps, want 1", len(f.Steps))
+	}
+}
+
+// TestParse_BareScrollDefaultsDown is the regression for #120: `- scroll`
+// with no arguments scrolls down, matching Maestro's documented default.
+func TestParse_BareScrollDefaultsDown(t *testing.T) {
+	content := "appId: com.app\n---\n- launchApp\n- scroll\n"
+	f, err := Parse([]byte(content), "scroll.yaml")
+	if err != nil {
+		t.Fatalf("Parse() error: %v", err)
+	}
+	var scroll *ScrollStep
+	for _, s := range f.Steps {
+		if ss, ok := s.(*ScrollStep); ok {
+			scroll = ss
+		}
+	}
+	if scroll == nil {
+		t.Fatal("no ScrollStep parsed")
+	}
+	if scroll.Direction != "down" {
+		t.Errorf("Direction = %q, want \"down\"", scroll.Direction)
+	}
+}
+
+func TestStartsBlockScalar(t *testing.T) {
+	cases := map[string]bool{
+		"script: |":                true,
+		"script: |-":               true,
+		"text: >":                  true,
+		"text: >-":                 true,
+		"cmd: |2":                  true,
+		"cmd: >+":                  true,
+		"# navigation: Library ->": false,
+		"# see the table |":        false,
+		"name: Library ->":         false,
+		"name: value":              false,
+		"":                         false,
+		"# comment: use |":         false,
+	}
+	for in, want := range cases {
+		if got := startsBlockScalar(in); got != want {
+			t.Errorf("startsBlockScalar(%q) = %v, want %v", in, got, want)
+		}
 	}
 }
 
@@ -1940,5 +2069,23 @@ func TestFlow_GetTestCases(t *testing.T) {
 	}
 	if testCases[1].File != "checkout.yaml" {
 		t.Errorf("testCases[1].File = %q, want 'checkout.yaml'", testCases[1].File)
+	}
+}
+
+// TestParse_StepPlatformGate verifies a step's `platform:` field parses and
+// PlatformGate() normalizes it (Maestro #1353).
+func TestParse_StepPlatformGate(t *testing.T) {
+	f, err := Parse([]byte("appId: com.app\n---\n- tapOn:\n    text: Login\n    platform: iOS\n- back\n"), "p.yaml")
+	if err != nil {
+		t.Fatalf("Parse() error: %v", err)
+	}
+	if len(f.Steps) != 2 {
+		t.Fatalf("got %d steps, want 2", len(f.Steps))
+	}
+	if g := f.Steps[0].PlatformGate(); g != "ios" {
+		t.Errorf("step 0 PlatformGate() = %q, want \"ios\"", g)
+	}
+	if g := f.Steps[1].PlatformGate(); g != "" {
+		t.Errorf("ungated step PlatformGate() = %q, want \"\"", g)
 	}
 }

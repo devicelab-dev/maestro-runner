@@ -80,6 +80,28 @@ func matchesID(pattern, id string) bool {
 	return containsIgnoreCase(id, pattern)
 }
 
+// preferExactID narrows a set of id-selector matches to only those whose
+// identifier equals the selector id exactly, when at least one such exact
+// match exists. Without this, matchesID's lenient substring fallback lets a
+// superset id win by snapshot order — e.g. `id: enriched-text` resolving to
+// `set-enriched-text-button` (#128). No-op for empty/regex ids or when no
+// exact match is present (keeps the lenient behavior).
+func preferExactID(hits []SnapshotNode, sel flow.Selector) []SnapshotNode {
+	if sel.ID == "" || looksLikeRegex(sel.ID) || len(hits) < 2 {
+		return hits
+	}
+	var exact []SnapshotNode
+	for _, n := range hits {
+		if n.Identifier == sel.ID {
+			exact = append(exact, n)
+		}
+	}
+	if len(exact) > 0 {
+		return exact
+	}
+	return hits
+}
+
 // matchesText returns true if `pattern` matches any of the given texts.
 // Empty texts are skipped. Pattern may be:
 //   - exact (case-insensitive)

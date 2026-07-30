@@ -412,3 +412,17 @@ func TestCheckBootStatus_UnknownUDID(t *testing.T) {
 		t.Error("CheckBootStatus(unknown) should return error")
 	}
 }
+
+// TestXcodebuildArch verifies Go's GOARCH names are translated into
+// xcodebuild's destination vocabulary (#117: amd64 → x86_64 on Intel Macs).
+func TestXcodebuildArch(t *testing.T) {
+	cases := map[string]string{
+		"amd64": "x86_64",
+		"arm64": "arm64",
+	}
+	for in, want := range cases {
+		if got := XcodebuildArch(in); got != want {
+			t.Errorf("XcodebuildArch(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

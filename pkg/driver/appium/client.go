@@ -654,6 +654,14 @@ func (c *Client) GetOrientation() (string, error) {
 	return strings.ToLower(orientation), nil
 }
 
+// Keepalive issues a cheap session-scoped GET (orientation) purely to reset
+// the server's newCommandTimeout idle timer. Any real command resets it; this
+// is the lightest one supported on both platforms. See Driver.Keepalive (#124).
+func (c *Client) Keepalive() error {
+	_, err := c.get(c.sessionPath() + "/orientation")
+	return err
+}
+
 // SetOrientation sets the orientation.
 func (c *Client) SetOrientation(orientation string) error {
 	_, err := c.post(c.sessionPath()+"/orientation", map[string]interface{}{

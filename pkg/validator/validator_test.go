@@ -1218,3 +1218,203 @@ func TestValidate_GetTopLevelFlowsWithMixedContent(t *testing.T) {
 		t.Errorf("expected 3 test cases, got %d: %v", len(result.TestCases), result.TestCases)
 	}
 }
+
+// writeFlow is a shared helper for the recursive-pattern tests below.
+// Creates any missing parent directories and writes a minimal-but-valid flow.
+func writeFlow(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`- tapOn: "X"`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestValidate_RecursivePatternWithPrefix verifies that "**" is treated as
+// recursive when it appears after a directory prefix, e.g. "tests/**/*.yaml".
+// Previously only patterns starting with "**" or "**/" were expanded
+// recursively; anything with a prefix fell through to filepath.Glob, which
+// treats "**" like a single "*" and therefore matched only one directory
+// level, silently skipping deeper flows.
+func TestValidate_RecursivePatternWithPrefix(t *testing.T) {
+	dir := t.TempDir()
+
+	files := []string{
+		"tests/a.yaml",
+		"tests/sub/b.yaml",
+		"tests/sub/deep/c.yaml",
+		"tests/sub/deep/more/d.yaml",
+	}
+	for _, p := range files {
+		writeFlow(t, filepath.Join(dir, p))
+	}
+	// Sibling directory that must NOT be picked up.
+	writeFlow(t, filepath.Join(dir, "other", "skip.yaml"))
+
+	config := `flows:
+  - "tests/**/*.yaml"
+`
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result := New(nil, nil).Validate(dir)
+
+	if !result.IsValid() {
+		t.Fatalf("expected valid result, got errors: %v", result.Errors)
+	}
+	if len(result.TestCases) != len(files) {
+		t.Errorf("expected %d test cases from tests/**/*.yaml, got %d: %v",
+			len(files), len(result.TestCases), result.TestCases)
+	}
+	for _, tc := range result.TestCases {
+		if strings.Contains(filepath.ToSlash(tc), "/other/") {
+			t.Errorf("test case leaked from sibling dir: %s", tc)
+		}
+	}
+}
+
+// TestValidate_RecursivePatternPrefixOnly verifies that "prefix/**" matches
+// every flow file underneath the prefix at any depth, without requiring a
+// filename suffix in the pattern.
+func TestValidate_RecursivePatternPrefixOnly(t *testing.T) {
+	dir := t.TempDir()
+
+	files := []string{
+		"flows/a.yaml",
+		"flows/sub/b.yaml",
+		"flows/sub/deep/c.yaml",
+	}
+	for _, p := range files {
+		writeFlow(t, filepath.Join(dir, p))
+	}
+
+	config := `flows:
+  - "flows/**"
+`
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result := New(nil, nil).Validate(dir)
+
+	if !result.IsValid() {
+		t.Fatalf("expected valid result, got errors: %v", result.Errors)
+	}
+	if len(result.TestCases) != len(files) {
+		t.Errorf("expected %d test cases from flows/**, got %d: %v",
+			len(files), len(result.TestCases), result.TestCases)
+	}
+}
+
+// TestValidate_RecursivePatternMultiSegmentSuffix verifies that a pattern
+// like "a/**/c/*.yaml" walks recursively from dir/a and then matches only
+// files whose trailing path is "c/<name>.yaml".
+func TestValidate_RecursivePatternMultiSegmentSuffix(t *testing.T) {
+	dir := t.TempDir()
+
+	included := []string{
+		"a/c/one.yaml",
+		"a/x/c/two.yaml",
+		"a/x/y/c/three.yaml",
+	}
+	excluded := []string{
+		"a/d/one.yaml",
+		"a/x/y/four.yaml",
+	}
+	for _, p := range append(included, excluded...) {
+		writeFlow(t, filepath.Join(dir, p))
+	}
+
+	config := `flows:
+  - "a/**/c/*.yaml"
+`
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result := New(nil, nil).Validate(dir)
+
+	if !result.IsValid() {
+		t.Fatalf("expected valid result, got errors: %v", result.Errors)
+	}
+	if len(result.TestCases) != len(included) {
+		t.Errorf("expected %d test cases matching a/**/c/*.yaml, got %d: %v",
+			len(included), len(result.TestCases), result.TestCases)
+	}
+	for _, tc := range result.TestCases {
+		rel := filepath.ToSlash(tc)
+		if !strings.Contains(rel, "/c/") {
+			t.Errorf("unexpected match outside c/ suffix: %s", tc)
+		}
+	}
+}
+
+// TestValidate_RecursivePatternMissingPrefixDir verifies that a pattern whose
+// prefix directory does not exist (e.g. "subflows/**/*.yaml" with no
+// subflows/) is a silent no-match rather than a walk error.
+func TestValidate_RecursivePatternMissingPrefixDir(t *testing.T) {
+	dir := t.TempDir()
+
+	// Only a top-level flow that should NOT match the prefixed pattern.
+	writeFlow(t, filepath.Join(dir, "top.yaml"))
+
+	config := `flows:
+  - "subflows/**/*.yaml"
+`
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result := New(nil, nil).Validate(dir)
+
+	if !result.IsValid() {
+		t.Fatalf("expected valid result for missing prefix dir, got errors: %v", result.Errors)
+	}
+	if len(result.TestCases) != 0 {
+		t.Errorf("expected 0 test cases, got %d: %v", len(result.TestCases), result.TestCases)
+	}
+}
+
+// TestValidate_RecursivePatternWildcardPrefix verifies that a shell-wildcard
+// in the prefix (before "**") is expanded via filepath.Glob, so
+// "flows-*/**/*.yaml" walks each matching directory.
+func TestValidate_RecursivePatternWildcardPrefix(t *testing.T) {
+	dir := t.TempDir()
+
+	included := []string{
+		"flows-alpha/a.yaml",
+		"flows-alpha/sub/b.yaml",
+		"flows-beta/c.yaml",
+	}
+	// Must NOT match — prefix wildcard "flows-*" doesn't include "other-dir".
+	excluded := []string{
+		"other-dir/skip.yaml",
+	}
+	for _, p := range append(included, excluded...) {
+		writeFlow(t, filepath.Join(dir, p))
+	}
+
+	config := `flows:
+  - "flows-*/**/*.yaml"
+`
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result := New(nil, nil).Validate(dir)
+
+	if !result.IsValid() {
+		t.Fatalf("expected valid result, got errors: %v", result.Errors)
+	}
+	if len(result.TestCases) != len(included) {
+		t.Errorf("expected %d test cases matching flows-*/**/*.yaml, got %d: %v",
+			len(included), len(result.TestCases), result.TestCases)
+	}
+	for _, tc := range result.TestCases {
+		if strings.Contains(filepath.ToSlash(tc), "/other-dir/") {
+			t.Errorf("test case leaked from sibling dir: %s", tc)
+		}
+	}
+}

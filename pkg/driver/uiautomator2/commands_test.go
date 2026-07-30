@@ -3452,6 +3452,21 @@ func TestSwipeWithSelectorDirection(t *testing.T) {
 	}
 }
 
+func TestSwipeInvalidDirection(t *testing.T) {
+	shell := &MockShellExecutor{}
+	driver := New(&MockUIA2Client{}, nil, shell)
+
+	step := &flow.SwipeStep{Direction: "diagonal"}
+	result := driver.swipe(step)
+
+	if result.Success {
+		t.Error("expected failure for invalid swipe direction")
+	}
+	if len(shell.commands) != 0 {
+		t.Errorf("expected no shell commands, got %v", shell.commands)
+	}
+}
+
 // ============================================================================
 // SetWaitForIdleTimeout via MockUIA2Client Tests
 // ============================================================================

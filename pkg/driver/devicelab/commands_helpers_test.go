@@ -352,16 +352,16 @@ func TestScrollByAdb_ShellError(t *testing.T) {
 // so unused methods retain their no-op behavior.
 type trackingClient struct {
 	*mockDeviceLabClient
-	backCalls       int
-	pressKeyCodes   []int
-	clipboardText   string
-	orientation     string
-	screenshotData  []byte
-	screenshotErr   error
-	setClipErr      error
-	setOrientErr    error
-	backErr         error
-	pressKeyErr     error
+	backCalls      int
+	pressKeyCodes  []int
+	clipboardText  string
+	orientation    string
+	screenshotData []byte
+	screenshotErr  error
+	setClipErr     error
+	setOrientErr   error
+	backErr        error
+	pressKeyErr    error
 }
 
 func newTrackingClient() *trackingClient {
@@ -1331,11 +1331,11 @@ func TestLooksLikeRegex(t *testing.T) {
 
 func TestEscapeUIAutomatorString(t *testing.T) {
 	cases := map[string]string{
-		"":          "",
-		"plain":     "plain",
-		`"quoted"`:  `\"quoted\"`,
-		`a"b"c`:     `a\"b\"c`,
-		`single'`:   `single'`,
+		"":         "",
+		"plain":    "plain",
+		`"quoted"`: `\"quoted\"`,
+		`a"b"c`:    `a\"b\"c`,
+		`single'`:  `single'`,
 	}
 	for in, want := range cases {
 		if got := escapeUIAutomatorString(in); got != want {
@@ -1606,10 +1606,12 @@ type richClient struct {
 	applySettErr error
 }
 
-func (r *richClient) Source() (string, error)                            { return r.source, r.sourceErr }
-func (r *richClient) GetOrientation() (string, error)                    { return r.orientation, nil }
-func (r *richClient) GetClipboard() (string, error)                      { return r.clipboard, nil }
-func (r *richClient) WaitForSettle(timeoutMs, quietMs int) (bool, error) { return r.settleQuiet, r.settleErr }
+func (r *richClient) Source() (string, error)         { return r.source, r.sourceErr }
+func (r *richClient) GetOrientation() (string, error) { return r.orientation, nil }
+func (r *richClient) GetClipboard() (string, error)   { return r.clipboard, nil }
+func (r *richClient) WaitForSettle(timeoutMs, quietMs int) (bool, error) {
+	return r.settleQuiet, r.settleErr
+}
 func (r *richClient) SetAppiumSettings(settings map[string]interface{}) error {
 	return r.applySettErr
 }
@@ -1770,8 +1772,8 @@ type scriptedClient struct {
 	activeElementReturn *uiautomator2.Element
 	activeElementErr    error
 
-	sendKeyActionsCalls   []string
-	sendKeyActionsErr     error
+	sendKeyActionsCalls []string
+	sendKeyActionsErr   error
 }
 
 func (s *scriptedClient) FindElement(strategy, selector string) (*uiautomator2.Element, error) {
@@ -1981,10 +1983,49 @@ func TestAssertVisible_NotFound(t *testing.T) {
 }
 
 // =============================================================================
-// inputText — no-selector path uses SendKeyActions directly
+// inputText — no-selector path prefers focused element, falls back to keys
 // =============================================================================
 
+// TestInputText_NoSelector_PrefersFocusedElement locks in the #122 fix:
+// with a focused element available, typing is element-scoped (reaches
+// WebView DOM inputs) instead of blind key events.
+func TestInputText_NoSelector_PrefersFocusedElement(t *testing.T) {
+	var typed string
+	client := &scriptedClient{trackingClient: newTrackingClient()}
+	client.activeElementReturn = makeFocusedElement("", &typed, nil, nil)
+	driver := New(client, &core.PlatformInfo{}, &mockShell{})
+
+	res := driver.inputText(&flow.InputTextStep{Text: "hello"})
+	if !res.Success {
+		t.Fatalf("inputText no-selector: %v", res.Error)
+	}
+	if typed != "hello" {
+		t.Errorf("expected element-scoped typing of %q, got %q", "hello", typed)
+	}
+	if len(client.sendKeyActionsCalls) != 0 {
+		t.Errorf("expected no blind key actions, got %v", client.sendKeyActionsCalls)
+	}
+}
+
+// TestInputText_NoSelector_FallsBackOnElementError verifies blind key events
+// remain the fallback when element-scoped typing fails.
+func TestInputText_NoSelector_FallsBackOnElementError(t *testing.T) {
+	var typed string
+	client := &scriptedClient{trackingClient: newTrackingClient()}
+	client.activeElementReturn = makeFocusedElement("", &typed, nil, fmt.Errorf("setText rejected"))
+	driver := New(client, &core.PlatformInfo{}, &mockShell{})
+
+	res := driver.inputText(&flow.InputTextStep{Text: "hello"})
+	if !res.Success {
+		t.Fatalf("inputText no-selector: %v", res.Error)
+	}
+	if len(client.sendKeyActionsCalls) != 1 || client.sendKeyActionsCalls[0] != "hello" {
+		t.Errorf("expected key-actions fallback with %q, got %v", "hello", client.sendKeyActionsCalls)
+	}
+}
+
 func TestInputText_NoSelector_SendsKeyActions(t *testing.T) {
+	// No focused element at all — key events are the last resort.
 	client := &scriptedClient{trackingClient: newTrackingClient()}
 	driver := New(client, &core.PlatformInfo{}, &mockShell{})
 
@@ -2189,14 +2230,14 @@ func TestScroll_NoScreenSize(t *testing.T) {
 
 type appLifecycleClient struct {
 	*scriptedClient
-	launches             []string
-	forceStops           []string
-	clearAppDatas        []string
-	grantPermsCalls      int
-	launchAppErr         error
-	forceStopErr         error
-	clearAppDataErr      error
-	grantPermissionsErr  error
+	launches            []string
+	forceStops          []string
+	clearAppDatas       []string
+	grantPermsCalls     int
+	launchAppErr        error
+	forceStopErr        error
+	clearAppDataErr     error
+	grantPermissionsErr error
 }
 
 func (a *appLifecycleClient) LaunchApp(id string, args map[string]interface{}) error {
@@ -2489,14 +2530,14 @@ func TestApplyRelativeFilter(t *testing.T) {
 		ft     relativeFilterType
 		expect int
 	}{
-		{filterBelow, 1},         // only "below"
-		{filterAbove, 1},         // only "above"
-		{filterLeftOf, 0},        // none have a smaller right edge than anchor.left=0
+		{filterBelow, 1},  // only "below"
+		{filterAbove, 1},  // only "above"
+		{filterLeftOf, 0}, // none have a smaller right edge than anchor.left=0
 		{filterRightOf, 0},
 		{filterChildOf, 0},
 		{filterContainsChild, 0},
 		{filterInsideOf, 0},
-		{filterNone, 2},          // default returns input unchanged
+		{filterNone, 2}, // default returns input unchanged
 	}
 	for _, c := range cases {
 		got := applyRelativeFilter(elems, anchor, c.ft)
@@ -2784,9 +2825,9 @@ func TestLaunchAppViaShell_ActivityResolutionFails_FallsBackToMonkey(t *testing.
 	calls := 0
 	shell := &fakeMultiShell{
 		outputs: []string{
-			"No activity found",              // resolve-activity returns garbage
-			"",                                // dumpsys output empty
-			"Events injected: 1",              // monkey succeeds
+			"No activity found",  // resolve-activity returns garbage
+			"",                   // dumpsys output empty
+			"Events injected: 1", // monkey succeeds
 		},
 		errs:    []error{nil, nil, nil},
 		counter: &calls,
@@ -3018,5 +3059,44 @@ func TestEraseText_PartialErase(t *testing.T) {
 	}
 	if typed != "Hel" {
 		t.Errorf("expected re-input \"Hel\", got %q", typed)
+	}
+}
+
+// TestSwipeInvalidDirection verifies a direction typo fails the step instead
+// of silently swiping up (the pre-#114 default-case behavior).
+func TestSwipeInvalidDirection(t *testing.T) {
+	driver := &Driver{}
+
+	step := &flow.SwipeStep{Direction: "diagonal"}
+	result := driver.swipe(step)
+
+	if result.Success {
+		t.Error("expected failure for invalid swipe direction")
+	}
+}
+
+// TestInWebViewConnectBackoff verifies the WebView connect backoff: a socket
+// that failed recently is skipped, but a different socket, an elapsed backoff,
+// or no prior failure connects immediately (mirrors Maestro MA-4119 — a
+// stalled devtools endpoint must not add the connect timeout to every command).
+func TestInWebViewConnectBackoff(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		name           string
+		socket, failSk string
+		lastFail       time.Time
+		want           bool
+	}{
+		{"no prior failure", "sockA", "", time.Time{}, false},
+		{"same socket, within backoff", "sockA", "sockA", now.Add(-1 * time.Second), true},
+		{"same socket, backoff elapsed", "sockA", "sockA", now.Add(-webViewConnectBackoff - time.Second), false},
+		{"different socket, recent failure", "sockB", "sockA", now.Add(-1 * time.Second), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := inWebViewConnectBackoff(c.socket, c.failSk, c.lastFail, now); got != c.want {
+				t.Errorf("inWebViewConnectBackoff = %v, want %v", got, c.want)
+			}
+		})
 	}
 }

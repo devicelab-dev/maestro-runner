@@ -299,6 +299,8 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	// Media
 	case *flow.TakeScreenshotStep:
 		result = d.takeScreenshot(s)
+	case *flow.AssertScreenshotStep:
+		result = d.takeScreenshot(&flow.TakeScreenshotStep{CropOn: s.CropOn})
 
 	// Airplane mode
 	case *flow.SetAirplaneModeStep:
@@ -777,17 +779,39 @@ func buildStateFilter(sel flow.Selector) string {
 func (d *Driver) findElementByWDA(sel flow.Selector) (*core.ElementInfo, error) {
 	stateFilter := buildStateFilter(sel)
 
+	// When BOTH an id and text are given, the single-field fast paths below each
+	// match on one field only — the id branch returns as soon as it finds an
+	// element with that id, before text is ever checked — silently degrading a
+	// combined selector to an OR (an element with the right id but wrong text
+	// would pass, or the text branch would match a different element entirely).
+	// Defer to the page-source matcher, which ANDs id + text on one element. (#130)
+	if sel.ID != "" && sel.Text != "" {
+		return nil, fmt.Errorf("combined id+text selector requires page-source AND matching")
+	}
+
 	// Try class chain for accessibility ID
 	if sel.ID != "" {
-		// Use CONTAINS for literal IDs, MATCHES for regex patterns
-		op := "CONTAINS"
 		if looksLikeRegex(sel.ID) {
-			op = "MATCHES"
-		}
-		query := fmt.Sprintf("**/XCUIElementTypeAny[`name %s '%s'%s`]", op, sel.ID, stateFilter)
-		elemID, err := d.client.FindElement("class chain", query)
-		if err == nil && elemID != "" {
-			return d.getElementInfo(elemID)
+			// Regex id: match against name via MATCHES.
+			query := fmt.Sprintf("**/XCUIElementTypeAny[`name MATCHES '%s'%s`]", sel.ID, stateFilter)
+			if elemID, err := d.client.FindElement("class chain", query); err == nil && elemID != "" {
+				return d.getElementInfo(elemID)
+			}
+		} else {
+			// Literal id: prefer an EXACT name match, then fall back to
+			// CONTAINS. Without the exact pass, `id: enriched-text` could
+			// resolve to `set-enriched-text-button` (a substring superset),
+			// since WDA returns the first class-chain hit (#128). The
+			// CONTAINS fallback preserves the lenient Maestro-compat behavior
+			// for callers that rely on partial-id matching.
+			exact := fmt.Sprintf("**/XCUIElementTypeAny[`name == '%s'%s`]", sel.ID, stateFilter)
+			if elemID, err := d.client.FindElement("class chain", exact); err == nil && elemID != "" {
+				return d.getElementInfo(elemID)
+			}
+			contains := fmt.Sprintf("**/XCUIElementTypeAny[`name CONTAINS '%s'%s`]", sel.ID, stateFilter)
+			if elemID, err := d.client.FindElement("class chain", contains); err == nil && elemID != "" {
+				return d.getElementInfo(elemID)
+			}
 		}
 	}
 

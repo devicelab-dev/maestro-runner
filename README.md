@@ -124,6 +124,20 @@ waitForIdleTimeout: 3000    # Device idle wait (ms), 0 to disable
 - assertVisible: "Welcome"
 ```
 
+## Visual Regression (`assertScreenshot`)
+
+`assertScreenshot` compares the current screen (optionally cropped with `cropOn`) against a reference PNG.
+
+- **First run:** if the reference file is missing, maestro-runner writes the captured screenshot as the new baseline and passes.
+- **Re-baseline:** overwrite existing baselines with `--update-screenshots` (or `MAESTRO_UPDATE_SCREENSHOTS=true`).
+- On mismatch, a `{name}_diff.png` overlay is written next to the reference.
+- Pixel comparison is device-, resolution-, and OS-specific — pin your device config and set `thresholdPercentage` deliberately (default `95`).
+
+```bash
+maestro-runner test flows/visual.yaml                  # seeds missing baselines
+maestro-runner test --update-screenshots flows/visual.yaml
+```
+
 ## Requirements
 
 - **Android testing:** `adb` (Android SDK Platform-Tools)

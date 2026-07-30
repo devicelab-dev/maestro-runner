@@ -1,6 +1,12 @@
 package wda
 
 import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -180,5 +186,119 @@ func TestRunner_Destination(t *testing.T) {
 
 	if dest != expected {
 		t.Errorf("expected destination %q, got %q", expected, dest)
+	}
+}
+
+// --- #118: fast-exiting xcodebuild must surface its real error, not "stalled" ---
+
+func TestWaitForStartup_FastExitSurfacesRealError(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "runner.log")
+	logContent := "xcodebuild: error: Unable to find a device matching the provided destination specifier\n"
+	if err := os.WriteFile(logPath, []byte(logContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	exit := make(chan error, 1)
+	exit <- fmt.Errorf("exit status 70")
+
+	r := &Runner{}
+	err := r.waitForStartup(logPath, exit)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "Unable to find a device") {
+		t.Errorf("expected the real xcodebuild error to surface, got: %v", err)
+	}
+	var perm *permanentStartupError
+	if !errors.As(err, &perm) {
+		t.Errorf("expected permanentStartupError (skips retries), got %T: %v", err, err)
+	}
+}
+
+func TestWaitForStartup_FastExitWithoutKnownErrorIsRetryable(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "runner.log")
+	if err := os.WriteFile(logPath, []byte("some unrelated output\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	exit := make(chan error, 1)
+	exit <- fmt.Errorf("signal: killed")
+
+	r := &Runner{}
+	err := r.waitForStartup(logPath, exit)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "exited") {
+		t.Errorf("expected exit-status error, got: %v", err)
+	}
+	var perm *permanentStartupError
+	if errors.As(err, &perm) {
+		t.Errorf("crash exits should stay retryable, got permanent error: %v", err)
+	}
+}
+
+func TestWaitForStartup_ExitAfterReadyMarkerStillFails(t *testing.T) {
+	// WDA runs inside xcodebuild: if the process exited, a ready marker in
+	// the log must not be treated as success.
+	logPath := filepath.Join(t.TempDir(), "runner.log")
+	if err := os.WriteFile(logPath, []byte("ServerURLHere->http://127.0.0.1:8100\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	exit := make(chan error, 1)
+	exit <- nil // exited with status 0
+
+	r := &Runner{}
+	err := r.waitForStartup(logPath, exit)
+	if err == nil {
+		t.Fatal("expected error when process exited, got nil")
+	}
+}
+
+func TestCheckLog_XcodebuildErrorIsPermanent(t *testing.T) {
+	r := &Runner{}
+	err := r.checkLog("blah\nxcodebuild: error: Unable to find a device matching X\nmore", "/tmp/x.log")
+	var perm *permanentStartupError
+	if !errors.As(err, &perm) {
+		t.Fatalf("expected permanentStartupError, got %T: %v", err, err)
+	}
+	if !strings.Contains(err.Error(), "Unable to find a device matching X") {
+		t.Errorf("expected error line surfaced, got: %v", err)
+	}
+}
+
+// TestPortFromUDID_Legacy40CharUDID verifies that legacy 40-character
+// hyphenless UDIDs get distinct in-range ports instead of all overflowing
+// uint64 and falling back to 8100 (#129).
+func TestPortFromUDID_Legacy40CharUDID(t *testing.T) {
+	// Two real-shaped 40-hex-char UDIDs differing only in the tail.
+	a := "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4"
+	b := "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3e5"
+
+	pa, pb := PortFromUDID(a), PortFromUDID(b)
+
+	for _, p := range []uint16{pa, pb} {
+		if p < wdaBasePort || p >= wdaBasePort+wdaPortRange {
+			t.Errorf("legacy UDID produced out-of-range port %d", p)
+		}
+	}
+	if pa == wdaBasePort && pb == wdaBasePort {
+		t.Errorf("both legacy UDIDs fell back to base port %d — the #129 bug", wdaBasePort)
+	}
+	if pa == pb {
+		t.Errorf("distinct legacy UDIDs collided on port %d", pa)
+	}
+}
+
+// TestPortFromUDID_UUIDPortUnchanged pins that the bounded-tail change does not
+// shift ports for standard UUIDs (their final segment is already 12 chars).
+func TestPortFromUDID_UUIDPortUnchanged(t *testing.T) {
+	udid := "00008101-001C0C660A13001E"
+	seg := "001C0C660A13001E"[len("001C0C660A13001E")-12:] // last 12 of the final group
+	val, _ := strconv.ParseUint(seg, 16, 64)
+	want := wdaBasePort + uint16(val%uint64(wdaPortRange))
+	if got := PortFromUDID(udid); got != want {
+		t.Errorf("UUID port changed: got %d, want %d", got, want)
 	}
 }

@@ -46,6 +46,8 @@ func (d *Driver) executeStep(step flow.Step) *core.CommandResult {
 		return d.handleAssertNotVisible(s)
 	case *flow.TakeScreenshotStep:
 		return d.handleTakeScreenshot(s)
+	case *flow.AssertScreenshotStep:
+		return d.handleTakeScreenshot(&flow.TakeScreenshotStep{CropOn: s.CropOn})
 	case *flow.PressKeyStep:
 		return d.handlePressKey(s)
 	case *flow.WaitForAnimationToEndStep:
@@ -694,7 +696,7 @@ func (d *Driver) handleLongPress(s *flow.LongPressOnStep) *core.CommandResult {
 // optional selector for the swipe area.
 func (d *Driver) resolveSwipeCoords(s *flow.SwipeStep) (float64, float64, float64, float64, error) {
 	w, h := d.screenDims()
-	if (s.Start != "" && s.End != "") {
+	if s.Start != "" && s.End != "" {
 		sx, sy, err := parsePercentageCoords(s.Start)
 		if err != nil {
 			return 0, 0, 0, 0, err
@@ -712,8 +714,14 @@ func (d *Driver) resolveSwipeCoords(s *flow.SwipeStep) (float64, float64, float6
 	areaX, areaY := 0.0, 0.0
 	areaW, areaH := float64(w), float64(h)
 	if s.Selector != nil && !s.Selector.IsEmpty() {
-		node, err := d.findElement(*s.Selector, false, s.TimeoutMs)
-		if err == nil && node != nil && node.Rect.Width > 0 {
+		// Element not found fails the step (unless optional) — falling back
+		// to a full-screen swipe would scroll the page when the flow meant
+		// to drag a specific element, failing later with a confusing symptom.
+		node, err := d.findElement(*s.Selector, s.IsOptional(), s.TimeoutMs)
+		if err != nil {
+			return 0, 0, 0, 0, fmt.Errorf("element not found for swipe: %w", err)
+		}
+		if node != nil && node.Rect.Width > 0 {
 			areaX = node.Rect.X
 			areaY = node.Rect.Y
 			areaW = node.Rect.Width
@@ -998,6 +1006,7 @@ func (d *Driver) snapshotMatching(sel flow.Selector) ([]SnapshotNode, error) {
 			hits = append(hits, nodes[i])
 		}
 	}
+	hits = preferExactID(hits, sel)
 	// Always prefer editable inputs / interactive controls when multiple
 	// nodes match. Applies to id-selectors too: RN TextInputs often share
 	// the testID with a sibling Image (e.g. a search icon), and we want

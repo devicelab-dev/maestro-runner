@@ -1228,6 +1228,44 @@ func TestScriptEngine_ExpandStep_InputTextStep(t *testing.T) {
 	}
 }
 
+func TestScriptEngine_ExpandStep_ScreenshotSteps(t *testing.T) {
+	se := NewScriptEngine()
+	defer se.Close()
+
+	se.SetVariable("ROOT", "/tmp/screenshots")
+	se.SetVariable("NAME", "alignment")
+	se.SetVariable("ELEMENT_ID", "enriched-text")
+
+	take := &flow.TakeScreenshotStep{
+		Path:   "${ROOT}/${NAME}",
+		CropOn: &flow.Selector{ID: "${ELEMENT_ID}"},
+	}
+	assert := &flow.AssertScreenshotStep{
+		Path:   "${ROOT}/${NAME}",
+		CropOn: &flow.Selector{ID: "${ELEMENT_ID}"},
+	}
+
+	se.ExpandStep(take)
+	se.ExpandStep(assert)
+
+	for name, step := range map[string]struct {
+		path   string
+		cropOn *flow.Selector
+	}{
+		"takeScreenshot":   {path: take.Path, cropOn: take.CropOn},
+		"assertScreenshot": {path: assert.Path, cropOn: assert.CropOn},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if step.path != "/tmp/screenshots/alignment" {
+				t.Errorf("Path = %q, want %q", step.path, "/tmp/screenshots/alignment")
+			}
+			if step.cropOn == nil || step.cropOn.ID != "enriched-text" {
+				t.Errorf("CropOn = %#v, want id enriched-text", step.cropOn)
+			}
+		})
+	}
+}
+
 func TestScriptEngine_ExpandStep_ScrollUntilVisibleDirection(t *testing.T) {
 	se := NewScriptEngine()
 	defer se.Close()

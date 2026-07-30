@@ -3,6 +3,8 @@ package wda
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -5975,5 +5977,42 @@ func TestPrepareForFlow_NoLaunchApp(t *testing.T) {
 	d.PrepareForFlow([]flow.Step{&flow.TapOnStep{}, &flow.BackStep{}})
 	if d.alertAction != "" {
 		t.Errorf("alertAction = %q, want empty (no launchApp = no monitor)", d.alertAction)
+	}
+}
+
+// TestFindElementByWDA_ExactIDBeforeContains verifies that a literal id
+// selector issues an exact `name == 'id'` class-chain query before falling
+// back to `name CONTAINS 'id'`, so a substring superset id can't win (#128).
+func TestFindElementByWDA_ExactIDBeforeContains(t *testing.T) {
+	var queries []string
+	server := mockWDAServer(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/element") && r.Method == "POST" {
+			body, _ := io.ReadAll(r.Body)
+			var req map[string]interface{}
+			_ = json.Unmarshal(body, &req)
+			if using, _ := req["using"].(string); using == "class chain" {
+				queries = append(queries, req["value"].(string))
+			}
+		}
+		// Return "not found" for everything — we only care about query order.
+		w.WriteHeader(http.StatusNotFound)
+		jsonResponse(w, map[string]interface{}{"value": map[string]interface{}{"error": "no such element"}})
+	})
+	defer server.Close()
+
+	d := &Driver{client: NewClient(8100), info: &core.PlatformInfo{Platform: "ios"}}
+	d.client.baseURL = server.URL
+	d.client.sessionID = "s1"
+
+	_, _ = d.findElementByWDA(flow.Selector{ID: "enriched-text"})
+
+	if len(queries) < 2 {
+		t.Fatalf("expected at least 2 class-chain queries (exact + contains), got %v", queries)
+	}
+	if !strings.Contains(queries[0], "name == 'enriched-text'") {
+		t.Errorf("first query should be exact match, got: %s", queries[0])
+	}
+	if !strings.Contains(queries[1], "name CONTAINS 'enriched-text'") {
+		t.Errorf("second query should be CONTAINS fallback, got: %s", queries[1])
 	}
 }

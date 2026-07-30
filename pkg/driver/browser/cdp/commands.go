@@ -666,45 +666,94 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 
 // swipe performs a swipe gesture using mouse drag.
 func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
-	dir := strings.ToLower(step.Direction)
-	center := d.viewportCenter()
-	cx, cy := center.X, center.Y
+	dir, err := core.NormalizeSwipeDirection(step.Direction)
+	if err != nil {
+		return errorResult(err, "Invalid swipe direction")
+	}
 
-	var startX, startY, endX, endY float64
-	switch dir {
-	case "up":
-		startX, startY = cx, cy*1.4
-		endX, endY = cx, cy*0.6
-	case "down":
-		startX, startY = cx, cy*0.6
-		endX, endY = cx, cy*1.4
-	case "left":
-		startX, startY = cx*1.4, cy
-		endX, endY = cx*0.6, cy
-	case "right":
-		startX, startY = cx*0.6, cy
-		endX, endY = cx*1.4, cy
-	default:
-		return errorResult(fmt.Errorf("unsupported swipe direction: %s", dir), "Invalid swipe direction")
+	center := d.viewportCenter()
+	startX, startY, endX, endY := viewportSwipeCoords(dir, center.X, center.Y)
+
+	// If a from:/selector element is specified, anchor the drag on the
+	// element's box instead of the viewport so drag targets (sliders,
+	// sortable lists) receive the gesture (#114 parity with the mobile
+	// drivers). Optional selectors fall back to the viewport swipe.
+	if step.Selector != nil && !step.Selector.IsEmpty() {
+		_, info, err := d.findElement(*step.Selector, step.IsOptional(), step.TimeoutMs)
+		if err != nil {
+			if !step.IsOptional() {
+				return errorResult(err, fmt.Sprintf("Element not found for swipe: %v", err))
+			}
+		} else if info != nil && info.Bounds.Width > 0 {
+			startX, startY, endX, endY = elementSwipeCoords(dir, info.Bounds)
+		}
 	}
 
 	mouse := d.page.Mouse
-	startPt := proto.NewPoint(startX, startY)
-	if err := mouse.MoveTo(startPt); err != nil {
+	if err := mouse.MoveTo(proto.NewPoint(startX, startY)); err != nil {
 		return errorResult(err, "Failed to move mouse for swipe")
 	}
 	if err := mouse.Down(proto.InputMouseButtonLeft, 1); err != nil {
 		return errorResult(err, "Failed to mouse down for swipe")
 	}
-	endPt := proto.NewPoint(endX, endY)
-	if err := mouse.MoveTo(endPt); err != nil {
-		return errorResult(err, "Failed to drag for swipe")
+	// Drag gradually — JS drag handlers (sliders, sortable lists) need
+	// intermediate mousemove events to track the pointer, and `duration:`
+	// paces them. A single move-to-end jump loses the drag on most
+	// libraries.
+	const dragSteps = 10
+	var stepDelay time.Duration
+	if step.Duration > 0 {
+		stepDelay = time.Duration(step.Duration) * time.Millisecond / dragSteps
+	}
+	for i := 1; i <= dragSteps; i++ {
+		t := float64(i) / dragSteps
+		pt := proto.NewPoint(startX+(endX-startX)*t, startY+(endY-startY)*t)
+		if err := mouse.MoveTo(pt); err != nil {
+			return errorResult(err, "Failed to drag for swipe")
+		}
+		if stepDelay > 0 {
+			time.Sleep(stepDelay)
+		}
 	}
 	if err := mouse.Up(proto.InputMouseButtonLeft, 1); err != nil {
 		return errorResult(err, "Failed to mouse up for swipe")
 	}
 
 	return successResult(fmt.Sprintf("Swiped %s", dir), nil)
+}
+
+// viewportSwipeCoords returns the full-viewport drag segment for a swipe
+// direction: the central 40% band around the viewport center (cy*1.4 →
+// cy*0.6 for "up", mirrored for the other directions).
+func viewportSwipeCoords(dir string, cx, cy float64) (startX, startY, endX, endY float64) {
+	switch dir {
+	case "up":
+		return cx, cy * 1.4, cx, cy * 0.6
+	case "down":
+		return cx, cy * 0.6, cx, cy * 1.4
+	case "left":
+		return cx * 1.4, cy, cx * 0.6, cy
+	default: // "right" — dir is pre-validated by NormalizeSwipeDirection
+		return cx * 0.6, cy, cx * 1.4, cy
+	}
+}
+
+// elementSwipeCoords returns a drag segment across an element's box: 90% →
+// 10% along the swipe axis, centered on the other axis. Unlike the mobile
+// drivers the end point stays inside the element — web drag handlers without
+// pointer capture stop tracking when the pointer leaves their hit area.
+func elementSwipeCoords(dir string, b core.Bounds) (startX, startY, endX, endY float64) {
+	x, y, w, h := float64(b.X), float64(b.Y), float64(b.Width), float64(b.Height)
+	switch dir {
+	case "up":
+		return x + w*0.5, y + h*0.9, x + w*0.5, y + h*0.1
+	case "down":
+		return x + w*0.5, y + h*0.1, x + w*0.5, y + h*0.9
+	case "left":
+		return x + w*0.9, y + h*0.5, x + w*0.1, y + h*0.5
+	default: // "right" — dir is pre-validated by NormalizeSwipeDirection
+		return x + w*0.1, y + h*0.5, x + w*0.9, y + h*0.5
+	}
 }
 
 // waitForPageReady waits for the page to finish loading and DOM to stabilize.

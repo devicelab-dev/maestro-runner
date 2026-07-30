@@ -13,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/devicelab-dev/maestro-runner/pkg/simulator"
 )
 
 // SetupOptions configures runner launch.
@@ -51,6 +53,12 @@ type RunnerHandle struct {
 	cmd  *exec.Cmd
 	port int
 	host string
+	// waitDone closes once the subprocess exits; waitErr holds cmd.Wait's
+	// result (written before the close). The watch goroutine in startOnce
+	// is the single Wait owner — Stop must select on waitDone instead of
+	// calling cmd.Wait a second time.
+	waitDone chan struct{}
+	waitErr  error
 }
 
 // Port returns the resolved listen port.
@@ -69,8 +77,14 @@ func (h *RunnerHandle) Stop() error {
 	}
 	// Send SIGTERM first; force-kill after 5s.
 	_ = h.cmd.Process.Signal(syscall.SIGTERM)
-	done := make(chan struct{})
-	go func() { _ = h.cmd.Wait(); close(done) }()
+	done := h.waitDone
+	if done == nil {
+		// No watch goroutine (handle built outside startOnce) — own the
+		// Wait here.
+		ch := make(chan struct{})
+		go func() { _ = h.cmd.Wait(); close(ch) }()
+		done = ch
+	}
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
@@ -163,7 +177,7 @@ func Setup(ctx context.Context, opts SetupOptions) (*Client, *RunnerHandle, erro
 		if attempt > 1 {
 			// User-visible + log retry banner.
 			banner := fmt.Sprintf(
-				"  ⚠ devicelab runner stalled on attempt %d/%d: %v",
+				"  ⚠ devicelab runner startup failed on attempt %d/%d: %v",
 				attempt-1, maxStartupAttempts, lastErr,
 			)
 			fmt.Fprintln(os.Stderr, banner)
@@ -195,6 +209,12 @@ func Setup(ctx context.Context, opts SetupOptions) (*Client, *RunnerHandle, erro
 				fmt.Fprintf(os.Stderr, "  ✓ Runner started on attempt %d/%d\n", attempt, maxStartupAttempts)
 			}
 			return client, handle, nil
+		}
+		// Deterministic configuration failures won't be fixed by retrying —
+		// report the real error immediately (#118).
+		var perm *permanentStartupError
+		if errors.As(err, &perm) {
+			return nil, nil, fmt.Errorf("runner failed to start: %w", err)
 		}
 		lastErr = err
 	}
@@ -228,7 +248,7 @@ func startOnce(ctx context.Context, opts SetupOptions, xctestrun, logPath string
 	// this pin (same root cause as the WDA fix in 822a511).
 	destination := fmt.Sprintf(
 		"platform=iOS Simulator,arch=%s,id=%s",
-		runtime.GOARCH, opts.SimulatorUDID,
+		simulator.XcodebuildArch(runtime.GOARCH), opts.SimulatorUDID,
 	)
 	cmd := exec.Command(
 		"xcodebuild",
@@ -244,10 +264,20 @@ func startOnce(ctx context.Context, opts SetupOptions, xctestrun, logPath string
 		return nil, nil, fmt.Errorf("start xcodebuild: %w", err)
 	}
 
-	handle := &RunnerHandle{cmd: cmd, port: port, host: "127.0.0.1"}
+	// Watch for xcodebuild exiting before the runner is ready. A fast
+	// failure (bad -destination, missing runtime, …) previously looked
+	// identical to a hang: the log stopped growing and the stall detector
+	// misreported it 60s later, burning blind retries (#118). This
+	// goroutine is the single cmd.Wait owner — Stop selects on waitDone.
+	handle := &RunnerHandle{cmd: cmd, port: port, host: "127.0.0.1", waitDone: make(chan struct{})}
+	go func() {
+		handle.waitErr = cmd.Wait()
+		close(handle.waitDone)
+	}()
+
 	client := NewClient(handle.host, port)
 
-	if err := awaitReady(ctx, client, opts.ReadyTimeout, logPath); err != nil {
+	if err := awaitReady(ctx, client, opts.ReadyTimeout, logPath, handle); err != nil {
 		_ = handle.Stop()
 		return nil, nil, err
 	}
@@ -363,7 +393,7 @@ func simctlInstall(ctx context.Context, udid, appPath string) error {
 // no log growth for stallDetectWindow, return errStalled — the caller (Setup)
 // kills xcodebuild and retries. Passing logPath="" disables stall detection
 // (used when callers route output to their own writers).
-func awaitReady(parent context.Context, c *Client, timeout time.Duration, logPath string) error {
+func awaitReady(parent context.Context, c *Client, timeout time.Duration, logPath string, handle *RunnerHandle) error {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
@@ -372,7 +402,21 @@ func awaitReady(parent context.Context, c *Client, timeout time.Duration, logPat
 	var lastLogSize int64 = -1
 	lastLogActivity := time.Now()
 
+	var exited <-chan struct{}
+	if handle != nil {
+		exited = handle.waitDone
+	}
+
 	for {
+		// xcodebuild exiting before the runner answered is a fast,
+		// deterministic failure — report the real error from the log
+		// instead of misdiagnosing the ensuing silence as a stall (#118).
+		select {
+		case <-exited:
+			return exitedBeforeReadyError(logPath, handle.waitErr)
+		default:
+		}
+
 		probeCtx, probeCancel := context.WithTimeout(ctx, 2*time.Second)
 		err := c.Ping(probeCtx)
 		probeCancel()
@@ -391,8 +435,8 @@ func awaitReady(parent context.Context, c *Client, timeout time.Duration, logPat
 					lastLogActivity = time.Now()
 				} else if time.Since(lastLogActivity) > stallDetectWindow {
 					return fmt.Errorf(
-						"xcodebuild stalled (no log output for %v; log: %s)",
-						stallDetectWindow.Round(time.Second), logPath,
+						"xcodebuild stalled (no log output for %v):\n%s\n\nFull log: %s",
+						stallDetectWindow.Round(time.Second), tailLog(logPath, 20), logPath,
 					)
 				}
 			}
@@ -407,6 +451,52 @@ func awaitReady(parent context.Context, c *Client, timeout time.Duration, logPat
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
+}
+
+// permanentStartupError marks startup failures that retrying cannot fix
+// (bad -destination, missing simulator runtime, …). Setup stops the retry
+// loop as soon as it sees one instead of burning further attempts (#118).
+type permanentStartupError struct{ err error }
+
+func (e *permanentStartupError) Error() string { return e.err.Error() }
+func (e *permanentStartupError) Unwrap() error { return e.err }
+
+// exitedBeforeReadyError builds the error for an xcodebuild process that
+// exited before the runner answered. A `xcodebuild: error:` line in the log
+// is a deterministic configuration failure and is marked permanent.
+func exitedBeforeReadyError(logPath string, waitErr error) error {
+	status := "exited unexpectedly (status 0)"
+	if waitErr != nil {
+		status = fmt.Sprintf("exited: %v", waitErr)
+	}
+	if logPath != "" {
+		content, _ := os.ReadFile(logPath)
+		for _, line := range strings.Split(string(content), "\n") {
+			if strings.Contains(line, "xcodebuild: error:") {
+				return &permanentStartupError{fmt.Errorf(
+					"%s\n\nFull log: %s", strings.TrimSpace(line), logPath,
+				)}
+			}
+		}
+		return fmt.Errorf(
+			"xcodebuild %s before the runner became ready:\n%s\n\nFull log: %s",
+			status, tailLog(logPath, 20), logPath,
+		)
+	}
+	return fmt.Errorf("xcodebuild %s before the runner became ready", status)
+}
+
+// tailLog returns the last n lines of the file at path.
+func tailLog(path string, n int) string {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Sprintf("(could not read log: %s)", err)
+	}
+	lines := strings.Split(string(content), "\n")
+	if len(lines) <= n {
+		return string(content)
+	}
+	return strings.Join(lines[len(lines)-n:], "\n")
 }
 
 // pickEphemeralPort asks the OS for a free port, closes the socket, and

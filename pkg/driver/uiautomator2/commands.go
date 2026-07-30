@@ -33,6 +33,7 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 
 	elem, info, err := d.findElementForTap(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
+		err = d.notFoundOrCrash(err)
 		return errorResult(err, fmt.Sprintf("Element not found: %v", err))
 	}
 	if info == nil {
@@ -109,6 +110,7 @@ func (d *Driver) doubleTapOn(step *flow.DoubleTapOnStep) *core.CommandResult {
 
 	elem, info, err := d.findElementForTap(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
+		err = d.notFoundOrCrash(err)
 		return errorResult(err, fmt.Sprintf("Element not found: %v", err))
 	}
 
@@ -136,6 +138,7 @@ func (d *Driver) longPressOn(step *flow.LongPressOnStep) *core.CommandResult {
 
 	elem, info, err := d.findElementForTap(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
+		err = d.notFoundOrCrash(err)
 		return errorResult(err, fmt.Sprintf("Element not found: %v", err))
 	}
 
@@ -211,6 +214,7 @@ func (d *Driver) assertVisible(step *flow.AssertVisibleStep) *core.CommandResult
 	// Use findElementFast - only need to check element exists (1 HTTP call vs 3)
 	_, info, err := d.findElementFast(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
+		err = d.notFoundOrCrash(err)
 		return errorResult(err, fmt.Sprintf("Element not visible: %v", err))
 	}
 
@@ -286,10 +290,29 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 			return errorResult(err, fmt.Sprintf("Failed to input text: %v", err))
 		}
 	} else {
-		// No selector — send key events directly to whatever the OS has focused.
-		// Matches Maestro's behavior: pressKeyCode for each character.
-		if err := d.client.SendKeyActions(text); err != nil {
-			return errorResult(err, fmt.Sprintf("Failed to input text: %v", err))
+		// No selector — prefer element-scoped typing into the focused
+		// element (POST /element/{id}/value). Blind key events can silently
+		// miss WebView DOM inputs on some devices (#122 — same wire
+		// mechanism failing over Appium on cloud farms); element send-keys
+		// routes through accessibility ACTION_SET_TEXT, which Chrome
+		// translates into a real DOM value change, and the UiAutomator2
+		// server appends rather than replaces, preserving type-into-focused
+		// semantics. Fall back to key events when nothing has focus.
+		//
+		// History: acea0c7 removed an ActiveElement path here because it
+		// dragged a fragile focused=true selector-search fallback with it.
+		// This reintroduction is a single ActiveElement round-trip with a
+		// plain key-events fallback — no selector search.
+		typed := false
+		if active, err := d.client.ActiveElement(); err == nil && active != nil {
+			if err := active.SendKeys(text); err == nil {
+				typed = true
+			}
+		}
+		if !typed {
+			if err := d.client.SendKeyActions(text); err != nil {
+				return errorResult(err, fmt.Sprintf("Failed to input text: %v", err))
+			}
 		}
 	}
 
@@ -594,9 +617,9 @@ func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
 	}
 
 	// Direction-based swipe
-	direction := strings.ToLower(step.Direction)
-	if direction == "" {
-		direction = "up"
+	direction, err := core.NormalizeSwipeDirection(step.Direction)
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("Invalid swipe direction: %s", step.Direction))
 	}
 
 	// If selector specified, derive swipe coordinates from the element's
@@ -612,7 +635,11 @@ func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
 			return errorResult(err, fmt.Sprintf("Element not found for swipe: %v", err))
 		}
 		if info != nil && info.Bounds.Width > 0 {
-			startX, startY, endX, endY := swipeCoordsInBounds(direction, info.Bounds)
+			screenW, screenH, _ := d.screenSize() // (0,0) when unknown → far-edge clamp skipped
+			startX, startY, endX, endY, err := core.SwipeCoordsInBounds(direction, info.Bounds, screenW, screenH)
+			if err != nil {
+				return errorResult(err, fmt.Sprintf("Invalid swipe direction: %s", step.Direction))
+			}
 			return d.swipeWithAbsoluteCoords(startX, startY, endX, endY, step.Duration)
 		}
 	}
@@ -623,43 +650,6 @@ func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
 		return errorResult(err, "Failed to get screen size")
 	}
 	return d.swipeWithMaestroCoordinates(direction, width, height, step.Duration)
-}
-
-// swipeCoordsInBounds returns absolute start/end coordinates for a
-// direction-based swipe anchored on an element. The swipe starts inside
-// the element (so the touch is captured by that element) and ends past
-// the opposite edge (so drag-based targets like native sliders reach
-// their extreme value). This matches classic Maestro's semantics on the
-// two common use cases:
-//   - scroll containers: touch starts inside and moves outward, scrolling
-//     the container by the drag distance
-//   - drag targets (sliders, drag handles): the release position past
-//     the edge pins the drag target to its extreme in that direction
-//
-// Negative coordinates are clamped to 0 (screen origin) so `adb input
-// swipe` receives on-screen coordinates even for elements flush against
-// a screen edge.
-func swipeCoordsInBounds(direction string, b core.Bounds) (startX, startY, endX, endY int) {
-	clamp := func(v int) int {
-		if v < 0 {
-			return 0
-		}
-		return v
-	}
-	pctX := func(p int) int { return clamp(b.X + b.Width*p/100) }
-	pctY := func(p int) int { return clamp(b.Y + b.Height*p/100) }
-	switch direction {
-	case "up":
-		return pctX(50), pctY(90), pctX(50), pctY(-10)
-	case "down":
-		return pctX(50), pctY(10), pctX(50), pctY(110)
-	case "left":
-		return pctX(90), pctY(50), pctX(-10), pctY(50)
-	case "right":
-		return pctX(10), pctY(50), pctX(110), pctY(50)
-	default:
-		return pctX(50), pctY(50), pctX(50), pctY(0)
-	}
 }
 
 // findScrollableElement waits for and finds a scrollable element.
@@ -856,6 +846,7 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 	if d.device == nil {
 		return errorResult(fmt.Errorf("device not configured"), "launchApp: no device connected — check ADB connection")
 	}
+	d.currentAppID = appID // remember for mid-flow crash detection
 
 	// Stop app first if requested (default: true)
 	if step.StopApp == nil || *step.StopApp {
@@ -1503,7 +1494,7 @@ func (d *Driver) openLink(step *flow.OpenLinkStep) *core.CommandResult {
 // ============================================================================
 
 func (d *Driver) takeScreenshot(step *flow.TakeScreenshotStep) *core.CommandResult {
-	data, err := d.client.Screenshot()
+	data, err := d.Screenshot()
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to take screenshot: %v", err))
 	}

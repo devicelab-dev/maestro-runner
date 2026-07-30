@@ -247,13 +247,34 @@ func (c *Client) Screenshot() ([]byte, error) {
 func (c *Client) Source() (string, error) {
 	resp, err := c.get(c.sessionPath("/source"))
 	if err != nil {
-		return "", err
+		// A snapshot taken while the accessibility tree is mutating can fail
+		// with a transient kAXErrorInvalidUIElement (-25202): an element ref
+		// went stale mid-walk. It clears on the next attempt, so retry once
+		// before surfacing it (mirrors Maestro's #3430 recovery).
+		if isTransientAXError(err) {
+			time.Sleep(150 * time.Millisecond)
+			resp, err = c.get(c.sessionPath("/source"))
+		}
+		if err != nil {
+			return "", err
+		}
 	}
 
 	if value, ok := resp["value"].(string); ok {
 		return value, nil
 	}
 	return "", fmt.Errorf("invalid source response")
+}
+
+// isTransientAXError reports whether a WDA error is the transient
+// kAXErrorInvalidUIElement (-25202) raised when the accessibility tree mutates
+// mid-query — a retry-once condition, not a real failure.
+func isTransientAXError(err error) bool {
+	if err == nil {
+		return false
+	}
+	m := err.Error()
+	return strings.Contains(m, "kAXErrorInvalidUIElement") || strings.Contains(m, "-25202")
 }
 
 // WindowSize returns the screen dimensions.

@@ -76,8 +76,7 @@ func splitYAMLDocuments(content string) []string {
 		trimmed := strings.TrimSpace(line)
 
 		if !inMultiline {
-			if strings.HasSuffix(trimmed, "|") || strings.HasSuffix(trimmed, ">") ||
-				strings.HasSuffix(trimmed, "|-") || strings.HasSuffix(trimmed, ">-") {
+			if startsBlockScalar(trimmed) {
 				inMultiline = true
 				if i+1 < len(lines) {
 					next := lines[i+1]
@@ -110,6 +109,32 @@ func splitYAMLDocuments(content string) []string {
 	}
 
 	return parts
+}
+
+// startsBlockScalar reports whether a YAML line opens a block scalar
+// (`script: |`, `text: >-`, `cmd: |2` …). Only the line's last
+// whitespace-separated token is considered, and it must be a bare block
+// indicator (| or > plus optional chomping/indent), so prose or comments
+// that merely end in '>' — e.g. "# navigation: Library ->" — don't flip
+// the splitter into multiline mode and swallow the `---` separator (#119).
+func startsBlockScalar(trimmed string) bool {
+	if strings.HasPrefix(trimmed, "#") {
+		return false
+	}
+	fields := strings.Fields(trimmed)
+	if len(fields) == 0 {
+		return false
+	}
+	last := fields[len(fields)-1]
+	if last[0] != '|' && last[0] != '>' {
+		return false
+	}
+	for _, c := range last[1:] {
+		if c != '+' && c != '-' && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 func parseConfig(content string, flow *Flow) error {
@@ -227,7 +252,7 @@ func isStepType(key string) bool {
 		StepInputText, StepInputRandom, StepInputRandomEmail, StepInputRandomNumber,
 		StepInputRandomPersonName, StepInputRandomText,
 		StepEraseText, StepCopyTextFrom, StepPasteText, StepSetClipboard,
-		StepAssertVisible, StepAssertNotVisible, StepAssertTrue, StepAssertCondition,
+		StepAssertVisible, StepAssertNotVisible, StepAssertTrue, StepAssertCondition, StepAssertScreenshot,
 		StepAssertNoDefectsWithAI, StepAssertWithAI, StepExtractTextWithAI, StepWaitUntil,
 		StepLaunchApp, StepStopApp, StepKillApp, StepClearState, StepClearKeychain, StepSetPermissions,
 		StepSetLocation, StepSetOrientation, StepSetAirplaneMode, StepToggleAirplaneMode,
@@ -304,6 +329,12 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 			s.Direction = valueNode.Value
 		} else if err := valueNode.Decode(&s); err != nil {
 			return nil, wrapParseError(sourcePath, valueNode.Line, err)
+		}
+		// Bare `- scroll` scrolls down, matching Maestro's documented
+		// default. Normalized here so every driver sees a concrete
+		// direction (#120: WDA and devicelab_ios rejected "").
+		if s.Direction == "" {
+			s.Direction = "down"
 		}
 		s.StepType = stepType
 		return &s, nil
@@ -836,6 +867,19 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 			s.Path = valueNode.Value
 		} else if err := valueNode.Decode(&s); err != nil {
 			return nil, wrapParseError(sourcePath, valueNode.Line, err)
+		}
+		s.StepType = stepType
+		return &s, nil
+
+	case StepAssertScreenshot:
+		var s AssertScreenshotStep
+		if valueNode.Kind == yaml.ScalarNode {
+			s.Path = valueNode.Value
+		} else if err := valueNode.Decode(&s); err != nil {
+			return nil, wrapParseError(sourcePath, valueNode.Line, err)
+		}
+		if s.ThresholdPercentage == 0 {
+			s.ThresholdPercentage = 95.0
 		}
 		s.StepType = stepType
 		return &s, nil

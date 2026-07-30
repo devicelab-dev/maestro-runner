@@ -118,6 +118,15 @@ type Driver struct {
 	lastCDPScan   time.Time     // rate-limit ADB shell CDP scans
 	lastCDPResult *core.CDPInfo // cached result from last scan
 	knownCDPType  string        // "browser" or "webview" — set from socket name, cleared on CDP down
+	// Backoff for a WebView CDP endpoint that fails to connect. A stalled/
+	// unreachable devtools socket makes connect() spend its full timeout
+	// (~20s), and ensureWebViewConnection retries on every command while
+	// disconnected — so without a backoff a single flaky WebView adds ~20s to
+	// every step. We record the failing socket + time and skip re-connecting
+	// to that same socket until the backoff elapses; commands fall through to
+	// native finding meanwhile.
+	lastWebViewConnectFail   time.Time
+	lastWebViewConnectFailSk string
 
 	// Lazy retry state: each successful tap captures the pre-tap tree hash
 	// + selector + time. If the NEXT element-based command can't find its
@@ -213,9 +222,9 @@ func (d *Driver) tapHadEffectViaWindowUpdate(appID string) bool {
 }
 
 const (
-	tapVerifyAttempts     = 3 //nolint:unused
+	tapVerifyAttempts     = 3                     //nolint:unused
 	tapVerifyInterval     = 30 * time.Millisecond //nolint:unused
-	windowUpdateTimeoutMs = 500 //nolint:unused
+	windowUpdateTimeoutMs = 500                   //nolint:unused
 )
 
 // recordTap captures the current tree hash so a later failing assertion can
@@ -558,6 +567,8 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	// Media
 	case *flow.TakeScreenshotStep:
 		result = d.takeScreenshot(s)
+	case *flow.AssertScreenshotStep:
+		result = d.takeScreenshot(&flow.TakeScreenshotStep{CropOn: s.CropOn})
 	case *flow.StartRecordingStep:
 		result = d.startRecording(s)
 	case *flow.StopRecordingStep:
@@ -639,7 +650,9 @@ func (d *Driver) ensureWebViewConnection() {
 			logger.Info("[cdp:3-connection] CDP socket gone, disconnecting webview")
 			d.webView.disconnect()
 		}
-		d.knownCDPType = "" // Clear browser mode when CDP goes away
+		d.knownCDPType = ""                    // Clear browser mode when CDP goes away
+		d.lastWebViewConnectFail = time.Time{} // reset backoff — socket is gone
+		d.lastWebViewConnectFailSk = ""
 		return
 	}
 
@@ -658,12 +671,40 @@ func (d *Driver) ensureWebViewConnection() {
 	//   - chrome_devtools_remote sockets are only reported when a browser is in the foreground
 	// So we trust whatever socket the agent sends us.
 	if !d.webView.isConnected() {
+		// Skip re-connecting to a socket that failed recently — connect() can
+		// spend ~20s on a stalled endpoint, and this runs on every command, so
+		// without the backoff one flaky WebView slows every step. Keyed on the
+		// socket so a different/new WebView still connects immediately.
+		if inWebViewConnectBackoff(cdpInfo.Socket, d.lastWebViewConnectFailSk, d.lastWebViewConnectFail, time.Now()) {
+			return
+		}
 		logger.Info("[cdp:3-connection] CDP socket available, initiating connection to %s (type=%s)", cdpInfo.Socket, cdpType)
 		if err := d.webView.connect(cdpInfo, cdpType); err != nil {
 			logger.Info("[cdp:3-connection] connect failed: %v (socket=%s)", err, cdpInfo.Socket)
+			d.lastWebViewConnectFail = time.Now()
+			d.lastWebViewConnectFailSk = cdpInfo.Socket
 			return
 		}
+		// Connected — clear any backoff state.
+		d.lastWebViewConnectFail = time.Time{}
+		d.lastWebViewConnectFailSk = ""
 	}
+}
+
+// webViewConnectBackoff is how long ensureWebViewConnection waits before
+// re-attempting a WebView CDP connect that just failed for the same socket,
+// so a stalled/unreachable devtools endpoint can't add the full connect
+// timeout to every command (mirrors Maestro's MA-4119 bound).
+const webViewConnectBackoff = 5 * time.Second
+
+// inWebViewConnectBackoff reports whether a connect to socket should be skipped
+// because the same socket failed to connect within webViewConnectBackoff of now.
+// A different socket (or no prior failure) is never in backoff.
+func inWebViewConnectBackoff(socket, lastFailSocket string, lastFail, now time.Time) bool {
+	if lastFail.IsZero() || socket != lastFailSocket {
+		return false
+	}
+	return now.Sub(lastFail) < webViewConnectBackoff
 }
 
 // getCDPInfo returns the current CDP socket info.
@@ -797,7 +838,7 @@ func (d *Driver) findFocused() (core.Element, error) {
 	// Try native
 	if d.webView == nil || d.webView.webViewType() != "browser" {
 		active, err := d.client.ActiveElement()
-		if err == nil {
+		if err == nil && active != nil {
 			info := &core.ElementInfo{Visible: true, Enabled: true}
 			if text, textErr := active.Text(); textErr == nil {
 				info.Text = text

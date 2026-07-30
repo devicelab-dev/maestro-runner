@@ -169,6 +169,11 @@ Examples:
 			Usage: "When to capture screenshots/hierarchy: on-failure (default), always, never",
 			Value: "on-failure",
 		},
+		&cli.BoolFlag{
+			Name:    "update-screenshots",
+			Usage:   "Overwrite existing assertScreenshot baselines with the current screen (missing baselines are always seeded on first run)",
+			EnvVars: []string{"MAESTRO_UPDATE_SCREENSHOTS"},
+		},
 
 		// Emulator management flags (start-emulator, auto-start-emulator,
 		// shutdown-after, boot-timeout) are global flags defined in cli.go.
@@ -532,6 +537,9 @@ type RunConfig struct {
 	// Artifacts
 	Artifacts executor.ArtifactMode // When to capture screenshots/hierarchy
 
+	// UpdateScreenshots overwrites existing assertScreenshot baselines.
+	UpdateScreenshots bool
+
 	// Cloud provider (detected from AppiumURL, nil if not a cloud provider)
 	CloudProvider cloud.Provider
 	CloudMeta     map[string]string
@@ -715,6 +723,7 @@ func runTest(c *cli.Context) error {
 		NoFlutterFallback:  getBool("no-flutter-fallback"),
 		AndroidTCPForward:  getBool("android-tcp-forward"),
 		Artifacts:          parseArtifactMode(getString("artifacts")),
+		UpdateScreenshots:  getBool("update-screenshots"),
 	}
 
 	// Apply waitForIdleTimeout with priority:
@@ -1362,6 +1371,7 @@ func executeSingleDevice(cfg *RunConfig, flows []flow.Flow) (*executor.RunResult
 		OutputDir:          cfg.OutputDir,
 		Parallelism:        0,
 		Artifacts:          cfg.Artifacts,
+		UpdateScreenshots:  cfg.UpdateScreenshots,
 		Device:             deviceInfo,
 		App:                buildAppReport(driver),
 		RunnerVersion:      Version,
@@ -1404,6 +1414,7 @@ func ExecuteFlowWithDriver(driver core.Driver, cfg *RunConfig, f flow.Flow) (*ex
 		OutputDir:          cfg.OutputDir,
 		Parallelism:        0,
 		Artifacts:          cfg.Artifacts,
+		UpdateScreenshots:  cfg.UpdateScreenshots,
 		Device:             deviceInfo,
 		App:                buildAppReport(driver),
 		RunnerVersion:      Version,
@@ -1438,6 +1449,12 @@ const (
 
 // Slow step threshold in milliseconds (5 seconds)
 const slowThresholdMs = 5000
+
+// appiumKeepaliveInterval is how often pre-created --parallel Appium sessions
+// are pinged to reset the server's newCommandTimeout while later sessions are
+// still being created (#124). 20s comfortably beats Appium's 60s default and
+// SauceLabs RDC's 90s ceiling with margin for slower farms.
+const appiumKeepaliveInterval = 20 * time.Second
 
 // colorsEnabled determines if ANSI colors should be used
 var colorsEnabled = true
@@ -1723,6 +1740,7 @@ func executeAppiumSingleSession(cfg *RunConfig, flows []flow.Flow) (*executor.Ru
 		OutputDir:          cfg.OutputDir,
 		Parallelism:        0,
 		Artifacts:          cfg.Artifacts,
+		UpdateScreenshots:  cfg.UpdateScreenshots,
 		Device:             deviceInfo,
 		App:                buildAppReport(driver),
 		RunnerVersion:      Version,
@@ -2083,8 +2101,14 @@ func enhanceNoDevicesError(noDevErr *device.NoDevicesError, cfg *RunConfig) {
 }
 
 // buildParallelDeviceError creates a helpful error when --parallel needs more devices.
+// The remediation hints are platform-specific: iOS runs get simulator guidance,
+// everything else gets the Android AVD/emulator guidance (#121).
 func buildParallelDeviceError(cfg *RunConfig, found int) error {
 	msg := fmt.Sprintf("--parallel %d requires %d devices but only found %d\n", cfg.Parallel, cfg.Parallel, found)
+
+	if cfg.Platform == "ios" {
+		return buildParallelIOSDeviceError(cfg, found, msg)
+	}
 
 	// Try to list available AVDs
 	avds, _ := emulator.ListAVDs()
@@ -2107,20 +2131,7 @@ func buildParallelDeviceError(cfg *RunConfig, found int) error {
 	}
 
 	if len(avds) > 0 {
-		// Build the actual command the user would run
-		args := os.Args
-		globalPart := args[0]
-		testPart := ""
-		for i := 1; i < len(args); i++ {
-			if args[i] == "test" {
-				globalPart = strings.Join(args[:i], " ")
-				testPart = " " + strings.Join(args[i:], " ")
-				break
-			}
-		}
-		if testPart == "" {
-			globalPart = strings.Join(args, " ")
-		}
+		globalPart, testPart := currentCommandParts()
 
 		msg += fmt.Sprintf("  %d. Auto-start emulators: %s --auto-start-emulator%s\n", optNum, globalPart, testPart)
 		optNum++
@@ -2141,6 +2152,63 @@ func buildParallelDeviceError(cfg *RunConfig, found int) error {
 	}
 
 	return fmt.Errorf("%s", msg)
+}
+
+// buildParallelIOSDeviceError builds the iOS-flavoured remediation for a
+// --parallel device shortage: boot more simulators (or let
+// --auto-start-emulator do it — supported for iOS since v1.1.19), never
+// Android AVD guidance (#121).
+func buildParallelIOSDeviceError(cfg *RunConfig, found int, msg string) error {
+	needed := cfg.Parallel - found
+
+	shutdownSims, _ := simulator.ListShutdownIOSSimulators()
+	if len(shutdownSims) > 0 {
+		msg += "\nAvailable iOS simulators (shut down):\n"
+		for _, sim := range shutdownSims {
+			msg += fmt.Sprintf("  - %s (%s)\n", sim.Name, sim.UDID)
+		}
+	}
+
+	msg += "\nOptions:\n"
+	optNum := 1
+
+	globalPart, testPart := currentCommandParts()
+	msg += fmt.Sprintf("  %d. Auto-start simulators: %s --auto-start-emulator%s\n", optNum, globalPart, testPart)
+	optNum++
+
+	if len(shutdownSims) > 0 {
+		msg += fmt.Sprintf("  %d. Boot simulators manually:\n", optNum)
+		limit := needed
+		if limit > len(shutdownSims) {
+			limit = len(shutdownSims)
+		}
+		for i := 0; i < limit; i++ {
+			msg += fmt.Sprintf("     xcrun simctl boot %s   # %s\n", shutdownSims[i].UDID, shutdownSims[i].Name)
+		}
+		optNum++
+	} else {
+		msg += fmt.Sprintf("  %d. Create simulators: xcrun simctl create <name> <device-type>\n", optNum)
+		optNum++
+	}
+
+	msg += fmt.Sprintf("  %d. Connect %d more iOS device(s) via USB\n", optNum, needed)
+
+	return fmt.Errorf("%s", msg)
+}
+
+// currentCommandParts splits os.Args around the `test` subcommand so hints
+// can splice extra flags into the command the user actually ran.
+func currentCommandParts() (globalPart, testPart string) {
+	args := os.Args
+	globalPart = args[0]
+	for i := 1; i < len(args); i++ {
+		if args[i] == "test" {
+			globalPart = strings.Join(args[:i], " ")
+			testPart = " " + strings.Join(args[i:], " ")
+			return globalPart, testPart
+		}
+	}
+	return strings.Join(args, " "), ""
 }
 
 // buildNotEnoughAVDsError creates a helpful error when --parallel N requires more
@@ -2407,6 +2475,42 @@ func createAppiumWorkers(cfg *RunConfig, count int) ([]executor.DeviceWorker, []
 		}
 	}
 
+	// Sessions are created serially, but no flow runs until all N exist — so an
+	// early session idles for ~(N-1)×creation_time before its first command. On
+	// cloud farms that idle can exceed the server's newCommandTimeout and the
+	// session is reaped, failing the first flow with "invalid session id" (#124).
+	// Keep every already-created session warm with a lightweight ping on a
+	// ticker; stop once creation finishes and execution is about to begin.
+	var kaMu sync.Mutex
+	var kaDrivers []*appiumdriver.Driver
+	kaStop := make(chan struct{})
+	var kaDone sync.WaitGroup
+	kaDone.Add(1)
+	go func() {
+		defer kaDone.Done()
+		ticker := time.NewTicker(appiumKeepaliveInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-kaStop:
+				return
+			case <-ticker.C:
+				kaMu.Lock()
+				snapshot := append([]*appiumdriver.Driver(nil), kaDrivers...)
+				kaMu.Unlock()
+				for _, d := range snapshot {
+					if err := d.Keepalive(); err != nil {
+						logger.Debug("Appium keepalive ping failed for session %s: %v", d.SessionID(), err)
+					}
+				}
+			}
+		}
+	}()
+	defer func() {
+		close(kaStop)
+		kaDone.Wait()
+	}()
+
 	// Preserve the caller's Devices so we can swap in per-worker UDIDs and
 	// restore them at the end. When the user supplies len(Devices) >= count,
 	// we round-robin so each Appium session targets a distinct device. When
@@ -2432,10 +2536,14 @@ func createAppiumWorkers(cfg *RunConfig, count int) ([]executor.DeviceWorker, []
 			return nil, nil, fmt.Errorf("failed to create %s: %w", workerID, err)
 		}
 
-		// Extract session ID for parallel output
+		// Extract session ID for parallel output, and register the session for
+		// keepalive pings while the remaining sessions are still being created.
 		var sessionID string
 		if appDrv, ok := driver.(*appiumdriver.Driver); ok {
 			sessionID = appDrv.SessionID()
+			kaMu.Lock()
+			kaDrivers = append(kaDrivers, appDrv)
+			kaMu.Unlock()
 		}
 
 		// Capture per-worker cloud metadata (each session = separate cloud job).
@@ -2501,6 +2609,7 @@ func createParallelRunner(cfg *RunConfig, workers []executor.DeviceWorker, platf
 		OutputDir:          cfg.OutputDir,
 		Parallelism:        0,
 		Artifacts:          cfg.Artifacts,
+		UpdateScreenshots:  cfg.UpdateScreenshots,
 		Device:             deviceInfo,
 		App:                buildAppReport(firstDriver),
 		RunnerVersion:      Version,

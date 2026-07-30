@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -324,6 +325,16 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 	// Mark step as started
 	fr.flowWriter.CommandStart(idx)
 
+	// Step-level platform gate: a step with `platform: ios|android|web` runs
+	// only on that platform and is skipped elsewhere (Maestro #1353).
+	if gate := step.PlatformGate(); gate != "" {
+		if info := fr.driver.GetPlatformInfo(); info != nil && !strings.EqualFold(info.Platform, gate) {
+			logger.Debug("Skipping step %d: platform gate %q != driver platform %q", idx, gate, info.Platform)
+			fr.flowWriter.CommandEnd(idx, report.StatusSkipped, nil, nil, report.CommandArtifacts{})
+			return report.StatusSkipped, "", time.Since(stepStart).Milliseconds()
+		}
+	}
+
 	// Determine what artifacts to capture
 	captureAlways := fr.config.Artifacts == ArtifactAlways
 	captureOnFailure := fr.config.Artifacts == ArtifactOnFailure
@@ -472,18 +483,14 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 
 	// TakeScreenshot - delegate to driver, then save the returned PNG data
 	case *flow.TakeScreenshotStep:
-		result = fr.driver.Execute(step)
-		if result.Success {
-			if data, ok := result.Data.([]byte); ok && len(data) > 0 {
-				path, saveErr := fr.flowWriter.SaveNamedScreenshot(idx, s.Path, data)
-				if saveErr != nil {
-					logger.Warn("Failed to save screenshot: %v", saveErr)
-				} else {
-					artifacts.ScreenshotAfter = path
-					result.Message = fmt.Sprintf("Screenshot saved: %s", filepath.Base(path))
-				}
-			}
+		var reportPath string
+		result, reportPath = fr.executeTakeScreenshot(s, idx)
+		if reportPath != "" {
+			artifacts.ScreenshotAfter = reportPath
 		}
+
+	case *flow.AssertScreenshotStep:
+		result = fr.executeAssertScreenshot(s)
 
 	// PasteText - use in-memory copiedText first, clipboard as fallback
 	case *flow.PasteTextStep:
@@ -572,6 +579,169 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 	}
 
 	return status, errorMsg, stepDuration
+}
+
+func (fr *FlowRunner) executeTakeScreenshot(
+	step *flow.TakeScreenshotStep,
+	commandIndex int,
+) (*core.CommandResult, string) {
+	result := fr.driver.Execute(step)
+	if !result.Success {
+		return result, ""
+	}
+
+	data, ok := result.Data.([]byte)
+	if !ok || len(data) == 0 {
+		return result, ""
+	}
+
+	requestedPath := ""
+	if step.Path != "" {
+		requestedPath = fr.script.ResolvePath(step.Path)
+		if filepath.Ext(requestedPath) == "" {
+			requestedPath += ".png"
+		}
+		if err := os.MkdirAll(filepath.Dir(requestedPath), 0o755); err != nil {
+			err = fmt.Errorf("create screenshot directory for %q: %w", requestedPath, err)
+			return &core.CommandResult{Success: false, Error: err, Message: err.Error()}, ""
+		}
+		if err := os.WriteFile(requestedPath, data, 0o644); err != nil {
+			err = fmt.Errorf("write screenshot %q: %w", requestedPath, err)
+			return &core.CommandResult{Success: false, Error: err, Message: err.Error()}, ""
+		}
+	}
+
+	reportName := ""
+	if step.Path != "" {
+		reportName = filepath.Base(step.Path)
+	}
+	reportPath, reportErr := fr.flowWriter.SaveNamedScreenshot(commandIndex, reportName, data)
+	if reportErr != nil {
+		logger.Warn("Failed to save screenshot report artifact: %v", reportErr)
+	}
+
+	if requestedPath != "" {
+		result.Message = fmt.Sprintf("Screenshot saved: %s", requestedPath)
+	} else if reportErr == nil {
+		result.Message = fmt.Sprintf("Screenshot saved: %s", filepath.Base(reportPath))
+	}
+	return result, reportPath
+}
+
+func (fr *FlowRunner) executeAssertScreenshot(step *flow.AssertScreenshotStep) *core.CommandResult {
+	result := fr.driver.Execute(step)
+	if !result.Success {
+		return result
+	}
+
+	capturedData, ok := result.Data.([]byte)
+	if !ok || len(capturedData) == 0 {
+		err := fmt.Errorf("screenshot capture returned no image data")
+		return &core.CommandResult{
+			Success: false,
+			Error:   err,
+			Message: err.Error(),
+		}
+	}
+
+	referencePath := fr.script.ResolvePath(step.Path)
+	if filepath.Ext(referencePath) == "" {
+		referencePath += ".png"
+	}
+
+	referenceData, err := os.ReadFile(referencePath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			err = fmt.Errorf("read reference screenshot %q: %w", referencePath, err)
+			return &core.CommandResult{
+				Success: false,
+				Error:   err,
+				Message: err.Error(),
+			}
+		}
+		if writeErr := writeScreenshotBaseline(referencePath, capturedData); writeErr != nil {
+			return &core.CommandResult{
+				Success: false,
+				Error:   writeErr,
+				Message: writeErr.Error(),
+			}
+		}
+		return &core.CommandResult{
+			Success: true,
+			Message: fmt.Sprintf("Baseline screenshot created: %s", referencePath),
+			Data:    capturedData,
+		}
+	}
+
+	if fr.config.UpdateScreenshots {
+		if writeErr := writeScreenshotBaseline(referencePath, capturedData); writeErr != nil {
+			return &core.CommandResult{
+				Success: false,
+				Error:   writeErr,
+				Message: writeErr.Error(),
+			}
+		}
+		return &core.CommandResult{
+			Success: true,
+			Message: fmt.Sprintf("Baseline screenshot updated: %s", referencePath),
+			Data:    capturedData,
+		}
+	}
+
+	matchPercentage, err := core.CheckImageMatchPercentage(referenceData, capturedData)
+	if err != nil {
+		err = fmt.Errorf("compare screenshot with %q: %w", referencePath, err)
+		return &core.CommandResult{
+			Success: false,
+			Error:   err,
+			Message: err.Error(),
+		}
+	}
+
+	if matchPercentage < step.ThresholdPercentage {
+		diffPath := core.DiffScreenshotPath(referencePath)
+		diffHint := ""
+		if writeErr := core.WriteScreenshotDiff(referenceData, capturedData, diffPath); writeErr != nil {
+			logger.Warn("Failed to write screenshot diff: %v", writeErr)
+		} else {
+			diffHint = fmt.Sprintf(". Check the diff image at %s", diffPath)
+		}
+		err = fmt.Errorf(
+			"screenshot match %.2f%% is below threshold %.2f%%",
+			matchPercentage,
+			step.ThresholdPercentage,
+		)
+		return &core.CommandResult{
+			Success: false,
+			Error:   err,
+			Message: fmt.Sprintf(
+				"Screenshot mismatch: %.2f%% match (threshold: %.2f%%)%s",
+				matchPercentage,
+				step.ThresholdPercentage,
+				diffHint,
+			),
+		}
+	}
+
+	return &core.CommandResult{
+		Success: true,
+		Message: fmt.Sprintf(
+			"Screenshot matches: %.2f%% (threshold: %.2f%%)",
+			matchPercentage,
+			step.ThresholdPercentage,
+		),
+		Data: capturedData,
+	}
+}
+
+func writeScreenshotBaseline(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create screenshot baseline directory for %q: %w", path, err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write screenshot baseline %q: %w", path, err)
+	}
+	return nil
 }
 
 // maxPrepareScanDepth bounds runFlow expansion during pre-session scanning so a
@@ -1060,18 +1230,10 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 		result = fr.driver.Execute(step)
 	case *flow.TakeScreenshotStep:
 		fr.script.ExpandStep(step)
-		result = fr.driver.Execute(step)
-		if result.Success {
-			if data, ok := result.Data.([]byte); ok && len(data) > 0 {
-				subIdx := len(fr.subCommands)
-				path, saveErr := fr.flowWriter.SaveNamedScreenshot(subIdx, s.Path, data)
-				if saveErr != nil {
-					logger.Warn("Failed to save nested screenshot: %v", saveErr)
-				} else {
-					result.Message = fmt.Sprintf("Screenshot saved: %s", filepath.Base(path))
-				}
-			}
-		}
+		result, _ = fr.executeTakeScreenshot(s, len(fr.subCommands))
+	case *flow.AssertScreenshotStep:
+		fr.script.ExpandStep(step)
+		result = fr.executeAssertScreenshot(s)
 	case *flow.EvalBrowserScriptStep:
 		fr.script.ExpandStep(step)
 		result = fr.driver.Execute(step)

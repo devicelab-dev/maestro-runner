@@ -2395,3 +2395,33 @@ func TestIOSTargetsSimulator(t *testing.T) {
 		})
 	}
 }
+
+// --- #121: --parallel shortage hints must match the platform ---
+
+func TestBuildParallelDeviceError_IOSGetsSimulatorHints(t *testing.T) {
+	cfg := &RunConfig{Parallel: 2, Platform: "ios"}
+	msg := buildParallelDeviceError(cfg, 1).Error()
+
+	for _, banned := range []string{"AVD", "avdmanager", "emulator -avd"} {
+		if strings.Contains(msg, banned) {
+			t.Errorf("iOS hint must not mention %q, got:\n%s", banned, msg)
+		}
+	}
+	for _, want := range []string{"simulator", "--auto-start-emulator", "iOS device(s)"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("iOS hint should mention %q, got:\n%s", want, msg)
+		}
+	}
+}
+
+func TestBuildParallelDeviceError_AndroidKeepsAVDHints(t *testing.T) {
+	cfg := &RunConfig{Parallel: 2, Platform: "android"}
+	msg := buildParallelDeviceError(cfg, 0).Error()
+
+	if strings.Contains(msg, "simctl") {
+		t.Errorf("Android hint must not mention simctl, got:\n%s", msg)
+	}
+	if !strings.Contains(msg, "AVD") {
+		t.Errorf("Android hint should mention AVDs, got:\n%s", msg)
+	}
+}

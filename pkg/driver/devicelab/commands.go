@@ -513,10 +513,28 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 			}
 		}
 	} else {
-		// No selector — send key events directly to whatever the OS has focused.
-		// Matches Maestro's behavior: pressKeyCode for each character.
-		if err := d.client.SendKeyActions(text); err != nil {
-			return errorResult(err, fmt.Sprintf("Failed to input text: %v", err))
+		// No selector — type into whatever has focus. findFocused prefers
+		// the WebView's DOM activeElement over the native ActiveElement,
+		// which matters after a CDP tap: the DOM input has focus but blind
+		// native key events never reach it, while the call still reports
+		// success (#122). Element-scoped native typing likewise fixes
+		// WebView inputs reached via a11y focus. Fall back to raw key
+		// events when nothing reports focus.
+		//
+		// History: acea0c7 removed an ActiveElement path here because it
+		// dragged a fragile focused=true selector-search fallback with it.
+		// This reintroduction is a single findFocused round-trip with a
+		// plain key-events fallback — no selector search.
+		typed := false
+		if focused, err := d.findFocused(); err == nil && focused != nil {
+			if err := focused.Input(text); err == nil {
+				typed = true
+			}
+		}
+		if !typed {
+			if err := d.client.SendKeyActions(text); err != nil {
+				return errorResult(err, fmt.Sprintf("Failed to input text: %v", err))
+			}
 		}
 	}
 
@@ -890,29 +908,29 @@ func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
 		return d.swipeWithAbsoluteCoords(step.StartX, step.StartY, step.EndX, step.EndY, step.Duration)
 	}
 
-	direction := strings.ToLower(step.Direction)
-	if direction == "" {
-		direction = "up"
+	direction, err := core.NormalizeSwipeDirection(step.Direction)
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("Invalid swipe direction: %s", step.Direction))
 	}
 
-	uiaDir := mapDirection(direction)
-
+	// If a from:/selector element is specified, derive swipe coordinates from
+	// the element's bounds and route through the same ADB `input swipe` path
+	// used by screen-percentage swipes. `SwipeInArea` (the previous path) does
+	// not honor `step.Duration`, producing a fast flick — too fast for native
+	// drag targets (sliders, drag handles), which discard the gesture. This
+	// mirrors the uiautomator2 fix for #114.
 	if step.Selector != nil && !step.Selector.IsEmpty() {
 		_, info, err := d.findElement(*step.Selector, step.IsOptional(), step.TimeoutMs)
 		if err != nil {
 			return errorResult(err, fmt.Sprintf("Element not found for swipe: %v", err))
 		}
 		if info != nil && info.Bounds.Width > 0 {
-			area := uiautomator2.NewRect(
-				info.Bounds.X,
-				info.Bounds.Y,
-				info.Bounds.Width,
-				info.Bounds.Height,
-			)
-			if err := d.client.SwipeInArea(area, uiaDir, 0.7, 0); err != nil {
-				return errorResult(err, fmt.Sprintf("Failed to swipe in element: %v", err))
+			screenW, screenH, _ := d.screenSize() // (0,0) when unknown → far-edge clamp skipped
+			startX, startY, endX, endY, err := core.SwipeCoordsInBounds(direction, info.Bounds, screenW, screenH)
+			if err != nil {
+				return errorResult(err, fmt.Sprintf("Invalid swipe direction: %s", step.Direction))
 			}
-			return successResult(fmt.Sprintf("Swiped %s in element", direction), info)
+			return d.swipeWithAbsoluteCoords(startX, startY, endX, endY, step.Duration)
 		}
 	}
 

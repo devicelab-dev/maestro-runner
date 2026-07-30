@@ -31,6 +31,10 @@ type RunnerConfig struct {
 	Retries     int          // Max retries per flow (0 = no retries)
 	Artifacts   ArtifactMode // When to capture artifacts
 
+	// UpdateScreenshots overwrites existing assertScreenshot baselines.
+	// Missing baselines are always seeded on first run regardless of this flag.
+	UpdateScreenshots bool
+
 	// Device/App info for reports
 	Device report.Device
 	App    report.App

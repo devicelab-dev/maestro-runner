@@ -9,6 +9,17 @@ import (
 	"github.com/devicelab-dev/maestro-runner/pkg/logger"
 )
 
+// XcodebuildArch translates Go's GOARCH vocabulary into xcodebuild's:
+// Go says "amd64" where xcodebuild's destination resolver only knows
+// "x86_64", so on Intel Macs no `-destination arch=` ever matched (#117).
+// "arm64" happens to be spelled the same in both.
+func XcodebuildArch(goarch string) string {
+	if goarch == "amd64" {
+		return "x86_64"
+	}
+	return goarch
+}
+
 // FindSimctlBinary verifies that xcrun/simctl is available.
 func FindSimctlBinary() (string, error) {
 	path, err := execLookPath("xcrun")

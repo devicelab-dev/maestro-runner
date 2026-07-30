@@ -3,6 +3,7 @@ package wda
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/danielpaulus/go-ios/ios/forward"
 	"github.com/devicelab-dev/maestro-runner/pkg/config"
 	"github.com/devicelab-dev/maestro-runner/pkg/logger"
+	"github.com/devicelab-dev/maestro-runner/pkg/simulator"
 )
 
 const (
@@ -93,9 +95,17 @@ func PortFromUDID(udid string) uint16 {
 	if idx := strings.LastIndex(udid, "-"); idx >= 0 {
 		seg = udid[idx+1:]
 	}
+	// Bound to the last 12 hex chars before parsing. A standard UUID's final
+	// segment is already exactly 12 chars, so UUID-derived ports are unchanged;
+	// a legacy 40-char hyphenless UDID would otherwise overflow uint64 in
+	// ParseUint and fall back to 8100 for every device — colliding in parallel
+	// runs (#129).
+	if len(seg) > 12 {
+		seg = seg[len(seg)-12:]
+	}
 	val, err := strconv.ParseUint(seg, 16, 64)
 	if err != nil {
-		return wdaBasePort // fallback to 8100 if UDID is not a standard UUID
+		return wdaBasePort // fallback to 8100 if the tail isn't hex
 	}
 	return wdaBasePort + uint16(val%uint64(wdaPortRange))
 }
@@ -198,7 +208,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	for attempt := 1; attempt <= maxStartupAttempts; attempt++ {
 		if attempt > 1 {
 			banner := fmt.Sprintf(
-				"  ⚠ WDA stalled on attempt %d/%d: %v",
+				"  ⚠ WDA startup failed on attempt %d/%d: %v",
 				attempt-1, maxStartupAttempts, lastErr,
 			)
 			fmt.Fprintln(os.Stderr, banner)
@@ -239,6 +249,13 @@ func (r *Runner) Start(ctx context.Context) error {
 			}
 			fmt.Println("WebDriverAgent started")
 			return nil
+		}
+		// Deterministic configuration failures won't be fixed by retrying —
+		// report the real error immediately instead of burning ~4 blind
+		// attempts (#118).
+		var perm *permanentStartupError
+		if errors.As(err, &perm) {
+			return fmt.Errorf("WDA failed to start: %w", err)
 		}
 		lastErr = err
 	}
@@ -290,7 +307,15 @@ func (r *Runner) startOnce(ctx context.Context, xctestrun, logPath string, attem
 		return fmt.Errorf("failed to start WDA: %w", err)
 	}
 
-	if err := r.waitForStartup(logPath); err != nil {
+	// Watch for the process exiting before WDA is ready. A fast-failing
+	// xcodebuild (bad -destination, missing runtime, …) previously looked
+	// identical to a hang: the log stopped growing and the stall detector
+	// misreported it 60s later, burning blind retries (#118).
+	cmd := r.cmd
+	exitCh := make(chan error, 1)
+	go func() { exitCh <- cmd.Wait() }()
+
+	if err := r.waitForStartup(logPath, exitCh); err != nil {
 		r.Stop()
 		return err
 	}
@@ -574,7 +599,7 @@ func (r *Runner) destination() string {
 	// so the resolver gets a single concrete destination.
 	isSim, _ := r.isSimulator()
 	if isSim {
-		return fmt.Sprintf("platform=iOS Simulator,arch=%s,id=%s", runtime.GOARCH, r.deviceUDID)
+		return fmt.Sprintf("platform=iOS Simulator,arch=%s,id=%s", simulator.XcodebuildArch(runtime.GOARCH), r.deviceUDID)
 	}
 	return fmt.Sprintf("platform=iOS,id=%s", r.deviceUDID)
 }
@@ -592,7 +617,7 @@ func (r *Runner) findXctestrun() (string, error) {
 	return matches[0], nil
 }
 
-func (r *Runner) waitForStartup(logPath string) error {
+func (r *Runner) waitForStartup(logPath string, exit <-chan error) error {
 	timeout := time.After(startupTimeout)
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
@@ -606,6 +631,25 @@ func (r *Runner) waitForStartup(logPath string) error {
 
 	for {
 		select {
+		case werr := <-exit:
+			// xcodebuild exited before WDA became ready — WDA runs inside
+			// the xcodebuild process, so this is always a failure even if
+			// the log shows the ready marker. Report the real error from
+			// the log instead of misdiagnosing the ensuing silence as a
+			// stall (#118). checkLog may classify it as permanent
+			// (`xcodebuild: error:`), which skips retries.
+			content, _ := os.ReadFile(logPath)
+			if cerr := r.checkLog(string(content), logPath); cerr != errNotReady && cerr != nil {
+				return cerr
+			}
+			status := "exited unexpectedly (status 0)"
+			if werr != nil {
+				status = fmt.Sprintf("exited: %v", werr)
+			}
+			return fmt.Errorf(
+				"xcodebuild %s before WDA became ready:\n%s\n\nFull log: %s",
+				status, tailLog(logPath, 20), logPath,
+			)
 		case <-ticker.C:
 			content, err := os.ReadFile(logPath)
 			if err != nil {
@@ -622,8 +666,8 @@ func (r *Runner) waitForStartup(logPath string) error {
 				lastLogActivity = time.Now()
 			} else if time.Since(lastLogActivity) > stallDetectWindow {
 				return fmt.Errorf(
-					"xcodebuild stalled (no log output for %v; log: %s)",
-					stallDetectWindow.Round(time.Second), logPath,
+					"xcodebuild stalled (no log output for %v):\n%s\n\nFull log: %s",
+					stallDetectWindow.Round(time.Second), tailLog(logPath, 20), logPath,
 				)
 			}
 		case <-timeout:
@@ -647,11 +691,36 @@ func (r *Runner) checkLog(log, logPath string) error {
 	if strings.Contains(log, "Code Sign error") {
 		return fmt.Errorf("code signing failed - check your DEVELOPMENT_TEAM and provisioning profiles")
 	}
+	// Generic xcodebuild errors (bad -destination, missing runtime, …)
+	// are deterministic configuration failures: surface the actual error
+	// line and skip the retry loop (#118).
+	if line := firstLineContaining(log, "xcodebuild: error:"); line != "" {
+		return &permanentStartupError{fmt.Errorf("%s\n\nFull log: %s", line, logPath)}
+	}
 	if strings.Contains(log, "Testing failed:") {
 		return fmt.Errorf("WDA failed:\n%s\n\nFull log: %s", tailLog(logPath, 20), logPath)
 	}
 
 	return errNotReady
+}
+
+// permanentStartupError marks startup failures that retrying cannot fix
+// (bad -destination, missing simulator runtime, …). Start stops the retry
+// loop as soon as it sees one instead of burning further attempts (#118).
+type permanentStartupError struct{ err error }
+
+func (e *permanentStartupError) Error() string { return e.err.Error() }
+func (e *permanentStartupError) Unwrap() error { return e.err }
+
+// firstLineContaining returns the first log line containing substr,
+// trimmed, or "" when absent.
+func firstLineContaining(log, substr string) string {
+	for _, line := range strings.Split(log, "\n") {
+		if strings.Contains(line, substr) {
+			return strings.TrimSpace(line)
+		}
+	}
+	return ""
 }
 
 func tailLog(path string, lines int) string {

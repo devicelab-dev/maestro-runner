@@ -84,6 +84,13 @@ func (d *Driver) SessionCaps() map[string]interface{} {
 	return d.client.SessionCaps()
 }
 
+// Keepalive sends a lightweight session-scoped command to reset the server's
+// newCommandTimeout idle timer. Used while --parallel pre-creates all sessions
+// so an early session isn't reaped by a cloud farm before its flow runs (#124).
+func (d *Driver) Keepalive() error {
+	return d.client.Keepalive()
+}
+
 // RestartSession closes the existing Appium session and creates a fresh one.
 func (d *Driver) RestartSession() error {
 	if err := d.client.Disconnect(); err != nil {
@@ -191,6 +198,8 @@ func (d *Driver) executeStep(step flow.Step) *core.CommandResult {
 		return d.inputRandom(s)
 	case *flow.TakeScreenshotStep:
 		return d.takeScreenshot(s)
+	case *flow.AssertScreenshotStep:
+		return d.takeScreenshot(&flow.TakeScreenshotStep{CropOn: s.CropOn})
 	default:
 		return errorResult(fmt.Errorf("unsupported step type: %T", step), "")
 	}

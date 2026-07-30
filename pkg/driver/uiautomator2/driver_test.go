@@ -197,14 +197,20 @@ func (m *MockUIA2Client) SetAppiumSettings(settings map[string]interface{}) erro
 // ============================================================================
 
 type MockShellExecutor struct {
-	commands []string
-	response string
-	err      error
+	commands       []string
+	response       string
+	err            error
+	screenshotData []byte
+	screenshotErr  error
 }
 
 func (m *MockShellExecutor) Shell(cmd string) (string, error) {
 	m.commands = append(m.commands, cmd)
 	return m.response, m.err
+}
+
+func (m *MockShellExecutor) Screenshot() ([]byte, error) {
+	return m.screenshotData, m.screenshotErr
 }
 
 // ============================================================================
@@ -1097,6 +1103,38 @@ func TestScreenshotError(t *testing.T) {
 	_, err := driver.Screenshot()
 	if err == nil {
 		t.Error("expected error")
+	}
+}
+
+func TestScreenshotPrefersDeviceCapture(t *testing.T) {
+	deviceData := []byte("adb screenshot")
+	client := &MockUIA2Client{
+		screenshotData: []byte("uia2 screenshot"),
+	}
+	device := &MockShellExecutor{screenshotData: deviceData}
+	driver := New(client, nil, device)
+
+	data, err := driver.Screenshot()
+	if err != nil {
+		t.Fatalf("Screenshot failed: %v", err)
+	}
+	if string(data) != string(deviceData) {
+		t.Errorf("Screenshot data = %q, want ADB capture %q", data, deviceData)
+	}
+}
+
+func TestScreenshotFallsBackToUIA2(t *testing.T) {
+	clientData := []byte("uia2 screenshot")
+	client := &MockUIA2Client{screenshotData: clientData}
+	device := &MockShellExecutor{screenshotErr: errors.New("adb capture failed")}
+	driver := New(client, nil, device)
+
+	data, err := driver.Screenshot()
+	if err != nil {
+		t.Fatalf("Screenshot failed: %v", err)
+	}
+	if string(data) != string(clientData) {
+		t.Errorf("Screenshot data = %q, want UIA2 fallback %q", data, clientData)
 	}
 }
 

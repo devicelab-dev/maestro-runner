@@ -2407,6 +2407,199 @@ func TestSwipeInvalidDirection(t *testing.T) {
 	}
 }
 
+// TestSwipeDirectionHonorsDuration verifies a plain direction swipe passes
+// `duration:` through to the W3C actions payload instead of a hardcoded 500ms.
+func TestSwipeDirectionHonorsDuration(t *testing.T) {
+	var actionsBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/actions") && r.Method == "POST" {
+			body, _ := io.ReadAll(r.Body)
+			actionsBody = string(body)
+		}
+		writeJSON(w, map[string]interface{}{"value": nil})
+	}))
+	defer server.Close()
+	driver := createTestAppiumDriver(server)
+
+	step := &flow.SwipeStep{Direction: "up", Duration: 1200}
+	result := driver.swipe(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	if !strings.Contains(actionsBody, `"duration":1200`) {
+		t.Errorf("expected actions payload with duration 1200, got: %s", actionsBody)
+	}
+}
+
+// TestSwipeWithSelectorAnchorsOnElement verifies a from:/selector swipe is
+// anchored on the element's bounds and honours duration (#114 parity with
+// the uiautomator2/devicelab drivers).
+func TestSwipeWithSelectorAnchorsOnElement(t *testing.T) {
+	var actionsBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		switch {
+		case strings.HasSuffix(path, "/actions") && r.Method == "POST":
+			body, _ := io.ReadAll(r.Body)
+			actionsBody = string(body)
+			writeJSON(w, map[string]interface{}{"value": nil})
+		case strings.HasSuffix(path, "/element") && r.Method == "POST":
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{
+					"element-6066-11e4-a52e-4f735466cecf": "elem-swipe",
+				},
+			})
+		case strings.Contains(path, "/rect"):
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{"x": 100.0, "y": 200.0, "width": 300.0, "height": 80.0},
+			})
+		case strings.Contains(path, "/text"):
+			writeJSON(w, map[string]interface{}{"value": "Slider"})
+		case strings.Contains(path, "/displayed"), strings.Contains(path, "/enabled"):
+			writeJSON(w, map[string]interface{}{"value": true})
+		default:
+			writeJSON(w, map[string]interface{}{"value": nil})
+		}
+	}))
+	defer server.Close()
+	driver := createTestAppiumDriver(server)
+
+	sel := flow.Selector{ID: "slider"}
+	step := &flow.SwipeStep{Direction: "left", Selector: &sel, Duration: 800}
+	result := driver.swipe(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	// Element bounds x=100,y=200,w=300,h=80: `left` starts at 90% X inside
+	// the element (370, 240) and ends 10% past its left edge (70, 240).
+	for _, want := range []string{`"x":370`, `"y":240`, `"x":70`, `"duration":800`} {
+		if !strings.Contains(actionsBody, want) {
+			t.Errorf("expected actions payload containing %s, got: %s", want, actionsBody)
+		}
+	}
+}
+
+// --- #122: Android inputText must reach WebView DOM inputs ---
+
+// TestInputText_AndroidTypesIntoActiveElement verifies the Android path
+// prefers element-scoped typing (POST /element/{id}/value) into the focused
+// element over blind W3C key actions, which silently no-op on WebView inputs.
+func TestInputText_AndroidTypesIntoActiveElement(t *testing.T) {
+	var valueBody string
+	actionsCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		switch {
+		case strings.HasSuffix(path, "/element/active") && r.Method == "POST":
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{"element-6066-11e4-a52e-4f735466cecf": "focused-1"},
+			})
+		case strings.HasSuffix(path, "/element/focused-1/value") && r.Method == "POST":
+			body, _ := io.ReadAll(r.Body)
+			valueBody = string(body)
+			writeJSON(w, map[string]interface{}{"value": nil})
+		case strings.HasSuffix(path, "/actions"):
+			actionsCalled = true
+			writeJSON(w, map[string]interface{}{"value": nil})
+		default:
+			writeJSON(w, map[string]interface{}{"value": nil})
+		}
+	}))
+	defer server.Close()
+	driver := createTestAppiumDriver(server)
+
+	result := driver.inputText(&flow.InputTextStep{Text: "web-input-122"})
+
+	if !result.Success {
+		t.Fatalf("expected success, got: %s", result.Message)
+	}
+	if !strings.Contains(valueBody, "web-input-122") {
+		t.Errorf("expected element-scoped /value payload with text, got: %s", valueBody)
+	}
+	if actionsCalled {
+		t.Error("expected no blind /actions key events when an element has focus")
+	}
+}
+
+// TestInputText_AndroidFallsBackToBlindKeys verifies key actions remain the
+// fallback when no element reports focus.
+func TestInputText_AndroidFallsBackToBlindKeys(t *testing.T) {
+	actionsCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		switch {
+		case strings.HasSuffix(path, "/element/active") && r.Method == "POST":
+			w.WriteHeader(http.StatusNotFound)
+			writeJSON(w, map[string]interface{}{"value": map[string]interface{}{"error": "no such element"}})
+		case strings.HasSuffix(path, "/actions"):
+			actionsCalled = true
+			writeJSON(w, map[string]interface{}{"value": nil})
+		default:
+			writeJSON(w, map[string]interface{}{"value": nil})
+		}
+	}))
+	defer server.Close()
+	driver := createTestAppiumDriver(server)
+
+	result := driver.inputText(&flow.InputTextStep{Text: "fallback-text"})
+
+	if !result.Success {
+		t.Fatalf("expected success, got: %s", result.Message)
+	}
+	if !actionsCalled {
+		t.Error("expected fallback to blind /actions key events")
+	}
+}
+
+// TestInputText_AndroidHonorsSelector verifies an inline selector finds the
+// element and types into it directly (parity with uia2/devicelab).
+func TestInputText_AndroidHonorsSelector(t *testing.T) {
+	var valueBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		switch {
+		case strings.HasSuffix(path, "/element") && r.Method == "POST":
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{"element-6066-11e4-a52e-4f735466cecf": "elem-sel"},
+			})
+		case strings.HasSuffix(path, "/element/elem-sel/value") && r.Method == "POST":
+			body, _ := io.ReadAll(r.Body)
+			valueBody = string(body)
+			writeJSON(w, map[string]interface{}{"value": nil})
+		case strings.Contains(path, "/rect"):
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{"x": 10.0, "y": 20.0, "width": 300.0, "height": 50.0},
+			})
+		case strings.Contains(path, "/text"):
+			writeJSON(w, map[string]interface{}{"value": ""})
+		case strings.Contains(path, "/displayed"), strings.Contains(path, "/enabled"):
+			writeJSON(w, map[string]interface{}{"value": true})
+		default:
+			writeJSON(w, map[string]interface{}{"value": nil})
+		}
+	}))
+	defer server.Close()
+	driver := createTestAppiumDriver(server)
+
+	step := &flow.InputTextStep{Text: "selector-typed"}
+	step.Selector = flow.Selector{ID: "login-username"}
+	result := driver.inputText(step)
+
+	if !result.Success {
+		t.Fatalf("expected success, got: %s", result.Message)
+	}
+	if !strings.Contains(valueBody, "selector-typed") {
+		t.Errorf("expected element-scoped /value payload with text, got: %s", valueBody)
+	}
+}
+
 // TestInputTextError tests inputText when SendKeys fails
 func TestInputTextError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
