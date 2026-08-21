@@ -878,6 +878,24 @@ func applyRelativeFilter(candidates []*ParsedElement, anchor *ParsedElement, ft 
 	}
 }
 
+// getElementInfo describes a found element.
+//
+// Every request here is a round trip, and on a real device each one costs about
+// the same regardless of what it asks for — measured at ~25ms apiece on a Pixel
+// 4a — so the call count is the whole cost, not the work per call. Against a
+// cloud grid it is worse again. So this asks only for what something downstream
+// actually reads:
+//
+//   - rect is needed by every gesture to derive coordinates, and reaches the report
+//   - text is read by copyTextFrom and assertions, and reaches the report
+//   - displayed is the visibility answer itself
+//
+// Enabled used to be fetched here and nothing ever read it: selectors that
+// filter on element state are routed to the page-source path, which builds that
+// field from XML, and the report keeps only id, text, class and bounds.
+//
+// The accessibility description is fetched by the one command that wants it
+// (see accessibilityLabelOf) rather than on every lookup.
 func (d *Driver) getElementInfo(elementID string) (*core.ElementInfo, error) {
 	x, y, w, h, err := d.client.GetElementRect(elementID)
 	if err != nil {
@@ -886,25 +904,33 @@ func (d *Driver) getElementInfo(elementID string) (*core.ElementInfo, error) {
 
 	text, _ := d.client.GetElementText(elementID)
 	displayed, _ := d.client.IsElementDisplayed(elementID)
-	enabled, _ := d.client.IsElementEnabled(elementID)
-
-	// Get accessibility description - important for elements found via descriptionMatches
-	// iOS uses "label" (accessibilityLabel), Android uses "content-desc"
-	var accessibilityDesc string
-	if d.platform == "ios" {
-		accessibilityDesc, _ = d.client.GetElementAttribute(elementID, "label")
-	} else {
-		accessibilityDesc, _ = d.client.GetElementAttribute(elementID, "content-desc")
-	}
 
 	return &core.ElementInfo{
-		ID:                 elementID,
-		Text:               text,
-		AccessibilityLabel: accessibilityDesc,
-		Bounds:             core.Bounds{X: x, Y: y, Width: w, Height: h},
-		Visible:            displayed,
-		Enabled:            enabled,
+		ID:      elementID,
+		Text:    text,
+		Bounds:  core.Bounds{X: x, Y: y, Width: w, Height: h},
+		Visible: displayed,
 	}, nil
+}
+
+// accessibilityLabelOf reads an element's accessibility description, which iOS
+// exposes as "label" and Android as "content-desc". Only copyTextFrom needs it,
+// as a fallback when an element carries no text, so it is fetched on demand
+// instead of on every element lookup.
+func (d *Driver) accessibilityLabelOf(elementID string) string {
+	// Elements resolved from page source carry a resource id here rather than
+	// an Appium element handle, and the server cannot look one up. Those
+	// already fold the description into Text during parsing, so there is
+	// nothing to fetch — skip rather than spend a round trip that can only fail.
+	if elementID == "" || strings.Contains(elementID, ":id/") {
+		return ""
+	}
+	attr := "content-desc"
+	if d.platform == "ios" {
+		attr = "label"
+	}
+	label, _ := d.client.GetElementAttribute(elementID, attr)
+	return label
 }
 
 func elementToInfo(elem *ParsedElement, platform string) *core.ElementInfo {

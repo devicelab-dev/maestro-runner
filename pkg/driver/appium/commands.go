@@ -821,10 +821,12 @@ func (d *Driver) copyTextFrom(step *flow.CopyTextFromStep) *core.CommandResult {
 		return errorResult(err, "Element not found for copyTextFrom")
 	}
 
-	// Get text, falling back to AccessibilityLabel if empty
+	// Fall back to the accessibility description when the element carries no
+	// text. Fetched here rather than on every element lookup — this is the only
+	// command that reads it.
 	text := info.Text
-	if text == "" && info.AccessibilityLabel != "" {
-		text = info.AccessibilityLabel
+	if text == "" {
+		text = d.accessibilityLabelOf(info.ID)
 	}
 	if text == "" {
 		return errorResult(fmt.Errorf("element has no text"), "")

@@ -1669,15 +1669,15 @@ func TestGetElementInfoAndroidAttribute(t *testing.T) {
 	driver := createTestAppiumDriver(server)
 	driver.platform = "android"
 
-	info, err := driver.getElementInfo("elem-1")
-	if err != nil {
-		t.Fatalf("Expected success, got error: %v", err)
-	}
+	// The accessibility description is no longer fetched for every element —
+	// only copyTextFrom wants it — but the platform-specific attribute choice
+	// still has to be right.
+	label := driver.accessibilityLabelOf("elem-1")
 	if requestedAttr != "content-desc" {
 		t.Errorf("Expected Android to request 'content-desc', got '%s'", requestedAttr)
 	}
-	if info.AccessibilityLabel != "Submit button" {
-		t.Errorf("Expected AccessibilityLabel 'Submit button', got '%s'", info.AccessibilityLabel)
+	if label != "Submit button" {
+		t.Errorf("Expected label 'Submit button', got '%s'", label)
 	}
 }
 
@@ -1715,15 +1715,12 @@ func TestGetElementInfoIOSAttribute(t *testing.T) {
 	driver := createTestAppiumDriver(server)
 	driver.platform = "ios"
 
-	info, err := driver.getElementInfo("elem-1")
-	if err != nil {
-		t.Fatalf("Expected success, got error: %v", err)
-	}
+	label := driver.accessibilityLabelOf("elem-1")
 	if requestedAttr != "label" {
 		t.Errorf("Expected iOS to request 'label', got '%s'", requestedAttr)
 	}
-	if info.AccessibilityLabel != "Submit button" {
-		t.Errorf("Expected AccessibilityLabel 'Submit button', got '%s'", info.AccessibilityLabel)
+	if label != "Submit button" {
+		t.Errorf("Expected label 'Submit button', got '%s'", label)
 	}
 }
 
@@ -2738,4 +2735,90 @@ func TestAppiumScrollUntilVisibleRespectsMaxScrolls(t *testing.T) {
 	if scrollCount != 3 {
 		t.Errorf("Expected exactly 3 scrolls (maxScrolls=3), got %d", scrollCount)
 	}
+}
+
+// getElementInfo used to fetch five attributes for every element. Two of them
+// were never read: nothing consumes ElementInfo.Enabled on this path, and the
+// accessibility description is wanted by exactly one command. On a real device
+// each request costs roughly the same regardless of what it asks for, so the
+// call count is the cost.
+func TestGetElementInfo_AsksOnlyForWhatIsRead(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/rect"):
+			_, _ = w.Write([]byte(`{"value":{"x":10,"y":20,"width":100,"height":50}}`))
+		case strings.HasSuffix(r.URL.Path, "/text"):
+			_, _ = w.Write([]byte(`{"value":"Products"}`))
+		case strings.HasSuffix(r.URL.Path, "/displayed"):
+			_, _ = w.Write([]byte(`{"value":true}`))
+		default:
+			_, _ = w.Write([]byte(`{"value":""}`))
+		}
+	}))
+	defer server.Close()
+
+	d := createTestAppiumDriver(server)
+	info, err := d.getElementInfo("elem-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(paths) != 3 {
+		t.Errorf("made %d requests (%v), want 3", len(paths), paths)
+	}
+	for _, p := range paths {
+		if strings.Contains(p, "/enabled") || strings.Contains(p, "/attribute/") {
+			t.Errorf("unexpected request %q — nothing reads it", p)
+		}
+	}
+
+	// The fields that survive still have to be right.
+	if info.Text != "Products" || !info.Visible {
+		t.Errorf("info = %+v", info)
+	}
+	if info.Bounds.Width != 100 || info.Bounds.Height != 50 {
+		t.Errorf("bounds = %+v", info.Bounds)
+	}
+}
+
+func TestAccessibilityLabelOf(t *testing.T) {
+	t.Run("fetches for a real element handle", func(t *testing.T) {
+		var asked string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			asked = r.URL.Path
+			_, _ = w.Write([]byte(`{"value":"Add to cart"}`))
+		}))
+		defer server.Close()
+
+		d := createTestAppiumDriver(server)
+		if got := d.accessibilityLabelOf("elem-1"); got != "Add to cart" {
+			t.Errorf("got %q", got)
+		}
+		if !strings.Contains(asked, "content-desc") {
+			t.Errorf("asked for %q, want the Android content-desc attribute", asked)
+		}
+	})
+
+	t.Run("skips page-source elements without a request", func(t *testing.T) {
+		// These carry a resource id rather than an Appium handle, and already
+		// fold the description into Text when parsed — a lookup could only fail.
+		var calls int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			_, _ = w.Write([]byte(`{"value":""}`))
+		}))
+		defer server.Close()
+
+		d := createTestAppiumDriver(server)
+		for _, id := range []string{"com.testhiveapp:id/action_bar_root", ""} {
+			if got := d.accessibilityLabelOf(id); got != "" {
+				t.Errorf("accessibilityLabelOf(%q) = %q, want empty", id, got)
+			}
+		}
+		if calls != 0 {
+			t.Errorf("made %d requests, want 0", calls)
+		}
+	})
 }
