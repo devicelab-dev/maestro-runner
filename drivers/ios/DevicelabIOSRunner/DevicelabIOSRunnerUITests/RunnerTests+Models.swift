@@ -149,6 +149,13 @@ struct DataPayload: Codable {
   let diffFraction: Double?
   // Local extension: "dark" or "light" from the appearance command.
   let appearance: String?
+  // Local extension (DeviceDeck): the target app's XCUIApplication.state
+  // at snapshot time — "runningForeground", "runningBackground",
+  // "runningBackgroundSuspended", "notRunning" or "unknown". A snapshot
+  // is not an interaction command, so it is never auto-activated first;
+  // this is the app's true state, which no signal in the node tree
+  // reports reliably (hittable oscillates while a screen backgrounds).
+  let appState: String?
 
   init(
     message: String? = nil,
@@ -173,7 +180,8 @@ struct DataPayload: Codable {
     pngBase64: String? = nil,
     diffFraction: Double? = nil,
     identifier: String? = nil,
-    appearance: String? = nil
+    appearance: String? = nil,
+    appState: String? = nil
   ) {
     self.message = message
     self.text = text
@@ -198,6 +206,7 @@ struct DataPayload: Codable {
     self.diffFraction = diffFraction
     self.identifier = identifier
     self.appearance = appearance
+    self.appState = appState
   }
 }
 

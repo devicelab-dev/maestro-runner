@@ -75,13 +75,27 @@ extension RunnerTests {
     }
   }
 
+  // appStateString names the target's lifecycle state for the snapshot
+  // response. XCUIApplication.state is the OS's own answer, unlike the
+  // per-node hittable flags, which flip while a screen animates into the
+  // background and settle back to their foreground values.
+  func appStateString(_ app: XCUIApplication) -> String {
+    switch app.state {
+    case .runningForeground: return "runningForeground"
+    case .runningBackground: return "runningBackground"
+    case .runningBackgroundSuspended: return "runningBackgroundSuspended"
+    case .notRunning: return "notRunning"
+    default: return "unknown"
+    }
+  }
+
   func snapshotFast(app: XCUIApplication, options: SnapshotOptions) -> DataPayload {
     if let blocking = blockingSystemAlertSnapshot() {
       return blocking
     }
 
     guard let context = makeSnapshotTraversalContext(app: app, options: options) else {
-      return DataPayload(nodes: [], truncated: false)
+      return DataPayload(nodes: [], truncated: false, appState: appStateString(app))
     }
 
     var cachedDescendantElements: [XCUIElement]?
@@ -183,7 +197,7 @@ extension RunnerTests {
 
     }
 
-    return DataPayload(nodes: nodes, truncated: truncated)
+    return DataPayload(nodes: nodes, truncated: truncated, appState: appStateString(app))
   }
 
   func snapshotRaw(app: XCUIApplication, options: SnapshotOptions) -> DataPayload {
@@ -192,7 +206,7 @@ extension RunnerTests {
     }
 
     guard let context = makeSnapshotTraversalContext(app: app, options: options) else {
-      return DataPayload(nodes: [], truncated: false)
+      return DataPayload(nodes: [], truncated: false, appState: appStateString(app))
     }
 
     var nodes: [SnapshotNode] = []
@@ -236,7 +250,7 @@ extension RunnerTests {
     }
 
     walk(context.rootSnapshot, depth: 0, parentIndex: nil)
-    return DataPayload(nodes: nodes, truncated: truncated)
+    return DataPayload(nodes: nodes, truncated: truncated, appState: appStateString(app))
   }
 
   func snapshotRect(from frame: CGRect) -> SnapshotRect {

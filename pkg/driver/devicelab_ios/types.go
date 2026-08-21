@@ -159,6 +159,14 @@ type ResponseData struct {
 	// commands. setAppearance reports what actually took effect rather
 	// than echoing the request.
 	Appearance string `json:"appearance,omitempty"`
+	// AppState — the target app's XCUIApplication.state at snapshot time:
+	// "runningForeground", "runningBackground", "runningBackgroundSuspended",
+	// "notRunning" or "unknown". A snapshot is not an interaction command,
+	// so the runner never auto-activates the app first; this is its true
+	// state. The node tree cannot report it reliably — per-node hittable
+	// oscillates while a screen animates into the background — so a caller
+	// that needs to know the app is frontmost reads this, not the tree.
+	AppState string `json:"appState,omitempty"`
 }
 
 // SnapshotNode mirrors the Swift wire model. Tree is reconstructed by
