@@ -570,7 +570,12 @@ func (d *Driver) assertVisible(step *flow.AssertVisibleStep) *core.CommandResult
 	// mere presence, which made the same flow mean different things on this
 	// driver and on uiautomator2. The displayed state was already fetched and
 	// then ignored, so checking it costs nothing.
-	if info != nil && !info.Visible {
+	//
+	// Android only. XCUITest reports displayed=false for elements that are
+	// plainly on screen — verified against a simulator, where gating on it
+	// failed two auth flows whose target was large, centred and unobstructed.
+	// Whatever that attribute means there, it is not "the user can see this".
+	if d.platform != "ios" && info != nil && !info.Visible {
 		return errorResult(fmt.Errorf("element found but not visible"),
 			fmt.Sprintf("Element exists but is not visible: %s", step.Selector.Describe()))
 	}
@@ -660,7 +665,11 @@ func (d *Driver) assertNotVisible(step *flow.AssertNotVisibleStep) *core.Command
 		// Gone, or present but not on screen — either satisfies "not visible".
 		// Requiring it to be unfindable made a hidden element fail this
 		// assertion, which is the mirror of the bug in assertVisible.
-		if err != nil || info == nil || !info.Visible {
+		// Android only, for the same reason as assertVisible: iOS reports
+		// displayed=false for visibly-rendered elements, which here would
+		// wrongly report a visible element as gone.
+		notVisible := d.platform != "ios" && info != nil && !info.Visible
+		if err != nil || info == nil || notVisible {
 			return successResult(fmt.Sprintf("Element is not visible: %s", step.Selector.Describe()), nil)
 		}
 
