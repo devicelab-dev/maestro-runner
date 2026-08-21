@@ -1123,14 +1123,11 @@ func (d *Driver) grantPermissions(appID string, permissions map[string]string) {
 		return
 	}
 
-	for _, perm := range getAllPermissions() {
-		if _, err := d.client.ExecuteMobile("shell", map[string]interface{}{
-			"command": "pm",
-			"args":    []string{"grant", appID, perm},
-		}); err != nil {
-			logger.Warn("failed to grant permission %s to %s: %v", perm, appID, err)
-		}
-	}
+	// No explicit list: grant what the app declares, in one call. Walking a
+	// hardcoded list of every runtime permission cost ~32 round trips and
+	// failed on most of them, since granting an undeclared permission raises
+	// a SecurityException.
+	d.client.GrantDeclaredPermissions(appID)
 }
 
 // getAllPermissions returns all common Android runtime permissions.

@@ -104,11 +104,11 @@ func TestClient_Connect_SkipsGrantLoopWhenAutoGrantSet(t *testing.T) {
 
 	client := NewClient(server.URL)
 	err := client.Connect(map[string]interface{}{
-		"platformName":                  "Android",
-		"appium:appPackage":             "com.test.app",
-		"appium:appActivity":            ".MainActivity",
-		"appium:noReset":                false,
-		"appium:autoGrantPermissions":   true,
+		"platformName":                "Android",
+		"appium:appPackage":           "com.test.app",
+		"appium:appActivity":          ".MainActivity",
+		"appium:noReset":              false,
+		"appium:autoGrantPermissions": true,
 	})
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
@@ -119,10 +119,10 @@ func TestClient_Connect_SkipsGrantLoopWhenAutoGrantSet(t *testing.T) {
 	}
 }
 
-// TestClient_Connect_RunsGrantLoopWithoutAutoGrant verifies that the
+// TestClient_Connect_GrantsDeclaredPermissionsWithoutAutoGrant verifies that the
 // legacy `mobile: shell pm grant` loop still fires for callers who
 // haven't opted into `appium:autoGrantPermissions: true`.
-func TestClient_Connect_RunsGrantLoopWithoutAutoGrant(t *testing.T) {
+func TestClient_Connect_GrantsDeclaredPermissionsWithoutAutoGrant(t *testing.T) {
 	scriptCalls := make(map[string]int)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -160,10 +160,15 @@ func TestClient_Connect_RunsGrantLoopWithoutAutoGrant(t *testing.T) {
 		t.Fatalf("Connect failed: %v", err)
 	}
 
-	// Expect one mobile: shell per known runtime permission.
-	want := len(getAllPermissions())
-	if scriptCalls["mobile: shell"] != want {
-		t.Errorf("expected %d mobile: shell pm grant calls; got %d", want, scriptCalls["mobile: shell"])
+	// Permissions are resolved from the manifest and granted in one call,
+	// rather than shelling out once per entry in a hardcoded list. Granting an
+	// undeclared permission raises a SecurityException, so asking for
+	// everything was both slow and mostly futile.
+	if got := scriptCalls["mobile: shell"]; got != 0 {
+		t.Errorf("expected no pm grant shelling; got %d mobile: shell calls", got)
+	}
+	if got := scriptCalls["mobile: getPermissions"]; got != 1 {
+		t.Errorf("expected the declared permissions to be read once; got %d", got)
 	}
 }
 
