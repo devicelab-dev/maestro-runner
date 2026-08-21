@@ -2064,7 +2064,10 @@ func TestAssertNotVisibleWhenVisible(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.HasSuffix(r.URL.Path, "/source") {
 			writeJSON(w, map[string]interface{}{
-				"value": `<hierarchy><android.widget.Button text="Login" bounds="[0,0][100,50]"/></hierarchy>`,
+				// Real Appium page source always carries displayed=; verified
+				// against a device. Without it the element parses as hidden,
+				// which is now a pass rather than a failure.
+				"value": `<hierarchy><android.widget.Button text="Login" displayed="true" bounds="[0,0][100,50]"/></hierarchy>`,
 			})
 			return
 		}

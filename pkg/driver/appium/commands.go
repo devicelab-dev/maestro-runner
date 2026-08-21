@@ -565,6 +565,16 @@ func (d *Driver) assertVisible(step *flow.AssertVisibleStep) *core.CommandResult
 		return errorResult(err, fmt.Sprintf("Element not visible: %s", step.Selector.Describe()))
 	}
 
+	// Being findable is not the same as being visible: a UiAutomator selector
+	// matches an element whether or not it is on screen. This used to pass on
+	// mere presence, which made the same flow mean different things on this
+	// driver and on uiautomator2. The displayed state was already fetched and
+	// then ignored, so checking it costs nothing.
+	if info != nil && !info.Visible {
+		return errorResult(fmt.Errorf("element found but not visible"),
+			fmt.Sprintf("Element exists but is not visible: %s", step.Selector.Describe()))
+	}
+
 	return successResult(fmt.Sprintf("Element is visible: %s", step.Selector.Describe()), info)
 }
 
@@ -647,7 +657,10 @@ func (d *Driver) assertNotVisible(step *flow.AssertNotVisibleStep) *core.Command
 
 	for {
 		info, err := d.findElementOnce(step.Selector)
-		if err != nil || info == nil {
+		// Gone, or present but not on screen — either satisfies "not visible".
+		// Requiring it to be unfindable made a hidden element fail this
+		// assertion, which is the mirror of the bug in assertVisible.
+		if err != nil || info == nil || !info.Visible {
 			return successResult(fmt.Sprintf("Element is not visible: %s", step.Selector.Describe()), nil)
 		}
 
