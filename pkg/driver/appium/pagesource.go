@@ -434,6 +434,14 @@ func looksLikeRegex(text string) bool {
 		c := text[i]
 		// Check if it's escaped
 		if i > 0 && text[i-1] == '\\' {
+			// A backslash-escaped metacharacter is regex syntax (\. matches a
+			// literal dot, \$ a literal $), so the whole pattern is a regex.
+			// Classifying it as literal would match the backslash verbatim and
+			// never hit an element whose text has no backslash (#136).
+			switch c {
+			case '.', '*', '+', '?', '[', ']', '{', '}', '|', '(', ')', '^', '$', '\\':
+				return true
+			}
 			continue
 		}
 		switch c {

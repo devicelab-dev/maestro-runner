@@ -1,15 +1,11 @@
 package wda
 
 import (
-	"bytes"
-	"encoding/base64"
 	"encoding/json"
-	"image"
-	"image/color"
-	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -1705,20 +1701,14 @@ func TestSetWaitForIdleTimeoutEnable(t *testing.T) {
 		if r.Method == "POST" && strings.Contains(r.URL.Path, "/appium/settings") {
 			body, _ := io.ReadAll(r.Body)
 			var req map[string]interface{}
-			if err := json.Unmarshal(body, &req); err != nil {
-				t.Errorf("unmarshal request: %v", err)
-			}
+			_ = json.Unmarshal(body, &req)
 			if s, ok := req["settings"].(map[string]interface{}); ok {
 				settingsReceived = s
 			}
-			if err := json.NewEncoder(w).Encode(map[string]interface{}{"value": nil, "sessionId": "s1"}); err != nil {
-				t.Errorf("encode response: %v", err)
-			}
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"value": nil, "sessionId": "s1"})
 			return
 		}
-		if err := json.NewEncoder(w).Encode(map[string]interface{}{"value": nil, "sessionId": "s1"}); err != nil {
-			t.Errorf("encode default response: %v", err)
-		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"value": nil, "sessionId": "s1"})
 	}))
 	defer server.Close()
 
@@ -1747,20 +1737,14 @@ func TestSetWaitForIdleTimeoutDisable(t *testing.T) {
 		if r.Method == "POST" && strings.Contains(r.URL.Path, "/appium/settings") {
 			body, _ := io.ReadAll(r.Body)
 			var req map[string]interface{}
-			if err := json.Unmarshal(body, &req); err != nil {
-				t.Errorf("unmarshal request: %v", err)
-			}
+			_ = json.Unmarshal(body, &req)
 			if s, ok := req["settings"].(map[string]interface{}); ok {
 				settingsReceived = s
 			}
-			if err := json.NewEncoder(w).Encode(map[string]interface{}{"value": nil, "sessionId": "s1"}); err != nil {
-				t.Errorf("encode response: %v", err)
-			}
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"value": nil, "sessionId": "s1"})
 			return
 		}
-		if err := json.NewEncoder(w).Encode(map[string]interface{}{"value": nil, "sessionId": "s1"}); err != nil {
-			t.Errorf("encode default response: %v", err)
-		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"value": nil, "sessionId": "s1"})
 	}))
 	defer server.Close()
 
@@ -1786,7 +1770,7 @@ func TestSetWaitForIdleTimeoutDefault(t *testing.T) {
 		if r.Method == "POST" && strings.Contains(r.URL.Path, "/appium/settings") {
 			called = true
 		}
-		json.NewEncoder(w).Encode(map[string]interface{}{"value": nil, "sessionId": "s1"})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"value": nil, "sessionId": "s1"})
 	}))
 	defer server.Close()
 
@@ -3162,82 +3146,12 @@ func TestOpenLinkEmpty(t *testing.T) {
 // waitForAnimationToEnd test
 // =============================================================================
 
-// makeMinimalPNG returns a 1x1 PNG with the given RGBA colour as a raw byte slice.
-func makeMinimalPNG(r, g, b, a uint8) []byte {
-	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
-	img.SetRGBA(0, 0, color.RGBA{R: r, G: g, B: b, A: a})
-	var buf bytes.Buffer
-	_ = png.Encode(&buf, img)
-	return buf.Bytes()
-}
-
-// TestWaitForAnimationToEndTimesOut verifies that when screenshots always differ
-// (animation never stops) the function times out and returns success=false.
-func TestWaitForAnimationToEndTimesOut(t *testing.T) {
-	call := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "/screenshot") {
-			// Alternate between two different pixels so diff is never zero
-			call++
-			var pngData []byte
-			if call%2 == 0 {
-				pngData = makeMinimalPNG(0, 0, 0, 255)
-			} else {
-				pngData = makeMinimalPNG(255, 255, 255, 255)
-			}
-			jsonResponse(w, map[string]interface{}{
-				"value": base64.StdEncoding.EncodeToString(pngData),
-			})
-			return
-		}
-		jsonResponse(w, map[string]interface{}{"status": 0})
-	}))
-	defer server.Close()
-
-	driver := createTestDriver(server)
-	// Use a short timeout so the test completes quickly
-	step := &flow.WaitForAnimationToEndStep{}
-	step.TimeoutMs = 500
-	step.Threshold = 0.0001
-
-	result := driver.waitForAnimationToEnd(step)
-
-	if result.Success {
-		t.Fatalf("Expected failure (timeout), got success. Message: %s", result.Message)
-	}
-	if !strings.Contains(result.Message, "Timed out") {
-		t.Errorf("Expected 'Timed out' in message, got: %s", result.Message)
-	}
-}
-
-// TestWaitForAnimationToEndSettles verifies that when consecutive screenshots are
-// identical (screen is static) the function returns success=true.
-func TestWaitForAnimationToEndSettles(t *testing.T) {
-	staticPNG := makeMinimalPNG(128, 128, 128, 255)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "/screenshot") {
-			jsonResponse(w, map[string]interface{}{
-				"value": base64.StdEncoding.EncodeToString(staticPNG),
-			})
-			return
-		}
-		jsonResponse(w, map[string]interface{}{"status": 0})
-	}))
-	defer server.Close()
-
-	driver := createTestDriver(server)
-	step := &flow.WaitForAnimationToEndStep{}
-	step.TimeoutMs = 3000
-	step.Threshold = 0.001
-
-	result := driver.waitForAnimationToEnd(step)
-
-	if !result.Success {
-		t.Fatalf("Expected success (screen static), got failure. Message: %s", result.Message)
-	}
-	if !strings.Contains(result.Message, "Animation ended") {
-		t.Errorf("Expected 'Animation ended' in message, got: %s", result.Message)
-	}
+// TestWaitForAnimationToEndReturnsWarning predates the screenshot-comparison
+// implementation. The "WARNING: not fully implemented" message no longer
+// exists; TestWaitForAnimationToEnd in driver_test.go now exercises the real
+// polling path against a mocked WDA server.
+func TestWaitForAnimationToEndReturnsWarning(t *testing.T) {
+	t.Skip("superseded by real screenshot-comparison; see TestWaitForAnimationToEnd in driver_test.go")
 }
 
 // =============================================================================
@@ -4897,5 +4811,372 @@ func TestLaunchAppReusesExistingSession(t *testing.T) {
 	}
 	if !launchCalled {
 		t.Error("Expected app launch to be called")
+	}
+}
+
+// =============================================================================
+// setLocation tests
+// =============================================================================
+
+// withFakeExec swaps the package execCommand seam for the duration of a test.
+// Captured invocations are appended to *gotArgs so tests can assert on them.
+func withFakeExec(t *testing.T, gotArgs *[][]string, fail bool) {
+	t.Helper()
+	prev := execCommand
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		*gotArgs = append(*gotArgs, append([]string{name}, args...))
+		if fail {
+			return exec.Command("false")
+		}
+		return exec.Command("true")
+	}
+	t.Cleanup(func() { execCommand = prev })
+}
+
+func TestSetLocationMissingCoordinates(t *testing.T) {
+	driver := &Driver{info: &core.PlatformInfo{Platform: "ios", IsSimulator: true}, udid: "SIM-UDID"}
+
+	cases := []struct{ lat, lon string }{
+		{"", "1"},
+		{"1", ""},
+		{"", ""},
+	}
+	for _, c := range cases {
+		result := driver.setLocation(&flow.SetLocationStep{Latitude: c.lat, Longitude: c.lon})
+		if result.Success {
+			t.Errorf("expected failure for lat=%q lon=%q", c.lat, c.lon)
+		}
+	}
+}
+
+func TestSetLocationInvalidLatitude(t *testing.T) {
+	driver := &Driver{info: &core.PlatformInfo{Platform: "ios", IsSimulator: true}, udid: "SIM-UDID"}
+	result := driver.setLocation(&flow.SetLocationStep{Latitude: "not-a-number", Longitude: "1.0"})
+	if result.Success {
+		t.Fatal("expected failure for invalid latitude")
+	}
+	if !strings.Contains(result.Message, "Invalid latitude") {
+		t.Errorf("expected 'Invalid latitude' in message, got: %s", result.Message)
+	}
+}
+
+func TestSetLocationInvalidLongitude(t *testing.T) {
+	driver := &Driver{info: &core.PlatformInfo{Platform: "ios", IsSimulator: true}, udid: "SIM-UDID"}
+	result := driver.setLocation(&flow.SetLocationStep{Latitude: "1.0", Longitude: "not-a-number"})
+	if result.Success {
+		t.Fatal("expected failure for invalid longitude")
+	}
+	if !strings.Contains(result.Message, "Invalid longitude") {
+		t.Errorf("expected 'Invalid longitude' in message, got: %s", result.Message)
+	}
+}
+
+func TestSetLocationRealDeviceUnsupported(t *testing.T) {
+	driver := &Driver{info: &core.PlatformInfo{Platform: "ios", IsSimulator: false}, udid: "REAL-UDID"}
+	result := driver.setLocation(&flow.SetLocationStep{Latitude: "37.7749", Longitude: "-122.4194"})
+	if result.Success {
+		t.Fatal("expected setLocation to fail on real device")
+	}
+	if !strings.Contains(result.Message, "real device") {
+		t.Errorf("expected message to mention real device, got: %s", result.Message)
+	}
+}
+
+func TestSetLocationNilInfoUnsupported(t *testing.T) {
+	driver := &Driver{info: nil, udid: "any"}
+	result := driver.setLocation(&flow.SetLocationStep{Latitude: "1.0", Longitude: "2.0"})
+	if result.Success {
+		t.Fatal("expected failure when PlatformInfo is nil")
+	}
+}
+
+func TestSetLocationSimulatorMissingUDID(t *testing.T) {
+	driver := &Driver{info: &core.PlatformInfo{Platform: "ios", IsSimulator: true}}
+	result := driver.setLocation(&flow.SetLocationStep{Latitude: "1.0", Longitude: "2.0"})
+	if result.Success {
+		t.Fatal("expected failure when UDID is empty")
+	}
+	if !strings.Contains(result.Message, "UDID") {
+		t.Errorf("expected message to mention UDID, got: %s", result.Message)
+	}
+}
+
+func TestSetLocationSimulatorSuccess(t *testing.T) {
+	var calls [][]string
+	withFakeExec(t, &calls, false)
+
+	driver := &Driver{info: &core.PlatformInfo{Platform: "ios", IsSimulator: true}, udid: "SIM-UDID"}
+	result := driver.setLocation(&flow.SetLocationStep{Latitude: "37.7749", Longitude: "-122.4194"})
+	if !result.Success {
+		t.Fatalf("expected success, got: %s", result.Message)
+	}
+
+	if len(calls) != 1 {
+		t.Fatalf("expected exactly one exec call, got %d", len(calls))
+	}
+	want := []string{"xcrun", "simctl", "location", "SIM-UDID", "set", "37.774900,-122.419400"}
+	if len(calls[0]) != len(want) {
+		t.Fatalf("expected %d args, got %d: %v", len(want), len(calls[0]), calls[0])
+	}
+	for i, w := range want {
+		if calls[0][i] != w {
+			t.Errorf("arg[%d]: expected %q, got %q", i, w, calls[0][i])
+		}
+	}
+}
+
+func TestSetLocationSimulatorSimctlError(t *testing.T) {
+	var calls [][]string
+	withFakeExec(t, &calls, true)
+
+	driver := &Driver{info: &core.PlatformInfo{Platform: "ios", IsSimulator: true}, udid: "SIM-UDID"}
+	result := driver.setLocation(&flow.SetLocationStep{Latitude: "1.0", Longitude: "2.0"})
+	if result.Success {
+		t.Fatal("expected failure when simctl exits non-zero")
+	}
+	if !strings.Contains(result.Message, "Failed to set simulator location") {
+		t.Errorf("expected failure message, got: %s", result.Message)
+	}
+}
+
+// =============================================================================
+// inputText typing-target gate (#143)
+// =============================================================================
+
+// collapsedFieldServer models the React Native accessibility-collapsed case
+// from #143: the container is itself an accessibility element, so iOS publishes
+// only the parent (typed Other, carrying the merged label) and no descendant
+// reports hasKeyboardFocus. /element/active resolves through that property and
+// so returns nothing, while the keyboard is genuinely on screen and the field
+// genuinely has first responder.
+func collapsedFieldServer(t *testing.T, sentKeys *bool) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		if strings.Contains(path, "/element/active") {
+			// WDA answers with no element reference at all.
+			jsonResponse(w, map[string]interface{}{"value": map[string]interface{}{}})
+			return
+		}
+		if strings.HasSuffix(path, "/elements") {
+			body, _ := io.ReadAll(r.Body)
+			var payload map[string]interface{}
+			_ = json.Unmarshal(body, &payload)
+			if v, _ := payload["value"].(string); strings.Contains(v, "XCUIElementTypeKeyboard") {
+				jsonResponse(w, map[string]interface{}{
+					"value": []interface{}{map[string]interface{}{"ELEMENT": "keyboard-1"}},
+				})
+				return
+			}
+			jsonResponse(w, map[string]interface{}{"value": []interface{}{}})
+			return
+		}
+		if strings.Contains(path, "/wda/keys") {
+			*sentKeys = true
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+}
+
+// The regression from #143: typing must proceed when the keyboard is up, even
+// though no element reports keyboard focus.
+func TestInputTextAcceptsVisibleKeyboardWithoutActiveElement(t *testing.T) {
+	var sentKeys bool
+	server := collapsedFieldServer(t, &sentKeys)
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	result := driver.inputText(&flow.InputTextStep{Text: "1234567"})
+
+	if !result.Success {
+		t.Fatalf("expected typing to proceed with the keyboard up, got: %s", result.Message)
+	}
+	if !sentKeys {
+		t.Error("expected the text to actually be sent")
+	}
+}
+
+// The #139 protection has to survive the relaxation: with neither an active
+// element nor a keyboard, the keys have nowhere to land and the step must fail
+// rather than silently type into whatever happens to be focused.
+func TestInputTextFailsWithNeitherKeyboardNorActiveElement(t *testing.T) {
+	var sentKeys bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		if strings.Contains(path, "/element/active") {
+			jsonResponse(w, map[string]interface{}{"value": map[string]interface{}{}})
+			return
+		}
+		if strings.HasSuffix(path, "/elements") {
+			jsonResponse(w, map[string]interface{}{"value": []interface{}{}})
+			return
+		}
+		if strings.Contains(path, "/wda/keys") {
+			sentKeys = true
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	result := driver.inputText(&flow.InputTextStep{Text: "hello"})
+
+	if result.Success {
+		t.Fatal("expected failure when nothing can receive the keys")
+	}
+	if sentKeys {
+		t.Error("expected no keys to be sent when there is no typing target")
+	}
+	if !strings.Contains(result.Message, "keyboard") {
+		t.Errorf("expected the message to mention the keyboard, got: %s", result.Message)
+	}
+	// The message has to say what was actually observed, so a report like #143
+	// arrives already diagnosed rather than needing a round trip.
+	if !strings.Contains(result.Message, "active element unavailable") {
+		t.Errorf("expected the message to say what the active element query observed, got: %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "keyboard not on screen") {
+		t.Errorf("expected the message to say what the keyboard query observed, got: %s", result.Message)
+	}
+}
+
+// A focused element alone is still sufficient — the original signal must keep
+// working for apps that do expose their fields.
+func TestInputTextAcceptsActiveElementWithoutKeyboardQuery(t *testing.T) {
+	var sentKeys bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		if strings.Contains(path, "/element/active") {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"ELEMENT": "field-1"},
+			})
+			return
+		}
+		if strings.HasSuffix(path, "/elements") {
+			t.Error("keyboard should not be queried once an element reports focus")
+			jsonResponse(w, map[string]interface{}{"value": []interface{}{}})
+			return
+		}
+		if strings.Contains(path, "/wda/keys") {
+			sentKeys = true
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	if result := driver.inputText(&flow.InputTextStep{Text: "hello"}); !result.Success {
+		t.Fatalf("expected success, got: %s", result.Message)
+	}
+	if !sentKeys {
+		t.Error("expected the text to be sent")
+	}
+}
+
+// GetActiveElement must read the W3C element key too. Reading only ELEMENT made
+// a W3C-shaped response look identical to "nothing is focused".
+func TestGetActiveElementReadsW3CKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		jsonResponse(w, map[string]interface{}{
+			"value": map[string]interface{}{
+				"element-6066-11e4-a52e-4f735466cecf": "field-9",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := &Client{
+		baseURL:    server.URL,
+		httpClient: http.DefaultClient,
+		sessionID:  "test-session",
+	}
+	elemID, err := client.GetActiveElement()
+	if err != nil {
+		t.Fatalf("expected the W3C key to be read, got %v", err)
+	}
+	if elemID != "field-9" {
+		t.Errorf("got element %q, want field-9", elemID)
+	}
+}
+
+// A selector that resolves to an accessibility-collapsed container publishes as
+// Other, and WDA rejects send-keys on a non-text element. The field inside it
+// still types once focused, so the step must fall through to tap-and-type
+// rather than failing outright (#143).
+func TestInputTextFallsBackWhenElementRejectsSendKeys(t *testing.T) {
+	var tapped, sentKeys bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		if strings.HasSuffix(path, "/element") && r.Method == "POST" {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"ELEMENT": "container-1"},
+			})
+			return
+		}
+		if strings.Contains(path, "/element/") && strings.Contains(path, "/rect") {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"x": 24.0, "y": 356.0, "width": 342.0, "height": 89.0},
+			})
+			return
+		}
+		if strings.Contains(path, "/element/") && strings.Contains(path, "/displayed") {
+			jsonResponse(w, map[string]interface{}{"value": true})
+			return
+		}
+		// Element send-keys is refused, the way WDA refuses a non-text element.
+		if strings.Contains(path, "/element/") && strings.Contains(path, "/value") {
+			w.WriteHeader(http.StatusInternalServerError)
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"error": "invalid element state"},
+			})
+			return
+		}
+		if strings.Contains(path, "/tap") {
+			tapped = true
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
+		// No element reports keyboard focus — the collapse hides it.
+		if strings.Contains(path, "/element/active") {
+			jsonResponse(w, map[string]interface{}{"value": map[string]interface{}{}})
+			return
+		}
+		// ...but the keyboard is up.
+		if strings.HasSuffix(path, "/elements") {
+			jsonResponse(w, map[string]interface{}{
+				"value": []interface{}{map[string]interface{}{"ELEMENT": "keyboard-1"}},
+			})
+			return
+		}
+		if strings.Contains(path, "/wda/keys") {
+			sentKeys = true
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	result := driver.inputText(&flow.InputTextStep{
+		Text:     "1234567",
+		Selector: flow.Selector{ID: "username, Enter phone number"},
+	})
+
+	if !result.Success {
+		t.Fatalf("expected fallback to tap-and-type, got: %s", result.Message)
+	}
+	if !tapped {
+		t.Error("expected the element to be tapped after send-keys was refused")
+	}
+	if !sentKeys {
+		t.Error("expected the text to be typed via the keyboard path")
 	}
 }

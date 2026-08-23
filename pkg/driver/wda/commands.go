@@ -1,13 +1,12 @@
 package wda
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"image"
-	"image/png"
-	"math"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -64,6 +63,20 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		return successResult(fmt.Sprintf("Tapped at relative point (%.0f, %.0f) on element", x, y), info)
 	}
 
+	// If duration is set (or longPress: true), hold the press for that long.
+	if step.DurationMs > 0 || step.LongPress {
+		durationSec := float64(step.DurationMs) / 1000.0
+		if durationSec <= 0 {
+			durationSec = 1.0
+		}
+		x := float64(info.Bounds.X + info.Bounds.Width/2)
+		y := float64(info.Bounds.Y + info.Bounds.Height/2)
+		if err := d.client.LongPress(x, y, durationSec); err != nil {
+			return errorResult(err, fmt.Sprintf("Press for %.2fs failed", durationSec))
+		}
+		return successResult("Pressed element", info)
+	}
+
 	// Determine if element is a text field (needs focus verification)
 	isTextField := strings.Contains(info.Class, "TextField")
 
@@ -94,6 +107,63 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 	return successResult("Tapped element", info)
 }
 
+// dragAndDrop long-presses the from-target, then drags it onto the to-target.
+// The hold is what makes reorder UIs lift the item; XCUITest paces the move
+// itself, so the step's Duration (move time) has no effect on this driver.
+func (d *Driver) dragAndDrop(step *flow.DragAndDropStep) *core.CommandResult {
+	fromX, fromY, fromInfo, err := d.resolveDragPoint(step.From, step.IsOptional(), step.TimeoutMs)
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("dragAndDrop: from target not resolved: %v", err))
+	}
+	toX, toY, _, err := d.resolveDragPoint(step.To, step.IsOptional(), step.TimeoutMs)
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("dragAndDrop: to target not resolved: %v", err))
+	}
+
+	holdSec := float64(step.HoldDuration) / 1000.0
+	if holdSec <= 0 {
+		holdSec = 1.0
+	}
+	if err := d.client.DragFromTo(fromX, fromY, toX, toY, holdSec); err != nil {
+		return errorResult(err, "Drag failed")
+	}
+	return successResult(fmt.Sprintf("Dragged (%.0f, %.0f) → (%.0f, %.0f)", fromX, fromY, toX, toY), fromInfo)
+}
+
+// resolveDragPoint turns a drag endpoint into screen coordinates: a bare
+// point resolves against the screen, a selector resolves to its center, and
+// a selector with a point resolves the point within the element's bounds —
+// the same rules tapOn applies.
+func (d *Driver) resolveDragPoint(sel flow.Selector, optional bool, timeoutMs int) (float64, float64, *core.ElementInfo, error) {
+	if sel.IsEmpty() {
+		if sel.Point == "" {
+			return 0, 0, nil, fmt.Errorf("a selector or point is required")
+		}
+		w, h, err := d.screenSize()
+		if err != nil {
+			return 0, 0, nil, fmt.Errorf("screen size unavailable for point %q: %w", sel.Point, err)
+		}
+		x, y, err := core.ParsePointCoords(sel.Point, w, h)
+		if err != nil {
+			return 0, 0, nil, err
+		}
+		return float64(x), float64(y), nil, nil
+	}
+
+	info, err := d.findElementForTap(sel, optional, timeoutMs)
+	if err != nil {
+		return 0, 0, nil, err
+	}
+	if sel.Point != "" && info.Bounds.Width > 0 {
+		px, py, perr := core.ParsePointCoords(sel.Point, info.Bounds.Width, info.Bounds.Height)
+		if perr != nil {
+			return 0, 0, nil, perr
+		}
+		return float64(info.Bounds.X + px), float64(info.Bounds.Y + py), info, nil
+	}
+	return float64(info.Bounds.X + info.Bounds.Width/2), float64(info.Bounds.Y + info.Bounds.Height/2), info, nil
+}
+
 // tapOnPointWithCoords handles point-based tap with either percentage ("85%, 50%") or absolute ("123, 456") coordinates.
 func (d *Driver) tapOnPointWithCoords(point string) *core.CommandResult {
 	width, height, err := d.screenSize()
@@ -119,8 +189,11 @@ func (d *Driver) doubleTapOn(step *flow.DoubleTapOnStep) *core.CommandResult {
 		return errorResult(err, fmt.Sprintf("Element not found: %s", selectorDesc(step.Selector)))
 	}
 
-	x := float64(info.Bounds.X + info.Bounds.Width/2)
-	y := float64(info.Bounds.Y + info.Bounds.Height/2)
+	px, py, perr := core.PointInBounds(step.Selector.Point, info.Bounds)
+	if perr != nil {
+		return errorResult(perr, fmt.Sprintf("Invalid point coordinates: %v", perr))
+	}
+	x, y := float64(px), float64(py)
 
 	if err := d.client.DoubleTap(x, y); err != nil {
 		return errorResult(err, "Double tap failed")
@@ -135,10 +208,16 @@ func (d *Driver) longPressOn(step *flow.LongPressOnStep) *core.CommandResult {
 		return errorResult(err, fmt.Sprintf("Element not found: %s", selectorDesc(step.Selector)))
 	}
 
-	x := float64(info.Bounds.X + info.Bounds.Width/2)
-	y := float64(info.Bounds.Y + info.Bounds.Height/2)
+	px, py, perr := core.PointInBounds(step.Selector.Point, info.Bounds)
+	if perr != nil {
+		return errorResult(perr, fmt.Sprintf("Invalid point coordinates: %v", perr))
+	}
+	x, y := float64(px), float64(py)
 
-	duration := 1.0 // default 1 second
+	duration := float64(step.DurationMs) / 1000.0
+	if duration <= 0 {
+		duration = 1.0 // default 1 second
+	}
 
 	if err := d.client.LongPress(x, y, duration); err != nil {
 		return errorResult(err, "Long press failed")
@@ -167,6 +246,17 @@ func (d *Driver) tapOnPoint(step *flow.TapOnPointStep) *core.CommandResult {
 		y = float64(step.Y)
 	}
 
+	if step.DurationMs > 0 || step.LongPress {
+		durationSec := float64(step.DurationMs) / 1000.0
+		if durationSec <= 0 {
+			durationSec = 1.0
+		}
+		if err := d.client.LongPress(x, y, durationSec); err != nil {
+			return errorResult(err, fmt.Sprintf("Press at point for %.2fs failed", durationSec))
+		}
+		return successResult(fmt.Sprintf("Pressed at (%.0f, %.0f)", x, y), nil)
+	}
+
 	if err := d.client.Tap(x, y); err != nil {
 		return errorResult(err, "Tap on point failed")
 	}
@@ -177,12 +267,88 @@ func (d *Driver) tapOnPoint(step *flow.TapOnPointStep) *core.CommandResult {
 // Assert commands
 
 func (d *Driver) assertVisible(step *flow.AssertVisibleStep) *core.CommandResult {
+	if want, has, err := step.ExpectedCount(); err != nil {
+		return errorResult(err, err.Error())
+	} else if has {
+		return d.assertVisibleCount(step, want)
+	}
+
 	info, err := d.findElement(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Element not visible: %s", selectorDesc(step.Selector)))
 	}
 
-	return successResult("Element is visible", info)
+	msg := "Element is visible"
+	if info != nil && info.MatchNote != "" {
+		msg = "Element is visible (" + info.MatchNote + ")"
+	}
+	return successResult(msg, info)
+}
+
+// assertVisibleCount asserts that the selector matches exactly `want` visible
+// elements. Counting needs the full page source (WDA's native find returns a
+// single match), so this polls one snapshot per tick — the way assertNotVisible
+// polls — until the expected count is observed or the deadline passes.
+func (d *Driver) assertVisibleCount(step *flow.AssertVisibleStep, want int) *core.CommandResult {
+	if step.Selector.HasRelativeSelector() {
+		err := fmt.Errorf("count cannot be combined with relative selectors (below/above/childOf/…)")
+		return errorResult(err, err.Error())
+	}
+
+	timeout := d.calculateTimeout(step.IsOptional(), step.TimeoutMs)
+	ctx, cancel := context.WithTimeout(d.parentContext(), timeout)
+	defer cancel()
+
+	// lastSeen distinguishes "counted the wrong number" from "never managed to
+	// read the screen" — the two need different failure messages.
+	lastSeen := -1
+	var lastErr error
+	for {
+		select {
+		case <-ctx.Done():
+			if lastSeen < 0 {
+				if lastErr == nil {
+					lastErr = ctx.Err()
+				}
+				return errorResult(lastErr, fmt.Sprintf(
+					"Expected %d visible matches of %s, but could not read the screen: %v",
+					want, selectorDesc(step.Selector), lastErr))
+			}
+			return errorResult(
+				fmt.Errorf("expected %d matches, found %d", want, lastSeen),
+				fmt.Sprintf("Expected %d visible matches of %s, found %d",
+					want, selectorDesc(step.Selector), lastSeen))
+		default:
+			n, err := d.countVisibleMatchesOnce(step.Selector)
+			if err != nil {
+				lastErr = err
+			} else {
+				lastSeen = n
+				if n == want {
+					return successResult(fmt.Sprintf("%d elements visible", n), nil)
+				}
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+}
+
+// countVisibleMatchesOnce takes one page-source snapshot and counts the
+// selector's visible matches.
+func (d *Driver) countVisibleMatchesOnce(sel flow.Selector) (int, error) {
+	pageSource, err := d.client.Source()
+	if err != nil {
+		return 0, err
+	}
+	allElements, err := ParsePageSource(pageSource)
+	if err != nil {
+		return 0, err
+	}
+	w, h := 0, 0
+	if sw, sh, sizeErr := d.screenSize(); sizeErr == nil {
+		w, h = sw, sh
+	}
+	return CountVisibleMatches(allElements, sel, w, h), nil
 }
 
 func (d *Driver) assertNotVisible(step *flow.AssertNotVisibleStep) *core.CommandResult {
@@ -231,12 +397,17 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		if err != nil {
 			return errorResult(err, fmt.Sprintf("Element not found: %s", selectorDesc(step.Selector)))
 		}
-		// If we have element ID, send keys directly to the element
+		// If we have element ID, send keys directly to the element.
+		//
+		// A failure here is not fatal: the resolved element may not accept keys
+		// directly — an accessibility-collapsed container publishes as Other,
+		// and WDA rejects send-keys on a non-text element — while the field
+		// inside it types perfectly well once focused. So fall through to the
+		// tap-and-type path rather than failing the step outright (#143).
 		if info.ID != "" {
-			if err := d.client.ElementSendKeys(info.ID, text, d.typingFrequency); err != nil {
-				return errorResult(err, "Input text to element failed")
+			if err := d.client.ElementSendKeys(info.ID, text, d.typingFrequency); err == nil {
+				return successResult(fmt.Sprintf("Entered text: %s%s", text, unicodeWarning), info)
 			}
-			return successResult(fmt.Sprintf("Entered text: %s%s", text, unicodeWarning), info)
 		}
 		// Fallback: tap to focus first
 		x := float64(info.Bounds.X + info.Bounds.Width/2)
@@ -247,14 +418,17 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		time.Sleep(100 * time.Millisecond) // Wait for focus
 	}
 
-	// Wait for keyboard to be ready by confirming a text field is focused.
-	// Poll GetActiveElement up to 1s (5 attempts, 200ms apart) similar to
-	// original Maestro's InputTextRouteHandler.swift keyboard wait.
-	for i := 0; i < 5; i++ {
-		if elemID, err := d.client.GetActiveElement(); err == nil && elemID != "" {
-			break
-		}
-		time.Sleep(200 * time.Millisecond)
+	// Wait for the keyboard to be ready, mirroring the wait in original
+	// Maestro's InputTextRouteHandler.swift.
+	//
+	// Nothing to type into means these keys have nowhere to land, and typing
+	// anyway is how text ends up somewhere other than the field the flow named
+	// while the step still reports success — the failure #139 chased on
+	// Android. Fail here instead, where the cause is still legible.
+	if ok, observed := d.waitForTypingTarget(); !ok {
+		err := fmt.Errorf("no keyboard appeared and no element took keyboard focus within 1s (%s)", observed)
+		return errorResult(err, "inputText: "+err.Error()+
+			" — the text would have been typed with nothing focused; check that the preceding tap focused a text field")
 	}
 
 	if err := d.client.SendKeys(text, d.typingFrequency); err != nil {
@@ -262,6 +436,72 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 	}
 
 	return successResult(fmt.Sprintf("Entered text: %s%s", text, unicodeWarning), nil)
+}
+
+// waitForTypingTarget polls up to about a second for evidence that typed keys
+// have somewhere to land, and reports whether it found any.
+//
+// Two signals count, and either alone is sufficient:
+//
+//   - an element reporting keyboard focus, via /element/active
+//   - the software keyboard being on screen — iOS does not raise it unless
+//     something holds first responder
+//
+// The keyboard signal is what makes this work on accessibility-collapsed
+// hierarchies. When a container is itself marked as an accessibility element —
+// a React Native View carrying `accessible` or an accessibilityLabel wrapped
+// around a TextInput — iOS publishes only the parent, typed Other with the
+// merged label, and no descendant reports hasKeyboardFocus. /element/active
+// resolves through that property, so it finds nothing even though the field is
+// genuinely focused and SendKeys reaches it. Requiring an active element
+// therefore rejected flows that had always worked (#143); requiring only that
+// *something* can receive the keys keeps the #139 protection without depending
+// on the field being individually addressable.
+// It also returns a short description of what it last observed when it finds
+// nothing. Both signals failing is ambiguous from the outside — a query that
+// errored looks exactly like one that legitimately reported nothing focused —
+// and that ambiguity is what made the original report of #143 hard to act on.
+// Saying which happened, and why, turns the next such report into a diagnosis.
+func (d *Driver) waitForTypingTarget() (bool, string) {
+	var observed string
+	for i := 0; i < 5; i++ {
+		if i > 0 {
+			time.Sleep(200 * time.Millisecond)
+		}
+
+		// GetActiveElement reports "nothing is focused" as an error rather than
+		// an empty id, and another caller depends on that, so the reason is
+		// carried through as-is instead of being reinterpreted here.
+		elemID, err := d.client.GetActiveElement()
+		switch {
+		case err == nil && elemID != "":
+			return true, ""
+		case err != nil:
+			observed = fmt.Sprintf("active element unavailable (%v)", err)
+		default:
+			observed = "active element unavailable (empty reference)"
+		}
+
+		visible, kbErr := d.keyboardVisible()
+		if visible {
+			return true, ""
+		}
+		if kbErr != nil {
+			observed += fmt.Sprintf("; keyboard query failed (%v)", kbErr)
+		} else {
+			observed += "; keyboard not on screen"
+		}
+	}
+	return false, observed
+}
+
+// keyboardVisible reports whether the software keyboard is on screen.
+func (d *Driver) keyboardVisible() (bool, error) {
+	ids, err := d.client.FindElements("class chain", "**/XCUIElementTypeKeyboard")
+	if err != nil {
+		return false, err
+	}
+	return len(ids) > 0, nil
 }
 
 func (d *Driver) eraseText(step *flow.EraseTextStep) *core.CommandResult {
@@ -341,7 +581,7 @@ func (d *Driver) waitForAlert(timeoutMs int, accept bool) *core.CommandResult {
 		timeoutMs = 5000
 	}
 	timeout := time.Duration(timeoutMs) * time.Millisecond
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(d.parentContext(), timeout)
 	defer cancel()
 
 	action := "accept"
@@ -463,7 +703,14 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	for i := 0; i < maxScrolls && time.Now().Before(deadline); i++ {
 		info, err := d.findElement(step.Element, true, 1000)
 		if err == nil && info != nil {
-			return successResult("Element found after scrolling", info)
+			// Found in the tree is not enough: an element half-hidden behind
+			// the fold satisfies a bare find, and the tap that follows lands
+			// wrong. Keep scrolling until enough of it is actually on screen.
+			// With no screen size to compare against, accept the find as before.
+			w, h, sizeErr := d.screenSize()
+			if sizeErr != nil || core.MeetsVisibility(info.Bounds, w, h, step.VisibilityPercentage) {
+				return successResult("Element found after scrolling", info)
+			}
 		}
 
 		// Scroll
@@ -534,29 +781,54 @@ func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
 		// UP:    centered horizontally, 90%→10% of height
 		// DOWN:  centered horizontally, 20%→90% of height
 		dir := strings.ToLower(step.Direction)
-		switch dir {
-		case "up":
-			fromX = areaX + areaW*0.5
-			fromY = areaY + areaH*0.9
-			toX = areaX + areaW*0.5
-			toY = areaY + areaH*0.1
-		case "down":
-			fromX = areaX + areaW*0.5
-			fromY = areaY + areaH*0.2
-			toX = areaX + areaW*0.5
-			toY = areaY + areaH*0.9
-		case "left":
-			fromX = areaX + areaW*0.9
-			fromY = areaY + areaH*0.5
-			toX = areaX + areaW*0.1
-			toY = areaY + areaH*0.5
-		case "right":
-			fromX = areaX + areaW*0.1
-			fromY = areaY + areaH*0.5
-			toX = areaX + areaW*0.9
-			toY = areaY + areaH*0.5
-		default:
-			return errorResult(fmt.Errorf("invalid direction: %s", step.Direction), "Invalid swipe direction")
+		if step.Distance > 0 {
+			// Explicit distance: centered swipe covering that fraction of the
+			// area (screen or the anchored element's bounds).
+			frac := step.Distance
+			if frac > 1 {
+				frac = 1
+			}
+			cx := areaX + areaW*0.5
+			cy := areaY + areaH*0.5
+			dxp := areaW * frac / 2
+			dyp := areaH * frac / 2
+			switch dir {
+			case "up":
+				fromX, fromY, toX, toY = cx, cy+dyp, cx, cy-dyp
+			case "down":
+				fromX, fromY, toX, toY = cx, cy-dyp, cx, cy+dyp
+			case "left":
+				fromX, fromY, toX, toY = cx+dxp, cy, cx-dxp, cy
+			case "right":
+				fromX, fromY, toX, toY = cx-dxp, cy, cx+dxp, cy
+			default:
+				return errorResult(fmt.Errorf("invalid direction: %s", step.Direction), "Invalid swipe direction")
+			}
+		} else {
+			switch dir {
+			case "up":
+				fromX = areaX + areaW*0.5
+				fromY = areaY + areaH*0.9
+				toX = areaX + areaW*0.5
+				toY = areaY + areaH*0.1
+			case "down":
+				fromX = areaX + areaW*0.5
+				fromY = areaY + areaH*0.2
+				toX = areaX + areaW*0.5
+				toY = areaY + areaH*0.9
+			case "left":
+				fromX = areaX + areaW*0.9
+				fromY = areaY + areaH*0.5
+				toX = areaX + areaW*0.1
+				toY = areaY + areaH*0.5
+			case "right":
+				fromX = areaX + areaW*0.1
+				fromY = areaY + areaH*0.5
+				toX = areaX + areaW*0.9
+				toY = areaY + areaH*0.5
+			default:
+				return errorResult(fmt.Errorf("invalid direction: %s", step.Direction), "Invalid swipe direction")
+			}
 		}
 	}
 
@@ -737,6 +1009,15 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 		wg.Wait()
 	}
 
+	// Reset simulator keychain if requested — after clearState so a reinstall
+	// can't race, before launch so the app starts with a clean keychain.
+	// No-op with a warning on real devices (keychain can't be reset there).
+	if step.ClearKeychain {
+		if r := d.resetKeychain(); !r.Success {
+			logger.Warn("launchApp: clearKeychain skipped: %s", r.Message)
+		}
+	}
+
 	if d.udid != "" {
 		d.alertAction = resolveAlertAction(permissions)
 	}
@@ -881,35 +1162,151 @@ func (d *Driver) clearState(step *flow.ClearStateStep) *core.CommandResult {
 }
 
 // clearAppState uninstalls and reinstalls an app to clear its state.
-// Requires --app-file for both simulators and real devices.
-// On simulators, uses simctl. On physical devices, uses xcrun devicectl.
+//   - Simulator: auto-discovers the installed .app via `simctl get_app_container`
+//     when --app-file isn't provided (or when it points inside the live sim
+//     container, which would be deleted by the uninstall step). Matches
+//     Maestro CLI's auto-stage behavior so flows like `- clearState` work
+//     without any extra flags.
+//   - Real device: --app-file is still required (Apple seals the .app on
+//     device, no public API to extract it back to the host).
 func (d *Driver) clearAppState(bundleID string) *core.CommandResult {
-	if d.appFile == "" {
-		return errorResult(fmt.Errorf("clearState on iOS requires --app-file for reinstall"),
-			"clearState on iOS requires --app-file to reinstall the app after uninstalling\n"+
-				"Usage: maestro-runner --app-file <path-to-ipa-or-app> --platform ios test <flow-files>")
-	}
-
 	if d.info.IsSimulator {
 		return d.clearAppStateSimulator(bundleID)
+	}
+	if d.appFile == "" {
+		return errorResult(fmt.Errorf("clearState on real iOS devices requires --app-file"),
+			"clearState on real iOS devices requires --app-file — the installed bundle "+
+				"isn't reachable from the host. On simulators no flag is needed.\n"+
+				"Usage: maestro-runner --app-file <path-to-ipa-or-app> --platform ios test <flow-files>")
 	}
 	return d.clearAppStateDevice(bundleID)
 }
 
 func (d *Driver) clearAppStateSimulator(bundleID string) *core.CommandResult {
+	appFile, cleanup, err := d.resolveSimAppFile(bundleID)
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("clearState: %v", err))
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
 	cmd := exec.Command("xcrun", "simctl", "uninstall", d.udid, bundleID)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return errorResult(fmt.Errorf("simctl uninstall failed: %w: %s", err, string(output)),
 			"Failed to uninstall app on simulator")
 	}
 
-	cmd = exec.Command("xcrun", "simctl", "install", d.udid, d.appFile)
+	cmd = exec.Command("xcrun", "simctl", "install", d.udid, appFile)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return errorResult(fmt.Errorf("simctl install failed: %w: %s", err, string(output)),
 			"Failed to reinstall app on simulator")
 	}
 
 	return successResult(fmt.Sprintf("Cleared state for %s (uninstall+reinstall)", bundleID), nil)
+}
+
+// resolveSimAppFile returns the .app path to feed into `simctl install` after
+// uninstall, plus an optional cleanup closure for any temp staging directory.
+//
+// The selection logic:
+//  1. --app-file points to an external location (not inside this sim's
+//     container) → use it as-is, no staging. Same speed as before.
+//  2. --app-file is empty OR points inside /CoreSimulator/Devices/<udid>/ →
+//     discover the installed .app via `simctl get_app_container <udid> <id>`
+//     and stage a copy to a temp dir. The uninstall step would otherwise
+//     delete the path before install reads it.
+//
+// Staging uses APFS clone (`cp -c`) — sim container and `os.MkdirTemp` both
+// land on the same APFS volume, so the copy is effectively zero-cost. Falls
+// back to `cp -R` if clone isn't supported.
+func (d *Driver) resolveSimAppFile(bundleID string) (string, func(), error) {
+	containerMarker := fmt.Sprintf("/CoreSimulator/Devices/%s/", d.udid)
+	pointsAtLiveContainer := d.appFile != "" && strings.Contains(d.appFile, containerMarker)
+
+	if d.appFile != "" && !pointsAtLiveContainer {
+		return d.appFile, nil, nil
+	}
+
+	installed, err := d.simulatorInstalledAppPath(bundleID)
+	if err != nil {
+		if d.appFile == "" {
+			return "", nil, fmt.Errorf("could not locate installed app for %s on simulator: %w (provide --app-file or install the app first)", bundleID, err)
+		}
+		// Fall back to the user-supplied --app-file even though it looked
+		// like a container path; let `simctl install` produce the actual
+		// error if it really is unreachable.
+		return d.appFile, nil, nil
+	}
+
+	tmpDir, err := os.MkdirTemp("", "maestro-runner-clearstate-*")
+	if err != nil {
+		return "", nil, fmt.Errorf("create temp dir for clearState staging: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(tmpDir) }
+
+	staged := filepath.Join(tmpDir, filepath.Base(installed))
+	if err := stageAppBundle(installed, staged); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("stage app bundle for clearState: %w", err)
+	}
+	return staged, cleanup, nil
+}
+
+// simulatorInstalledAppPath returns the .app bundle path for the installed
+// app, via `xcrun simctl get_app_container <udid> <bundleID>`. Returns an
+// error when the app isn't installed or simctl fails.
+func (d *Driver) simulatorInstalledAppPath(bundleID string) (string, error) {
+	cmd := exec.Command("xcrun", "simctl", "get_app_container", d.udid, bundleID)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("simctl get_app_container: %w", err)
+	}
+	path := strings.TrimSpace(string(out))
+	if path == "" {
+		return "", fmt.Errorf("simctl returned empty container path")
+	}
+	return path, nil
+}
+
+// stageAppBundle copies a .app bundle from src to dst, preferring APFS
+// clone-on-write (cp -c) for near-zero-cost staging on modern macOS. Falls
+// back to a plain recursive copy if clone isn't supported (e.g. cross-volume).
+func stageAppBundle(src, dst string) error {
+	if err := exec.Command("cp", "-c", "-R", src, dst).Run(); err == nil {
+		return nil
+	}
+	if out, err := exec.Command("cp", "-R", src, dst).CombinedOutput(); err != nil {
+		return fmt.Errorf("cp -R %s %s: %w: %s", src, dst, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// clearKeychain handles the standalone clearKeychain step. Unsupported on
+// real devices (iOS keychain is sandboxed and can't be reset via public API).
+func (d *Driver) clearKeychain(_ *flow.ClearKeychainStep) *core.CommandResult {
+	return d.resetKeychain()
+}
+
+// resetKeychain runs `xcrun simctl keychain <udid> reset` on the simulator.
+// Shared by the standalone step and the launchApp clearKeychain: true option.
+func (d *Driver) resetKeychain() *core.CommandResult {
+	if !d.info.IsSimulator {
+		return &core.CommandResult{
+			Success: false,
+			Error:   fmt.Errorf("clearKeychain is not supported on real iOS devices"),
+			Message: "clearKeychain requires an iOS Simulator — the iOS keychain is sandboxed on real devices and cannot be reset programmatically. Use clearState to reinstall the app, which drops its keychain entries.",
+		}
+	}
+	if d.udid == "" {
+		return errorResult(fmt.Errorf("simulator UDID required"), "clearKeychain requires a booted simulator")
+	}
+	cmd := exec.Command("xcrun", "simctl", "keychain", d.udid, "reset")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return errorResult(fmt.Errorf("simctl keychain reset failed: %w: %s", err, string(output)),
+			"Failed to reset simulator keychain")
+	}
+	return successResult("Simulator keychain reset", nil)
 }
 
 func (d *Driver) clearAppStateDevice(bundleID string) *core.CommandResult {
@@ -980,42 +1377,66 @@ func (d *Driver) setOrientation(step *flow.SetOrientationStep) *core.CommandResu
 	return successResult(fmt.Sprintf("Set orientation to %s", step.Orientation), nil)
 }
 
+// setLocation sets the device's simulated GPS location.
+//   - Simulator: runs `xcrun simctl location <udid> set <lat>,<lon>` —
+//     same mechanism Maestro uses (LocalSimulatorUtils.kt).
+//   - Real device: returns an unsupported error. Apple's public tooling
+//     (devicectl / instruments / WDA) doesn't expose a way to override GPS
+//     on a real device, so there's nothing to call into; Maestro's own
+//     real-device path is a `TODO("Not yet implemented")` stub for the
+//     same reason.
+func (d *Driver) setLocation(step *flow.SetLocationStep) *core.CommandResult {
+	if step.Latitude == "" || step.Longitude == "" {
+		return errorResult(
+			fmt.Errorf("latitude and longitude required"),
+			"setLocation requires both latitude and longitude",
+		)
+	}
+
+	lat, err := strconv.ParseFloat(step.Latitude, 64)
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("Invalid latitude: %s", step.Latitude))
+	}
+	lon, err := strconv.ParseFloat(step.Longitude, 64)
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("Invalid longitude: %s", step.Longitude))
+	}
+
+	if d.info == nil || !d.info.IsSimulator {
+		return errorResult(
+			fmt.Errorf("setLocation not supported on iOS real devices"),
+			"setLocation isn't supported on iOS real devices: Apple's public tooling "+
+				"(devicectl / instruments / WDA) doesn't expose a way to override GPS on "+
+				"a real device. Run the flow on an iOS simulator, or mock location at the app level.",
+		)
+	}
+
+	if d.udid == "" {
+		return errorResult(
+			fmt.Errorf("device UDID not configured"),
+			"setLocation requires a simulator UDID",
+		)
+	}
+
+	cmd := execCommand("xcrun", "simctl", "location", d.udid, "set", fmt.Sprintf("%f,%f", lat, lon))
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return errorResult(
+			fmt.Errorf("simctl location: %w: %s", err, strings.TrimSpace(string(output))),
+			"Failed to set simulator location",
+		)
+	}
+
+	return successResult(fmt.Sprintf("Set location to (%.6f, %.6f)", lat, lon), nil)
+}
+
 func (d *Driver) openLink(step *flow.OpenLinkStep) *core.CommandResult {
 	link := step.Link
 	if link == "" {
 		return errorResult(fmt.Errorf("no link specified"), "No link to open")
 	}
 
-	// For simulators, xcrun simctl openurl is more reliable than WDA DeepLink
-	// because DeepLink requires an active WDA session (launched app).
-	if d.info != nil && d.info.IsSimulator {
-		cmd := exec.Command("xcrun", "simctl", "openurl", d.udid, link)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return errorResult(fmt.Errorf("%w: %s", err, out), fmt.Sprintf("Failed to open link: %s", link))
-		}
-		// Ensure a WDA Safari session exists so subsequent driver calls
-		// (swipe, tap, screenshot, etc.) have an active session to operate on.
-		if !d.client.HasSession() && (strings.HasPrefix(link, "http://") || strings.HasPrefix(link, "https://")) {
-			if err := d.client.CreateSession("com.apple.mobilesafari", d.alertAction); err != nil {
-				logger.Debug("openLink: could not create Safari WDA session: %v", err)
-			}
-		}
-		// fall through to AutoVerify / return below
-	} else {
-		// Real device: WDA DeepLink requires an active session — create a Safari session
-		// for http/https URLs if none exists.
-		if !d.client.HasSession() {
-			bundleID := "com.apple.mobilesafari"
-			if !strings.HasPrefix(link, "http://") && !strings.HasPrefix(link, "https://") {
-				bundleID = "" // deep-link — let WDA use the system handler
-			}
-			if err := d.client.CreateSession(bundleID, d.alertAction); err != nil {
-				return errorResult(err, fmt.Sprintf("Failed to create session for link: %s", link))
-			}
-		}
-		if err := d.client.DeepLink(link); err != nil {
-			return errorResult(err, fmt.Sprintf("Failed to open link: %s", link))
-		}
+	if err := d.openURL(link); err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to open link: %s", link))
 	}
 
 	// If autoVerify is enabled, wait briefly for page load
@@ -1025,9 +1446,31 @@ func (d *Driver) openLink(step *flow.OpenLinkStep) *core.CommandResult {
 
 	msg := fmt.Sprintf("Opened link: %s", link)
 	if step.Browser != nil && *step.Browser {
-		msg += " (browser flag set, but WDA uses system default handler)"
+		msg += " (browser flag set, but the system default handler is used)"
 	}
 	return successResult(msg, nil)
+}
+
+// openURL dispatches a URL to the iOS device.
+//
+//   - Simulators: shell out to `xcrun simctl openurl <udid> <url>`. Bypasses
+//     WDA entirely so deep links keep working even when the user-installed
+//     WDA build (e.g. via `maestro-runner wda update` on a different version)
+//     has dropped or relocated the `/url` route. Matches Maestro CLI's
+//     behaviour and avoids the version-coupling between maestro-runner and
+//     the WebDriverAgent endpoint shape.
+//   - Real devices: continue using the WDA `/url` POST. simctl doesn't reach
+//     real devices, and there's no equivalent host-side primitive for
+//     deep-link delivery.
+func (d *Driver) openURL(url string) error {
+	if d.info != nil && d.info.IsSimulator && d.udid != "" {
+		cmd := exec.Command("xcrun", "simctl", "openurl", d.udid, url)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("simctl openurl: %w: %s", err, strings.TrimSpace(string(output)))
+		}
+		return nil
+	}
+	return d.client.DeepLink(url)
 }
 
 func (d *Driver) openBrowser(step *flow.OpenBrowserStep) *core.CommandResult {
@@ -1036,20 +1479,8 @@ func (d *Driver) openBrowser(step *flow.OpenBrowserStep) *core.CommandResult {
 		return errorResult(fmt.Errorf("no URL specified"), "No URL to open")
 	}
 
-	if d.info != nil && d.info.IsSimulator {
-		cmd := exec.Command("xcrun", "simctl", "openurl", d.udid, url)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return errorResult(fmt.Errorf("%w: %s", err, out), fmt.Sprintf("Failed to open browser: %s", url))
-		}
-	} else {
-		if !d.client.HasSession() {
-			if err := d.client.CreateSession("com.apple.mobilesafari", d.alertAction); err != nil {
-				return errorResult(err, fmt.Sprintf("Failed to create session for browser: %s", url))
-			}
-		}
-		if err := d.client.DeepLink(url); err != nil {
-			return errorResult(err, fmt.Sprintf("Failed to open browser: %s", url))
-		}
+	if err := d.openURL(url); err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to open browser: %s", url))
 	}
 
 	return successResult(fmt.Sprintf("Opened browser: %s", url), nil)
@@ -1064,7 +1495,7 @@ func (d *Driver) waitUntil(step *flow.WaitUntilStep) *core.CommandResult {
 	}
 	timeout := time.Duration(timeoutMs) * time.Millisecond
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(d.parentContext(), timeout)
 	defer cancel()
 
 	// Determine selector for error messages
@@ -1112,154 +1543,29 @@ func (d *Driver) waitUntil(step *flow.WaitUntilStep) *core.CommandResult {
 func (d *Driver) waitForAnimationToEnd(step *flow.WaitForAnimationToEndStep) *core.CommandResult {
 	timeoutMs := step.TimeoutMs
 	if timeoutMs <= 0 {
-		timeoutMs = defaultAnimationTimeoutMs
+		timeoutMs = 15000
 	}
+	const threshold = 0.005
 
-	sleepMs := step.SleepMs
-	if sleepMs <= 0 {
-		sleepMs = defaultAnimationSleepMs
-	}
-
-	threshold := step.Threshold
-	if threshold <= 0 {
-		threshold = screenshotDiffThreshold
-	}
-
-	logger.Info("waitForAnimationToEnd starting: timeoutMs=%d sleepMs=%d threshold=%.4f",
-		timeoutMs, sleepMs, threshold)
-
-	settled, iterations, elapsed, allDiffs := d.waitUntilScreenIsStatic(
-		time.Duration(timeoutMs)*time.Millisecond,
-		time.Duration(sleepMs)*time.Millisecond,
-		threshold,
-	)
-
-	if settled {
-		logger.Info("waitForAnimationToEnd: screen became static after %d iteration(s) (%.0fms elapsed), diffs=%s",
-			iterations, elapsed.Seconds()*1000, formatAnimationDiffs(allDiffs))
-		return successResult(
-			fmt.Sprintf("Animation ended (screen became static) after %d iteration(s) in %.0fms, diffs=%s",
-				iterations, elapsed.Seconds()*1000, formatAnimationDiffs(allDiffs)),
-			nil,
-		)
-	}
-
-	logger.Info("waitForAnimationToEnd: timed out after %d iteration(s) (%.0fms), diffs=%s threshold=%.4f",
-		iterations, elapsed.Seconds()*1000, formatAnimationDiffs(allDiffs), threshold)
-	return &core.CommandResult{
-		Success: false,
-		Message: fmt.Sprintf(
-			"Timed out after %dms (%d iteration(s)) waiting for screen to become static; diffs=%s threshold=%.4f",
-			timeoutMs, iterations, formatAnimationDiffs(allDiffs), threshold,
-		),
-	}
-}
-
-// formatAnimationDiffs formats a slice of diff values as "[0.000764 0.000821 ...]"
-func formatAnimationDiffs(diffs []float64) string {
-	if len(diffs) == 0 {
-		return "[]"
-	}
-	parts := make([]string, len(diffs))
-	for i, d := range diffs {
-		parts[i] = fmt.Sprintf("%.6f", d)
-	}
-	return "[" + strings.Join(parts, " ") + "]"
-}
-
-// waitUntilScreenIsStatic polls until two consecutive screenshots taken sleep
-// apart are pixel-similar within threshold, or the deadline is reached.
-// Returns: (settled, iterations, elapsed, allDiffs).
-func (d *Driver) waitUntilScreenIsStatic(timeout, sleep time.Duration, threshold float64) (bool, int, time.Duration, []float64) {
+	deadline := time.Now().Add(time.Duration(timeoutMs) * time.Millisecond)
 	start := time.Now()
-	deadline := start.Add(timeout)
-	var allDiffs []float64
-	i := 0
 	for time.Now().Before(deadline) {
-		i++
-		diff, err := d.consecutiveScreenshotDiff(sleep)
+		prev, err := d.client.Screenshot()
 		if err != nil {
-			logger.Debug("waitForAnimationToEnd iter=%d screenshot error: %v", i, err)
-			time.Sleep(time.Duration(screenshotRetryIntervalMs) * time.Millisecond)
-			continue
+			return errorResult(err, fmt.Sprintf("Screenshot failed: %v", err))
 		}
-		allDiffs = append(allDiffs, diff)
-		elapsed := time.Since(start)
-		logger.Debug("waitForAnimationToEnd iter=%d elapsed=%.0fms diff=%.6f threshold=%.4f",
-			i, elapsed.Seconds()*1000, diff, threshold)
+		curr, err := d.client.Screenshot()
+		if err != nil {
+			return errorResult(err, fmt.Sprintf("Screenshot failed: %v", err))
+		}
+		diff := core.ImageDifference(prev, curr)
 		if diff <= threshold {
-			return true, i, elapsed, allDiffs
-		}
-		time.Sleep(time.Duration(screenshotRetryIntervalMs) * time.Millisecond)
-	}
-	return false, i, time.Since(start), allDiffs
-}
-
-// consecutiveScreenshotDiff takes two screenshots separated by sleep and
-// returns the pixel-diff percentage.  Returns (0, nil) if bytes are identical.
-func (d *Driver) consecutiveScreenshotDiff(sleep time.Duration) (float64, error) {
-	startBytes, err := d.client.Screenshot()
-	if err != nil {
-		return 0, fmt.Errorf("screenshot 1: %w", err)
-	}
-
-	time.Sleep(sleep)
-
-	endBytes, err := d.client.Screenshot()
-	if err != nil {
-		return 0, fmt.Errorf("screenshot 2: %w", err)
-	}
-
-	// Fast path: identical bytes — definitely static.
-	if bytes.Equal(startBytes, endBytes) {
-		return 0, nil
-	}
-
-	startImg, err := png.Decode(bytes.NewReader(startBytes))
-	if err != nil {
-		return 0, fmt.Errorf("decode screenshot 1: %w", err)
-	}
-	endImg, err := png.Decode(bytes.NewReader(endBytes))
-	if err != nil {
-		return 0, fmt.Errorf("decode screenshot 2: %w", err)
-	}
-
-	startBounds := startImg.Bounds()
-	endBounds := endImg.Bounds()
-	if startBounds.Dx() != endBounds.Dx() || startBounds.Dy() != endBounds.Dy() {
-		// Dimensions changed — treat as maximally different.
-		return 1.0, nil
-	}
-
-	return screenshotDifferencePercent(startImg, endImg), nil
-}
-
-func screenshotDifferencePercent(a, b image.Image) float64 {
-	ab := a.Bounds()
-	bb := b.Bounds()
-	width := ab.Dx()
-	height := ab.Dy()
-	if width <= 0 || height <= 0 || width != bb.Dx() || height != bb.Dy() {
-		return 1.0
-	}
-
-	var totalDiff float64
-	const maxChannel = 65535.0
-
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			ar, ag, ab, aa := a.At(ab.Min.X+x, ab.Min.Y+y).RGBA()
-			br, bg, bb, ba := b.At(bb.Min.X+x, bb.Min.Y+y).RGBA()
-
-			totalDiff += math.Abs(float64(ar) - float64(br))
-			totalDiff += math.Abs(float64(ag) - float64(bg))
-			totalDiff += math.Abs(float64(ab) - float64(bb))
-			totalDiff += math.Abs(float64(aa) - float64(ba))
+			elapsed := time.Since(start)
+			return successResult(fmt.Sprintf("Animation ended (%.1f%% diff, %dms)", diff*100, elapsed.Milliseconds()), nil)
 		}
 	}
 
-	channels := float64(width*height) * 4.0
-	return totalDiff / (channels * maxChannel)
+	return successResult(fmt.Sprintf("Animation did not settle within %dms — continuing", timeoutMs), nil)
 }
 
 // Media
@@ -1268,6 +1574,22 @@ func (d *Driver) takeScreenshot(step *flow.TakeScreenshotStep) *core.CommandResu
 	data, err := d.client.Screenshot()
 	if err != nil {
 		return errorResult(err, "Screenshot failed")
+	}
+
+	if step.CropOn != nil {
+		info, findErr := d.findElement(*step.CropOn, false, 0)
+		if findErr != nil || info == nil {
+			return errorResult(findErr, fmt.Sprintf("cropOn: element not found: %v", findErr))
+		}
+		sw, sh, dimErr := d.screenSize()
+		if dimErr != nil {
+			return errorResult(dimErr, "cropOn requires screen dimensions")
+		}
+		cropped, cropErr := core.CropScreenshot(data, info.Bounds, sw, sh)
+		if cropErr != nil {
+			return errorResult(cropErr, fmt.Sprintf("cropOn: %v", cropErr))
+		}
+		data = cropped
 	}
 
 	return &core.CommandResult{
@@ -1618,4 +1940,77 @@ func getIOSPermissions() []string {
 		"reminders",
 		"notifications",
 	}
+}
+
+// ============================================================================
+// Dark mode (Maestro #2507)
+// ============================================================================
+
+// Appearance is only settable on simulators under this driver, because
+// `simctl ui` has no real-device equivalent and WebDriverAgent exposes no
+// endpoint for it. iOS itself can do this on a device — XCUIDevice has an
+// appearance property — which is why the devicelab_ios driver, whose runner is
+// a UI test, supports real hardware. Here a physical device gets a clear error
+// rather than a silent no-op that would make a flow look like it passed in the
+// wrong appearance.
+func (d *Driver) setDarkMode(step *flow.SetDarkModeStep) *core.CommandResult {
+	if err := d.requireSimulatorForAppearance("setDarkMode"); err != nil {
+		return errorResult(err, err.Error())
+	}
+	out, err := exec.Command("xcrun", "simctl", "ui", d.udid, "appearance",
+		core.IOSAppearanceValue(step.Enabled)).CombinedOutput()
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to set dark mode: %v: %s", err, strings.TrimSpace(string(out))))
+	}
+	return successResult(fmt.Sprintf("Set %s mode", core.DarkModeStateName(step.Enabled)), nil)
+}
+
+func (d *Driver) toggleDarkMode(_ *flow.ToggleDarkModeStep) *core.CommandResult {
+	current, err := d.currentDarkMode()
+	if err != nil {
+		return errorResult(err, err.Error())
+	}
+	return d.setDarkMode(&flow.SetDarkModeStep{Enabled: !current})
+}
+
+func (d *Driver) assertDarkMode(_ *flow.AssertDarkModeStep) *core.CommandResult {
+	return d.assertDarkModeIs(true)
+}
+
+func (d *Driver) assertLightMode(_ *flow.AssertLightModeStep) *core.CommandResult {
+	return d.assertDarkModeIs(false)
+}
+
+func (d *Driver) assertDarkModeIs(want bool) *core.CommandResult {
+	got, err := d.currentDarkMode()
+	if err != nil {
+		return errorResult(err, err.Error())
+	}
+	if got != want {
+		assertErr := core.DarkModeAssertionError(want, got)
+		return errorResult(assertErr, assertErr.Error())
+	}
+	return successResult(fmt.Sprintf("Device is in %s mode", core.DarkModeStateName(want)), nil)
+}
+
+func (d *Driver) currentDarkMode() (bool, error) {
+	if err := d.requireSimulatorForAppearance("dark mode"); err != nil {
+		return false, err
+	}
+	out, err := exec.Command("xcrun", "simctl", "ui", d.udid, "appearance").CombinedOutput()
+	if err != nil {
+		return false, fmt.Errorf("failed to read appearance: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return core.ParseIOSAppearance(string(out))
+}
+
+func (d *Driver) requireSimulatorForAppearance(what string) error {
+	if d.info == nil || !d.info.IsSimulator {
+		return fmt.Errorf("%s is not supported on a physical device with the wda driver — "+
+			"WebDriverAgent has no appearance endpoint; use --driver devicelab_ios for dark mode on real hardware", what)
+	}
+	if d.udid == "" {
+		return fmt.Errorf("%s requires a simulator UDID", what)
+	}
+	return nil
 }

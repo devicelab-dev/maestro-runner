@@ -670,6 +670,47 @@ func TestSelector_HasNonZeroIndex(t *testing.T) {
 	}
 }
 
+func TestSelector_EffectiveNth(t *testing.T) {
+	tests := []struct {
+		name  string
+		index string
+		nth   int
+		want  int
+	}{
+		{name: "both unset", want: 0},
+		{name: "nth set, no index", nth: 2, want: 2},
+		{name: "index set as string, no nth", index: "3", want: 3},
+		{name: "index set with whitespace", index: "  4  ", want: 4},
+		{name: "both set: nth wins", nth: 5, index: "9", want: 5},
+		{name: "index zero, nth zero", index: "0", nth: 0, want: 0},
+		{name: "negative index treated as 0", index: "-1", want: 0},
+		{name: "non-numeric index treated as 0", index: "abc", want: 0},
+		{name: "variable reference treated as 0", index: "${idx}", want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := Selector{Nth: tt.nth, Index: tt.index}
+			if got := s.EffectiveNth(); got != tt.want {
+				t.Errorf("EffectiveNth() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSelector_WebSupportsIndex guards the parity behavior reported in #67:
+// flows that use `index: N` (the mobile-style spelling) on a web selector
+// should not be flagged as unsupported. Regression in this list is what
+// caused upstream-Maestro flows to silently tap the wrong element on web.
+func TestSelector_WebSupportsIndex(t *testing.T) {
+	s := &Selector{Text: "Help", Index: "1"}
+	unsupported := CheckUnsupportedFields(s, "web")
+	for _, f := range unsupported {
+		if f == "index" {
+			t.Errorf("CheckUnsupportedFields(web) reported %q as unsupported; should be allowed (#67)", f)
+		}
+	}
+}
+
 func TestSelector_UnmarshalYAML_Invalid(t *testing.T) {
 	invalidYAML := `
 text: valid
@@ -955,9 +996,9 @@ func TestCheckUnsupportedFields(t *testing.T) {
 		},
 		{
 			name:        "multiple unsupported on web",
-			selector:    Selector{Width: 100, Height: 50, Index: "1"},
+			selector:    Selector{Width: 100, Height: 50, Tolerance: 5},
 			platform:    "web",
-			unsupported: []string{"width", "height", "index"},
+			unsupported: []string{"width", "height", "tolerance"},
 		},
 		{
 			name:        "relative selector on web - unsupported",

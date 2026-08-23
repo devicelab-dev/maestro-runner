@@ -196,6 +196,21 @@ func (c *Client) Swipe(fromX, fromY, toX, toY float64, durationSec float64) erro
 	return err
 }
 
+// DragFromTo presses at the start point, holds, then drags to the end point.
+// The endpoint maps to XCUITest's press(forDuration:thenDragTo:), so
+// pressDurationSec is the hold before the move — the lift gesture reorder UIs
+// wait for. XCUITest paces the move itself; the drag speed is not ours to set.
+func (c *Client) DragFromTo(fromX, fromY, toX, toY, pressDurationSec float64) error {
+	_, err := c.post(c.sessionPath("/wda/dragfromtoforduration"), map[string]interface{}{
+		"fromX":    fromX,
+		"fromY":    fromY,
+		"toX":      toX,
+		"toY":      toY,
+		"duration": pressDurationSec,
+	})
+	return err
+}
+
 // Input
 
 // SendKeys types text. If frequency > 0, it overrides the session typing speed (keys/sec).
@@ -247,13 +262,34 @@ func (c *Client) Screenshot() ([]byte, error) {
 func (c *Client) Source() (string, error) {
 	resp, err := c.get(c.sessionPath("/source"))
 	if err != nil {
-		return "", err
+		// A snapshot taken while the accessibility tree is mutating can fail
+		// with a transient kAXErrorInvalidUIElement (-25202): an element ref
+		// went stale mid-walk. It clears on the next attempt, so retry once
+		// before surfacing it (mirrors Maestro's #3430 recovery).
+		if isTransientAXError(err) {
+			time.Sleep(150 * time.Millisecond)
+			resp, err = c.get(c.sessionPath("/source"))
+		}
+		if err != nil {
+			return "", err
+		}
 	}
 
 	if value, ok := resp["value"].(string); ok {
 		return value, nil
 	}
 	return "", fmt.Errorf("invalid source response")
+}
+
+// isTransientAXError reports whether a WDA error is the transient
+// kAXErrorInvalidUIElement (-25202) raised when the accessibility tree mutates
+// mid-query — a retry-once condition, not a real failure.
+func isTransientAXError(err error) bool {
+	if err == nil {
+		return false
+	}
+	m := err.Error()
+	return strings.Contains(m, "kAXErrorInvalidUIElement") || strings.Contains(m, "-25202")
 }
 
 // WindowSize returns the screen dimensions.
@@ -479,15 +515,27 @@ func (c *Client) ElementAttribute(elementID, name string) (string, error) {
 }
 
 // GetActiveElement returns the currently focused element ID.
+//
+// The reference is read under either the legacy ELEMENT key or the W3C
+// element-6066 key, the same way FindElements does. Reading only ELEMENT would
+// make a W3C-shaped response indistinguishable from "nothing is focused", which
+// callers act on.
 func (c *Client) GetActiveElement() (string, error) {
 	resp, err := c.get(c.sessionPath("/element/active"))
 	if err != nil {
 		return "", err
 	}
 	if value, ok := resp["value"].(map[string]interface{}); ok {
-		// WDA returns element ID as ELEMENT key
-		if elemID, ok := value["ELEMENT"].(string); ok {
+		if elemID, ok := value["ELEMENT"].(string); ok && elemID != "" {
 			return elemID, nil
+		}
+		for key, v := range value {
+			if !strings.HasPrefix(key, "element-") {
+				continue
+			}
+			if elemID, ok := v.(string); ok && elemID != "" {
+				return elemID, nil
+			}
 		}
 	}
 	return "", fmt.Errorf("no active element")

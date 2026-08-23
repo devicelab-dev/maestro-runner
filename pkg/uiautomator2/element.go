@@ -206,7 +206,16 @@ func (e *Element) Text() (string, error) {
 }
 
 // Attribute returns an element attribute.
+//
+// Cached elements (NewCachedElement, used by the DeviceLab WebSocket adapter)
+// carry no HTTP client — every other method is cache- or callback-aware, so
+// only this one could reach a nil client and crash the runner. Report it
+// instead: callers already treat an attribute error as "not available".
 func (e *Element) Attribute(name string) (string, error) {
+	if e.client == nil {
+		return "", fmt.Errorf("attribute %q unavailable: element %s is not backed by a session", name, e.id)
+	}
+
 	data, err := e.client.request("GET", e.client.sessionPath("/element/"+e.id+"/attribute/"+name), nil)
 	if err != nil {
 		return "", err

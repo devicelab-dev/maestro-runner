@@ -43,6 +43,20 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		return errorResult(err, fmt.Sprintf("Element not found: %s", step.Selector.Describe()))
 	}
 
+	cx, cy := info.Bounds.Center()
+
+	// If duration is set (or longPress: true), hold the press for that long.
+	if step.DurationMs > 0 || step.LongPress {
+		duration := step.DurationMs
+		if duration <= 0 {
+			duration = 1000
+		}
+		if err := d.client.LongPress(cx, cy, duration); err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to press for %dms", duration))
+		}
+		return successResult(fmt.Sprintf("Pressed on element for %dms", duration), info)
+	}
+
 	// On iOS, store the element ID so inputText can use ElementSendKeys
 	// to atomically focus + type (bypasses keyboard focus timing issues).
 	if d.platform == "ios" && info.ID != "" {
@@ -57,7 +71,6 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		return successResult(fmt.Sprintf("Tapped on element '%s'", info.ID), info)
 	}
 
-	cx, cy := info.Bounds.Center()
 	if err := d.client.Tap(cx, cy); err != nil {
 		return errorResult(err, "Failed to tap")
 	}
@@ -77,7 +90,10 @@ func (d *Driver) doubleTapOn(step *flow.DoubleTapOnStep) *core.CommandResult {
 		return errorResult(err, fmt.Sprintf("Element not found: %s", step.Selector.Describe()))
 	}
 
-	cx, cy := info.Bounds.Center()
+	cx, cy, perr := core.PointInBounds(step.Selector.Point, info.Bounds)
+	if perr != nil {
+		return errorResult(perr, fmt.Sprintf("Invalid point coordinates: %v", perr))
+	}
 	if err := d.client.DoubleTap(cx, cy); err != nil {
 		return errorResult(err, "Failed to double tap")
 	}
@@ -97,9 +113,15 @@ func (d *Driver) longPressOn(step *flow.LongPressOnStep) *core.CommandResult {
 		return errorResult(err, fmt.Sprintf("Element not found: %s", step.Selector.Describe()))
 	}
 
-	duration := 1000 // Default 1 second for long press
+	duration := step.DurationMs
+	if duration <= 0 {
+		duration = 1000 // Default 1 second for long press
+	}
 
-	cx, cy := info.Bounds.Center()
+	cx, cy, perr := core.PointInBounds(step.Selector.Point, info.Bounds)
+	if perr != nil {
+		return errorResult(perr, fmt.Sprintf("Invalid point coordinates: %v", perr))
+	}
 	if err := d.client.LongPress(cx, cy, duration); err != nil {
 		return errorResult(err, "Failed to long press")
 	}
@@ -120,6 +142,17 @@ func (d *Driver) tapOnPoint(step *flow.TapOnPointStep) *core.CommandResult {
 		if err != nil {
 			return errorResult(err, "Invalid point coordinates")
 		}
+	}
+
+	if step.DurationMs > 0 || step.LongPress {
+		duration := step.DurationMs
+		if duration <= 0 {
+			duration = 1000
+		}
+		if err := d.client.LongPress(x, y, duration); err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to press at point for %dms", duration))
+		}
+		return successResult(fmt.Sprintf("Pressed at (%d, %d)", x, y), nil)
 	}
 
 	if err := d.client.Tap(x, y); err != nil {
@@ -174,9 +207,39 @@ func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
 	}
 
 	// Direction-based swipe
-	direction := strings.ToLower(step.Direction)
-	if direction == "" {
-		direction = "up"
+	direction, err := core.NormalizeSwipeDirection(step.Direction)
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("Invalid swipe direction: %s", step.Direction))
+	}
+
+	duration := step.Duration
+	if duration <= 0 {
+		duration = 500
+	}
+
+	// If a from:/selector element is specified, anchor the swipe on the
+	// element's bounds so drag targets (sliders, drag handles) receive the
+	// gesture, and honour `duration:` — parity with the uiautomator2 /
+	// devicelab fix (#114).
+	if step.Selector != nil && !step.Selector.IsEmpty() {
+		timeout := time.Duration(step.TimeoutMs) * time.Millisecond
+		if timeout <= 0 {
+			timeout = d.getFindTimeout()
+		}
+		info, err := d.findElement(*step.Selector, timeout)
+		if err != nil {
+			return errorResult(err, fmt.Sprintf("Element not found for swipe: %s", step.Selector.Describe()))
+		}
+		if info != nil && info.Bounds.Width > 0 {
+			startX, startY, endX, endY, err := core.SwipeCoordsInBounds(direction, info.Bounds, w, h)
+			if err != nil {
+				return errorResult(err, fmt.Sprintf("Invalid swipe direction: %s", step.Direction))
+			}
+			if err := d.client.Swipe(startX, startY, endX, endY, duration); err != nil {
+				return errorResult(err, "Failed to swipe")
+			}
+			return successResult(fmt.Sprintf("Swiped %s in element", direction), info)
+		}
 	}
 
 	// Swipe coordinates match Maestro behavior:
@@ -203,7 +266,7 @@ func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
 		return errorResult(fmt.Errorf("invalid direction: %s", direction), "")
 	}
 
-	if err := d.client.Swipe(startX, startY, endX, endY, 500); err != nil {
+	if err := d.client.Swipe(startX, startY, endX, endY, duration); err != nil {
 		return errorResult(err, "Failed to swipe")
 	}
 
@@ -238,6 +301,44 @@ func (d *Driver) scroll(step *flow.ScrollStep) *core.CommandResult {
 	return successResult(fmt.Sprintf("Scrolled %s", direction), nil)
 }
 
+// resolveDragPoint turns one end of a dragAndDrop into screen coordinates:
+// a bare point resolves against the screen, anything else finds the element
+// and uses its center.
+func (d *Driver) resolveDragPoint(sel flow.Selector, timeout time.Duration) (int, int, *core.ElementInfo, error) {
+	if sel.Point != "" && sel.IsEmpty() {
+		w, h := d.client.ScreenSize()
+		x, y, err := core.ParsePointCoords(sel.Point, w, h)
+		return x, y, nil, err
+	}
+	info, err := d.findElement(sel, timeout)
+	if err != nil {
+		return 0, 0, nil, fmt.Errorf("element not found: %s: %w", sel.Describe(), err)
+	}
+	x, y := info.Bounds.Center()
+	return x, y, info, nil
+}
+
+func (d *Driver) dragAndDrop(step *flow.DragAndDropStep) *core.CommandResult {
+	timeout := time.Duration(step.TimeoutMs) * time.Millisecond
+	if timeout <= 0 {
+		timeout = d.getFindTimeout()
+	}
+
+	fromX, fromY, fromInfo, err := d.resolveDragPoint(step.From, timeout)
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("dragAndDrop from: %v", err))
+	}
+	toX, toY, _, err := d.resolveDragPoint(step.To, timeout)
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("dragAndDrop to: %v", err))
+	}
+
+	if err := d.client.DragAndDrop(fromX, fromY, toX, toY, step.HoldDuration, step.Duration); err != nil {
+		return errorResult(err, "Failed to drag and drop")
+	}
+	return successResult(fmt.Sprintf("Dragged (%d, %d) → (%d, %d)", fromX, fromY, toX, toY), fromInfo)
+}
+
 func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.CommandResult {
 	direction := strings.ToLower(step.Direction)
 	if direction == "" {
@@ -255,11 +356,25 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 		maxScrolls = step.MaxScrolls
 	}
 
+	partiallyVisible := false
 	for i := 0; i < maxScrolls && time.Now().Before(deadline); i++ {
-		// Check if element is visible
+		if err := d.parentContext().Err(); err != nil {
+			return errorResult(fmt.Errorf("scroll cancelled: %w", err), "")
+		}
+
+		// Found in the tree is not enough: an element half-hidden behind a bar
+		// or peeking over the fold would stop the scroll and the next tap
+		// lands wrong. Require the visibility fraction the step asks for
+		// (default: fully on screen). Elements without usable bounds keep the
+		// old found-is-enough behavior — there is nothing to measure.
 		info, err := d.findElement(step.Element, 1*time.Second)
 		if err == nil && info != nil {
-			return successResult("Element found", info)
+			w, h := d.client.ScreenSize()
+			boundsKnown := info.Bounds.Width > 0 && info.Bounds.Height > 0 && w > 0 && h > 0
+			if !boundsKnown || core.MeetsVisibility(info.Bounds, w, h, step.VisibilityPercentage) {
+				return successResult("Element found", info)
+			}
+			partiallyVisible = true
 		}
 
 		// Scroll
@@ -267,6 +382,9 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 		time.Sleep(300 * time.Millisecond)
 	}
 
+	if partiallyVisible {
+		return errorResult(fmt.Errorf("element found but never sufficiently visible after scrolling"), "")
+	}
 	return errorResult(fmt.Errorf("element not found after scrolling"), "")
 }
 
@@ -274,6 +392,29 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 
 func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 	text := step.Text
+
+	// Inline selector: find the element and type into it directly — parity
+	// with the uiautomator2/devicelab drivers, which already honour it.
+	// Guard against the YAML artifact where InputTextStep.Text and
+	// Selector.Text share the `text:` key (map form), which would otherwise
+	// send us hunting for an element whose text equals the input value.
+	selectorIsReal := !step.Selector.IsEmpty() && step.Selector.Text != text
+	if selectorIsReal {
+		timeout := time.Duration(step.TimeoutMs) * time.Millisecond
+		if timeout <= 0 {
+			timeout = d.getFindTimeout()
+		}
+		info, err := d.findElement(step.Selector, timeout)
+		if err != nil {
+			return errorResult(err, fmt.Sprintf("Element not found: %s", step.Selector.Describe()))
+		}
+		if info != nil && info.ID != "" {
+			if err := d.client.ElementSendKeys(info.ID, text); err != nil {
+				return errorResult(err, "Failed to input text")
+			}
+			return successResult(fmt.Sprintf("Input text: %s", text), info)
+		}
+	}
 
 	if d.platform == "ios" {
 		// On iOS, use ElementSendKeys (POST /element/{id}/value) which internally
@@ -301,8 +442,25 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 			}
 		}
 	} else {
-		if err := d.client.SendKeys(text); err != nil {
-			return errorResult(err, "Failed to input text")
+		// Android: prefer element-scoped typing into the focused element
+		// (POST /element/{id}/value). Blind W3C key actions silently no-op
+		// on WebView DOM inputs — the keystrokes never reach the page, but
+		// the call still reports success (#122). Element send-keys routes
+		// through accessibility ACTION_SET_TEXT, which Chrome translates
+		// into a real DOM value change with input/change events. The
+		// UiAutomator2 server appends rather than replaces, preserving
+		// type-into-focused semantics. Fall back to blind key actions when
+		// no element has focus.
+		typed := false
+		if elemID, err := d.client.GetActiveElement(); err == nil && elemID != "" {
+			if err := d.client.ElementSendKeys(elemID, text); err == nil {
+				typed = true
+			}
+		}
+		if !typed {
+			if err := d.client.SendKeys(text); err != nil {
+				return errorResult(err, "Failed to input text")
+			}
 		}
 	}
 
@@ -400,12 +558,83 @@ func (d *Driver) assertVisible(step *flow.AssertVisibleStep) *core.CommandResult
 		timeout = d.getFindTimeout()
 	}
 
+	if n, has, err := step.ExpectedCount(); err != nil {
+		return errorResult(err, err.Error())
+	} else if has {
+		return d.assertVisibleCount(step.Selector, n, timeout)
+	}
+
 	info, err := d.findElement(step.Selector, timeout)
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Element not visible: %s", step.Selector.Describe()))
 	}
 
 	return successResult(fmt.Sprintf("Element is visible: %s", step.Selector.Describe()), info)
+}
+
+// assertVisibleCount asserts that exactly expected displayed elements match
+// the selector. Counting enumerates the page source with the same matcher
+// index selection uses, so what counts as a match is identical to what
+// `index:` would pick among. Polls until the count is met or the timeout
+// expires, then reports the last observed count.
+func (d *Driver) assertVisibleCount(sel flow.Selector, expected int, timeout time.Duration) *core.CommandResult {
+	desc := sel.Describe()
+	deadline := time.Now().Add(timeout)
+	observed := -1
+	var lastErr error
+
+	for {
+		if err := d.parentContext().Err(); err != nil {
+			return errorResult(err, fmt.Sprintf("Expected %d visible matches of %s", expected, desc))
+		}
+
+		n, err := d.countVisibleMatches(sel)
+		if err != nil {
+			lastErr = err
+		} else {
+			observed = n
+			if n == expected {
+				return successResult(fmt.Sprintf("Element is visible exactly %d time(s): %s", expected, desc), nil)
+			}
+		}
+
+		if time.Now().After(deadline) {
+			if observed < 0 {
+				return errorResult(lastErr, fmt.Sprintf("Expected %d visible matches of %s: could not read page source", expected, desc))
+			}
+			return errorResult(
+				fmt.Errorf("expected %d visible matches, found %d", expected, observed),
+				fmt.Sprintf("Expected %d visible matches of %s, found %d", expected, desc, observed),
+			)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// countVisibleMatches counts the displayed elements matching the selector in
+// the current page source.
+func (d *Driver) countVisibleMatches(sel flow.Selector) (int, error) {
+	source, err := d.client.Source()
+	if err != nil {
+		return 0, err
+	}
+	elements, platform, err := ParsePageSource(source)
+	if err != nil {
+		return 0, err
+	}
+	d.platform = platform
+	return countDisplayed(FilterBySelector(elements, sel, platform)), nil
+}
+
+// countDisplayed counts the elements the platform reports as displayed.
+func countDisplayed(elements []*ParsedElement) int {
+	n := 0
+	for _, e := range elements {
+		if e.Displayed {
+			n++
+		}
+	}
+	return n
 }
 
 func (d *Driver) assertNotVisible(step *flow.AssertNotVisibleStep) *core.CommandResult {
@@ -605,10 +834,9 @@ func (d *Driver) copyTextFrom(step *flow.CopyTextFromStep) *core.CommandResult {
 		return errorResult(fmt.Errorf("element has no text"), "")
 	}
 
-	if err := d.client.SetClipboard(text); err != nil {
-		return errorResult(err, "Failed to set clipboard")
-	}
-
+	// Don't push to device clipboard — Appium 3.x UIA2 returns 404 for
+	// /appium/device/set_clipboard, and the executor already keeps the
+	// copied text in memory (script.SetCopiedText) for pasteText to reuse.
 	result := successResult(fmt.Sprintf("Copied text: '%s' (len=%d)", text, len(text)), info)
 	result.Data = text
 	return result
@@ -884,7 +1112,7 @@ func (d *Driver) waitUntil(step *flow.WaitUntilStep) *core.CommandResult {
 		timeout = time.Duration(step.TimeoutMs) * time.Millisecond
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(d.parentContext(), timeout)
 	defer cancel()
 
 	var selector *flow.Selector
@@ -1009,6 +1237,11 @@ func parsePercentageCoords(coord string) (float64, float64, error) {
 // grantPermissions grants permissions via mobile: shell pm grant.
 // If the permissions map is provided, only those are granted (keys are permission names).
 // If empty/nil, all common runtime permissions are granted.
+//
+// Note: `mobile: shell` requires Appium's `adb_shell` insecure feature to
+// be enabled. On hosts that disable it (e.g. Sauce Labs by default), pass
+// `appium:autoGrantPermissions: true` in caps so Appium grants declared
+// permissions during install, and avoid using this step explicitly.
 func (d *Driver) grantPermissions(appID string, permissions map[string]string) {
 	if len(permissions) > 0 {
 		for perm := range permissions {

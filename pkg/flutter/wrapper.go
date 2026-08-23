@@ -36,11 +36,12 @@ type FlutterDriver struct {
 	client        *VMServiceClient
 	dev           DeviceExecutor
 	appID         string
-	socketPath    string // Unix socket path for VM Service forwarding (Android)
-	udid          string // iOS simulator UDID (empty for Android)
-	isIOS         bool   // true = iOS reconnection path
-	attempted     bool   // true after first discovery attempt (avoids retrying every step)
-	findTimeoutMs int    // current find timeout set by executor (0 = driver default)
+	socketPath    string          // Unix socket path for VM Service forwarding (Android)
+	udid          string          // iOS simulator UDID (empty for Android)
+	isIOS         bool            // true = iOS reconnection path
+	attempted     bool            // true after first discovery attempt (avoids retrying every step)
+	findTimeoutMs int             // current find timeout set by executor (0 = driver default)
+	ctx           context.Context // Parent context for element-finding operations (runFlow timeout)
 }
 
 // Wrap creates a FlutterDriver that wraps the given inner driver.
@@ -91,6 +92,13 @@ func (d *FlutterDriver) Execute(step flow.Step) *core.CommandResult {
 		return d.inner.Execute(step)
 	}
 
+	// Count assertions → inner only. The Flutter VM resolves a single element,
+	// so the parallel race is meaningless for "exactly N matches" — and its 1s
+	// inner poll windows would clamp the count's own polling loop.
+	if av, ok := step.(*flow.AssertVisibleStep); ok && av.Count != "" {
+		return d.inner.Execute(step)
+	}
+
 	sel := extractSelector(step)
 	if sel == nil || sel.IsEmpty() || (sel.Text == "" && sel.ID == "") {
 		return d.inner.Execute(step)
@@ -115,7 +123,7 @@ func (d *FlutterDriver) Execute(step flow.Step) *core.CommandResult {
 	// --- Parallel search: inner driver (1s polls) + Flutter (continuous goroutine) ---
 
 	// Start Flutter polling in background goroutine
-	searchCtx, searchCancel := context.WithTimeout(context.Background(), time.Duration(effectiveTimeout)*time.Millisecond)
+	searchCtx, searchCancel := context.WithTimeout(d.parentContext(), time.Duration(effectiveTimeout)*time.Millisecond)
 	flutterCh := make(chan *flutterSearchResult, 1)
 	go d.flutterPollLoop(searchCtx, sel, flutterCh)
 
@@ -125,6 +133,14 @@ func (d *FlutterDriver) Execute(step flow.Step) *core.CommandResult {
 	var result *core.CommandResult
 
 	for time.Now().Before(deadline) {
+		// Check if parent context (e.g. runFlow timeout) was cancelled
+		if err := d.parentContext().Err(); err != nil {
+			searchCancel()
+			<-flutterCh
+			d.inner.SetFindTimeout(d.findTimeoutMs)
+			return core.ErrorResult(fmt.Errorf("element %q not found: %w", sel.Describe(), err), "")
+		}
+
 		d.inner.SetFindTimeout(innerPollTimeout)
 		result = d.inner.Execute(step)
 
@@ -380,6 +396,31 @@ func (d *FlutterDriver) tryReconnectIOS() error {
 func (d *FlutterDriver) executeFlutterResult(step flow.Step, fr *flutterSearchResult) *core.CommandResult {
 	cx, cy := fr.cx, fr.cy
 
+	// Viewport check: Flutter's widget/semantics trees include lazy ListView
+	// items that are laid out in the cache-extent buffer (just past the
+	// visible viewport). Their reported coordinates may still fall within
+	// the device screen bounds, but a tap there lands on the system nav bar
+	// or on a different widget that is actually painted at that position.
+	// Reject when the tap point is in the system-bar safe area or fully
+	// outside the screen, with a clear error so the user knows to scroll.
+	if !fr.isSuffix && shouldRejectAsOffscreen(d.inner.GetPlatformInfo(), cx, cy) {
+		sel := extractSelector(step)
+		describe := ""
+		if sel != nil {
+			describe = sel.Describe()
+		}
+		info := d.inner.GetPlatformInfo()
+		sw, sh := 0, 0
+		if info != nil {
+			sw, sh = info.ScreenWidth, info.ScreenHeight
+		}
+		logger.Info("Flutter fallback: rejecting offscreen tap (node #%d at %d,%d on %dx%d screen)", fr.node.ID, cx, cy, sw, sh)
+		return core.ErrorResult(
+			fmt.Errorf("element %s located by Flutter VM service at (%d,%d) but that's outside the visible viewport of the %dx%d screen — element is likely in a lazy ListView cache buffer; use scrollUntilVisible to bring it into view first", describe, cx, cy, sw, sh),
+			"",
+		)
+	}
+
 	if fr.isSuffix {
 		rightEdge := int(fr.node.Rect.Right * fr.pixelRatio)
 		cx = rightEdge - int(12*fr.pixelRatio)
@@ -400,6 +441,25 @@ func (d *FlutterDriver) executeFlutterResult(step flow.Step, fr *flutterSearchRe
 	}
 
 	return d.executeWithCoordinates(step, fr.node, cx, cy, fr.bounds)
+}
+
+// shouldRejectAsOffscreen decides whether a Flutter-located tap point is
+// likely outside the visible viewport (system-bar safe-area buffer, or fully
+// off the screen). Permissive when screen size is unknown.
+//
+// Safe-area heuristic: top 3% (status bar / notch) and bottom 5% (nav bar /
+// gesture area). Tappable content rarely lands here; when it does, the
+// inner driver usually sees it directly without needing Flutter fallback.
+func shouldRejectAsOffscreen(info *core.PlatformInfo, cx, cy int) bool {
+	if info == nil || info.ScreenWidth <= 0 || info.ScreenHeight <= 0 {
+		return false
+	}
+	if cx < 0 || cx >= info.ScreenWidth || cy < 0 || cy >= info.ScreenHeight {
+		return true
+	}
+	topInset := info.ScreenHeight * 3 / 100
+	bottomInset := info.ScreenHeight - info.ScreenHeight*5/100
+	return cy < topInset || cy > bottomInset
 }
 
 // searchSemanticsTree searches the parsed semantics tree for matching nodes.
@@ -551,6 +611,17 @@ func (d *FlutterDriver) SetFindTimeout(ms int) {
 }
 func (d *FlutterDriver) SetWaitForIdleTimeout(ms int) error {
 	return d.inner.SetWaitForIdleTimeout(ms)
+}
+func (d *FlutterDriver) SetContext(ctx context.Context) {
+	d.ctx = ctx
+	d.inner.SetContext(ctx)
+}
+
+func (d *FlutterDriver) parentContext() context.Context {
+	if d.ctx != nil {
+		return d.ctx
+	}
+	return context.Background()
 }
 
 // --- Optional interface forwarding ---

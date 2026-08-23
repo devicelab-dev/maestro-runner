@@ -116,6 +116,52 @@ func (c *Client) Drag(elementID string, endX, endY, speed int) error {
 	return err
 }
 
+// DragAndDrop presses at (fromX, fromY), holds for holdMs, drags to
+// (toX, toY) over moveMs, settles briefly, then releases.
+//
+// Goes through the W3C actions endpoint rather than the gestures API: the
+// server's /gestures/drag has no hold phase, and reorder UIs only lift the
+// item after a long press. The move is split into small steps because drop
+// targets track the finger — a single jump can skip every zone in between.
+func (c *Client) DragAndDrop(fromX, fromY, toX, toY, holdMs, moveMs int) error {
+	const moveSteps = 20
+
+	actions := []map[string]interface{}{
+		{"type": "pointerMove", "duration": 0, "x": fromX, "y": fromY},
+		{"type": "pointerDown", "button": 0},
+		{"type": "pause", "duration": holdMs},
+	}
+	stepDuration := moveMs / moveSteps
+	for i := 1; i <= moveSteps; i++ {
+		frac := float64(i) / float64(moveSteps)
+		actions = append(actions, map[string]interface{}{
+			"type":     "pointerMove",
+			"duration": stepDuration,
+			"x":        fromX + int(float64(toX-fromX)*frac),
+			"y":        fromY + int(float64(toY-fromY)*frac),
+		})
+	}
+	actions = append(actions,
+		// Hold still before lifting so the drop registers as a deliberate
+		// placement rather than a fling.
+		map[string]interface{}{"type": "pause", "duration": 250},
+		map[string]interface{}{"type": "pointerUp", "button": 0},
+	)
+
+	req := map[string]interface{}{
+		"actions": []map[string]interface{}{
+			{
+				"type":       "pointer",
+				"id":         "finger1",
+				"parameters": map[string]interface{}{"pointerType": "touch"},
+				"actions":    actions,
+			},
+		},
+	}
+	_, err := c.request("POST", c.sessionPath("/actions"), req)
+	return err
+}
+
 // PinchOpen performs a pinch-open (zoom in) gesture.
 func (c *Client) PinchOpen(elementID string, percent float64, speed int) error {
 	req := PinchRequest{

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -76,8 +77,7 @@ func splitYAMLDocuments(content string) []string {
 		trimmed := strings.TrimSpace(line)
 
 		if !inMultiline {
-			if strings.HasSuffix(trimmed, "|") || strings.HasSuffix(trimmed, ">") ||
-				strings.HasSuffix(trimmed, "|-") || strings.HasSuffix(trimmed, ">-") {
+			if startsBlockScalar(trimmed) {
 				inMultiline = true
 				if i+1 < len(lines) {
 					next := lines[i+1]
@@ -110,6 +110,32 @@ func splitYAMLDocuments(content string) []string {
 	}
 
 	return parts
+}
+
+// startsBlockScalar reports whether a YAML line opens a block scalar
+// (`script: |`, `text: >-`, `cmd: |2` …). Only the line's last
+// whitespace-separated token is considered, and it must be a bare block
+// indicator (| or > plus optional chomping/indent), so prose or comments
+// that merely end in '>' — e.g. "# navigation: Library ->" — don't flip
+// the splitter into multiline mode and swallow the `---` separator (#119).
+func startsBlockScalar(trimmed string) bool {
+	if strings.HasPrefix(trimmed, "#") {
+		return false
+	}
+	fields := strings.Fields(trimmed)
+	if len(fields) == 0 {
+		return false
+	}
+	last := fields[len(fields)-1]
+	if last[0] != '|' && last[0] != '>' {
+		return false
+	}
+	for _, c := range last[1:] {
+		if c != '+' && c != '-' && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 func parseConfig(content string, flow *Flow) error {
@@ -223,14 +249,15 @@ func isStepType(key string) bool {
 	switch StepType(key) {
 	case StepTapOn, StepDoubleTapOn, StepLongPressOn, StepTapOnPoint,
 		StepSwipe, StepScroll, StepScrollUntilVisible, StepBack, StepHideKeyboard,
-		StepAcceptAlert, StepDismissAlert, StepIsKeyboardVisible,
+		StepOpenNotifications, StepAcceptAlert, StepDismissAlert, StepIsKeyboardVisible,
 		StepInputText, StepInputRandom, StepInputRandomEmail, StepInputRandomNumber,
 		StepInputRandomPersonName, StepInputRandomText,
 		StepEraseText, StepCopyTextFrom, StepPasteText, StepSetClipboard,
-		StepAssertVisible, StepAssertNotVisible, StepAssertTrue, StepAssertCondition,
+		StepAssertVisible, StepAssertNotVisible, StepAssertTrue, StepAssertCondition, StepAssertScreenshot,
 		StepAssertNoDefectsWithAI, StepAssertWithAI, StepExtractTextWithAI, StepWaitUntil,
 		StepLaunchApp, StepStopApp, StepKillApp, StepClearState, StepClearKeychain, StepSetPermissions,
 		StepSetLocation, StepSetOrientation, StepSetAirplaneMode, StepToggleAirplaneMode,
+		StepSetDarkMode, StepToggleDarkMode, StepAssertDarkMode, StepAssertLightMode,
 		StepTravel, StepOpenLink, StepOpenBrowser, StepRepeat, StepRetry, StepRunFlow,
 		StepRunScript, StepEvalScript, StepEvalBrowserScript,
 		StepRunBrowserScript, StepEvalWebViewScript, StepRunWebViewScript,
@@ -240,8 +267,8 @@ func isStepType(key string) bool {
 		StepOpenTab, StepSwitchTab, StepCloseTab,
 		StepMockNetwork, StepBlockNetwork, StepSetNetworkConditions, StepWaitForRequest, StepClearNetworkMocks,
 		StepTakeScreenshot, StepStartRecording,
-		StepStopRecording, StepAddMedia, StepSleep, StepPressKey, StepWaitForAnimationToEnd,
-		StepDefineVariables:
+		StepStopRecording, StepAddMedia, StepRemoveMedia, StepSleep, StepPressKey, StepWaitForAnimationToEnd,
+		StepDefineVariables, StepDragAndDrop:
 		return true
 	}
 	return false
@@ -305,6 +332,12 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 		} else if err := valueNode.Decode(&s); err != nil {
 			return nil, wrapParseError(sourcePath, valueNode.Line, err)
 		}
+		// Bare `- scroll` scrolls down, matching Maestro's documented
+		// default. Normalized here so every driver sees a concrete
+		// direction (#120: WDA and devicelab_ios rejected "").
+		if s.Direction == "" {
+			s.Direction = "down"
+		}
 		s.StepType = stepType
 		return &s, nil
 
@@ -332,6 +365,9 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 		}
 		s.StepType = stepType
 		return &s, nil
+
+	case StepOpenNotifications:
+		return &OpenNotificationsStep{BaseStep: BaseStep{StepType: stepType}}, nil
 
 	case StepAcceptAlert:
 		return &AcceptAlertStep{BaseStep: BaseStep{StepType: stepType}}, nil
@@ -422,12 +458,45 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 		s.StepType = stepType
 		return &s, nil
 
+	case StepDragAndDrop:
+		var s DragAndDropStep
+		if err := valueNode.Decode(&s); err != nil {
+			return nil, wrapParseError(sourcePath, valueNode.Line, err)
+		}
+		if s.From.IsEmpty() && s.From.Point == "" {
+			return nil, wrapParseError(sourcePath, valueNode.Line,
+				fmt.Errorf("dragAndDrop: from requires a selector or point"))
+		}
+		if s.To.IsEmpty() && s.To.Point == "" {
+			return nil, wrapParseError(sourcePath, valueNode.Line,
+				fmt.Errorf("dragAndDrop: to requires a selector or point"))
+		}
+		if s.HoldDuration == 0 {
+			s.HoldDuration = 1000
+		}
+		if s.Duration == 0 {
+			s.Duration = 1000
+		}
+		s.StepType = stepType
+		return &s, nil
+
 	case StepAssertVisible:
 		var s AssertVisibleStep
 		if valueNode.Kind == yaml.ScalarNode {
 			s.Selector.Text = valueNode.Value
 		} else if err := valueNode.Decode(&s); err != nil {
 			return nil, wrapParseError(sourcePath, valueNode.Line, err)
+		}
+		// A numeric count literal is validated here so the flow fails before a
+		// device is touched; a ${VAR} count is validated after expansion.
+		if s.Count != "" && !strings.Contains(s.Count, "${") {
+			if _, _, err := s.ExpectedCount(); err != nil {
+				return nil, wrapParseError(sourcePath, valueNode.Line, err)
+			}
+		}
+		if s.Count != "" && s.Selector.Index != "" {
+			return nil, wrapParseError(sourcePath, valueNode.Line,
+				fmt.Errorf("assertVisible: count and index cannot be combined — count asserts how many elements match, index picks one of them"))
 		}
 		s.StepType = stepType
 		return &s, nil
@@ -578,11 +647,46 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 		} else if err := valueNode.Decode(&s); err != nil {
 			return nil, wrapParseError(sourcePath, valueNode.Line, err)
 		}
+		// If `enabled:` was a literal bool, copy it into Enabled now so flows
+		// without variable interpolation work without the expand pass.
+		if b, ok := s.EnabledRaw.(bool); ok {
+			s.Enabled = b
+		}
 		s.StepType = stepType
 		return &s, nil
 
 	case StepToggleAirplaneMode:
 		return &ToggleAirplaneModeStep{BaseStep: BaseStep{StepType: stepType}}, nil
+
+	case StepSetDarkMode:
+		var s SetDarkModeStep
+		if valueNode.Kind == yaml.ScalarNode {
+			switch valueNode.Value {
+			case "enabled", "dark", "true":
+				s.Enabled = true
+			case "disabled", "light", "false":
+				s.Enabled = false
+			default:
+				return nil, wrapParseError(sourcePath, valueNode.Line,
+					fmt.Errorf("setDarkMode expects 'enabled'/'dark' or 'disabled'/'light', got %q", valueNode.Value))
+			}
+		} else if err := valueNode.Decode(&s); err != nil {
+			return nil, wrapParseError(sourcePath, valueNode.Line, err)
+		}
+		if b, ok := s.EnabledRaw.(bool); ok {
+			s.Enabled = b
+		}
+		s.StepType = stepType
+		return &s, nil
+
+	case StepToggleDarkMode:
+		return &ToggleDarkModeStep{BaseStep: BaseStep{StepType: stepType}}, nil
+
+	case StepAssertDarkMode:
+		return &AssertDarkModeStep{BaseStep: BaseStep{StepType: stepType}}, nil
+
+	case StepAssertLightMode:
+		return &AssertLightModeStep{BaseStep: BaseStep{StepType: stepType}}, nil
 
 	case StepTravel:
 		var s TravelStep
@@ -844,6 +948,25 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 		s.StepType = stepType
 		return &s, nil
 
+	case StepAssertScreenshot:
+		var s AssertScreenshotStep
+		if valueNode.Kind == yaml.ScalarNode {
+			s.Path = valueNode.Value
+		} else if err := valueNode.Decode(&s); err != nil {
+			return nil, wrapParseError(sourcePath, valueNode.Line, err)
+		}
+		// Resolve a literal numeric threshold now so flows without variable
+		// interpolation work without the expand pass. A string value (e.g.
+		// "${VAR}") is left for ExpandStep. Absent or 0 → default.
+		if f, ok := ThresholdAsFloat(s.ThresholdRaw); ok {
+			s.ThresholdPercentage = f
+		}
+		if _, isStr := s.ThresholdRaw.(string); !isStr && s.ThresholdPercentage == 0 {
+			s.ThresholdPercentage = 95.0
+		}
+		s.StepType = stepType
+		return &s, nil
+
 	case StepStartRecording:
 		var s StartRecordingStep
 		if valueNode.Kind == yaml.ScalarNode {
@@ -866,11 +989,29 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 
 	case StepAddMedia:
 		var s AddMediaStep
-		if err := valueNode.Decode(&s); err != nil {
-			return nil, wrapParseError(sourcePath, valueNode.Line, err)
+		// Maestro's canonical syntax is a bare sequence of paths
+		// (`addMedia: ["a.jpg", "b.jpg"]` / block list), so decode a sequence
+		// straight into Files. A single scalar path and the historical mapping
+		// form (`addMedia: { files: [...] }`) are also accepted. (#131)
+		switch valueNode.Kind {
+		case yaml.SequenceNode:
+			if err := valueNode.Decode(&s.Files); err != nil {
+				return nil, wrapParseError(sourcePath, valueNode.Line, err)
+			}
+		case yaml.ScalarNode:
+			if valueNode.Value != "" {
+				s.Files = []string{valueNode.Value}
+			}
+		default:
+			if err := valueNode.Decode(&s); err != nil {
+				return nil, wrapParseError(sourcePath, valueNode.Line, err)
+			}
 		}
 		s.StepType = stepType
 		return &s, nil
+
+	case StepRemoveMedia:
+		return &RemoveMediaStep{BaseStep: BaseStep{StepType: stepType}}, nil
 
 	case StepPressKey:
 		var s PressKeyStep
@@ -995,7 +1136,13 @@ func parseRetryStep(valueNode *yaml.Node, sourcePath string) (Step, error) {
 	return s, nil
 }
 
-// parseRunFlowStep handles runFlow with optional nested commands.
+// parseRunFlowStep handles runFlow with optional nested commands and an
+// optional else branch (run when `when:` evaluates false).
+//
+// The else branch accepts three YAML shapes:
+//   - else: path/to/fallback.yaml          (string scalar → fallback file)
+//   - else: [- tapOn: foo, ...]            (sequence → inline fallback steps)
+//   - elseCommands: [- tapOn: foo, ...]    (alias for the sequence form)
 func parseRunFlowStep(valueNode *yaml.Node, sourcePath string) (Step, error) {
 	s := &RunFlowStep{BaseStep: BaseStep{StepType: StepRunFlow}}
 
@@ -1005,12 +1152,14 @@ func parseRunFlowStep(valueNode *yaml.Node, sourcePath string) (Step, error) {
 	}
 
 	var raw struct {
-		File     string            `yaml:"file"`
-		Commands []yaml.Node       `yaml:"commands"`
-		When     *Condition        `yaml:"when"`
-		Env      map[string]string `yaml:"env"`
-		Optional bool              `yaml:"optional"`
-		Label    string            `yaml:"label"`
+		File         string            `yaml:"file"`
+		Commands     []yaml.Node       `yaml:"commands"`
+		ElseCommands []yaml.Node       `yaml:"elseCommands"`
+		When         *Condition        `yaml:"when"`
+		Env          map[string]string `yaml:"env"`
+		Optional     bool              `yaml:"optional"`
+		Label        string            `yaml:"label"`
+		Timeout      int               `yaml:"timeout"`
 	}
 
 	if err := valueNode.Decode(&raw); err != nil {
@@ -1022,6 +1171,7 @@ func parseRunFlowStep(valueNode *yaml.Node, sourcePath string) (Step, error) {
 	s.Env = raw.Env
 	s.Optional = raw.Optional
 	s.StepLabel = raw.Label
+	s.TimeoutMs = raw.Timeout
 
 	for _, cmdNode := range raw.Commands {
 		step, err := parseStep(&cmdNode, sourcePath)
@@ -1029,6 +1179,42 @@ func parseRunFlowStep(valueNode *yaml.Node, sourcePath string) (Step, error) {
 			return nil, err
 		}
 		s.Steps = append(s.Steps, step)
+	}
+
+	// `else:` is decoded by walking the mapping manually because its value
+	// can be either a scalar (fallback file path) or a sequence (inline
+	// fallback steps). Decoding into a fixed Go type would force one shape.
+	for i := 0; i+1 < len(valueNode.Content); i += 2 {
+		keyNode := valueNode.Content[i]
+		valNode := valueNode.Content[i+1]
+		if keyNode.Value != "else" {
+			continue
+		}
+		switch valNode.Kind {
+		case yaml.ScalarNode:
+			s.ElseFile = valNode.Value
+		case yaml.SequenceNode:
+			for _, cmdNode := range valNode.Content {
+				step, err := parseStep(cmdNode, sourcePath)
+				if err != nil {
+					return nil, err
+				}
+				s.ElseSteps = append(s.ElseSteps, step)
+			}
+		default:
+			return nil, wrapParseError(sourcePath, valNode.Line,
+				fmt.Errorf("runFlow.else must be a file path (string) or a list of steps"))
+		}
+		break
+	}
+
+	// elseCommands: [steps...] — alias for else when used as a sequence.
+	for _, cmdNode := range raw.ElseCommands {
+		step, err := parseStep(&cmdNode, sourcePath)
+		if err != nil {
+			return nil, err
+		}
+		s.ElseSteps = append(s.ElseSteps, step)
 	}
 
 	return s, nil
@@ -1040,6 +1226,28 @@ func wrapParseError(path string, line int, err error) error {
 		Line:    line,
 		Message: err.Error(),
 	}
+}
+
+// ThresholdAsFloat coerces a raw YAML `thresholdPercentage:` value into a
+// float. YAML decodes a bare number into an int or float64 (via `any`); a
+// numeric string is also accepted so a `${VAR}` that resolves to "98.5" works
+// once expanded. Returns ok=false for nil or non-numeric strings.
+func ThresholdAsFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(n), 64)
+		if err != nil {
+			return 0, false
+		}
+		return f, true
+	}
+	return 0, false
 }
 
 // ParseDirectory parses all YAML files in a directory.

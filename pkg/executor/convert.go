@@ -41,9 +41,14 @@ func commandResultToError(r *core.CommandResult) *report.Error {
 
 	message := r.Error.Error()
 
-	// Use message from result if available
+	// Use message from result if available — but preserve the underlying cause
+	// so debugging can see why findElement actually rejected.
 	if r.Message != "" {
-		message = r.Message
+		if causeMsg := r.Error.Error(); causeMsg != "" && causeMsg != r.Message {
+			message = fmt.Sprintf("%s (cause: %s)", r.Message, causeMsg)
+		} else {
+			message = r.Message
+		}
 	}
 
 	errType := classifyError(message)

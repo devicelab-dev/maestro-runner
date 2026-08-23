@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"time"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
@@ -33,6 +34,11 @@ type Driver interface {
 	// 0 = disabled, >0 = wait up to N ms for device to be idle.
 	// This is used by waitForIdleTimeout in flow config.
 	SetWaitForIdleTimeout(ms int) error
+
+	// SetContext sets the parent context for element-finding operations.
+	// When set, driver polling loops use this as the parent context so that
+	// external cancellation (e.g. runFlow timeout) can interrupt them.
+	SetContext(ctx context.Context)
 }
 
 // CommandResult represents the outcome of executing a single command
@@ -90,6 +96,11 @@ type ElementInfo struct {
 	Class              string            `json:"class,omitempty"`
 	AccessibilityLabel string            `json:"accessibilityLabel,omitempty"`
 	Attributes         map[string]string `json:"attributes,omitempty"`
+	// MatchNote explains a non-default match path the driver took to find the
+	// element (e.g. "rescued: container marked visible=false but hosts visible
+	// descendants" on iOS for RN container testIDs). Surfaced in step messages
+	// and the JSON report so users know they're relying on relaxed matching.
+	MatchNote string `json:"matchNote,omitempty"`
 }
 
 // Bounds represents element position and size
@@ -168,7 +179,11 @@ type PlatformInfo struct {
 	ScreenWidth  int    `json:"screenWidth,omitempty"`  // Screen width in pixels
 	ScreenHeight int    `json:"screenHeight,omitempty"` // Screen height in pixels
 	AppID        string `json:"appId,omitempty"`        // Bundle ID / Package name
-	AppVersion   string `json:"appVersion,omitempty"`   // App version
+	AppVersion   string `json:"appVersion,omitempty"`   // App version name, e.g. "1.16.0"
+	// AppBuild is the build number behind the version name — Android's
+	// versionCode, iOS's CFBundleVersion. One release version covers many CI
+	// builds, so the version alone does not identify which binary was tested.
+	AppBuild string `json:"appBuild,omitempty"`
 }
 
 // ExecutedBy indicates what component executed a step
@@ -225,6 +240,32 @@ type TypingFrequencyConfigurer interface {
 // have an active session. If launchApp runs later, it replaces the session.
 type SessionEnsurer interface {
 	EnsureSession(appID string) error
+}
+
+// ScreenRecorder is an optional interface drivers can implement to record the
+// device screen while a flow runs (--record). Recording is best-effort: the
+// executor logs a failure from either method and continues, so an error here
+// never fails a flow.
+type ScreenRecorder interface {
+	// StartScreenRecording begins recording. An error means recording is not
+	// possible right now (e.g. a physical device without a capture path).
+	StartScreenRecording() error
+	// StopScreenRecording finishes the recording and writes an MP4 to
+	// hostPath. Called only after a successful StartScreenRecording.
+	StopScreenRecording(hostPath string) error
+}
+
+// FlowAware is an optional interface drivers can implement to inspect the
+// upcoming flow before session creation. The WDA driver uses this to decide
+// whether to register XCTest's alert monitor at session creation — only flows
+// that include a launchApp step (implicitly permissions: all=allow by default)
+// need the monitor. Flows without launchApp keep the monitor off so in-app
+// confirmation dialogs aren't auto-dismissed.
+type FlowAware interface {
+	// PrepareForFlow is called once, before EnsureSession, with the flow's
+	// top-level step list. Drivers should treat unrecognized step types as
+	// no-ops and never error.
+	PrepareForFlow(steps []flow.Step)
 }
 
 // Unwrap returns the innermost driver, stripping any wrapper layers

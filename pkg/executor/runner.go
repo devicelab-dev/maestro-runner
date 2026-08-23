@@ -31,6 +31,15 @@ type RunnerConfig struct {
 	Retries     int          // Max retries per flow (0 = no retries)
 	Artifacts   ArtifactMode // When to capture artifacts
 
+	// UpdateScreenshots overwrites existing assertScreenshot baselines.
+	// Missing baselines are always seeded on first run regardless of this flag.
+	UpdateScreenshots bool
+
+	// Record captures a screen recording of every flow into its assets
+	// directory (--record). Best-effort: drivers that can't record are logged
+	// and the run continues without video.
+	Record bool
+
 	// Device/App info for reports
 	Device report.Device
 	App    report.App
@@ -46,6 +55,10 @@ type RunnerConfig struct {
 	// Driver settings
 	WaitForIdleTimeout int // Global wait for idle timeout in ms
 	TypingFrequency    int // Global WDA typing frequency in keys/sec (0 = WDA default)
+	ConditionTimeout   int // Default timeout (ms) for when:/while: condition checks (0 = engine default)
+	// StepDelay pauses between top-level steps (ms). Flow config overrides it.
+	// For pacing demos and apps whose animations outrun the assertions.
+	StepDelay int
 
 	// Device information (set by executor)
 	DeviceInfo *report.Device
@@ -81,6 +94,10 @@ type FlowResult struct {
 	StepsPassed  int
 	StepsFailed  int
 	StepsSkipped int
+	// SessionID identifies the worker (Appium session) that ran this flow.
+	// Empty for sequential single-device runs; set by ParallelRunner so cloud
+	// providers can filter results to the worker that produced them.
+	SessionID string
 }
 
 // Runner orchestrates flow execution.

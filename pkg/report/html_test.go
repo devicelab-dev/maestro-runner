@@ -140,7 +140,9 @@ func TestGenerateHTML(t *testing.T) {
 	// Check for essential elements
 	checks := []string{
 		"<!DOCTYPE html>",
-		"<title>Test Report</title>",
+		// The title carries the app version so browser tabs of different runs
+		// are distinguishable (#144).
+		"<title>Test Report — v1.0.0</title>",
 		"Login Test",
 		"launchApp",
 		"tapOn",
@@ -154,6 +156,96 @@ func TestGenerateHTML(t *testing.T) {
 	for _, check := range checks {
 		if !strings.Contains(html, check) {
 			t.Errorf("HTML missing expected content: %s", check)
+		}
+	}
+}
+
+// TestGenerateHTML_RendersConsoleLogs verifies that when a flow detail has
+// captured browser console entries, the HTML report includes the
+// console-logs section, the renderConsoleLogs JS, and the entries
+// themselves in the embedded report data. This is the regression test for
+// the auto-surface console-error feature.
+func TestGenerateHTML_RendersConsoleLogs(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	now := time.Now()
+	duration := int64(500)
+	index := &Index{
+		Version:     "1.0.0",
+		Status:      StatusPassed,
+		StartTime:   now,
+		LastUpdated: now,
+		Device:      Device{ID: "browser", Name: "Chrome", Platform: "web"},
+		App:         App{ID: "test"},
+		MaestroRunner: RunnerInfo{
+			Version: "0.1.0",
+			Driver:  "cdp",
+		},
+		Summary: Summary{Total: 1, Passed: 1},
+		Flows: []FlowEntry{
+			{
+				Index: 0, ID: "flow-000", Name: "Console Test",
+				SourceFile: "flows/console.yaml", DataFile: "flows/flow-000.json",
+				AssetsDir: "assets/flow-000", Status: StatusPassed,
+				Duration: &duration,
+				Commands: CommandSummary{Total: 1, Passed: 1},
+			},
+		},
+	}
+
+	cmdDuration := int64(200)
+	flowDetail := FlowDetail{
+		ID: "flow-000", Name: "Console Test", SourceFile: "flows/console.yaml",
+		StartTime: now, Duration: &duration,
+		Commands: []Command{
+			{ID: "cmd-000", Index: 0, Type: "launchApp", Status: StatusPassed, Duration: &cmdDuration},
+		},
+		ConsoleLogs: []ConsoleLog{
+			{Level: "error", Message: "uncaught TypeError: x is undefined"},
+			{Level: "warning", Message: "deprecated API call"},
+			{Level: "exception", Message: "Error: kaboom\n    at app.js:42"},
+		},
+	}
+
+	if err := os.MkdirAll(filepath.Join(tmpDir, "flows"), 0o755); err != nil {
+		t.Fatalf("create flows dir: %v", err)
+	}
+	if err := atomicWriteJSON(filepath.Join(tmpDir, "report.json"), index); err != nil {
+		t.Fatalf("write index: %v", err)
+	}
+	if err := atomicWriteJSON(filepath.Join(tmpDir, "flows", "flow-000.json"), flowDetail); err != nil {
+		t.Fatalf("write flow: %v", err)
+	}
+
+	outputPath := filepath.Join(tmpDir, "report.html")
+	if err := GenerateHTML(tmpDir, HTMLConfig{OutputPath: outputPath, Title: "Console Test"}); err != nil {
+		t.Fatalf("GenerateHTML: %v", err)
+	}
+
+	content, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read html: %v", err)
+	}
+	html := string(content)
+
+	// Each of these must be present for the feature to be visible to the user:
+	checks := []struct {
+		name, want string
+	}{
+		// Static template surface.
+		{"console-logs container div", `id="console-logs"`},
+		{"renderConsoleLogs JS function", `function renderConsoleLogs(`},
+		{"CSS for the console section", `.console-header`},
+		{"CSS for error-level entries", `.console-error`},
+		// Per-flow data embedded into the page (consoleLogs JSON-marshalled).
+		{"consoleLogs field in embedded JSON", `"consoleLogs"`},
+		{"error message round-tripped", "uncaught TypeError"},
+		{"warning message round-tripped", "deprecated API call"},
+		{"exception message round-tripped", "kaboom"},
+	}
+	for _, c := range checks {
+		if !strings.Contains(html, c.want) {
+			t.Errorf("%s: HTML missing %q", c.name, c.want)
 		}
 	}
 }
@@ -698,5 +790,130 @@ func TestLoadAsBase64(t *testing.T) {
 	result = loadAsBase64(jpgPath)
 	if !strings.HasPrefix(result, "data:image/jpeg;base64,") {
 		t.Error("expected base64 JPEG")
+	}
+}
+
+// TestGenerateHTMLShowsAppBuildNumber covers #144 end to end: one release
+// version has many CI builds, so the build number has to survive into the
+// rendered page — in the title, the header, and the App line — or a report
+// opened later cannot say which binary it exercised.
+func TestGenerateHTMLShowsAppBuildNumber(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpDir, "flows"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	now := time.Now()
+	index := &Index{
+		Version:     Version,
+		Status:      StatusPassed,
+		StartTime:   now,
+		LastUpdated: now,
+		Device:      Device{ID: "emulator-5554", Name: "Pixel 6", Platform: "android", OSVersion: "14"},
+		App: App{
+			ID:      "com.example.app",
+			Version: "1.16.0",
+			Build:   "10009107",
+		},
+		MaestroRunner: RunnerInfo{Version: "1.1.24", Driver: "uiautomator2"},
+		Summary:       Summary{Total: 1, Passed: 1},
+		Flows: []FlowEntry{{
+			Index: 0, ID: "flow-000", Name: "Smoke", SourceFile: "smoke.yaml",
+			DataFile: "flows/flow-000.json", Status: StatusPassed,
+		}},
+	}
+	flowDetail := &FlowDetail{
+		ID: "flow-000", Name: "Smoke", SourceFile: "smoke.yaml", StartTime: now,
+		Commands: []Command{{ID: "cmd-0", Index: 0, Type: "launchApp", Status: StatusPassed}},
+	}
+
+	if err := atomicWriteJSON(filepath.Join(tmpDir, "report.json"), index); err != nil {
+		t.Fatalf("write index: %v", err)
+	}
+	if err := atomicWriteJSON(filepath.Join(tmpDir, "flows", "flow-000.json"), flowDetail); err != nil {
+		t.Fatalf("write flow: %v", err)
+	}
+
+	outputPath := filepath.Join(tmpDir, "report.html")
+	if err := GenerateHTML(tmpDir, HTMLConfig{OutputPath: outputPath, Title: "Test Report"}); err != nil {
+		t.Fatalf("GenerateHTML: %v", err)
+	}
+
+	content, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read html: %v", err)
+	}
+	html := string(content)
+
+	for _, want := range []string{
+		"<title>Test Report — v1.16.0 (10009107)</title>",
+		// Header subtitle, where the run identifies itself on screen.
+		"v1.16.0 (10009107)",
+		// App line keeps the bundle id alongside it.
+		"com.example.app",
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("HTML missing expected content: %s", want)
+		}
+	}
+
+	// The build number must appear more than once — losing it from either the
+	// title or the body would still leave a partial match above.
+	if got := strings.Count(html, "10009107"); got < 2 {
+		t.Errorf("expected the build number in both title and body, found %d occurrences", got)
+	}
+}
+
+// TestGenerateHTMLShowsVersionWithoutAppID covers the Appium case, where the
+// session capabilities may not name the app: the App line used to fall back to
+// a bare dash and throw the version away with it, even though the version was
+// known and shown in the title.
+func TestGenerateHTMLShowsVersionWithoutAppID(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpDir, "flows"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	now := time.Now()
+	index := &Index{
+		Version:       Version,
+		Status:        StatusPassed,
+		StartTime:     now,
+		LastUpdated:   now,
+		Device:        Device{ID: "sim-1", Name: "iPhone 16 Pro", Platform: "ios", OSVersion: "18.6"},
+		App:           App{Version: "1.16.0", Build: "10009107"}, // no ID
+		MaestroRunner: RunnerInfo{Version: "1.1.24", Driver: "appium"},
+		Summary:       Summary{Total: 1, Passed: 1},
+		Flows: []FlowEntry{{
+			Index: 0, ID: "flow-000", Name: "Smoke", SourceFile: "smoke.yaml",
+			DataFile: "flows/flow-000.json", Status: StatusPassed,
+		}},
+	}
+	flowDetail := &FlowDetail{
+		ID: "flow-000", Name: "Smoke", SourceFile: "smoke.yaml", StartTime: now,
+		Commands: []Command{{ID: "cmd-0", Index: 0, Type: "launchApp", Status: StatusPassed}},
+	}
+	if err := atomicWriteJSON(filepath.Join(tmpDir, "report.json"), index); err != nil {
+		t.Fatalf("write index: %v", err)
+	}
+	if err := atomicWriteJSON(filepath.Join(tmpDir, "flows", "flow-000.json"), flowDetail); err != nil {
+		t.Fatalf("write flow: %v", err)
+	}
+
+	outputPath := filepath.Join(tmpDir, "report.html")
+	if err := GenerateHTML(tmpDir, HTMLConfig{OutputPath: outputPath, Title: "Test Report"}); err != nil {
+		t.Fatalf("GenerateHTML: %v", err)
+	}
+	content, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read html: %v", err)
+	}
+	html := string(content)
+
+	if !strings.Contains(html, `<span class="env-value">v1.16.0 (10009107)</span>`) {
+		t.Error("expected the App line to show the version when no app id is known")
+	}
+	if strings.Contains(html, `<span class="env-value">-</span>`) {
+		t.Error("App line fell back to a dash despite a known version")
 	}
 }

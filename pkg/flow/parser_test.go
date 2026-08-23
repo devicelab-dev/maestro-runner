@@ -182,6 +182,7 @@ func TestParse_AllStepTypes(t *testing.T) {
 		{"waitForRequest mapping", `- waitForRequest: {url: "*/api/submit", method: POST, output: reqBody}`, StepWaitForRequest},
 		{"clearNetworkMocks", `- clearNetworkMocks:`, StepClearNetworkMocks},
 		{"takeScreenshot", `- takeScreenshot: "screen.png"`, StepTakeScreenshot},
+		{"assertScreenshot", `- assertScreenshot: "screen.png"`, StepAssertScreenshot},
 		{"startRecording", `- startRecording: "video.mp4"`, StepStartRecording},
 		{"stopRecording", `- stopRecording: "video.mp4"`, StepStopRecording},
 		{"addMedia", `- addMedia: {files: ["img.png"]}`, StepAddMedia},
@@ -203,6 +204,128 @@ func TestParse_AllStepTypes(t *testing.T) {
 				t.Errorf("expected type %v, got %v", tc.stepType, flow.Steps[0].Type())
 			}
 		})
+	}
+}
+
+func TestParse_AssertScreenshotStep(t *testing.T) {
+	yaml := `
+- assertScreenshot:
+    path: screenshots/banner.png
+    cropOn:
+      id: banner
+    thresholdPercentage: 98.5
+`
+
+	parsed, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	step, ok := parsed.Steps[0].(*AssertScreenshotStep)
+	if !ok {
+		t.Fatalf("expected AssertScreenshotStep, got %T", parsed.Steps[0])
+	}
+	if step.Path != "screenshots/banner.png" {
+		t.Errorf("Path = %q, want %q", step.Path, "screenshots/banner.png")
+	}
+	if step.CropOn == nil || step.CropOn.ID != "banner" {
+		t.Errorf("CropOn = %#v, want selector with id banner", step.CropOn)
+	}
+	if step.ThresholdPercentage != 98.5 {
+		t.Errorf("ThresholdPercentage = %v, want 98.5", step.ThresholdPercentage)
+	}
+}
+
+func TestParse_AssertScreenshotStep_DefaultThreshold(t *testing.T) {
+	parsed, err := Parse([]byte(`- assertScreenshot: splash.png`), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	step, ok := parsed.Steps[0].(*AssertScreenshotStep)
+	if !ok {
+		t.Fatalf("expected AssertScreenshotStep, got %T", parsed.Steps[0])
+	}
+	if step.ThresholdPercentage != 95 {
+		t.Errorf("ThresholdPercentage = %v, want 95", step.ThresholdPercentage)
+	}
+}
+
+func TestParse_AddMediaStep_Forms(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+		want []string
+	}{
+		{"bare sequence (Maestro syntax)", "- addMedia:\n    - \"./a.jpg\"\n    - \"./b.png\"", []string{"./a.jpg", "./b.png"}},
+		{"flow sequence", `- addMedia: ["a.jpg", "b.png"]`, []string{"a.jpg", "b.png"}},
+		{"single scalar path", `- addMedia: "only.jpg"`, []string{"only.jpg"}},
+		{"mapping form (historical)", `- addMedia: {files: ["m.png"]}`, []string{"m.png"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			parsed, err := Parse([]byte(c.yaml), "test.yaml")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			step, ok := parsed.Steps[0].(*AddMediaStep)
+			if !ok {
+				t.Fatalf("expected AddMediaStep, got %T", parsed.Steps[0])
+			}
+			if len(step.Files) != len(c.want) {
+				t.Fatalf("Files = %#v, want %#v", step.Files, c.want)
+			}
+			for i := range c.want {
+				if step.Files[i] != c.want[i] {
+					t.Errorf("Files[%d] = %q, want %q", i, step.Files[i], c.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestParse_AssertScreenshotStep_VarThreshold(t *testing.T) {
+	// A ${VAR} threshold must parse without error (it can't decode into a
+	// float at YAML time), leaving the raw string for the expand pass. (#3444)
+	parsed, err := Parse([]byte(`
+- assertScreenshot:
+    path: banner.png
+    thresholdPercentage: ${THRESH}
+`), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	step, ok := parsed.Steps[0].(*AssertScreenshotStep)
+	if !ok {
+		t.Fatalf("expected AssertScreenshotStep, got %T", parsed.Steps[0])
+	}
+	if s, _ := step.ThresholdRaw.(string); s != "${THRESH}" {
+		t.Errorf("ThresholdRaw = %#v, want %q", step.ThresholdRaw, "${THRESH}")
+	}
+	// Not resolved yet — the executor's expand pass fills this in.
+	if step.ThresholdPercentage != 0 {
+		t.Errorf("ThresholdPercentage = %v, want 0 (unresolved)", step.ThresholdPercentage)
+	}
+}
+
+func TestThresholdAsFloat(t *testing.T) {
+	cases := []struct {
+		in   any
+		want float64
+		ok   bool
+	}{
+		{float64(98.5), 98.5, true},
+		{int(90), 90, true},
+		{"87.5", 87.5, true},
+		{"  91 ", 91, true},
+		{"${VAR}", 0, false},
+		{nil, 0, false},
+	}
+	for _, c := range cases {
+		got, ok := ThresholdAsFloat(c.in)
+		if ok != c.ok || got != c.want {
+			t.Errorf("ThresholdAsFloat(%#v) = (%v, %v), want (%v, %v)", c.in, got, ok, c.want, c.ok)
+		}
 	}
 }
 
@@ -393,6 +516,146 @@ func TestParse_RunFlowWithInlineSteps(t *testing.T) {
 	}
 	if runFlow.StepLabel != "login flow" {
 		t.Errorf("expected label=login flow, got %q", runFlow.StepLabel)
+	}
+}
+
+func TestParse_RunFlowElseFile(t *testing.T) {
+	yaml := `
+- runFlow:
+    file: signed-in.yaml
+    when:
+      visible: "Logout"
+    else: sign-in.yaml
+`
+	flow, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rf := flow.Steps[0].(*RunFlowStep)
+	if rf.File != "signed-in.yaml" {
+		t.Errorf("expected File=signed-in.yaml, got %q", rf.File)
+	}
+	if rf.ElseFile != "sign-in.yaml" {
+		t.Errorf("expected ElseFile=sign-in.yaml, got %q", rf.ElseFile)
+	}
+	if len(rf.ElseSteps) != 0 {
+		t.Errorf("expected no inline else steps, got %d", len(rf.ElseSteps))
+	}
+}
+
+func TestParse_RunFlowElseInlineSteps(t *testing.T) {
+	yaml := `
+- runFlow:
+    when:
+      visible: "Welcome"
+    commands:
+      - tapOn: "Continue"
+    else:
+      - tapOn: "Try again"
+      - inputText: "fallback"
+`
+	flow, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rf := flow.Steps[0].(*RunFlowStep)
+	if len(rf.Steps) != 1 {
+		t.Errorf("expected 1 main step, got %d", len(rf.Steps))
+	}
+	if len(rf.ElseSteps) != 2 {
+		t.Fatalf("expected 2 else steps, got %d", len(rf.ElseSteps))
+	}
+	if rf.ElseSteps[0].Type() != StepTapOn {
+		t.Errorf("else[0] type = %v, want tapOn", rf.ElseSteps[0].Type())
+	}
+	if rf.ElseSteps[1].Type() != StepInputText {
+		t.Errorf("else[1] type = %v, want inputText", rf.ElseSteps[1].Type())
+	}
+}
+
+func TestParse_RunFlowElseCommandsAlias(t *testing.T) {
+	// elseCommands: should produce identical ElseSteps as else: <sequence>.
+	yaml := `
+- runFlow:
+    when:
+      visible: "Welcome"
+    elseCommands:
+      - tapOn: "fallback"
+`
+	flow, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rf := flow.Steps[0].(*RunFlowStep)
+	if len(rf.ElseSteps) != 1 {
+		t.Fatalf("expected 1 elseCommand, got %d", len(rf.ElseSteps))
+	}
+	if rf.ElseSteps[0].Type() != StepTapOn {
+		t.Errorf("elseCommands[0] type = %v, want tapOn", rf.ElseSteps[0].Type())
+	}
+}
+
+func TestParse_RunFlowElseInvalidType(t *testing.T) {
+	// else: as a mapping (not scalar or sequence) is rejected.
+	yaml := `
+- runFlow:
+    when:
+      visible: "X"
+    else:
+      file: nope.yaml
+`
+	_, err := Parse([]byte(yaml), "test.yaml")
+	if err == nil {
+		t.Error("expected error for else as mapping")
+	}
+}
+
+func TestParse_RunFlowWithTimeout(t *testing.T) {
+	yaml := `
+- runFlow:
+    file: login.yaml
+    timeout: 5000
+    env:
+      user: test
+`
+	flow, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	runFlow, ok := flow.Steps[0].(*RunFlowStep)
+	if !ok {
+		t.Fatalf("expected RunFlowStep, got %T", flow.Steps[0])
+	}
+	if runFlow.TimeoutMs != 5000 {
+		t.Errorf("expected TimeoutMs=5000, got %d", runFlow.TimeoutMs)
+	}
+	if runFlow.File != "login.yaml" {
+		t.Errorf("expected file=login.yaml, got %q", runFlow.File)
+	}
+}
+
+func TestParse_RunFlowInlineWithTimeout(t *testing.T) {
+	yaml := `
+- runFlow:
+    timeout: 3000
+    commands:
+      - assertVisible: "Hello"
+`
+	flow, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	runFlow, ok := flow.Steps[0].(*RunFlowStep)
+	if !ok {
+		t.Fatalf("expected RunFlowStep, got %T", flow.Steps[0])
+	}
+	if runFlow.TimeoutMs != 3000 {
+		t.Errorf("expected TimeoutMs=3000, got %d", runFlow.TimeoutMs)
+	}
+	if len(runFlow.Steps) != 1 {
+		t.Errorf("expected 1 inline step, got %d", len(runFlow.Steps))
 	}
 }
 
@@ -806,6 +1069,71 @@ func TestParse_SwipeWithAllFields(t *testing.T) {
 	}
 }
 
+// See devicelab-dev/maestro-runner#112 — `from: {id: X}` used to be silently
+// discarded, causing direction-swipes to ignore the anchor and fall through
+// to a screen-percentage swipe.
+func TestParse_SwipeFromKeyPopulatesSelector(t *testing.T) {
+	yaml := `
+- swipe:
+    from:
+      id: 'SliderTestID'
+    direction: LEFT
+    duration: 1500
+`
+	flow, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	swipe := flow.Steps[0].(*SwipeStep)
+	if swipe.Selector == nil {
+		t.Fatal("Selector is nil — `from:` was not parsed")
+	}
+	if swipe.Selector.ID != "SliderTestID" {
+		t.Errorf("Selector.ID=%q, want SliderTestID", swipe.Selector.ID)
+	}
+	if swipe.Direction != "LEFT" {
+		t.Errorf("Direction=%q, want LEFT", swipe.Direction)
+	}
+}
+
+// Historical `selector:` key remains supported for backward compatibility.
+func TestParse_SwipeSelectorKeyStillWorks(t *testing.T) {
+	yaml := `
+- swipe:
+    selector:
+      id: 'MyListView'
+    direction: DOWN
+`
+	flow, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	swipe := flow.Steps[0].(*SwipeStep)
+	if swipe.Selector == nil || swipe.Selector.ID != "MyListView" {
+		t.Fatalf("expected Selector.ID=MyListView, got %+v", swipe.Selector)
+	}
+}
+
+// `from:` wins if both keys are present.
+func TestParse_SwipeFromPrecedenceOverSelector(t *testing.T) {
+	yaml := `
+- swipe:
+    from:
+      id: 'PrimaryAnchor'
+    selector:
+      id: 'FallbackAnchor'
+    direction: LEFT
+`
+	flow, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	swipe := flow.Steps[0].(*SwipeStep)
+	if swipe.Selector == nil || swipe.Selector.ID != "PrimaryAnchor" {
+		t.Fatalf("expected Selector.ID=PrimaryAnchor (from), got %+v", swipe.Selector)
+	}
+}
+
 func TestParse_ScrollUntilVisibleWithAllFields(t *testing.T) {
 	yaml := `
 - scrollUntilVisible:
@@ -855,6 +1183,50 @@ func TestParse_ScrollUntilVisibleWithAllFields(t *testing.T) {
 	}
 }
 
+// TestParse_ScrollEngineField covers the per-step "engine" opt-in on both
+// scroll and scrollUntilVisible. Default is empty (= adb); "agent" selects
+// the on-device gesture path. Drivers ignore unknown values.
+func TestParse_ScrollEngineField(t *testing.T) {
+	yaml := `
+- scroll:
+    direction: DOWN
+- scroll:
+    direction: DOWN
+    engine: agent
+- scrollUntilVisible:
+    element:
+      id: target
+    engine: agent
+- scrollUntilVisible:
+    element:
+      id: target
+`
+	parsed, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+	if len(parsed.Steps) != 4 {
+		t.Fatalf("expected 4 steps, got %d", len(parsed.Steps))
+	}
+
+	s0 := parsed.Steps[0].(*ScrollStep)
+	if s0.Engine != "" {
+		t.Errorf("step 0 (default): Engine=%q, want empty", s0.Engine)
+	}
+	s1 := parsed.Steps[1].(*ScrollStep)
+	if s1.Engine != "agent" {
+		t.Errorf("step 1 (opt-in): Engine=%q, want \"agent\"", s1.Engine)
+	}
+	s2 := parsed.Steps[2].(*ScrollUntilVisibleStep)
+	if s2.Engine != "agent" {
+		t.Errorf("step 2 (opt-in): Engine=%q, want \"agent\"", s2.Engine)
+	}
+	s3 := parsed.Steps[3].(*ScrollUntilVisibleStep)
+	if s3.Engine != "" {
+		t.Errorf("step 3 (default): Engine=%q, want empty", s3.Engine)
+	}
+}
+
 func TestParse_WaitUntilStep(t *testing.T) {
 	yaml := `
 - extendedWaitUntil:
@@ -889,7 +1261,7 @@ func TestParse_AssertConditionStep(t *testing.T) {
       text: "Success"
     notVisible:
       text: "Error"
-    scriptCondition: "result === true"
+    true: "result === true"
     platform: Android
 `
 	flow, err := Parse([]byte(yaml), "test.yaml")
@@ -948,10 +1320,28 @@ func TestParse_SetAirplaneModeScalarValues(t *testing.T) {
 	}
 }
 
+func TestParse_SetAirplaneModeInterpolationCarriedThrough(t *testing.T) {
+	// Variable-interpolated `enabled:` should parse without error and reach the
+	// step as a string in EnabledRaw. Resolution to bool happens at execute time.
+	flow, err := Parse([]byte(`- setAirplaneMode: {enabled: "${OFFLINE}"}`), "test.yaml")
+	if err != nil {
+		t.Fatalf("expected no parse error, got %v", err)
+	}
+	if len(flow.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(flow.Steps))
+	}
+	step := flow.Steps[0].(*SetAirplaneModeStep)
+	got, ok := step.EnabledRaw.(string)
+	if !ok || got != "${OFFLINE}" {
+		t.Errorf("EnabledRaw=%v (%T), want %q (string)", step.EnabledRaw, step.EnabledRaw, "${OFFLINE}")
+	}
+}
+
 func TestIsStepType(t *testing.T) {
 	validTypes := []string{
 		"tapOn", "doubleTapOn", "longPressOn", "tapOnPoint", "swipe", "scroll",
-		"scrollUntilVisible", "back", "hideKeyboard", "acceptAlert", "dismissAlert",
+		"scrollUntilVisible", "back", "hideKeyboard", "openNotifications",
+		"acceptAlert", "dismissAlert",
 		"inputText", "inputRandom", "inputRandomEmail", "inputRandomNumber",
 		"inputRandomPersonName", "inputRandomText",
 		"eraseText", "copyTextFrom", "pasteText", "setClipboard", "assertVisible",
@@ -961,7 +1351,7 @@ func TestIsStepType(t *testing.T) {
 		"setLocation", "setOrientation", "setAirplaneMode", "toggleAirplaneMode",
 		"travel", "openLink", "openBrowser", "repeat", "retry", "runFlow",
 		"runScript", "evalScript", "takeScreenshot", "startRecording", "stopRecording",
-		"addMedia", "pressKey", "waitForAnimationToEnd", "defineVariables",
+		"addMedia", "removeMedia", "pressKey", "waitForAnimationToEnd", "defineVariables",
 	}
 
 	for _, st := range validTypes {
@@ -1089,6 +1479,23 @@ func TestSplitYAMLDocuments(t *testing.T) {
 			content:  "   \n  \n  ",
 			expected: 0,
 		},
+		{
+			// #119: a header comment ending in "->" must not flip the
+			// splitter into multiline mode and swallow the --- separator.
+			name:     "comment ending in arrow before separator",
+			content:  "appId: com.app\n# navigation: Library ->\ntags:\n  - e2e\n---\n- launchApp",
+			expected: 2,
+		},
+		{
+			name:     "comment ending in pipe before separator",
+			content:  "appId: com.app\n# see table |\n---\n- launchApp",
+			expected: 2,
+		},
+		{
+			name:     "plain value ending in arrow before separator",
+			content:  "appId: com.app\nname: Library ->\n---\n- launchApp",
+			expected: 2,
+		},
 	}
 
 	for _, tc := range tests {
@@ -1098,6 +1505,73 @@ func TestSplitYAMLDocuments(t *testing.T) {
 				t.Errorf("splitYAMLDocuments() returned %d parts, want %d", len(parts), tc.expected)
 			}
 		})
+	}
+}
+
+// TestParse_ArrowCommentHeader is the end-to-end regression for #119: the
+// full file from the issue report must parse with config and steps intact.
+func TestParse_ArrowCommentHeader(t *testing.T) {
+	content := `appId: com.example.app
+name: "x"
+# navigation: Library ->
+tags:
+  - e2e
+---
+- launchApp
+`
+	f, err := Parse([]byte(content), "bug.yaml")
+	if err != nil {
+		t.Fatalf("Parse() error: %v", err)
+	}
+	if f.Config.AppID != "com.example.app" {
+		t.Errorf("AppID = %q, want com.example.app", f.Config.AppID)
+	}
+	if len(f.Steps) != 1 {
+		t.Errorf("got %d steps, want 1", len(f.Steps))
+	}
+}
+
+// TestParse_BareScrollDefaultsDown is the regression for #120: `- scroll`
+// with no arguments scrolls down, matching Maestro's documented default.
+func TestParse_BareScrollDefaultsDown(t *testing.T) {
+	content := "appId: com.app\n---\n- launchApp\n- scroll\n"
+	f, err := Parse([]byte(content), "scroll.yaml")
+	if err != nil {
+		t.Fatalf("Parse() error: %v", err)
+	}
+	var scroll *ScrollStep
+	for _, s := range f.Steps {
+		if ss, ok := s.(*ScrollStep); ok {
+			scroll = ss
+		}
+	}
+	if scroll == nil {
+		t.Fatal("no ScrollStep parsed")
+	}
+	if scroll.Direction != "down" {
+		t.Errorf("Direction = %q, want \"down\"", scroll.Direction)
+	}
+}
+
+func TestStartsBlockScalar(t *testing.T) {
+	cases := map[string]bool{
+		"script: |":                true,
+		"script: |-":               true,
+		"text: >":                  true,
+		"text: >-":                 true,
+		"cmd: |2":                  true,
+		"cmd: >+":                  true,
+		"# navigation: Library ->": false,
+		"# see the table |":        false,
+		"name: Library ->":         false,
+		"name: value":              false,
+		"":                         false,
+		"# comment: use |":         false,
+	}
+	for in, want := range cases {
+		if got := startsBlockScalar(in); got != want {
+			t.Errorf("startsBlockScalar(%q) = %v, want %v", in, got, want)
+		}
 	}
 }
 
@@ -1134,7 +1608,9 @@ func TestParse_DecodeErrors(t *testing.T) {
 		{"clearState invalid", `- clearState: {appId: [invalid]}`},
 		{"setLocation invalid", `- setLocation: {latitude: [invalid]}`},
 		{"setOrientation invalid", `- setOrientation: {orientation: [invalid]}`},
-		{"setAirplaneMode invalid mapping", `- setAirplaneMode: {enabled: "not a bool"}`},
+		// `enabled:` now accepts strings (for ${VAR} interpolation), so the
+		// "not a bool" form is no longer a parse-time error — it resolves to
+		// false at execute time.
 		{"setAirplaneMode invalid scalar", `- setAirplaneMode: foobar`},
 		{"travel invalid", `- travel: {points: "not an array"}`},
 		{"openLink invalid", `- openLink: {link: [invalid]}`},
@@ -1671,5 +2147,202 @@ func TestFlow_GetTestCases(t *testing.T) {
 	}
 	if testCases[1].File != "checkout.yaml" {
 		t.Errorf("testCases[1].File = %q, want 'checkout.yaml'", testCases[1].File)
+	}
+}
+
+// TestParse_StepPlatformGate verifies a step's `platform:` field parses and
+// PlatformGate() normalizes it (Maestro #1353).
+func TestParse_StepPlatformGate(t *testing.T) {
+	f, err := Parse([]byte("appId: com.app\n---\n- tapOn:\n    text: Login\n    platform: iOS\n- back\n"), "p.yaml")
+	if err != nil {
+		t.Fatalf("Parse() error: %v", err)
+	}
+	if len(f.Steps) != 2 {
+		t.Fatalf("got %d steps, want 2", len(f.Steps))
+	}
+	if g := f.Steps[0].PlatformGate(); g != "ios" {
+		t.Errorf("step 0 PlatformGate() = %q, want \"ios\"", g)
+	}
+	if g := f.Steps[1].PlatformGate(); g != "" {
+		t.Errorf("ungated step PlatformGate() = %q, want \"\"", g)
+	}
+}
+
+// TestParseDarkModeSteps covers the dark-mode commands (Maestro #2507). The
+// scalar spellings matter: `setDarkMode: dark` reads better in a flow than
+// `enabled: true`, and both must land on the same step.
+func TestParseDarkModeSteps(t *testing.T) {
+	tests := []struct {
+		name     string
+		yaml     string
+		wantType StepType
+		wantOn   bool
+	}{
+		{"scalar enabled", `- setDarkMode: enabled`, StepSetDarkMode, true},
+		{"scalar dark", `- setDarkMode: dark`, StepSetDarkMode, true},
+		{"scalar disabled", `- setDarkMode: disabled`, StepSetDarkMode, false},
+		{"scalar light", `- setDarkMode: light`, StepSetDarkMode, false},
+		{"mapping true", `- setDarkMode: {enabled: true}`, StepSetDarkMode, true},
+		{"mapping false", `- setDarkMode: {enabled: false}`, StepSetDarkMode, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f, err := Parse([]byte(tt.yaml), "test.yaml")
+			if err != nil {
+				t.Fatalf("Parse() error = %v", err)
+			}
+			if len(f.Steps) != 1 {
+				t.Fatalf("got %d steps, want 1", len(f.Steps))
+			}
+			step, ok := f.Steps[0].(*SetDarkModeStep)
+			if !ok {
+				t.Fatalf("got %T, want *SetDarkModeStep", f.Steps[0])
+			}
+			if step.Type() != tt.wantType {
+				t.Errorf("Type() = %v, want %v", step.Type(), tt.wantType)
+			}
+			if step.Enabled != tt.wantOn {
+				t.Errorf("Enabled = %v, want %v", step.Enabled, tt.wantOn)
+			}
+		})
+	}
+
+	t.Run("rejects an unknown scalar", func(t *testing.T) {
+		if _, err := Parse([]byte(`- setDarkMode: purple`), "test.yaml"); err == nil {
+			t.Error("expected an error for an unrecognised setDarkMode value")
+		}
+	})
+
+	t.Run("variable is deferred to the expansion pass", func(t *testing.T) {
+		f, err := Parse([]byte(`- setDarkMode: {enabled: "${DARK}"}`), "test.yaml")
+		if err != nil {
+			t.Fatalf("Parse() error = %v", err)
+		}
+		step := f.Steps[0].(*SetDarkModeStep)
+		if raw, ok := step.EnabledRaw.(string); !ok || raw != "${DARK}" {
+			t.Errorf("EnabledRaw = %v, want the raw ${DARK} for later expansion", step.EnabledRaw)
+		}
+	})
+
+	for _, tc := range []struct {
+		yaml     string
+		wantType StepType
+	}{
+		{`- toggleDarkMode:`, StepToggleDarkMode},
+		{`- assertDarkMode:`, StepAssertDarkMode},
+		{`- assertLightMode:`, StepAssertLightMode},
+	} {
+		t.Run(string(tc.wantType), func(t *testing.T) {
+			f, err := Parse([]byte(tc.yaml), "test.yaml")
+			if err != nil {
+				t.Fatalf("Parse() error = %v", err)
+			}
+			if got := f.Steps[0].Type(); got != tc.wantType {
+				t.Errorf("Type() = %v, want %v", got, tc.wantType)
+			}
+		})
+	}
+}
+
+func TestParse_AssertVisibleCount(t *testing.T) {
+	yaml := `
+- assertVisible:
+    id: product-row
+    count: 3
+`
+	parsed, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	step, ok := parsed.Steps[0].(*AssertVisibleStep)
+	if !ok {
+		t.Fatalf("expected AssertVisibleStep, got %T", parsed.Steps[0])
+	}
+	if step.Count != "3" {
+		t.Errorf("Count = %q, want %q", step.Count, "3")
+	}
+	n, has, err := step.ExpectedCount()
+	if err != nil || !has || n != 3 {
+		t.Errorf("ExpectedCount() = (%d, %v, %v), want (3, true, nil)", n, has, err)
+	}
+}
+
+func TestParse_AssertVisibleCount_Variable(t *testing.T) {
+	yaml := `
+- assertVisible:
+    id: row
+    count: ${ROWS}
+`
+	parsed, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("a ${VAR} count must parse (validated after expansion): %v", err)
+	}
+	step := parsed.Steps[0].(*AssertVisibleStep)
+	if step.Count != "${ROWS}" {
+		t.Errorf("Count = %q, want %q", step.Count, "${ROWS}")
+	}
+	if _, _, err := step.ExpectedCount(); err == nil {
+		t.Error("ExpectedCount on an unexpanded variable should error")
+	}
+}
+
+func TestParse_AssertVisibleCount_Invalid(t *testing.T) {
+	for name, yaml := range map[string]string{
+		"zero":       "- assertVisible: {id: row, count: 0}",
+		"negative":   "- assertVisible: {id: row, count: -2}",
+		"not number": "- assertVisible: {id: row, count: many}",
+		"with index": "- assertVisible: {id: row, count: 2, index: 1}",
+	} {
+		if _, err := Parse([]byte(yaml), "test.yaml"); err == nil {
+			t.Errorf("%s: expected a parse error for %q", name, yaml)
+		}
+	}
+}
+
+func TestAssertVisibleStep_DescribeWithCount(t *testing.T) {
+	s := &AssertVisibleStep{Selector: Selector{ID: "row"}, Count: "3"}
+	got := s.Describe()
+	if !strings.Contains(got, "count: 3") {
+		t.Errorf("Describe() = %q, want it to mention the count", got)
+	}
+}
+
+func TestParse_DragAndDrop(t *testing.T) {
+	yaml := `
+- dragAndDrop:
+    from:
+      id: item-3
+    to:
+      point: "50%, 20%"
+    holdDuration: 800
+`
+	parsed, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	s, ok := parsed.Steps[0].(*DragAndDropStep)
+	if !ok {
+		t.Fatalf("expected DragAndDropStep, got %T", parsed.Steps[0])
+	}
+	if s.From.ID != "item-3" || s.To.Point != "50%, 20%" {
+		t.Errorf("from/to = %v / %v", s.From, s.To)
+	}
+	if s.HoldDuration != 800 {
+		t.Errorf("HoldDuration = %d, want 800", s.HoldDuration)
+	}
+	if s.Duration != 1000 {
+		t.Errorf("Duration default = %d, want 1000", s.Duration)
+	}
+}
+
+func TestParse_DragAndDrop_RequiresFromAndTo(t *testing.T) {
+	for name, yaml := range map[string]string{
+		"missing to":   "- dragAndDrop: {from: {id: a}}",
+		"missing from": "- dragAndDrop: {to: {id: b}}",
+		"empty":        "- dragAndDrop: {}",
+	} {
+		if _, err := Parse([]byte(yaml), "test.yaml"); err == nil {
+			t.Errorf("%s: expected a parse error", name)
+		}
 	}
 }

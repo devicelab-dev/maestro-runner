@@ -48,20 +48,32 @@ func (c *Client) Connect(capabilities map[string]interface{}) error {
 	// For iOS: disable auto-launch to prevent double-launch (once by Appium session,
 	// once by flow's launchApp). Double-launch causes duplicate permission alerts
 	// that interfere with element focus during text input.
+	//
+	// EXCEPT when the user explicitly set appium:autoLaunch in their caps file.
+	// Some workflows require Appium to launch the app during session creation —
+	// notably appium:processArguments (DYLD_INSERT_LIBRARIES for Applitools NML,
+	// etc.) only takes effect on the Appium-initiated launch. Overriding the
+	// user's autoLaunch=true would silently strip those side-effects.
 	if p, ok := capabilities["platformName"].(string); ok && strings.EqualFold(p, "ios") {
-		capabilities["appium:autoLaunch"] = false
+		if _, userSet := capabilities["appium:autoLaunch"]; !userSet {
+			capabilities["appium:autoLaunch"] = false
+		}
 	}
 
 	// For Android with clearState (noReset=false): disable auto-launch so we can
 	// grant permissions via pm grant before the app starts (avoids permission popups).
 	// When noReset is true (default), permissions persist across sessions so this isn't needed.
+	// Same caveat as iOS — respect the user's explicit autoLaunch setting so that
+	// appium:processArguments and similar launch-time-only capabilities still apply.
 	var androidAppPackage, androidAppActivity string
 	if p, ok := capabilities["platformName"].(string); ok && strings.EqualFold(p, "android") {
 		if noReset, ok := capabilities["appium:noReset"].(bool); ok && !noReset {
 			if pkg, ok := capabilities["appium:appPackage"].(string); ok && pkg != "" {
 				androidAppPackage = pkg
 				androidAppActivity, _ = capabilities["appium:appActivity"].(string)
-				capabilities["appium:autoLaunch"] = false
+				if _, userSet := capabilities["appium:autoLaunch"]; !userSet {
+					capabilities["appium:autoLaunch"] = false
+				}
 			}
 		}
 	}
@@ -158,13 +170,30 @@ func (c *Client) Connect(capabilities map[string]interface{}) error {
 
 		// Grant all permissions and launch app (autoLaunch was disabled above)
 		if androidAppPackage != "" {
-			for _, perm := range getAllPermissions() {
-				// Ignore errors - permission might not be declared by the app
-				if _, err := c.ExecuteMobile("shell", map[string]interface{}{
-					"command": "pm",
-					"args":    []string{"grant", androidAppPackage, perm},
-				}); err != nil {
-					logger.Debug("grant %s failed (expected if not declared): %v", perm, err)
+			// If the caller already passed `appium:autoGrantPermissions: true`,
+			// Appium grants the app's declared permissions natively during the
+			// install/launch phase — no work for us at session-start time.
+			// Skip the explicit loop. This is the only path that works on
+			// Appium hosts that disable the `adb_shell` insecure feature
+			// (e.g. Sauce Labs by default): the customer sets the cap and
+			// maestro-runner stops trying to grant via shell.
+			autoGrant := false
+			if v, ok := capabilities["appium:autoGrantPermissions"].(bool); ok && v {
+				autoGrant = true
+			} else if v, ok := capabilities["autoGrantPermissions"].(bool); ok && v {
+				autoGrant = true
+			}
+			if !autoGrant {
+				for _, perm := range getAllPermissions() {
+					// Ignore errors - permission might not be declared by the app,
+					// or the host may block `adb_shell` (in which case set
+					// `appium:autoGrantPermissions: true` in caps instead).
+					if _, err := c.ExecuteMobile("shell", map[string]interface{}{
+						"command": "pm",
+						"args":    []string{"grant", androidAppPackage, perm},
+					}); err != nil {
+						logger.Debug("grant %s failed (expected if not declared or shell blocked): %v", perm, err)
+					}
 				}
 			}
 			if androidAppActivity != "" {
@@ -461,6 +490,32 @@ func (c *Client) LongPress(x, y, durationMs int) error {
 	})
 }
 
+// DragAndDrop long-presses at the start point, drags to the end point in
+// interpolated moves, settles, and releases. The interpolation matters: drop
+// targets track the pointer, and a single jump from start to end skips every
+// zone in between.
+func (c *Client) DragAndDrop(fromX, fromY, toX, toY, holdMs, moveMs int) error {
+	actions := []map[string]interface{}{
+		{"type": "pointerMove", "duration": 0, "x": fromX, "y": fromY},
+		{"type": "pointerDown", "button": 0},
+		{"type": "pause", "duration": holdMs},
+	}
+	const steps = 20
+	for i := 1; i <= steps; i++ {
+		actions = append(actions, map[string]interface{}{
+			"type":     "pointerMove",
+			"duration": moveMs / steps,
+			"x":        fromX + (toX-fromX)*i/steps,
+			"y":        fromY + (toY-fromY)*i/steps,
+		})
+	}
+	actions = append(actions,
+		map[string]interface{}{"type": "pause", "duration": 250},
+		map[string]interface{}{"type": "pointerUp", "button": 0},
+	)
+	return c.performTouchAction(actions)
+}
+
 // Swipe performs a swipe gesture.
 func (c *Client) Swipe(startX, startY, endX, endY, durationMs int) error {
 	return c.performTouchAction([]map[string]interface{}{
@@ -570,7 +625,14 @@ func (c *Client) ClearAppData(appID string) error {
 		return err
 	}
 
-	// Android: use mobile: shell to run pm clear (same as native driver)
+	// Android: use mobile: clearApp (native, no adb_shell required).
+	// Falls back to mobile: shell pm clear on older Appium servers where
+	// the native command isn't implemented.
+	if _, err := c.ExecuteMobile("clearApp", map[string]interface{}{"appId": appID}); err == nil {
+		return nil
+	} else {
+		logger.Debug("mobile: clearApp unavailable (%v) — falling back to mobile: shell pm clear", err)
+	}
 	_, err := c.post(c.sessionPath()+"/execute/sync", map[string]interface{}{
 		"script": "mobile: shell",
 		"args": []interface{}{map[string]interface{}{
@@ -616,6 +678,14 @@ func (c *Client) GetOrientation() (string, error) {
 	}
 	orientation, _ := resp["value"].(string)
 	return strings.ToLower(orientation), nil
+}
+
+// Keepalive issues a cheap session-scoped GET (orientation) purely to reset
+// the server's newCommandTimeout idle timer. Any real command resets it; this
+// is the lightest one supported on both platforms. See Driver.Keepalive (#124).
+func (c *Client) Keepalive() error {
+	_, err := c.get(c.sessionPath() + "/orientation")
+	return err
 }
 
 // SetOrientation sets the orientation.

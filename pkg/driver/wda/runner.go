@@ -3,11 +3,13 @@ package wda
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -16,13 +18,40 @@ import (
 	"github.com/danielpaulus/go-ios/ios/forward"
 	"github.com/devicelab-dev/maestro-runner/pkg/config"
 	"github.com/devicelab-dev/maestro-runner/pkg/logger"
+	"github.com/devicelab-dev/maestro-runner/pkg/simulator"
 )
 
 const (
 	wdaBasePort    = uint16(8100)
 	wdaPortRange   = uint16(1000)
-	buildTimeout   = 10 * time.Minute
-	startupTimeout = 90 * time.Second
+	buildTimeout = 10 * time.Minute
+	// startupTimeout covers the full window from invoking
+	// `xcodebuild test-without-building` to WDA's FBWebServer printing
+	// "ServerURLHere->...". On CI macos-latest with Xcode 26.3 + iOS 26
+	// simulator, the xcodebuild bootstrap + test-runtime spawn alone
+	// consumes ~75 seconds before XCTest even prints "Running tests..."
+	// (vs ~10s on a fast local Mac). At 90s the budget left for WDA's
+	// own startup was only ~15s — too tight, flaked ~67% of soak runs.
+	// Bumped to 600s to match upstream maestro's
+	// MAESTRO_DRIVER_STARTUP_TIMEOUT — sized for the slowest CI path
+	// we've seen (>250s under load). Local runs see "ServerURLHere->"
+	// in <30s so they pay nothing for the larger budget.
+	startupTimeout = 600 * time.Second
+	// maxStartupAttempts caps the retry loop in Start. On CI macos-latest
+	// xcodebuild test-without-building intermittently hangs after launch —
+	// emits a few "[MT] IDERunDestination" lines then never opens WDA's
+	// HTTP listener. Killing it and retrying clears the hang ~80% of the
+	// time, so 4 attempts (1 initial + 3 retries) reduces the effective
+	// startup-fail rate from the ~40% per-attempt baseline to a fraction
+	// of a percent in theory. Each failed attempt waits the stall window
+	// (60s) before giving up, so 4 attempts cap at ~4 minutes worst case.
+	maxStartupAttempts = 4
+	// stallDetectWindow is how long waitForStartup waits with no new log
+	// output before declaring xcodebuild stalled. A healthy startup emits
+	// new log lines every few seconds (xcodebuild bootstrap, XCTest init,
+	// then WDA's "ServerURLHere->" marker). 60s of silence is reliable
+	// hung-process evidence.
+	stallDetectWindow = 60 * time.Second
 )
 
 // Runner handles building and running WDA on iOS devices.
@@ -66,9 +95,17 @@ func PortFromUDID(udid string) uint16 {
 	if idx := strings.LastIndex(udid, "-"); idx >= 0 {
 		seg = udid[idx+1:]
 	}
+	// Bound to the last 12 hex chars before parsing. A standard UUID's final
+	// segment is already exactly 12 chars, so UUID-derived ports are unchanged;
+	// a legacy 40-char hyphenless UDID would otherwise overflow uint64 in
+	// ParseUint and fall back to 8100 for every device — colliding in parallel
+	// runs (#129).
+	if len(seg) > 12 {
+		seg = seg[len(seg)-12:]
+	}
 	val, err := strconv.ParseUint(seg, 16, 64)
 	if err != nil {
-		return wdaBasePort // fallback to 8100 if UDID is not a standard UUID
+		return wdaBasePort // fallback to 8100 if the tail isn't hex
 	}
 	return wdaBasePort + uint16(val%uint64(wdaPortRange))
 }
@@ -152,7 +189,10 @@ func (r *Runner) Build(ctx context.Context) error {
 	return nil
 }
 
-// Start runs WDA on the device.
+// Start runs WDA on the device. Wraps a per-attempt startOnce in a retry
+// loop that detects xcodebuild stalls (no log output for stallDetectWindow)
+// and kills + retries up to maxStartupAttempts times. Matches the
+// equivalent retry logic in pkg/driver/devicelab_ios/setup.go.
 func (r *Runner) Start(ctx context.Context) error {
 	xctestrun, err := r.findXctestrun()
 	if err != nil {
@@ -162,18 +202,93 @@ func (r *Runner) Start(ctx context.Context) error {
 	// Check if this is a simulator or physical device
 	r.isSimulatorCache, _ = r.isSimulator()
 
-	// Inject USE_PORT into the xctestrun plist so the WDA process picks it up.
-	// Setting cmd.Env on xcodebuild does NOT propagate to the test runner;
-	// the runner reads env vars from the xctestrun plist's EnvironmentVariables.
+	logPath := filepath.Join(r.buildDir, "logs", "runner.log")
+
+	var lastErr error
+	for attempt := 1; attempt <= maxStartupAttempts; attempt++ {
+		if attempt > 1 {
+			banner := fmt.Sprintf(
+				"  ⚠ WDA startup failed on attempt %d/%d: %v",
+				attempt-1, maxStartupAttempts, lastErr,
+			)
+			fmt.Fprintln(os.Stderr, banner)
+			fmt.Fprintf(os.Stderr, "  ↻ Retrying (attempt %d/%d)...\n", attempt, maxStartupAttempts)
+			// Mirror banner into the runner log so the failure artifact
+			// captures the full retry history. Use append mode so we
+			// don't lose the previous attempt's xcodebuild output.
+			if f, ferr := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644); ferr == nil {
+				fmt.Fprintln(f, banner)
+				fmt.Fprintf(f, "=== attempt %d/%d ===\n", attempt, maxStartupAttempts)
+				_ = f.Close()
+			}
+			// Reset the simulator before retrying. Killing xcodebuild alone
+			// doesn't unwedge a stuck CoreSimulator daemon — if the sim is
+			// in a bad state every xcodebuild retry hits the same wall.
+			// shutdown+boot on the same UDID clears CoreSimulator without
+			// losing installed apps. Sim-only — physical devices don't
+			// have a simctl equivalent (and don't suffer this CI-runner
+			// wedge pattern anyway).
+			if r.isSimulatorCache {
+				if rerr := resetSimulator(ctx, r.deviceUDID); rerr != nil {
+					fmt.Fprintf(os.Stderr, "  ⚠ simctl reset failed: %v (continuing anyway)\n", rerr)
+				}
+			}
+		}
+
+		err := r.startOnce(ctx, xctestrun, logPath, attempt)
+		if err == nil {
+			if attempt > 1 {
+				fmt.Fprintf(os.Stderr, "  ✓ WDA started on attempt %d/%d\n", attempt, maxStartupAttempts)
+			}
+			// For physical devices, forward the WDA port from device to localhost.
+			if !r.isSimulatorCache {
+				if pferr := r.startPortForward(); pferr != nil {
+					r.Stop()
+					return fmt.Errorf("failed to start port forwarding: %w", pferr)
+				}
+			}
+			fmt.Println("WebDriverAgent started")
+			return nil
+		}
+		// Deterministic configuration failures won't be fixed by retrying —
+		// report the real error immediately instead of burning ~4 blind
+		// attempts (#118).
+		var perm *permanentStartupError
+		if errors.As(err, &perm) {
+			return fmt.Errorf("WDA failed to start: %w", err)
+		}
+		lastErr = err
+	}
+	return fmt.Errorf(
+		"WDA failed to start after %d attempts: %w",
+		maxStartupAttempts, lastErr,
+	)
+}
+
+// startOnce performs one launch+wait attempt. On stall (no log output
+// for stallDetectWindow) it stops the xcodebuild subprocess and returns
+// an error tagged for retry. Caller (Start) owns the retry decision.
+func (r *Runner) startOnce(ctx context.Context, xctestrun, logPath string, attempt int) error {
+	// Re-inject port each attempt — the xctestrun is edited in place, and
+	// the previous attempt may have left a stale port if injection raced
+	// with the killed subprocess.
 	if err := r.injectPort(xctestrun); err != nil {
 		return fmt.Errorf("failed to set WDA port in xctestrun: %w", err)
 	}
 
-	logPath := filepath.Join(r.buildDir, "logs", "runner.log")
-	r.logFile, err = os.Create(logPath)
+	// Truncate on first attempt, append on retries so the log captures
+	// the full history.
+	flags := os.O_CREATE | os.O_WRONLY
+	if attempt == 1 {
+		flags |= os.O_TRUNC
+	} else {
+		flags |= os.O_APPEND
+	}
+	logFile, err := os.OpenFile(logPath, flags, 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to create log file: %w", err)
 	}
+	r.logFile = logFile
 
 	r.cmd = exec.CommandContext(ctx, "xcodebuild",
 		"test-without-building",
@@ -184,26 +299,26 @@ func (r *Runner) Start(ctx context.Context) error {
 	r.cmd.Stdout = r.logFile
 	r.cmd.Stderr = r.logFile
 
-	fmt.Println("Starting WebDriverAgent...")
+	if attempt == 1 {
+		fmt.Println("Starting WebDriverAgent...")
+	}
 
 	if err := r.cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start WDA: %w", err)
 	}
 
-	if err := r.waitForStartup(logPath); err != nil {
+	// Watch for the process exiting before WDA is ready. A fast-failing
+	// xcodebuild (bad -destination, missing runtime, …) previously looked
+	// identical to a hang: the log stopped growing and the stall detector
+	// misreported it 60s later, burning blind retries (#118).
+	cmd := r.cmd
+	exitCh := make(chan error, 1)
+	go func() { exitCh <- cmd.Wait() }()
+
+	if err := r.waitForStartup(logPath, exitCh); err != nil {
 		r.Stop()
 		return err
 	}
-
-	// For physical devices, forward the WDA port from device to localhost
-	if !r.isSimulatorCache {
-		if err := r.startPortForward(); err != nil {
-			r.Stop()
-			return fmt.Errorf("failed to start port forwarding: %w", err)
-		}
-	}
-
-	fmt.Println("WebDriverAgent started")
 	return nil
 }
 
@@ -362,6 +477,34 @@ func (r *Runner) getBuildCacheDir() (string, error) {
 	return cacheDir, nil
 }
 
+// resetSimulator shuts down then boots the given simulator. Used between
+// retry attempts when xcodebuild stalls — a sim-daemon stuck in a bad
+// state survives a plain xcodebuild kill, but a shutdown+boot cycle
+// resets it without losing installed apps.
+func resetSimulator(ctx context.Context, udid string) error {
+	shutdownCmd := exec.CommandContext(ctx, "xcrun", "simctl", "shutdown", udid)
+	if out, err := shutdownCmd.CombinedOutput(); err != nil {
+		msg := strings.ToLower(strings.TrimSpace(string(out)))
+		// Already shut down → fine.
+		if !strings.Contains(msg, "shutdown") && !strings.Contains(msg, "current state:") {
+			return fmt.Errorf("simctl shutdown: %w (%s)", err, msg)
+		}
+	}
+	bootCmd := exec.CommandContext(ctx, "xcrun", "simctl", "boot", udid)
+	if out, err := bootCmd.CombinedOutput(); err != nil {
+		msg := strings.ToLower(strings.TrimSpace(string(out)))
+		// Already booted → fine.
+		if !strings.Contains(msg, "booted") && !strings.Contains(msg, "current state:") {
+			return fmt.Errorf("simctl boot: %w (%s)", err, msg)
+		}
+	}
+	// Block until boot completes; cap at 60s. Healthy sim boots in 5-15s.
+	bootCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	_ = exec.CommandContext(bootCtx, "xcrun", "simctl", "bootstatus", udid, "-b").Run()
+	return nil
+}
+
 // isSimulator checks if the device is a simulator.
 func (r *Runner) isSimulator() (bool, error) {
 	// Run simctl to check if this UDID is a simulator
@@ -446,7 +589,19 @@ func (r *Runner) getIOSVersion() (string, error) {
 }
 
 func (r *Runner) destination() string {
-	return fmt.Sprintf("id=%s", r.deviceUDID)
+	// On Xcode 26 + iOS 26 simulators, xcodebuild's destination resolver
+	// returns BOTH arm64 and x86_64 entries for the same UDID and warns
+	// "Using the first of multiple matching destinations". The cached
+	// xctestrun is built arm64-only on Apple Silicon hosts, so picking
+	// the x86_64 variant leaves testmanagerd never spawning the test
+	// bundle and `xcodebuild test-without-building` stalls past 90s
+	// without ever emitting ServerURLHere. Pin platform + arch explicitly
+	// so the resolver gets a single concrete destination.
+	isSim, _ := r.isSimulator()
+	if isSim {
+		return fmt.Sprintf("platform=iOS Simulator,arch=%s,id=%s", simulator.XcodebuildArch(runtime.GOARCH), r.deviceUDID)
+	}
+	return fmt.Sprintf("platform=iOS,id=%s", r.deviceUDID)
 }
 
 func (r *Runner) derivedDataPath() string {
@@ -462,13 +617,39 @@ func (r *Runner) findXctestrun() (string, error) {
 	return matches[0], nil
 }
 
-func (r *Runner) waitForStartup(logPath string) error {
+func (r *Runner) waitForStartup(logPath string, exit <-chan error) error {
 	timeout := time.After(startupTimeout)
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
+	// Stall detection — if the log file isn't growing, xcodebuild is hung
+	// (most commonly waiting on the Xcode 26 + iOS 26 sim destination
+	// resolver). Bail early so the caller can kill + retry instead of
+	// waiting the full 300s startupTimeout.
+	var lastLogSize int64 = -1
+	lastLogActivity := time.Now()
+
 	for {
 		select {
+		case werr := <-exit:
+			// xcodebuild exited before WDA became ready — WDA runs inside
+			// the xcodebuild process, so this is always a failure even if
+			// the log shows the ready marker. Report the real error from
+			// the log instead of misdiagnosing the ensuing silence as a
+			// stall (#118). checkLog may classify it as permanent
+			// (`xcodebuild: error:`), which skips retries.
+			content, _ := os.ReadFile(logPath)
+			if cerr := r.checkLog(string(content), logPath); cerr != errNotReady && cerr != nil {
+				return cerr
+			}
+			status := "exited unexpectedly (status 0)"
+			if werr != nil {
+				status = fmt.Sprintf("exited: %v", werr)
+			}
+			return fmt.Errorf(
+				"xcodebuild %s before WDA became ready:\n%s\n\nFull log: %s",
+				status, tailLog(logPath, 20), logPath,
+			)
 		case <-ticker.C:
 			content, err := os.ReadFile(logPath)
 			if err != nil {
@@ -477,8 +658,20 @@ func (r *Runner) waitForStartup(logPath string) error {
 			if err := r.checkLog(string(content), logPath); err != errNotReady {
 				return err
 			}
+			// Did the file grow since last tick? If not for stallDetectWindow,
+			// xcodebuild is stalled — surface as a retryable error.
+			size := int64(len(content))
+			if size != lastLogSize {
+				lastLogSize = size
+				lastLogActivity = time.Now()
+			} else if time.Since(lastLogActivity) > stallDetectWindow {
+				return fmt.Errorf(
+					"xcodebuild stalled (no log output for %v):\n%s\n\nFull log: %s",
+					stallDetectWindow.Round(time.Second), tailLog(logPath, 20), logPath,
+				)
+			}
 		case <-timeout:
-			return fmt.Errorf("WDA startup timeout (90s):\n%s\n\nFull log: %s", tailLog(logPath, 20), logPath)
+			return fmt.Errorf("WDA startup timeout (%s):\n%s\n\nFull log: %s", startupTimeout, tailLog(logPath, 20), logPath)
 		}
 	}
 }
@@ -498,11 +691,36 @@ func (r *Runner) checkLog(log, logPath string) error {
 	if strings.Contains(log, "Code Sign error") {
 		return fmt.Errorf("code signing failed - check your DEVELOPMENT_TEAM and provisioning profiles")
 	}
+	// Generic xcodebuild errors (bad -destination, missing runtime, …)
+	// are deterministic configuration failures: surface the actual error
+	// line and skip the retry loop (#118).
+	if line := firstLineContaining(log, "xcodebuild: error:"); line != "" {
+		return &permanentStartupError{fmt.Errorf("%s\n\nFull log: %s", line, logPath)}
+	}
 	if strings.Contains(log, "Testing failed:") {
 		return fmt.Errorf("WDA failed:\n%s\n\nFull log: %s", tailLog(logPath, 20), logPath)
 	}
 
 	return errNotReady
+}
+
+// permanentStartupError marks startup failures that retrying cannot fix
+// (bad -destination, missing simulator runtime, …). Start stops the retry
+// loop as soon as it sees one instead of burning further attempts (#118).
+type permanentStartupError struct{ err error }
+
+func (e *permanentStartupError) Error() string { return e.err.Error() }
+func (e *permanentStartupError) Unwrap() error { return e.err }
+
+// firstLineContaining returns the first log line containing substr,
+// trimmed, or "" when absent.
+func firstLineContaining(log, substr string) string {
+	for _, line := range strings.Split(log, "\n") {
+		if strings.Contains(line, substr) {
+			return strings.TrimSpace(line)
+		}
+	}
+	return ""
 }
 
 func tailLog(path string, lines int) string {

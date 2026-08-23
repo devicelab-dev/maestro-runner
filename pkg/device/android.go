@@ -5,10 +5,11 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/devicelab-dev/maestro-runner/pkg/core"
 )
 
 // AndroidDevice manages an Android device connection via ADB.
@@ -91,7 +92,7 @@ func (e *NoDevicesError) Error() string {
 // detectDeviceSerial finds the first connected device serial.
 // If no devices found, returns NoDevicesError with helpful suggestions.
 func detectDeviceSerial(adbPath string) (string, error) {
-	cmd := exec.Command(adbPath, "devices")
+	cmd := execCommand(adbPath, "devices")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("adb devices failed: %w\nHint: Is adb server running? Try: adb start-server", err)
@@ -162,7 +163,7 @@ func listAvailableAVDs() []string {
 	}
 
 	// Run emulator -list-avds
-	cmd := exec.Command(emulatorPath, "-list-avds")
+	cmd := execCommand(emulatorPath, "-list-avds")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil
@@ -200,7 +201,7 @@ func findEmulatorBinary() string {
 	}
 
 	// Try PATH
-	if path, err := exec.LookPath("emulator"); err == nil {
+	if path, err := execLookPath("emulator"); err == nil {
 		return path
 	}
 
@@ -217,6 +218,11 @@ func (d *AndroidDevice) Shell(cmd string) (string, error) {
 	return d.adb("shell", cmd)
 }
 
+// Screenshot captures the physical display through ADB.
+func (d *AndroidDevice) Screenshot() ([]byte, error) {
+	return d.adbOutput("exec-out", "screencap", "-p")
+}
+
 // Install installs an APK on the device.
 func (d *AndroidDevice) Install(apkPath string) error {
 	_, err := d.adb("install", "-r", "-g", apkPath)
@@ -229,29 +235,61 @@ func (d *AndroidDevice) Uninstall(pkg string) error {
 	return err
 }
 
+// Push copies a local file to the device via `adb push`.
+func (d *AndroidDevice) Push(localPath, remotePath string) error {
+	_, err := d.adb("push", localPath, remotePath)
+	return err
+}
+
+// Pull copies a file from the device to the host.
+func (d *AndroidDevice) Pull(remotePath, localPath string) error {
+	_, err := d.adb("pull", remotePath, localPath)
+	return err
+}
+
 // GetAppVersion returns the version name of an installed app.
 // Returns empty string if app is not installed or version cannot be determined.
 func (d *AndroidDevice) GetAppVersion(packageName string) string {
+	version, _ := d.GetAppVersionAndBuild(packageName)
+	return version
+}
+
+// GetAppVersionAndBuild returns an installed app's version name and version
+// code — what a user calls the version and the build number.
+//
+// One release version covers many CI builds, so the version name alone does not
+// identify which binary a run used. Both come out of the same dumpsys output,
+// so reading them together costs one shell call rather than two.
+//
+// Either value is empty when the app is not installed or it cannot be parsed.
+func (d *AndroidDevice) GetAppVersionAndBuild(packageName string) (version, build string) {
 	if packageName == "" {
-		return ""
+		return "", ""
 	}
 
-	out, err := d.Shell(fmt.Sprintf("dumpsys package %s | grep versionName", packageName))
+	// Matching on "version" alone keeps this to a single grep with nothing to
+	// quote, and the parsing below only accepts the two keys that matter.
+	out, err := d.Shell(fmt.Sprintf("dumpsys package %s | grep version", core.ShellQuote(packageName)))
 	if err != nil {
-		return ""
+		return "", ""
 	}
 
-	// Parse output: "    versionName=2.2.0"
-	lines := strings.Split(out, "\n")
-	for _, line := range lines {
+	// Parse output lines: "    versionName=2.2.0" and
+	// "    versionCode=10009107 minSdk=24 targetSdk=34" — the version code
+	// shares its line with other fields, so it stops at the first space.
+	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "versionName=") {
-			version := strings.TrimPrefix(line, "versionName=")
-			return strings.TrimSpace(version)
+		switch {
+		case version == "" && strings.HasPrefix(line, "versionName="):
+			version = strings.TrimSpace(strings.TrimPrefix(line, "versionName="))
+		case build == "" && strings.HasPrefix(line, "versionCode="):
+			if fields := strings.Fields(strings.TrimPrefix(line, "versionCode=")); len(fields) > 0 {
+				build = fields[0]
+			}
 		}
 	}
 
-	return ""
+	return version, build
 }
 
 // IsInstalled checks if a package is installed.
@@ -356,13 +394,18 @@ func (d *AndroidDevice) Info() (DeviceInfo, error) {
 
 // adb executes an ADB command.
 func (d *AndroidDevice) adb(args ...string) (string, error) {
+	out, err := d.adbOutput(args...)
+	return string(out), err
+}
+
+func (d *AndroidDevice) adbOutput(args ...string) ([]byte, error) {
 	cmdArgs := make([]string, 0, len(args)+2)
 	if d.serial != "" {
 		cmdArgs = append(cmdArgs, "-s", d.serial)
 	}
 	cmdArgs = append(cmdArgs, args...)
 
-	cmd := exec.Command(d.adbPath, cmdArgs...)
+	cmd := execCommand(d.adbPath, cmdArgs...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -372,10 +415,10 @@ func (d *AndroidDevice) adb(args ...string) (string, error) {
 		if errMsg == "" {
 			errMsg = stdout.String()
 		}
-		return "", fmt.Errorf("adb %s: %w: %s", strings.Join(args, " "), err, errMsg)
+		return nil, fmt.Errorf("adb %s: %w: %s", strings.Join(args, " "), err, errMsg)
 	}
 
-	return stdout.String(), nil
+	return stdout.Bytes(), nil
 }
 
 // waitForDevice waits for the device to be available.
@@ -402,7 +445,7 @@ func (d *AndroidDevice) isConnected() bool {
 // findADB locates the ADB binary.
 func findADB() (string, error) {
 	// Try PATH first
-	if path, err := exec.LookPath("adb"); err == nil {
+	if path, err := execLookPath("adb"); err == nil {
 		return path, nil
 	}
 

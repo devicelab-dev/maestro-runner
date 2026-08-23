@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -18,6 +19,23 @@ import (
 	"github.com/devicelab-dev/maestro-runner/pkg/maestro"
 	"github.com/devicelab-dev/maestro-runner/pkg/uiautomator2"
 )
+
+// useAndroidTCPForward decides whether to force TCP-to-TCP adb forwards
+// (instead of the default Linux/Mac unix-socket forward) for Android
+// drivers. Returns true when either the explicit cfg flag is set, OR
+// $DEVICEFARM_DEVICE_UDID is in the environment (AWS Device Farm test
+// spec sets that on every run — its adb-proxy sandbox blocks
+// localfilesystem:/localabstract: forwards but allows plain tcp:,
+// see issue #83).
+func useAndroidTCPForward(cfg *RunConfig) bool {
+	if cfg != nil && cfg.AndroidTCPForward {
+		return true
+	}
+	if os.Getenv("DEVICEFARM_DEVICE_UDID") != "" {
+		return true
+	}
+	return false
+}
 
 // CreateAndroidDriver creates an Android driver based on cfg.Driver type.
 // Exported for library use.
@@ -146,6 +164,14 @@ func createUIAutomator2Driver(cfg *RunConfig, dev *device.AndroidDevice, info de
 	printSetupStep("Starting UIAutomator2 server...")
 	logger.Info("Starting UIAutomator2 server on device %s", dev.Serial())
 	uia2Cfg := device.DefaultUIAutomator2Config()
+	if cfg.DriverStartTimeout > 0 {
+		uia2Cfg.Timeout = time.Duration(cfg.DriverStartTimeout) * time.Second
+		logger.Info("Overriding UIAutomator2 start timeout to %v (--driver-start-timeout)", uia2Cfg.Timeout)
+	}
+	if useAndroidTCPForward(cfg) {
+		uia2Cfg.TCPForward = true
+		logger.Info("Android: using TCP-to-TCP adb forward (AWS DF / --android-tcp-forward)")
+	}
 	if err := dev.StartUIAutomator2(uia2Cfg); err != nil {
 		logger.Error("Failed to start UIAutomator2: %v", err)
 		return nil, nil, fmt.Errorf("start UIAutomator2: %w", err)
@@ -197,8 +223,17 @@ func createUIAutomator2Driver(cfg *RunConfig, dev *device.AndroidDevice, info de
 	// Set waitForIdle timeout - configurable via --wait-for-idle-timeout or config.yaml
 	// Default is 5000ms which balances speed and reliability
 	// Set to 0 to disable (faster but may miss animations)
+	//
+	// enableMultiWindows=true makes the server's page source and element search
+	// span ALL accessibility windows, not just the focused one. Without it,
+	// content in a separate window — AlertDialogs, permission prompts, and
+	// Material ExposedDropdownMenu / Spinner popups (ListPopupWindow) — is
+	// invisible, so tapOn an item reports "no such element" even though it is on
+	// screen (issue #93). Stock Maestro's instrumentation always traverses all
+	// windows; this aligns the uiautomator2 driver with that behavior.
 	if err := client.SetAppiumSettings(map[string]interface{}{
 		"waitForIdleTimeout": cfg.WaitForIdleTimeout,
+		"enableMultiWindows": true,
 	}); err != nil {
 		fmt.Printf("  %s⚠%s Warning: failed to set appium settings: %v\n", color(colorYellow), color(colorReset), err)
 	}
@@ -210,10 +245,10 @@ func createUIAutomator2Driver(cfg *RunConfig, dev *device.AndroidDevice, info de
 		fmt.Printf("  %s⚠%s Warning: failed to set implicit wait: %v\n", color(colorYellow), color(colorReset), err)
 	}
 
-	// 5. Query app version from device if appId is known
-	appVersion := ""
+	// 5. Query app version and build number from device if appId is known
+	appVersion, appBuild := "", ""
 	if cfg.AppID != "" {
-		appVersion = dev.GetAppVersion(cfg.AppID)
+		appVersion, appBuild = dev.GetAppVersionAndBuild(cfg.AppID)
 	}
 
 	// 6. Get screen size
@@ -252,6 +287,7 @@ func createUIAutomator2Driver(cfg *RunConfig, dev *device.AndroidDevice, info de
 		ScreenHeight: screenH,
 		AppID:        cfg.AppID,
 		AppVersion:   appVersion,
+		AppBuild:     appBuild,
 	}
 	driver := uia2driver.New(client, platformInfo, dev)
 
@@ -331,6 +367,14 @@ func createDeviceLabDriver(cfg *RunConfig, dev *device.AndroidDevice, info devic
 	printSetupStep("Starting DeviceLab driver...")
 	logger.Info("Starting DeviceLab driver on device %s", dev.Serial())
 	driverCfg := device.DefaultDeviceLabDriverConfig()
+	if cfg.DriverStartTimeout > 0 {
+		driverCfg.Timeout = time.Duration(cfg.DriverStartTimeout) * time.Second
+		logger.Info("Overriding DeviceLab driver start timeout to %v (--driver-start-timeout)", driverCfg.Timeout)
+	}
+	if useAndroidTCPForward(cfg) {
+		driverCfg.TCPForward = true
+		logger.Info("Android: using TCP-to-TCP adb forward (AWS DF / --android-tcp-forward)")
+	}
 	if err := dev.StartDeviceLabDriver(driverCfg); err != nil {
 		logger.Error("Failed to start DeviceLab driver: %v", err)
 		return nil, nil, fmt.Errorf("start DeviceLab driver: %w", err)
@@ -402,10 +446,10 @@ func createDeviceLabDriver(cfg *RunConfig, dev *device.AndroidDevice, info devic
 		fmt.Printf("  %s⚠%s Warning: failed to set implicit wait: %v\n", color(colorYellow), color(colorReset), err)
 	}
 
-	// 5. Query app version
-	appVersion := ""
+	// 5. Query app version and build number
+	appVersion, appBuild := "", ""
 	if cfg.AppID != "" {
-		appVersion = dev.GetAppVersion(cfg.AppID)
+		appVersion, appBuild = dev.GetAppVersionAndBuild(cfg.AppID)
 	}
 
 	// 6. Get screen size from session device info
@@ -443,6 +487,7 @@ func createDeviceLabDriver(cfg *RunConfig, dev *device.AndroidDevice, info devic
 		ScreenHeight: screenH,
 		AppID:        cfg.AppID,
 		AppVersion:   appVersion,
+		AppBuild:     appBuild,
 	}
 	driver := devicelabdriver.New(adapter, platformInfo, dev)
 

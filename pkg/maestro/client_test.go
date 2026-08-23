@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 // mockServer creates an httptest.Server that upgrades to WebSocket
@@ -258,7 +258,7 @@ func TestClientCallWithParams(t *testing.T) {
 		// Verify params were passed
 		params, _ := json.Marshal(req.Params)
 		var p map[string]interface{}
-		json.Unmarshal(params, &p)
+		_ = json.Unmarshal(params, &p)
 
 		x, _ := p["x"].(float64)
 		y, _ := p["y"].(float64)
@@ -406,5 +406,71 @@ func TestErrorPayloadError(t *testing.T) {
 	expected := "not_found: element not found"
 	if e.Error() != expected {
 		t.Errorf("expected %q, got %q", expected, e.Error())
+	}
+}
+
+// TestNewClient covers the Unix-socket constructor (just field setup; no connection).
+func TestNewClient(t *testing.T) {
+	c := NewClient("/tmp/foo.sock")
+	if c == nil {
+		t.Fatal("NewClient returned nil")
+	}
+	if c.socketPath != "/tmp/foo.sock" {
+		t.Errorf("socketPath: got %q", c.socketPath)
+	}
+	if c.done == nil {
+		t.Error("done channel must be initialised")
+	}
+	if c.logger == nil {
+		t.Error("logger must be initialised")
+	}
+}
+
+// TestNewClientTCP covers the TCP constructor.
+func TestNewClientTCP(t *testing.T) {
+	c := NewClientTCP(12345)
+	if c == nil {
+		t.Fatal("NewClientTCP returned nil")
+	}
+	if c.tcpPort != 12345 {
+		t.Errorf("tcpPort: got %d", c.tcpPort)
+	}
+	if c.socketPath != "" {
+		t.Errorf("socketPath should be empty for TCP, got %q", c.socketPath)
+	}
+}
+
+// TestSetLogPath swaps the logger to write to the provided path.
+func TestSetLogPath(t *testing.T) {
+	c := NewClient("/tmp/x.sock")
+	path := t.TempDir() + "/maestro.log"
+	c.SetLogPath(path)
+	if c.logger == nil {
+		t.Fatal("logger nil after SetLogPath")
+	}
+	// Bad path should not panic (silently swallowed per implementation).
+	c.SetLogPath("/nonexistent/cannot/be/created/x.log")
+}
+
+// TestConnect_BadPath returns an error rather than panicking.
+func TestConnect_BadPath(t *testing.T) {
+	c := NewClient("/nonexistent/socket/path.sock")
+	if err := c.Connect(); err == nil {
+		t.Error("Connect to nonexistent socket should fail")
+		_ = c.Close()
+	}
+}
+
+// TestConnectWithTimeout_BadPath honours the custom timeout.
+func TestConnectWithTimeout_BadPath(t *testing.T) {
+	c := NewClient("/nonexistent/socket/path.sock")
+	start := time.Now()
+	err := c.ConnectWithTimeout(50 * time.Millisecond)
+	if err == nil {
+		t.Error("Connect to nonexistent socket should fail")
+		_ = c.Close()
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("ConnectWithTimeout exceeded its budget: %v", elapsed)
 	}
 }

@@ -90,8 +90,10 @@ func (w *FlowWriter) CommandEndWithSubs(cmdIndex int, status Status, element *El
 	w.updateIndexProgress()
 }
 
-// End marks the flow as complete.
-func (w *FlowWriter) End(status Status) {
+// End marks the flow as complete. flowLevelError, when non-empty, is used
+// as the failure message when no individual command recorded one — covers
+// flow-level failures like failOnConsoleError.
+func (w *FlowWriter) End(status Status, flowLevelError ...string) {
 	now := time.Now()
 	w.flow.EndTime = &now
 
@@ -99,6 +101,13 @@ func (w *FlowWriter) End(status Status) {
 	if !w.flow.StartTime.IsZero() {
 		duration = now.Sub(w.flow.StartTime).Milliseconds()
 		w.flow.Duration = &duration
+	}
+
+	// Summarise per-step latency now that every command has its duration, so
+	// the shape of a slow run is visible in the report rather than only its
+	// total. Omitted when nothing ran (a fully skipped flow has no data).
+	if latency := ComputeStepLatency(w.flow.Commands); latency.Count > 0 {
+		w.flow.StepLatency = &latency
 	}
 
 	w.flush()
@@ -111,6 +120,12 @@ func (w *FlowWriter) End(status Status) {
 				errMsg = &cmd.Error.Message
 				break
 			}
+		}
+		// Fall back to flow-level error (no command failed but the flow did
+		// — e.g. failOnConsoleError).
+		if errMsg == nil && len(flowLevelError) > 0 && flowLevelError[0] != "" {
+			fle := flowLevelError[0]
+			errMsg = &fle
 		}
 	}
 
@@ -130,6 +145,13 @@ func (w *FlowWriter) End(status Status) {
 // SetFlowArtifacts sets flow-level artifacts (video, logs).
 func (w *FlowWriter) SetFlowArtifacts(artifacts FlowArtifacts) {
 	w.flow.Artifacts = artifacts
+	w.flush()
+}
+
+// SetConsoleLogs records browser console / page error entries captured during
+// the flow. Web flows only — mobile / native drivers leave this nil.
+func (w *FlowWriter) SetConsoleLogs(logs []ConsoleLog) {
+	w.flow.ConsoleLogs = logs
 	w.flush()
 }
 
@@ -185,6 +207,19 @@ func (w *FlowWriter) SaveViewHierarchy(cmdIndex int, data []byte) (string, error
 	}
 
 	return filepath.Join("assets", w.flow.ID, filename), nil
+}
+
+// RecordingTarget returns the absolute path a flow screen recording should be
+// written to. The file does not exist until a driver writes it.
+func (w *FlowWriter) RecordingTarget() string {
+	return filepath.Join(w.assetsDir, "recording.mp4")
+}
+
+// SetVideo records that a screen recording exists at RecordingTarget,
+// storing the report-relative path alongside the other flow artifacts.
+func (w *FlowWriter) SetVideo() {
+	w.flow.Artifacts.Video = filepath.Join("assets", w.flow.ID, "recording.mp4")
+	w.flush()
 }
 
 // SaveDeviceLog saves device log and returns the relative path.

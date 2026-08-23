@@ -402,6 +402,14 @@ func writeAllureEnvironment(allureDir string, index *Index) error {
 	if index.App.ID != "" {
 		b.WriteString(fmt.Sprintf("app.id=%s\n", index.App.ID))
 	}
+	// Version and build are what distinguish two runs of the same suite in an
+	// Allure history, so they belong in the environment alongside the app id.
+	if index.App.Version != "" {
+		b.WriteString(fmt.Sprintf("app.version=%s\n", index.App.Version))
+	}
+	if index.App.Build != "" {
+		b.WriteString(fmt.Sprintf("app.build=%s\n", index.App.Build))
+	}
 
 	path := filepath.Join(allureDir, "environment.properties")
 	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {

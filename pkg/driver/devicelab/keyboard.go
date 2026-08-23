@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
@@ -130,15 +131,22 @@ func (d *Driver) isKeyboardVisible() bool {
 }
 
 // tapWouldHitKeyboard returns true if a tap on the element's center would land
-// on the keyboard area instead of the element. Uses a margin to account for the
-// keyboard's touchable region including the suggestion strip above the actual keys.
+// on the keyboard area instead of the element.
+//
+// This used to allow a 50px margin below the reported keyboard top, on the
+// theory that the touchable region includes a suggestion strip above the real
+// keys and elements barely overlapping it stay tappable. Measurement says
+// otherwise: on a Pixel 4a the IME reports `touchable region=SkRegion((0,1428,
+// 1080,2340))`, and a tap at y=1439 — inside the region but within the old
+// margin — was swallowed by the keyboard, leaving the field unfocused while the
+// step reported success (#139). The touchable region is exactly the area the IME
+// window consumes touches in; the suggestion strip consumes them just as the
+// keys do. All three parse strategies already normalise to the keyboard's real
+// area (touchable region directly, or mFrame corrected by content insets), so
+// adding slack on top of that double-counts.
 func tapWouldHitKeyboard(element, keyboard core.Bounds) bool {
 	_, cy := element.Center()
-	// The keyboard's touchable region often includes the suggestion/toolbar strip,
-	// so the reported top is higher than where keys actually start. Allow a 50px
-	// margin so elements barely overlapping the strip are still considered tappable.
-	const margin = 50
-	return cy >= keyboard.Y+margin
+	return cy >= keyboard.Y
 }
 
 // consumeInputFlag checks and resets the lastStepWasInput flag.
@@ -151,35 +159,82 @@ func (d *Driver) consumeInputFlag() bool {
 
 var errKeyboardOpen = fmt.Errorf("keyboard is open — add a `- hideKeyboard` step before this step")
 
-// checkKeyboardBlocking checks if the keyboard overlaps the target element after an input step.
+// keyboardSettleWindow bounds how long checkKeyboardBlocking re-samples geometry before
+// declaring the element covered. Windows with SOFT_INPUT_ADJUST_RESIZE (e.g. a plain
+// AlertDialog whose body is a ScrollView) relayout a few frames after the IME appears or
+// after typing: on the first frame the target still reports covered bounds, then the
+// window shrinks and the target rises above the keyboard. A single-shot check reads that
+// stale first frame and rejects a perfectly tappable element. Var (not const) so tests
+// can shrink it.
+var keyboardSettleWindow = 2 * time.Second
+
+// keyboardSettlePoll is the re-sample cadence while waiting for the geometry to settle.
+const keyboardSettlePoll = 50 * time.Millisecond
+
+// keyboardStillCovering is the per-sample verdict: true only when the keyboard is
+// visible AND a tap on the element's center would land on it.
+func keyboardStillCovering(element core.Bounds, keyboard *core.Bounds) bool {
+	return keyboard != nil && tapWouldHitKeyboard(element, *keyboard)
+}
+
+// checkKeyboardBlocking checks if the keyboard overlaps the target element.
 // UIA2 finds elements via the accessibility tree even when the keyboard covers them,
 // but coordinate taps land on the keyboard overlay instead. This detects that case and
-// fails fast with a helpful hint instead of silently tapping the keyboard.
+// fails with a helpful hint instead of silently tapping the keyboard.
 // Returns nil if this check doesn't apply or element is not blocked — caller should proceed normally.
+//
+// The keyboard is not only up because the previous step typed: a field with
+// autoFocus raises the IME on screen entry, and the IME survives navigation.
+// Gating solely on wasInput let those cases through, so the coordinate tap
+// landed on the keyboard, the step still reported success, and the following
+// `inputText` — which injects global key events — typed into whatever element
+// actually held focus. That silent misdirection is #139. So when the previous
+// step wasn't an input, fall back to asking whether the keyboard is up at all.
+//
+// Ordering matters for cost: `wasInput` short-circuits, so the tap-after-typing
+// path pays exactly what it did before. Only taps that previously skipped the
+// check outright spend a dumpsys, and only to discover the keyboard is down.
 func (d *Driver) checkKeyboardBlocking(wasInput bool, sel flow.Selector) *core.CommandResult {
-	if !wasInput {
+	if !wasInput && d.getKeyboardBounds() == nil {
 		return nil
 	}
 
-	// Find element (UIA2 will find it even behind keyboard)
-	_, info, err := d.findElementOnce(sel)
-	if err != nil || info == nil {
-		// Element genuinely not found — let caller do the full-timeout find
+	return settleKeyboardBlocking(
+		func() (*core.ElementInfo, bool) {
+			// Find element (UIA2 will find it even behind keyboard)
+			_, info, err := d.findElementOnce(sel)
+			if err != nil || info == nil {
+				// Element genuinely not found — let caller do the full-timeout find
+				return nil, false
+			}
+			return info, true
+		},
+		d.getKeyboardBounds,
+	)
+}
+
+// settleKeyboardBlocking wraps the shared core settle loop (core.SettleKeyboardBlocking)
+// with this driver's ElementInfo sampler, verdict (keyboardStillCovering, which includes
+// the suggestion-strip margin), and error. The loop itself is shared with the uiautomator2
+// driver so the two can't drift on timing behavior.
+func settleKeyboardBlocking(findElement func() (*core.ElementInfo, bool),
+	keyboardBounds func() *core.Bounds) *core.CommandResult {
+	blocked, kbTop, centerY := core.SettleKeyboardBlocking(
+		func() (core.Bounds, bool) {
+			info, ok := findElement()
+			if !ok {
+				return core.Bounds{}, false
+			}
+			return info.Bounds, true
+		},
+		keyboardBounds,
+		keyboardStillCovering,
+		keyboardSettleWindow, keyboardSettlePoll,
+	)
+	if !blocked {
 		return nil
 	}
-
-	// Element found — check if keyboard overlaps its bounds
-	kbBounds := d.getKeyboardBounds()
-	if kbBounds == nil {
-		return nil
-	}
-
-	if tapWouldHitKeyboard(info.Bounds, *kbBounds) {
-		_, cy := info.Bounds.Center()
-		return errorResult(errKeyboardOpen,
-			fmt.Sprintf("Element found but keyboard is covering it (keyboard top: %d, element center Y: %d) — add a `- hideKeyboard` step before this step",
-				kbBounds.Y, cy))
-	}
-
-	return nil
+	return errorResult(errKeyboardOpen,
+		fmt.Sprintf("Element found but keyboard is covering it (keyboard top: %d, element center Y: %d) — add a `- hideKeyboard` step before this step",
+			kbTop, centerY))
 }

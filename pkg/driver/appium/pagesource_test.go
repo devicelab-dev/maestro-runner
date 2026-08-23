@@ -444,7 +444,7 @@ func TestLooksLikeRegex(t *testing.T) {
 		{"^start", true},
 		{"end$", true},
 		{"(group)", true},
-		{`a\*b`, false},                 // escaped
+		{`a\*b`, true},                  // escaped metachar is regex syntax (#136)
 		{"mastodon.social", false},      // domain name
 		{"Join mastodon.social", false}, // button text with domain
 		{"v1.2.3", false},               // version number

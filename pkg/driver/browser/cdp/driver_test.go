@@ -185,6 +185,66 @@ func TestNewAndClose(t *testing.T) {
 	}
 }
 
+// TestUserDataDir verifies that a UserDataDir setting causes Chrome to use
+// that directory as its profile — localStorage survives a second New() call
+// against the same directory.
+func TestUserDataDir(t *testing.T) {
+	// Manually managed dir — t.TempDir's auto-cleanup races Chrome's
+	// lock-file release on macOS and surfaces as a spurious test failure.
+	dir, err := os.MkdirTemp("", "maestro-user-data-dir-*")
+	if err != nil {
+		t.Fatalf("mkdirtemp: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	ts := newTestServer()
+	defer ts.Close()
+
+	// First session: write to localStorage.
+	d1, err := New(Config{
+		Headless:    true,
+		URL:         ts.URL,
+		UserDataDir: dir,
+		ViewportW:   1024,
+		ViewportH:   768,
+	})
+	if err != nil {
+		t.Fatalf("first driver: %v", err)
+	}
+	d1.SetFindTimeout(5000)
+
+	_, err = d1.page.Eval(`() => { localStorage.setItem("h5_test", "stayed"); }`)
+	if err != nil {
+		t.Fatalf("set localStorage: %v", err)
+	}
+	if err := d1.Close(); err != nil {
+		t.Fatalf("close first driver: %v", err)
+	}
+
+	// Second session: same UserDataDir → localStorage entry should survive.
+	d2, err := New(Config{
+		Headless:    true,
+		URL:         ts.URL,
+		UserDataDir: dir,
+		ViewportW:   1024,
+		ViewportH:   768,
+	})
+	if err != nil {
+		t.Fatalf("second driver: %v", err)
+	}
+	d2.SetFindTimeout(5000)
+	defer d2.Close()
+
+	obj, err := d2.page.Eval(`() => localStorage.getItem("h5_test")`)
+	if err != nil {
+		t.Fatalf("read localStorage: %v", err)
+	}
+	got := obj.Value.Str()
+	if got != "stayed" {
+		t.Errorf("localStorage not preserved across runs; got %q, want %q", got, "stayed")
+	}
+}
+
 func TestAssertVisible(t *testing.T) {
 	ts := newTestServer()
 	defer ts.Close()
@@ -1077,6 +1137,36 @@ func TestMapKey(t *testing.T) {
 		}
 		if !tt.want && key != 0 {
 			t.Errorf("mapKey(%q) should return 0", tt.name)
+		}
+	}
+}
+
+func TestMapModifier(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"ctrl", true},
+		{"control", true},
+		{"shift", true},
+		{"alt", true},
+		{"option", true},
+		{"meta", true},
+		{"cmd", true},
+		{"command", true},
+		{"win", true},
+		{"CTRL", true},
+		{"unknown", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		got := mapModifier(tt.name)
+		if tt.want && got == 0 {
+			t.Errorf("mapModifier(%q) returned 0, expected a key", tt.name)
+		}
+		if !tt.want && got != 0 {
+			t.Errorf("mapModifier(%q) returned %v, expected 0", tt.name, got)
 		}
 	}
 }
@@ -2091,6 +2181,127 @@ func TestFindByAXTreeHiddenElement(t *testing.T) {
 	}
 }
 
+// TestFindByAXTreeSkipsNonRenderableTags is the 1.1.15 regression guard
+// for saucedemo/demoblaze where SPAs put the route label into
+// document.title — the AX tree's accessible-name search surfaced
+// <title>, the actionability gate then rejected it because <title>
+// has display:none. The finder now skips non-renderable tags
+// (<title>, <script>, <style>, etc.) so the cascade can reach the
+// actual visible button.
+func TestFindByAXTreeSkipsNonRenderableTags(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		// document.title shares text with the on-page button.
+		// Pre-1.1.15 the AX-tree finder could surface <title>; post-fix
+		// it must skip <title> and return the button.
+		fmt.Fprint(w, `<!DOCTYPE html>
+<html>
+<head><title>Back to products</title></head>
+<body>
+  <button aria-label="Back to products">Back to products</button>
+</body>
+</html>`)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	d := newTestDriver(t, ts.URL)
+	defer d.Close()
+
+	_, info, err := d.findByAXTree("Back to products", "button", flow.Selector{Text: "Back to products"})
+	if err != nil {
+		t.Fatalf("findByAXTree should find the button despite <title> sharing the same text: %v", err)
+	}
+	if info == nil || !info.Visible {
+		t.Fatal("expected the resolved element to be the visible button")
+	}
+}
+
+// TestIsNonRenderableTagDirect exercises the helper directly across the
+// tag set we want to filter out, plus a control case.
+func TestIsNonRenderableTagDirect(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<!DOCTYPE html>
+<html>
+<head>
+  <title id="t">Doc Title</title>
+  <script id="s" type="application/ld+json">{"name":"x"}</script>
+  <style id="y">body{color:red}</style>
+  <meta id="m" name="x" content="y">
+  <link id="l" rel="icon" href="data:,">
+</head>
+<body>
+  <button id="b">Visible</button>
+</body>
+</html>`)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	d := newTestDriver(t, ts.URL)
+	defer d.Close()
+
+	type c struct {
+		selector string
+		want     bool
+	}
+	for _, tt := range []c{
+		{"#t", true},  // <title>
+		{"#s", true},  // <script>
+		{"#y", true},  // <style>
+		{"#m", true},  // <meta>
+		{"#l", true},  // <link>
+		{"#b", false}, // <button> — should be renderable
+		{"body", false},
+	} {
+		elem, err := d.page.Element(tt.selector)
+		if err != nil {
+			t.Errorf("could not find %s: %v", tt.selector, err)
+			continue
+		}
+		if got := isNonRenderableTag(elem); got != tt.want {
+			t.Errorf("isNonRenderableTag(%s) = %v, want %v", tt.selector, got, tt.want)
+		}
+	}
+}
+
+// TestAXNodeToElementWalksUpTextNode exercises the path where the AX
+// tree returns a #text node handle: axNodeToElement must walk up to
+// the parent Element so callers can dispatch real clicks on it.
+func TestAXNodeToElementWalksUpTextNode(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		// Button whose accessible name comes from a child text node.
+		// Without the walk-up, findByAXTree could return the #text
+		// handle, which Rod's Click() refuses.
+		fmt.Fprint(w, `<!DOCTYPE html><html><body><button id="b">Press me</button></body></html>`)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	d := newTestDriver(t, ts.URL)
+	defer d.Close()
+
+	_, info, err := d.findByAXTree("Press me", "button", flow.Selector{Text: "Press me"})
+	if err != nil {
+		t.Fatalf("findByAXTree: %v", err)
+	}
+	if info == nil {
+		t.Fatal("expected non-nil ElementInfo")
+	}
+	// We can't assert the underlying tagName from ElementInfo, but we can
+	// verify the bounds are non-zero, which would not be the case if a
+	// #text handle leaked through (a text node has zero own bounds in
+	// most layout situations).
+	if info.Bounds.Width == 0 || info.Bounds.Height == 0 {
+		t.Errorf("expected non-zero bounds (Element handle); got %+v", info.Bounds)
+	}
+}
+
 func TestNewInvalidChromeBin(t *testing.T) {
 	_, err := New(Config{
 		Headless:  true,
@@ -2321,10 +2532,11 @@ func TestExecuteUnknownStepType(t *testing.T) {
 // unknownStep implements flow.Step for testing the default Execute branch.
 type unknownStep struct{}
 
-func (s *unknownStep) Type() flow.StepType { return "unknown" }
-func (s *unknownStep) IsOptional() bool    { return false }
-func (s *unknownStep) Label() string       { return "" }
-func (s *unknownStep) Describe() string    { return "unknown step" }
+func (s *unknownStep) Type() flow.StepType  { return "unknown" }
+func (s *unknownStep) IsOptional() bool     { return false }
+func (s *unknownStep) Label() string        { return "" }
+func (s *unknownStep) Describe() string     { return "unknown step" }
+func (s *unknownStep) PlatformGate() string { return "" }
 
 func TestWaitUntilTimeout(t *testing.T) {
 	ts := newTestServer()
@@ -3501,7 +3713,7 @@ func TestUploadFile(t *testing.T) {
 
 	// Create a temp file to upload
 	tmpFile := t.TempDir() + "/test-upload.txt"
-	os.WriteFile(tmpFile, []byte("test content"), 0o600)
+	_ = os.WriteFile(tmpFile, []byte("test content"), 0o600)
 
 	step := &flow.UploadFileStep{
 		BaseStep: flow.BaseStep{StepType: flow.StepUploadFile},
@@ -3532,8 +3744,8 @@ func TestUploadFileMultiple(t *testing.T) {
 	defer d.Close()
 
 	dir := t.TempDir()
-	os.WriteFile(dir+"/a.txt", []byte("a"), 0o600)
-	os.WriteFile(dir+"/b.txt", []byte("b"), 0o600)
+	_ = os.WriteFile(dir+"/a.txt", []byte("a"), 0o600)
+	_ = os.WriteFile(dir+"/b.txt", []byte("b"), 0o600)
 
 	step := &flow.UploadFileStep{
 		BaseStep: flow.BaseStep{StepType: flow.StepUploadFile},
@@ -4375,7 +4587,7 @@ func TestRunBrowserScript(t *testing.T) {
 	// Create a temp JS file
 	tmpDir := t.TempDir()
 	scriptPath := filepath.Join(tmpDir, "test-script.js")
-	os.WriteFile(scriptPath, []byte(`return document.title;`), 0644)
+	_ = os.WriteFile(scriptPath, []byte(`return document.title;`), 0644)
 
 	result := d.runBrowserScript(&flow.RunBrowserScriptStep{
 		File: scriptPath,
@@ -4397,7 +4609,7 @@ func TestRunBrowserScriptWithEnv(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	scriptPath := filepath.Join(tmpDir, "env-script.js")
-	os.WriteFile(scriptPath, []byte(`return window.__env.API_KEY;`), 0644)
+	_ = os.WriteFile(scriptPath, []byte(`return window.__env.API_KEY;`), 0644)
 
 	result := d.runBrowserScript(&flow.RunBrowserScriptStep{
 		File: scriptPath,

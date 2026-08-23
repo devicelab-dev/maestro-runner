@@ -3,8 +3,10 @@ package devicelab
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -34,21 +36,30 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		return result
 	}
 
-	// For text-based taps, use FindAndClick —
+	// For text- AND id-based taps, use FindAndClick —
 	// single atomic Java call: find node + coordinate click at center.
-	// No stale nodes, no performAction, no parent walk-up.
-	if step.Selector.Text != "" && step.Point == "" && !step.Selector.HasRelativeSelector() {
+	// No stale nodes, no performAction, no parent walk-up. Routing id
+	// selectors through this path gives them the same tree-signature
+	// settle that text selectors get (agent's findAndClick → findElement
+	// with settle=true), so id taps don't fire mid-animation.
+	if (step.Selector.Text != "" || step.Selector.ID != "") && step.Point == "" && !step.Selector.HasRelativeSelector() {
 		// Browser mode: find via CDP and click via CDP
 		if d.isBrowserMode() {
 			return d.tapOnBrowser(step)
 		}
 
-		strategies, err := buildSelectors(step.Selector, 0)
+		// Clickable-first: prefer buttons over labels. The agent promotes a text
+		// match to its nearest clickable ancestor when .clickable(true) is set,
+		// so "tapOn: SIGN IN" hits the clickable login-button ViewGroup even
+		// when the text lives on a non-clickable TextView child.
+		clickableStrategies, _ := buildClickableOnlyStrategies(step.Selector)
+		allStrategies, err := buildSelectors(step.Selector, 0)
 		if err != nil {
 			return errorResult(err, fmt.Sprintf("Failed to build selectors: %v", err))
 		}
+		strategies := append(clickableStrategies, allStrategies...)
 		timeout := d.calculateTimeout(step.IsOptional(), step.TimeoutMs)
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		ctx, cancel := context.WithTimeout(d.parentContext(), timeout)
 		defer cancel()
 
 		var lastErr error
@@ -68,6 +79,10 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 				}
 
 				for _, s := range strategies {
+					// Capture the pre-tap tree hash so a later failing
+					// assertion can detect "tap had no effect" and retry.
+					d.recordTap(step.Selector)
+
 					elem, err := d.client.FindAndClick(s.Strategy, s.Value)
 					if err == nil {
 						info := &core.ElementInfo{
@@ -77,9 +92,52 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 						if t, err := elem.Text(); err == nil {
 							info.Text = t
 						}
+						rectOK := false
 						if rect, err := elem.Rect(); err == nil {
 							info.Bounds = core.Bounds{X: rect.X, Y: rect.Y, Width: rect.Width, Height: rect.Height}
+							rectOK = true
 						}
+						logger.Info("[devicelab] FindAndClick hit for %s via %s=%s: bounds=[%d,%d][%d,%d] (w=%d h=%d) center=(%d,%d)",
+							step.Selector.Describe(), s.Strategy, s.Value,
+							info.Bounds.X, info.Bounds.Y,
+							info.Bounds.X+info.Bounds.Width, info.Bounds.Y+info.Bounds.Height,
+							info.Bounds.Width, info.Bounds.Height,
+							info.Bounds.X+info.Bounds.Width/2, info.Bounds.Y+info.Bounds.Height/2)
+
+						// #94: reject a tap whose rect is malformed (non-positive
+						// width/height) or whose centre lies off-screen, and keep
+						// polling. The agent's id-find path applies no on-screen
+						// filter, so a just-opened bottom sheet's first laid-out
+						// frame yields a clipped rect (top>bottom) and FindAndClick
+						// injects the tap off-screen — a no-op that leaves the flow
+						// desynced. A settled frame a moment later taps the real
+						// target. (Mirrors the assert-side viewport check from #39.)
+						if rectOK {
+							// Validate against the FULL physical display (same coordinate
+							// space as info.Bounds, which come from the accessibility
+							// hierarchy). screenSize() can report the USABLE height (minus
+							// the status bar), which wrongly condemns on-screen bottom
+							// buttons/FABs whose centre sits in the bottom band.
+							if sw, sh, serr := d.tappableScreenSize(); serr == nil && !boundsTappable(info.Bounds, sw, sh) {
+								logger.Info("[devicelab] tap rejected (off-screen/malformed rect) for %s: w=%d h=%d center=(%d,%d) screen=%dx%d — re-polling",
+									step.Selector.Describe(), info.Bounds.Width, info.Bounds.Height,
+									info.Bounds.X+info.Bounds.Width/2, info.Bounds.Y+info.Bounds.Height/2, sw, sh)
+								lastErr = fmt.Errorf("element rect not tappable (w=%d h=%d center=(%d,%d) screen=%dx%d)",
+									info.Bounds.Width, info.Bounds.Height,
+									info.Bounds.X+info.Bounds.Width/2, info.Bounds.Y+info.Bounds.Height/2, sw, sh)
+								time.Sleep(50 * time.Millisecond)
+								break
+							}
+						}
+
+						// Post-tap verification candidates (all wired but
+						// NOT called — empirically none reliably distinguish
+						// "tap had effect" from "tap fired ripple only" on
+						// the React Navigation showcase app):
+						//   d.tapHadEffectViaWindowUpdate("")  // Maestro's isWindowUpdating
+						//   d.tapHadEffect()                   // element-presence check
+						// Both produce false positives (ripples count) and
+						// false negatives (buttons persist across screens).
 						return successResult("Tapped on element", info)
 					}
 					lastErr = err
@@ -95,11 +153,18 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 
 	_, info, err := d.findElementForTap(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
+		err = d.notFoundOrCrash(err)
 		return errorResult(err, fmt.Sprintf("Element not found: %v", err))
 	}
 	if info == nil {
 		return errorResult(fmt.Errorf("nil element info"), "Element info is nil")
 	}
+
+	logger.Info("[devicelab] tap target for %s: bounds=[%d,%d][%d,%d] (w=%d h=%d)",
+		step.Selector.Describe(),
+		info.Bounds.X, info.Bounds.Y,
+		info.Bounds.X+info.Bounds.Width, info.Bounds.Y+info.Bounds.Height,
+		info.Bounds.Width, info.Bounds.Height)
 
 	// If Point is specified WITH selector, tap at relative position within element bounds
 	if step.Point != "" && info.Bounds.Width > 0 {
@@ -115,15 +180,41 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		return successResult(fmt.Sprintf("Tapped at relative point (%d, %d) on element", x, y), info)
 	}
 
+	x, y := info.Bounds.Center()
+
+	// If duration is set (or longPress: true), hold the press for that long.
+	if step.DurationMs > 0 || step.LongPress {
+		duration := step.DurationMs
+		if duration <= 0 {
+			duration = 1000
+		}
+		if err := d.client.LongClick(x, y, duration); err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to press for %dms: %v", duration, err))
+		}
+		return successResult("Pressed on element", info)
+	}
+
 	// Always use coordinate-based tap (not accessibility performAction).
 	// Coordinate taps simulate real touch events, which work reliably for
 	// repeated taps on the same button and custom click handlers.
-	x, y := info.Bounds.Center()
 	if err := d.client.Click(x, y); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to tap at coordinates: %v", err))
 	}
 
 	return successResult("Tapped on element", info)
+}
+
+// boundsTappable reports whether b is a real on-screen rectangle whose centre
+// can be tapped. It rejects a malformed rect (non-positive width/height — e.g.
+// a clipped first-frame rect with top>bottom) and one whose centre falls
+// outside the display. Used to avoid injecting a lost off-screen tap (#94).
+func boundsTappable(b core.Bounds, screenW, screenH int) bool {
+	if b.Width <= 0 || b.Height <= 0 {
+		return false
+	}
+	cx := b.X + b.Width/2
+	cy := b.Y + b.Height/2
+	return cx >= 0 && cx < screenW && cy >= 0 && cy < screenH
 }
 
 // tapOnBrowser handles tapOn entirely via CDP for Chrome browser mode.
@@ -173,6 +264,56 @@ func (d *Driver) tapOnPointWithCoords(point string) *core.CommandResult {
 	return successResult(fmt.Sprintf("Tapped at (%d, %d)", x, y), nil)
 }
 
+func (d *Driver) dragAndDrop(step *flow.DragAndDropStep) *core.CommandResult {
+	if d.device == nil {
+		return errorResult(fmt.Errorf("device not configured"), "dragAndDrop requires device access")
+	}
+
+	fromX, fromY, info, err := d.resolveGesturePoint(step.From, step.IsOptional(), step.TimeoutMs)
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("dragAndDrop: from: %v", err))
+	}
+	toX, toY, _, err := d.resolveGesturePoint(step.To, step.IsOptional(), step.TimeoutMs)
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("dragAndDrop: to: %v", err))
+	}
+
+	// The agent has no drag RPC, so the gesture goes through Android's own
+	// `input draganddrop`, which long-presses (the system long-press timeout)
+	// before moving — the lift reorder UIs need. That timeout is fixed by the
+	// system: a custom holdDuration beyond it is not controllable on this
+	// driver. The trailing argument is the move duration.
+	cmd := fmt.Sprintf("input draganddrop %d %d %d %d %d", fromX, fromY, toX, toY, step.Duration)
+	if out, err := d.device.Shell(cmd); err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to drag (input draganddrop needs Android 12+): %v — %s", err, out))
+	}
+	return successResult(fmt.Sprintf("Dragged from (%d, %d) to (%d, %d)", fromX, fromY, toX, toY), info)
+}
+
+// resolveGesturePoint turns a drag endpoint — a bare point, a selector, or a
+// selector plus a point inside it — into screen coordinates, following the
+// same percentage/absolute rules as tapOn.
+func (d *Driver) resolveGesturePoint(sel flow.Selector, optional bool, stepTimeoutMs int) (int, int, *core.ElementInfo, error) {
+	if sel.IsEmpty() {
+		width, height, err := d.screenSize()
+		if err != nil {
+			return 0, 0, nil, err
+		}
+		x, y, err := core.ParsePointCoords(sel.Point, width, height)
+		return x, y, nil, err
+	}
+
+	_, info, err := d.findElementForTap(sel, optional, stepTimeoutMs)
+	if err != nil {
+		return 0, 0, nil, err
+	}
+	if info == nil {
+		return 0, 0, nil, fmt.Errorf("nil element info")
+	}
+	x, y, err := core.PointInBounds(sel.Point, info.Bounds)
+	return x, y, info, err
+}
+
 func (d *Driver) doubleTapOn(step *flow.DoubleTapOnStep) *core.CommandResult {
 	wasInput := d.consumeInputFlag()
 
@@ -182,10 +323,14 @@ func (d *Driver) doubleTapOn(step *flow.DoubleTapOnStep) *core.CommandResult {
 
 	_, info, err := d.findElementForTap(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
+		err = d.notFoundOrCrash(err)
 		return errorResult(err, fmt.Sprintf("Element not found: %v", err))
 	}
 
-	x, y := info.Bounds.Center()
+	x, y, perr := core.PointInBounds(step.Selector.Point, info.Bounds)
+	if perr != nil {
+		return errorResult(perr, fmt.Sprintf("Invalid point coordinates: %v", perr))
+	}
 	if err := d.client.DoubleClick(x, y); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to double tap at coordinates: %v", err))
 	}
@@ -202,12 +347,19 @@ func (d *Driver) longPressOn(step *flow.LongPressOnStep) *core.CommandResult {
 
 	_, info, err := d.findElementForTap(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
+		err = d.notFoundOrCrash(err)
 		return errorResult(err, fmt.Sprintf("Element not found: %v", err))
 	}
 
-	duration := 1000 // default 1 second
+	duration := step.DurationMs
+	if duration <= 0 {
+		duration = 1000 // default 1 second
+	}
 
-	x, y := info.Bounds.Center()
+	x, y, perr := core.PointInBounds(step.Selector.Point, info.Bounds)
+	if perr != nil {
+		return errorResult(perr, fmt.Sprintf("Invalid point coordinates: %v", perr))
+	}
 	if err := d.client.LongClick(x, y, duration); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to long press at coordinates: %v", err))
 	}
@@ -234,6 +386,17 @@ func (d *Driver) tapOnPoint(step *flow.TapOnPointStep) *core.CommandResult {
 		return errorResult(fmt.Errorf("no point specified"), "Either point or x/y coordinates required")
 	}
 
+	if step.DurationMs > 0 || step.LongPress {
+		duration := step.DurationMs
+		if duration <= 0 {
+			duration = 1000
+		}
+		if err := d.client.LongClick(x, y, duration); err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to press at point for %dms: %v", duration, err))
+		}
+		return successResult(fmt.Sprintf("Pressed at (%d, %d)", x, y), nil)
+	}
+
 	if err := d.client.Click(x, y); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to tap at point: %v", err))
 	}
@@ -254,6 +417,10 @@ func (d *Driver) assertVisible(step *flow.AssertVisibleStep) *core.CommandResult
 
 	// Browser mode: use JS RAF-based polling (60fps in-browser, single CDP call).
 	if d.isBrowserMode() && d.webView != nil && d.webView.isConnected() {
+		if step.Count != "" {
+			err := fmt.Errorf("count is not supported in browser mode")
+			return errorResult(err, "assertVisible count: not supported in browser mode")
+		}
 		timeout := step.TimeoutMs
 		if timeout <= 0 {
 			timeout = 5000
@@ -261,8 +428,15 @@ func (d *Driver) assertVisible(step *flow.AssertVisibleStep) *core.CommandResult
 		return d.assertVisibleBrowser(step.Selector, timeout)
 	}
 
-	_, info, err := d.findElementFast(step.Selector, step.IsOptional(), step.TimeoutMs)
+	// A count assertion needs every match, not the first one — route to the
+	// page-source path, which is the only enumerator we have.
+	if step.Count != "" {
+		return d.assertVisibleCount(step)
+	}
+
+	_, info, err := d.findElementFastWithLazyRetry(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
+		err = d.notFoundOrCrash(err)
 		return errorResult(err, fmt.Sprintf("Element not visible: %v", err))
 	}
 
@@ -271,6 +445,66 @@ func (d *Driver) assertVisible(step *flow.AssertVisibleStep) *core.CommandResult
 	}
 
 	return errorResult(fmt.Errorf("element not visible"), "Element exists but is not visible")
+}
+
+// assertVisibleCount asserts that the selector matches exactly the requested
+// number of visible elements. Polls until the count is right or the assert
+// timeout runs out, reporting the last observed count on failure.
+func (d *Driver) assertVisibleCount(step *flow.AssertVisibleStep) *core.CommandResult {
+	want, _, err := step.ExpectedCount()
+	if err != nil {
+		return errorResult(err, err.Error())
+	}
+	if step.Selector.HasRelativeSelector() {
+		err := fmt.Errorf("count cannot be combined with relative selectors (childOf/below/...)")
+		return errorResult(err, err.Error())
+	}
+
+	timeout := d.calculateTimeout(step.IsOptional(), step.TimeoutMs)
+	ctx, cancel := context.WithTimeout(d.parentContext(), timeout)
+	defer cancel()
+
+	desc := step.Selector.Describe()
+	observed := -1
+	var lastErr error
+	for {
+		select {
+		case <-ctx.Done():
+			if observed < 0 {
+				if lastErr != nil {
+					return errorResult(lastErr, fmt.Sprintf("Failed to count matches of '%s': %v", desc, lastErr))
+				}
+				return errorResult(ctx.Err(), fmt.Sprintf("Expected %d visible matches of '%s' but no observation completed: %v", want, desc, ctx.Err()))
+			}
+			err := fmt.Errorf("expected %d visible matches of '%s', last observed %d", want, desc, observed)
+			return errorResult(err, err.Error())
+		default:
+			n, err := d.countVisibleMatches(step.Selector)
+			if err != nil {
+				lastErr = err
+				continue // page-source round-trip is the natural rate limit
+			}
+			observed = n
+			if n == want {
+				return successResult(fmt.Sprintf("%d elements visible", n), nil)
+			}
+		}
+	}
+}
+
+// countVisibleMatches reads the page source once and counts visible matches.
+func (d *Driver) countVisibleMatches(sel flow.Selector) (int, error) {
+	pageSource, err := d.client.Source()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get page source: %w", err)
+	}
+
+	allElements, err := ParsePageSource(pageSource)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse page source: %w", err)
+	}
+
+	return CountDisplayedMatches(allElements, sel), nil
 }
 
 // assertVisibleBrowser uses the injected __maestro.waitForVisible() JS helper.
@@ -391,7 +625,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 	}
 
 	if !step.Selector.IsEmpty() {
-		elem, _, err := d.findElement(step.Selector, step.IsOptional(), step.TimeoutMs)
+		elem, _, err := d.findElementWithLazyRetry(step.Selector, step.IsOptional(), step.TimeoutMs)
 		if err != nil {
 			return errorResult(err, fmt.Sprintf("Element not found: %v", err))
 		}
@@ -410,40 +644,28 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 			}
 		}
 	} else {
-		// Try to find focused element with retry logic for keyboard transitions
-		var focused core.Element
-		var err error
-
-		// First attempt
-		focused, err = d.findFocused()
-
-		// If initial attempt fails, retry with delays (handles numeric/special keyboards)
-		if err != nil {
-			retryDelays := []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 300 * time.Millisecond, 500 * time.Millisecond}
-			for _, delay := range retryDelays {
-				time.Sleep(delay)
-				if focused, err = d.findFocused(); err == nil {
-					break
-				}
+		// No selector — type into whatever has focus. findFocused prefers
+		// the WebView's DOM activeElement over the native ActiveElement,
+		// which matters after a CDP tap: the DOM input has focus but blind
+		// native key events never reach it, while the call still reports
+		// success (#122). Element-scoped native typing likewise fixes
+		// WebView inputs reached via a11y focus. Fall back to raw key
+		// events when nothing reports focus.
+		//
+		// History: acea0c7 removed an ActiveElement path here because it
+		// dragged a fragile focused=true selector-search fallback with it.
+		// This reintroduction is a single findFocused round-trip with a
+		// plain key-events fallback — no selector search.
+		typed := false
+		if focused, err := d.findFocused(); err == nil && focused != nil {
+			if err := focused.Input(text); err == nil {
+				typed = true
 			}
 		}
-
-		// Still no focused element — try finding by focused selector
-		if err != nil {
-			focusedTrue := true
-			focusedSel := flow.Selector{Focused: &focusedTrue}
-			_, _, findErr := d.findElement(focusedSel, false, 2000)
-			if findErr != nil {
-				return errorResult(err, "No focused element to type into")
+		if !typed {
+			if err := d.client.SendKeyActions(text); err != nil {
+				return errorResult(err, fmt.Sprintf("Failed to input text: %v", err))
 			}
-			// Re-try findFocused after finding focused element
-			focused, err = d.findFocused()
-			if err != nil {
-				return errorResult(err, "No focused element to type into")
-			}
-		}
-		if err := focused.Input(text); err != nil {
-			return errorResult(err, fmt.Sprintf("Failed to input text: %v", err))
 		}
 	}
 
@@ -592,7 +814,7 @@ func (d *Driver) hideKeyboard(_ *flow.HideKeyboardStep) *core.CommandResult {
 	// Retry up to 3 times — the on-device agent tries KEYCODE_ESCAPE first
 	// (keyboard-only, no navigation side-effects), then falls back to KEYCODE_BACK.
 	for attempt := 0; attempt < 3; attempt++ {
-		d.client.HideKeyboard()
+		_ = d.client.HideKeyboard()
 
 		// Wait for keyboard to actually disappear (animation ~300ms).
 		deadline := time.Now().Add(500 * time.Millisecond)
@@ -656,12 +878,9 @@ func (d *Driver) scroll(step *flow.ScrollStep) *core.CommandResult {
 		return errorResult(err, "Failed to get screen size")
 	}
 
-	area := uiautomator2.NewRect(0, height/8, width, height*3/4)
-
-	if err := d.client.ScrollInArea(area, direction, 0.5, 0); err != nil {
+	if err := d.performScroll(direction, width, height, step.Engine, 0.5); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to scroll: %v", err))
 	}
-
 	return successResult(fmt.Sprintf("Scrolled %s", direction), nil)
 }
 
@@ -681,20 +900,35 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	}
 	deadline := time.Now().Add(timeout)
 
-	width, height, err := d.screenSize()
+	// Use the FULL physical display (same coordinate space as the hierarchy bounds). An element
+	// in the bottom system-bar band — e.g. the last nav-drawer item, centre y in
+	// (usableHeight, physicalHeight] — is genuinely on screen and tappable (see boundsTappable),
+	// so isElementOnScreen must NOT treat it as off-screen; otherwise scrollUntilVisible loops to
+	// the scroll cap on a last item that is already shown. Falls back to screenSize().
+	width, height, err := d.tappableScreenSize()
 	if err != nil {
 		return errorResult(err, "Failed to get screen size")
 	}
 
-	area := uiautomator2.NewRect(0, height/8, width, height*3/4)
-
 	for i := 0; i < maxScrolls && time.Now().Before(deadline); i++ {
 		_, info, err := d.findElement(step.Element, true, 1000)
 		if err == nil && info != nil {
-			return successResult(fmt.Sprintf("Element found after %d scrolls", i), info)
+			// The DeviceLab agent returns matches from the full view hierarchy,
+			// including items below the fold in a ScrollView — and a match
+			// half-hidden at the screen edge is no better, because the tap that
+			// follows lands wrong. Stop only when the element meets the flow's
+			// visibility requirement (default: fully inside the viewport, which
+			// here is the full physical display — see tappableScreenSize above).
+			if core.MeetsVisibility(info.Bounds, width, height, step.VisibilityPercentage) {
+				return successResult(fmt.Sprintf("Element found after %d scrolls", i), info)
+			}
+		} else if err != nil && !isElementNotFoundError(err) {
+			// Infrastructure failure (dead session, connection refused, etc.):
+			// surface immediately rather than silently looping through all scrolls.
+			return errorResult(err, "Failed to find element")
 		}
 
-		if err := d.client.ScrollInArea(area, direction, 0.3, 0); err != nil {
+		if err := d.performScroll(direction, width, height, step.Engine, 0.3); err != nil {
 			return errorResult(err, fmt.Sprintf("Failed to scroll: %v", err))
 		}
 
@@ -702,6 +936,84 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	}
 
 	return errorResult(fmt.Errorf("element not found"), fmt.Sprintf("Element not found after %d scrolls", maxScrolls))
+}
+
+// performScroll dispatches a scroll gesture using the engine selected by the
+// step. Default ("" or "adb") uses adb input swipe (matches upstream Maestro
+// and is the most reliable path across Android skins). "agent" uses the
+// on-device DeviceLab agent's MotionEvent injection. ADB falls back to the
+// agent (with a warning) when no shell executor is available.
+// percent controls the swipe distance as a fraction of screen dimension.
+func (d *Driver) performScroll(direction string, width, height int, engine string, percent float64) error {
+	useAgent := strings.EqualFold(engine, "agent")
+	if !useAgent {
+		if d.device != nil {
+			return d.scrollByAdb(direction, width, height, percent)
+		}
+		logger.Warn("scroll: ADB shell unavailable, falling back to agent gesture (may be unreliable on some Android skins)")
+	}
+	area := uiautomator2.NewRect(0, height/8, width, height*3/4)
+	return d.client.ScrollInArea(area, direction, percent, scrollDurationMs)
+}
+
+// scrollByAdb issues `adb shell input swipe` over the local shell executor.
+// percent is the swipe distance as a fraction of the screen dimension along
+// the scroll axis. Direction uses Maestro scroll semantics (what becomes
+// visible — "down" reveals content below by swiping the finger UP).
+func (d *Driver) scrollByAdb(direction string, screenWidth, screenHeight int, percent float64) error {
+	centerX := screenWidth / 2
+	centerY := screenHeight / 2
+	halfV := int(float64(screenHeight) * percent / 2)
+	halfH := int(float64(screenWidth) * percent / 2)
+	var fromX, fromY, toX, toY int
+	switch direction {
+	case "up":
+		fromX, fromY = centerX, centerY-halfV
+		toX, toY = centerX, centerY+halfV
+	case "down":
+		fromX, fromY = centerX, centerY+halfV
+		toX, toY = centerX, centerY-halfV
+	case "left":
+		fromX, fromY = centerX-halfH, centerY
+		toX, toY = centerX+halfH, centerY
+	case "right":
+		fromX, fromY = centerX+halfH, centerY
+		toX, toY = centerX-halfH, centerY
+	default:
+		fromX, fromY = centerX, centerY+halfV
+		toX, toY = centerX, centerY-halfV
+	}
+	cmd := fmt.Sprintf("input swipe %d %d %d %d %d", fromX, fromY, toX, toY, scrollDurationMs)
+	_, err := d.device.Shell(cmd)
+	return err
+}
+
+// scrollDurationMs is the swipe duration (in ms) passed to the DeviceLab
+// agent for scroll gestures. The agent uses it as the total MotionEvent
+// duration; values that are too low (including 0) emit events too fast for
+// Android's input pipeline to register as a scroll.
+const scrollDurationMs = 300
+
+// isElementNotFoundError distinguishes expected "not on screen yet" errors
+// (which scrollUntilVisible should swallow and keep scrolling) from real
+// infrastructure failures that should propagate immediately.
+func isElementNotFoundError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	for _, phrase := range []string{
+		"not found",
+		"no elements match",
+		"no such element",
+		"could not be located",
+		"context deadline exceeded",
+	} {
+		if strings.Contains(msg, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
@@ -713,63 +1025,46 @@ func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
 		return d.swipeWithAbsoluteCoords(step.StartX, step.StartY, step.EndX, step.EndY, step.Duration)
 	}
 
-	direction := strings.ToLower(step.Direction)
-	if direction == "" {
-		direction = "up"
+	direction, err := core.NormalizeSwipeDirection(step.Direction)
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("Invalid swipe direction: %s", step.Direction))
 	}
 
-	uiaDir := mapDirection(direction)
-
+	// If a from:/selector element is specified, derive swipe coordinates from
+	// the element's bounds and route through the same ADB `input swipe` path
+	// used by screen-percentage swipes. `SwipeInArea` (the previous path) does
+	// not honor `step.Duration`, producing a fast flick — too fast for native
+	// drag targets (sliders, drag handles), which discard the gesture. This
+	// mirrors the uiautomator2 fix for #114.
 	if step.Selector != nil && !step.Selector.IsEmpty() {
 		_, info, err := d.findElement(*step.Selector, step.IsOptional(), step.TimeoutMs)
 		if err != nil {
 			return errorResult(err, fmt.Sprintf("Element not found for swipe: %v", err))
 		}
 		if info != nil && info.Bounds.Width > 0 {
-			area := uiautomator2.NewRect(
-				info.Bounds.X,
-				info.Bounds.Y,
-				info.Bounds.Width,
-				info.Bounds.Height,
-			)
-			if err := d.client.SwipeInArea(area, uiaDir, 0.7, 0); err != nil {
-				return errorResult(err, fmt.Sprintf("Failed to swipe in element: %v", err))
+			screenW, screenH, _ := d.screenSize() // (0,0) when unknown → far-edge clamp skipped
+			startX, startY, endX, endY, err := core.SwipeCoordsForElement(
+				direction, info.Bounds, screenW, screenH, step.Distance, step.Selector.Point)
+			if err != nil {
+				return errorResult(err, fmt.Sprintf("Invalid swipe direction: %s", step.Direction))
 			}
-			return successResult(fmt.Sprintf("Swiped %s in element", direction), info)
+			return d.swipeWithAbsoluteCoords(startX, startY, endX, endY, step.Duration)
 		}
 	}
 
+	// No selector — use screen coordinates directly (matches Maestro behavior)
 	width, height, err := d.screenSize()
 	if err != nil {
 		return errorResult(err, "Failed to get screen size")
 	}
-
-	scrollableInfo, scrollableCount := d.findScrollableElement(10000)
-
-	if scrollableInfo != nil {
-		b := scrollableInfo.Bounds
-		fmt.Printf("[swipe] Found %d scrollable(s), using: bounds=[%d,%d,%d,%d]\n",
-			scrollableCount, b.X, b.Y, b.Width, b.Height)
-
-		centerX := b.X + b.Width/2
-		var startY, endY int
-		switch direction {
-		case "up":
-			startY = b.Y + b.Height*70/100
-			endY = b.Y + b.Height*30/100
-		case "down":
-			startY = b.Y + b.Height*30/100
-			endY = b.Y + b.Height*70/100
-		default:
-			startY = b.Y + b.Height*70/100
-			endY = b.Y + b.Height*30/100
+	// An explicit `distance:` controls how far the centered swipe travels.
+	if step.Distance > 0 {
+		sx, sy, ex, ey, derr := core.DirectionSwipeScreenCoords(direction, width, height, step.Distance)
+		if derr != nil {
+			return errorResult(derr, fmt.Sprintf("Invalid swipe direction: %s", step.Direction))
 		}
-
-		fmt.Printf("[swipe] Coords in scrollable: (%d,%d) → (%d,%d)\n", centerX, startY, centerX, endY)
-		return d.swipeWithAbsoluteCoords(centerX, startY, centerX, endY, step.Duration)
+		return d.swipeWithAbsoluteCoords(sx, sy, ex, ey, step.Duration)
 	}
-
-	fmt.Printf("[swipe] No scrollable found, using screen coordinates (50%% center)\n")
 	return d.swipeWithMaestroCoordinates(direction, width, height, step.Duration)
 }
 
@@ -884,13 +1179,32 @@ func (d *Driver) swipeWithCoordinates(start, end string, durationMs int) *core.C
 	return d.swipeWithAbsoluteCoords(startX, startY, endX, endY, durationMs)
 }
 
+// swipeWithAbsoluteCoords runs a swipe between two screen points.
+//
+// Prefers the agent's in-process injection over `adb shell input swipe`.
+// The shell command always lifts the pointer at speed, so the view flings and
+// the distance scrolled depends on momentum computed from timings that shift
+// with machine load — the same flow then scrolls differently locally and on CI
+// (#141). The agent primes the touch slop and holds the pointer still before
+// lifting, neither of which `input swipe` can express. ADB stays as the
+// fallback for when the agent isn't reachable.
 func (d *Driver) swipeWithAbsoluteCoords(startX, startY, endX, endY, durationMs int) *core.CommandResult {
-	if d.device == nil {
-		return errorResult(fmt.Errorf("device not configured"), "swipe with coordinates requires device access")
-	}
-
 	if durationMs <= 0 {
 		durationMs = 300
+	}
+
+	if d.client != nil {
+		if err := d.client.SwipeCoords(startX, startY, endX, endY, durationMs); err == nil {
+			return successResult(fmt.Sprintf("Swiped from (%d,%d) to (%d,%d)", startX, startY, endX, endY), nil)
+		} else if d.device == nil {
+			return errorResult(err, fmt.Sprintf("Failed to swipe: %v", err))
+		} else {
+			logger.Warn("[devicelab] agent swipe failed, falling back to adb: %v", err)
+		}
+	}
+
+	if d.device == nil {
+		return errorResult(fmt.Errorf("device not configured"), "swipe with coordinates requires device access")
 	}
 
 	cmd := fmt.Sprintf("input swipe %d %d %d %d %d", startX, startY, endX, endY, durationMs)
@@ -927,6 +1241,16 @@ func (d *Driver) pressKey(step *flow.PressKeyStep) *core.CommandResult {
 	return successResult(fmt.Sprintf("Pressed key: %s", key), nil)
 }
 
+func (d *Driver) openNotifications(_ *flow.OpenNotificationsStep) *core.CommandResult {
+	if d.device == nil {
+		return errorResult(fmt.Errorf("no shell executor"), "openNotifications requires shell access")
+	}
+	if _, err := d.device.Shell("cmd statusbar expand-notifications"); err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to open notification shade: %v", err))
+	}
+	return successResult("Opened notification shade", nil)
+}
+
 // ============================================================================
 // App Lifecycle Commands
 // ============================================================================
@@ -940,6 +1264,12 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 	if d.device == nil {
 		return errorResult(fmt.Errorf("device not configured"), "launchApp: no device connected — check ADB connection")
 	}
+	d.currentAppID = appID // remember for mid-flow crash detection
+
+	// Forget deaths recorded before this launch: exit-info persists across
+	// runs, so an earlier crash — or the force-stop below — would otherwise be
+	// reported as this flow's.
+	d.clearExitHistory(appID)
 
 	// 1. Clear state or force-stop via RPC (no USB round-trips)
 	if step.ClearState {
@@ -1023,24 +1353,28 @@ func (d *Driver) launchAppViaShell(appID string, arguments map[string]interface{
 	cmd := fmt.Sprintf("%s -W -n %s -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -f 0x10200000",
 		amCmd, activity)
 
+	// String values are quoted because they are free text from the flow — the
+	// numeric and boolean cases render from typed Go values and cannot carry
+	// shell syntax.
 	for key, value := range arguments {
+		k := core.ShellQuote(key)
 		switch v := value.(type) {
 		case string:
-			cmd += fmt.Sprintf(" --es %s '%s'", key, v)
+			cmd += fmt.Sprintf(" --es %s %s", k, core.ShellQuote(v))
 		case int:
-			cmd += fmt.Sprintf(" --ei %s %d", key, v)
+			cmd += fmt.Sprintf(" --ei %s %d", k, v)
 		case int64:
-			cmd += fmt.Sprintf(" --ei %s %d", key, v)
+			cmd += fmt.Sprintf(" --ei %s %d", k, v)
 		case float64:
 			if v == float64(int(v)) {
-				cmd += fmt.Sprintf(" --ei %s %d", key, int(v))
+				cmd += fmt.Sprintf(" --ei %s %d", k, int(v))
 			} else {
-				cmd += fmt.Sprintf(" --ef %s %f", key, v)
+				cmd += fmt.Sprintf(" --ef %s %f", k, v)
 			}
 		case bool:
-			cmd += fmt.Sprintf(" --ez %s %t", key, v)
+			cmd += fmt.Sprintf(" --ez %s %t", k, v)
 		default:
-			cmd += fmt.Sprintf(" --es %s '%v'", key, v)
+			cmd += fmt.Sprintf(" --es %s %s", k, core.ShellQuote(fmt.Sprintf("%v", v)))
 		}
 	}
 
@@ -1421,13 +1755,18 @@ func (d *Driver) copyTextFrom(step *flow.CopyTextFromStep) *core.CommandResult {
 	var text string
 	if elem != nil {
 		text, err = elem.Text()
+		if err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to get text: %v", err))
+		}
 		if text == "" {
 			if desc, descErr := elem.Attribute("content-desc"); descErr == nil && desc != "" {
 				text = desc
 			}
 		}
-		if err != nil {
-			return errorResult(err, fmt.Sprintf("Failed to get text: %v", err))
+		// Cached elements can't serve content-desc over the wire; the
+		// hierarchy snapshot already carries it.
+		if text == "" && info != nil {
+			text = info.AccessibilityLabel
 		}
 	} else if info != nil {
 		text = info.Text
@@ -1531,11 +1870,12 @@ func (d *Driver) openLink(step *flow.OpenLinkStep) *core.CommandResult {
 		return errorResult(fmt.Errorf("device not configured"), "openLink requires device access")
 	}
 
+	quoted := core.ShellQuote(link)
 	var cmd string
 	if step.Browser != nil && *step.Browser {
-		cmd = fmt.Sprintf("am start -a android.intent.action.VIEW -c android.intent.category.BROWSABLE -d '%s'", link)
+		cmd = fmt.Sprintf("am start -a android.intent.action.VIEW -c android.intent.category.BROWSABLE -d %s", quoted)
 	} else {
-		cmd = fmt.Sprintf("am start -a android.intent.action.VIEW -d '%s'", link)
+		cmd = fmt.Sprintf("am start -a android.intent.action.VIEW -d %s", quoted)
 	}
 
 	if _, err := d.device.Shell(cmd); err != nil {
@@ -1570,6 +1910,22 @@ func (d *Driver) takeScreenshot(step *flow.TakeScreenshotStep) *core.CommandResu
 		return errorResult(err, fmt.Sprintf("Failed to take screenshot: %v", err))
 	}
 
+	if step.CropOn != nil {
+		_, info, findErr := d.findElement(*step.CropOn, false, 0)
+		if findErr != nil || info == nil {
+			return errorResult(findErr, fmt.Sprintf("cropOn: element not found: %v", findErr))
+		}
+		sw, sh, dimErr := d.screenSize()
+		if dimErr != nil {
+			return errorResult(dimErr, "cropOn requires screen dimensions")
+		}
+		cropped, cropErr := core.CropScreenshot(data, info.Bounds, sw, sh)
+		if cropErr != nil {
+			return errorResult(cropErr, fmt.Sprintf("cropOn: %v", cropErr))
+		}
+		data = cropped
+	}
+
 	return &core.CommandResult{
 		Success: true,
 		Message: "Screenshot captured",
@@ -1587,7 +1943,7 @@ func (d *Driver) openBrowser(step *flow.OpenBrowserStep) *core.CommandResult {
 		return errorResult(fmt.Errorf("device not configured"), "openBrowser requires device access")
 	}
 
-	cmd := fmt.Sprintf("am start -a android.intent.action.VIEW -d '%s'", url)
+	cmd := fmt.Sprintf("am start -a android.intent.action.VIEW -d %s", core.ShellQuote(url))
 	if _, err := d.device.Shell(cmd); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to open browser: %v", err))
 	}
@@ -1596,22 +1952,51 @@ func (d *Driver) openBrowser(step *flow.OpenBrowserStep) *core.CommandResult {
 }
 
 func (d *Driver) addMedia(step *flow.AddMediaStep) *core.CommandResult {
-	if len(step.Files) == 0 {
-		return errorResult(fmt.Errorf("no files specified"), "No media files to add")
+	if err := core.ValidateMediaFiles(step.Files); err != nil {
+		return errorResult(err, err.Error())
 	}
 
-	if d.device == nil {
-		return errorResult(fmt.Errorf("device not configured"), "addMedia requires device access")
-	}
-
+	// Stream each file's bytes to the on-device agent, which inserts it into
+	// MediaStore (ContentResolver, IS_PENDING flow) so the app's picker/gallery
+	// can select it. This is the correct path on API 29+ scoped storage — the
+	// old MEDIA_SCANNER_SCAN_FILE broadcast is deprecated and doesn't register
+	// media for the modern photo picker.
 	for _, file := range step.Files {
-		cmd := fmt.Sprintf("am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://%s", file)
-		if _, err := d.device.Shell(cmd); err != nil {
-			return errorResult(err, fmt.Sprintf("Failed to add media %s: %v", file, err))
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to read media file %s: %v", file, err))
+		}
+		mime, _ := core.MediaMIMEType(file)
+		if err := d.client.AddMedia(filepath.Base(file), mime, data); err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to add media %s: %v", filepath.Base(file), err))
 		}
 	}
 
-	return successResult(fmt.Sprintf("Added %d media files", len(step.Files)), nil)
+	return successResult(fmt.Sprintf("Added %d media file(s)", len(step.Files)), nil)
+}
+
+func (d *Driver) removeMedia(_ *flow.RemoveMediaStep) *core.CommandResult {
+	if d.device == nil {
+		return errorResult(fmt.Errorf("device not configured"), "removeMedia requires device access")
+	}
+
+	var lastErr error
+	cleared := false
+	for _, pkg := range []string{
+		"com.google.android.providers.media.module",
+		"com.android.providers.media",
+	} {
+		if _, err := d.device.Shell("pm clear " + pkg); err == nil {
+			cleared = true
+		} else {
+			lastErr = err
+		}
+	}
+	if !cleared {
+		return errorResult(lastErr, fmt.Sprintf("Failed to clear media providers: %v", lastErr))
+	}
+
+	return successResult("Cleared MediaStore index", nil)
 }
 
 func (d *Driver) startRecording(step *flow.StartRecordingStep) *core.CommandResult {
@@ -1624,7 +2009,7 @@ func (d *Driver) startRecording(step *flow.StartRecordingStep) *core.CommandResu
 		path = "/sdcard/recording.mp4"
 	}
 
-	cmd := fmt.Sprintf("screenrecord %s &", path)
+	cmd := fmt.Sprintf("screenrecord %s </dev/null >/dev/null 2>&1 &", path)
 	if _, err := d.device.Shell(cmd); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to start recording: %v", err))
 	}
@@ -1677,9 +2062,14 @@ func (d *Driver) waitUntil(step *flow.WaitUntilStep) *core.CommandResult {
 	}
 
 	timeout := time.Duration(timeoutMs) * time.Millisecond
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(d.parentContext(), timeout)
 	defer cancel()
 
+	// extendedWaitUntil intentionally does NOT use lazy retry: the user
+	// explicitly asked for a long wait, so re-tapping the previous step's
+	// target would corrupt state for persistent buttons (e.g. Preload
+	// Details which stays on screen but triggers an async update — we
+	// saw this break Native Stack - Preload Flow with triple-taps).
 	for {
 		select {
 		case <-ctx.Done():
@@ -1709,11 +2099,32 @@ func (d *Driver) waitUntil(step *flow.WaitUntilStep) *core.CommandResult {
 	}
 }
 
-func (d *Driver) waitForAnimationToEnd(_ *flow.WaitForAnimationToEndStep) *core.CommandResult {
-	return &core.CommandResult{
-		Success: true,
-		Message: "WARNING: waitForAnimationToEnd is not fully implemented - step passed without animation check",
+func (d *Driver) waitForAnimationToEnd(step *flow.WaitForAnimationToEndStep) *core.CommandResult {
+	timeoutMs := step.TimeoutMs
+	if timeoutMs <= 0 {
+		timeoutMs = 15000
 	}
+	const threshold = 0.005
+
+	deadline := time.Now().Add(time.Duration(timeoutMs) * time.Millisecond)
+	start := time.Now()
+	for time.Now().Before(deadline) {
+		prev, err := d.client.Screenshot()
+		if err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to take screenshot: %v", err))
+		}
+		curr, err := d.client.Screenshot()
+		if err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to take screenshot: %v", err))
+		}
+		diff := core.ImageDifference(prev, curr)
+		if diff <= threshold {
+			elapsed := time.Since(start)
+			return successResult(fmt.Sprintf("Animation ended (%.1f%% diff, %dms)", diff*100, elapsed.Milliseconds()), nil)
+		}
+	}
+
+	return successResult(fmt.Sprintf("Animation did not settle within %dms — continuing", timeoutMs), nil)
 }
 
 // ============================================================================
@@ -1955,4 +2366,62 @@ func (d *Driver) runWebViewScript(step *flow.RunWebViewScriptStep) *core.Command
 	result := &core.CommandResult{Success: true, Message: "runWebViewScript completed"}
 	result.Data = val
 	return result
+}
+
+// ============================================================================
+// Dark mode (Maestro #2507)
+// ============================================================================
+
+func (d *Driver) setDarkMode(step *flow.SetDarkModeStep) *core.CommandResult {
+	return d.applyDarkMode(step.Enabled)
+}
+
+func (d *Driver) toggleDarkMode(_ *flow.ToggleDarkModeStep) *core.CommandResult {
+	current, err := d.currentDarkMode()
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to read dark mode: %v", err))
+	}
+	return d.applyDarkMode(!current)
+}
+
+func (d *Driver) assertDarkMode(_ *flow.AssertDarkModeStep) *core.CommandResult {
+	return d.assertDarkModeIs(true)
+}
+
+func (d *Driver) assertLightMode(_ *flow.AssertLightModeStep) *core.CommandResult {
+	return d.assertDarkModeIs(false)
+}
+
+func (d *Driver) assertDarkModeIs(want bool) *core.CommandResult {
+	got, err := d.currentDarkMode()
+	if err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to read dark mode: %v", err))
+	}
+	if got != want {
+		assertErr := core.DarkModeAssertionError(want, got)
+		return errorResult(assertErr, assertErr.Error())
+	}
+	return successResult(fmt.Sprintf("Device is in %s mode", core.DarkModeStateName(want)), nil)
+}
+
+// currentDarkMode reports whether the system UI is currently dark.
+func (d *Driver) currentDarkMode() (bool, error) {
+	if d.device == nil {
+		return false, fmt.Errorf("device not configured")
+	}
+	output, err := d.device.Shell(core.AndroidDarkModeQuery)
+	if err != nil {
+		return false, err
+	}
+	return core.ParseAndroidNightMode(output)
+}
+
+func (d *Driver) applyDarkMode(enabled bool) *core.CommandResult {
+	if d.device == nil {
+		return errorResult(fmt.Errorf("device not configured"), "setDarkMode requires device access")
+	}
+	if _, err := d.device.Shell(core.AndroidDarkModeCommand(enabled)); err != nil {
+		return errorResult(err, fmt.Sprintf("Failed to set dark mode: %v", err))
+	}
+	return successResult(fmt.Sprintf("Set %s mode", core.DarkModeStateName(enabled)), nil)
 }

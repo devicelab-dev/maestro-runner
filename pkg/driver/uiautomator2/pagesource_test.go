@@ -729,8 +729,8 @@ func TestFilterOutOfBounds(t *testing.T) {
 		{Text: "on-screen", Bounds: core.Bounds{X: 100, Y: 200, Width: 200, Height: 80}},
 		{Text: "off-screen-right", Bounds: core.Bounds{X: 1200, Y: 200, Width: 200, Height: 80}},
 		{Text: "off-screen-below", Bounds: core.Bounds{X: 100, Y: 2000, Width: 200, Height: 80}},
-		{Text: "partially-visible", Bounds: core.Bounds{X: 980, Y: 200, Width: 200, Height: 80}},  // 100/200 = 50% visible
-		{Text: "barely-off", Bounds: core.Bounds{X: 1070, Y: 200, Width: 200, Height: 80}},         // 10/200 = 5% visible → filtered
+		{Text: "partially-visible", Bounds: core.Bounds{X: 980, Y: 200, Width: 200, Height: 80}}, // 100/200 = 50% visible
+		{Text: "barely-off", Bounds: core.Bounds{X: 1070, Y: 200, Width: 200, Height: 80}},       // 10/200 = 5% visible → filtered
 		{Text: "full-screen", Bounds: core.Bounds{X: 0, Y: 0, Width: 1080, Height: 1920}},
 	}
 
@@ -754,5 +754,33 @@ func TestFilterOutOfBounds(t *testing.T) {
 		if !expected[e.Text] {
 			t.Errorf("unexpected element kept: %s", e.Text)
 		}
+	}
+}
+
+func TestCountDisplayedMatches(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" bounds="[0,0][1080,1920]" clickable="false" enabled="true" displayed="true">
+    <node index="0" text="Row" resource-id="com.app:id/row" class="android.widget.TextView" bounds="[0,100][1080,200]" clickable="false" enabled="true" displayed="true"/>
+    <node index="1" text="Row" resource-id="com.app:id/row" class="android.widget.TextView" bounds="[0,200][1080,300]" clickable="false" enabled="true" displayed="true"/>
+    <node index="2" text="Row" resource-id="com.app:id/row" class="android.widget.TextView" bounds="[0,300][1080,400]" clickable="false" enabled="true" displayed="false"/>
+    <node index="3" text="Other" resource-id="com.app:id/other" class="android.widget.TextView" bounds="[0,400][1080,500]" clickable="false" enabled="true" displayed="true"/>
+  </node>
+</hierarchy>`
+
+	elements, err := ParsePageSource(xml)
+	if err != nil {
+		t.Fatalf("ParsePageSource failed: %v", err)
+	}
+
+	// Two displayed rows match; the displayed="false" one must not count.
+	if got := CountDisplayedMatches(elements, flow.Selector{ID: "com.app:id/row"}); got != 2 {
+		t.Errorf("CountDisplayedMatches(id=row) = %d, want 2", got)
+	}
+	if got := CountDisplayedMatches(elements, flow.Selector{Text: "Row"}); got != 2 {
+		t.Errorf("CountDisplayedMatches(text=Row) = %d, want 2", got)
+	}
+	if got := CountDisplayedMatches(elements, flow.Selector{ID: "com.app:id/missing"}); got != 0 {
+		t.Errorf("CountDisplayedMatches(missing id) = %d, want 0", got)
 	}
 }

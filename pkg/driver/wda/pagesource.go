@@ -4,8 +4,11 @@ import (
 	"encoding/xml"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
@@ -176,6 +179,36 @@ func FilterOutOfBounds(elements []*ParsedElement, screenWidth, screenHeight int)
 	return result
 }
 
+// HasVisibleDescendant reports whether any descendant of elem (any depth)
+// is marked visible. Used to rescue elements XCUITest reports as
+// visible="false" but which clearly host visible content — e.g. React
+// Native <View testID="..."> wrappers, which have no own visual content
+// so XCUITest can't classify them as visible even when on screen.
+// A hidden-screen container (no visible descendants) returns false.
+func HasVisibleDescendant(elem *ParsedElement) bool {
+	for _, child := range elem.Children {
+		if child.Displayed {
+			return true
+		}
+		if HasVisibleDescendant(child) {
+			return true
+		}
+	}
+	return false
+}
+
+// CountVisibleMatches returns how many elements match the selector, applying
+// the same visibility rules as the single-match page-source path: elements
+// outside the screen bounds are excluded (when the screen size is known), and
+// XCUITest's own visible="false" opinion is not trusted (see
+// findElementByPageSourceOnce for why).
+func CountVisibleMatches(elements []*ParsedElement, sel flow.Selector, screenW, screenH int) int {
+	if screenW > 0 && screenH > 0 {
+		elements = FilterOutOfBounds(elements, screenW, screenH)
+	}
+	return len(FilterBySelector(elements, sel))
+}
+
 // FilterBySelector filters elements by selector properties.
 func FilterBySelector(elements []*ParsedElement, sel flow.Selector) []*ParsedElement {
 	var result []*ParsedElement
@@ -253,7 +286,11 @@ func matchesID(pattern, id string) bool {
 }
 
 // matchesText checks if pattern matches any of the text fields.
+// Both sides are NFC-normalized first: selector text from YAML or JS output
+// and accessibility labels can disagree on composed vs decomposed accents
+// (e.g. "É" as U+00C9 vs "E"+U+0301), which a byte-wise compare misses.
 func matchesText(pattern string, texts ...string) bool {
+	pattern = norm.NFC.String(pattern)
 	if looksLikeRegex(pattern) {
 		re, err := regexp.Compile("(?i)" + pattern)
 		if err != nil {
@@ -268,6 +305,7 @@ func matchesText(pattern string, texts ...string) bool {
 
 		for _, text := range texts {
 			if text != "" {
+				text = norm.NFC.String(text)
 				strippedText := strings.ReplaceAll(text, "\n", " ")
 				if re.MatchString(text) || re.MatchString(strippedText) || pattern == text {
 					return true
@@ -286,9 +324,92 @@ func matchesText(pattern string, texts ...string) bool {
 	return false
 }
 
-// containsIgnoreCase checks if s contains substr (case-insensitive).
+// containsIgnoreCase checks if s contains substr (case-insensitive, NFC-normalized).
 func containsIgnoreCase(s, substr string) bool {
+	s = norm.NFC.String(s)
+	substr = norm.NFC.String(substr)
 	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
+}
+
+// ClosestTexts returns up to max distinct on-screen texts ranked by bigram
+// similarity to pattern. Used to enrich "not found" errors so a near-miss
+// (wrong locale, typo, invisible glyph) is visible in the failure message
+// instead of requiring a hierarchy dump.
+func ClosestTexts(elements []*ParsedElement, pattern string, max int) []string {
+	type scored struct {
+		text  string
+		score float64
+	}
+	var candidates []scored
+	seen := make(map[string]bool)
+	for _, elem := range elements {
+		for _, text := range []string{elem.Label, elem.Name, elem.Value, elem.PlaceholderValue} {
+			if text == "" || seen[text] {
+				continue
+			}
+			seen[text] = true
+			if score := bigramSimilarity(pattern, text); score > 0 {
+				candidates = append(candidates, scored{text, score})
+			}
+		}
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].score > candidates[j].score
+	})
+	if len(candidates) > max {
+		candidates = candidates[:max]
+	}
+	result := make([]string, len(candidates))
+	for i, c := range candidates {
+		// Quote so invisible/PUA characters show as escapes ("Carte, \U000f0142")
+		result[i] = strconv.Quote(truncateRunes(c.text, 60))
+	}
+	return result
+}
+
+// bigramSimilarity computes the Dice coefficient over case-folded rune
+// bigrams of a and b. Returns 0..1.
+func bigramSimilarity(a, b string) float64 {
+	aBigrams := runeBigrams(strings.ToLower(norm.NFC.String(a)))
+	bBigrams := runeBigrams(strings.ToLower(norm.NFC.String(b)))
+	if len(aBigrams) == 0 || len(bBigrams) == 0 {
+		return 0
+	}
+	shared := 0
+	for bg, n := range aBigrams {
+		if m := bBigrams[bg]; m > 0 {
+			if n < m {
+				shared += n
+			} else {
+				shared += m
+			}
+		}
+	}
+	total := 0
+	for _, n := range aBigrams {
+		total += n
+	}
+	for _, n := range bBigrams {
+		total += n
+	}
+	return 2 * float64(shared) / float64(total)
+}
+
+func runeBigrams(s string) map[string]int {
+	runes := []rune(s)
+	bigrams := make(map[string]int)
+	for i := 0; i+1 < len(runes); i++ {
+		bigrams[string(runes[i:i+2])]++
+	}
+	return bigrams
+}
+
+func truncateRunes(s string, max int) string {
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max]) + "…"
 }
 
 // looksLikeRegex checks if text contains regex metacharacters.
@@ -298,6 +419,14 @@ func looksLikeRegex(text string) bool {
 		c := text[i]
 		// Check if it's escaped
 		if i > 0 && text[i-1] == '\\' {
+			// A backslash-escaped metacharacter is regex syntax (\. matches a
+			// literal dot, \$ a literal $), so the whole pattern is a regex.
+			// Classifying it as literal would match the backslash verbatim and
+			// never hit an element whose text has no backslash (#136).
+			switch c {
+			case '.', '*', '+', '?', '[', ']', '{', '}', '|', '(', ')', '^', '$', '\\':
+				return true
+			}
 			continue
 		}
 		switch c {

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	goios "github.com/danielpaulus/go-ios/ios"
 	"github.com/danielpaulus/go-ios/ios/zipconduit"
@@ -15,6 +17,11 @@ import (
 	"github.com/devicelab-dev/maestro-runner/pkg/flutter"
 	"github.com/devicelab-dev/maestro-runner/pkg/logger"
 )
+
+// installTimeout is the max time we wait for an iOS app install to complete.
+// Big apps on slow USB can legitimately take a while; 3 minutes is a generous
+// upper bound that still catches infinite hangs.
+const installTimeout = 3 * time.Minute
 
 // simulatorInfo holds iOS simulator information.
 type simulatorInfo struct {
@@ -33,6 +40,13 @@ type iosDeviceInfo struct {
 // CreateIOSDriver creates an iOS driver using WebDriverAgent.
 // Exported for library use.
 func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
+	// Phase 4 — devicelab driver branch. Mirrors --driver devicelab on Android.
+	// Routes to the XCUITest-based runner (pkg/driver/devicelab_ios) instead
+	// of WebDriverAgent. Simulator-only in Phase 4.
+	if strings.EqualFold(cfg.Driver, "devicelab") {
+		return createDevicelabIOSDriver(cfg)
+	}
+
 	udid := getFirstDevice(cfg)
 
 	if udid == "" {
@@ -80,18 +94,13 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		printSetupSuccess("App installed")
 	}
 
-	// 2. Check if WDA is installed
+	// 2. Verify bundled WDA is present (no auto-download — releases ship WDA)
 	if !cfg.NoDriverInstall {
 		printSetupStep("Checking WDA installation...")
-		if !wdadriver.IsWDAInstalled() {
-			printSetupStep("Downloading WDA...")
-			if _, err := wdadriver.Setup(); err != nil {
-				return nil, nil, fmt.Errorf("WDA setup failed: %w", err)
-			}
-			printSetupSuccess("WDA installed")
-		} else {
-			printSetupSuccess("WDA already installed")
+		if _, err := wdadriver.Setup(); err != nil {
+			return nil, nil, fmt.Errorf("WDA setup failed: %w", err)
 		}
+		printSetupSuccess("WDA installed")
 	}
 
 	// 3. Create WDA runner
@@ -129,10 +138,18 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		return nil, nil, fmt.Errorf("get device info: %w", err)
 	}
 
-	// 7. Query app version if appId is known (only works for simulators)
-	appVersion := ""
+	// 7. Query the app's version and build number.
+	//
+	// simctl can only reach an installed simulator app, so on a physical device
+	// the same two keys are read from the .app being tested instead — that is
+	// the binary the run is about, and without it a real-device report carries
+	// no version at all.
+	appVersion, appBuild := "", ""
 	if cfg.AppID != "" && isSimulator {
-		appVersion = getIOSAppVersion(udid, cfg.AppID)
+		appVersion, appBuild = getIOSAppVersionAndBuild(udid, cfg.AppID)
+	}
+	if appVersion == "" && appBuild == "" && cfg.AppFile != "" {
+		appVersion, appBuild = readBundleVersionAndBuild(cfg.AppFile)
 	}
 
 	// 8. Get screen size
@@ -151,6 +168,7 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		ScreenHeight: screenH,
 		AppID:        cfg.AppID,
 		AppVersion:   appVersion,
+		AppBuild:     appBuild,
 	}
 
 	// 9. Create driver
@@ -196,6 +214,25 @@ func findIOSDevice() (string, error) {
 	}
 
 	return "", fmt.Errorf("no iOS device found (no booted simulator or connected physical device)")
+}
+
+// iosTargetsSimulator reports whether an iOS WDA run will target a simulator
+// rather than a real device, so --team-id (code signing) and --app-file aren't
+// required. --auto-start-emulator and --start-simulator both imply simulators
+// (you can't auto-create a real device), and crucially this is evaluated before
+// any simulator is booted — so it must not depend on hasBootedSimulator() in
+// those cases, which is the bug behind --auto-start-emulator erroring for
+// simulators (#111). Otherwise fall back to the named device, or a
+// currently-booted simulator.
+func iosTargetsSimulator(cfg *RunConfig) bool {
+	switch {
+	case cfg.AutoStartEmulator, cfg.StartSimulator != "":
+		return true
+	case len(cfg.Devices) > 0:
+		return isIOSSimulator(cfg.Devices[0])
+	default:
+		return hasBootedSimulator()
+	}
 }
 
 // hasBootedSimulator returns true if any iOS simulator is currently booted.
@@ -342,16 +379,81 @@ func getIOSDeviceInfo(udid string) (*iosDeviceInfo, error) {
 }
 
 // installIOSApp installs an app on an iOS device (simulator or physical).
+//
+// Strategy for physical devices:
+//  1. Prefer `xcrun devicectl device install app` (Apple's modern CoreDevice
+//     installer, iOS 17+ friendly) — set MAESTRO_RUNNER_IOS_INSTALLER=zipconduit
+//     to skip.
+//  2. Fall back to go-ios zipconduit for older Xcode / macOS or on devicectl
+//     failure. Both paths run with installTimeout so an unresponsive install
+//     service surfaces as an error instead of hanging forever.
 func installIOSApp(udid string, appPath string, isSimulator bool) error {
 	if isSimulator {
-		out, err := runCommand("xcrun", "simctl", "install", udid, appPath)
-		if err != nil {
-			return fmt.Errorf("simctl install failed: %w\nOutput: %s", err, out)
-		}
-		return nil
+		return installViaSimctl(udid, appPath)
 	}
 
-	// Physical device - use go-ios zipconduit
+	installer := strings.ToLower(strings.TrimSpace(os.Getenv("MAESTRO_RUNNER_IOS_INSTALLER")))
+
+	// Default: prefer devicectl, fall back to zipconduit.
+	if installer != "zipconduit" && devicectlAvailable() {
+		if err := installViaDevicectl(udid, appPath); err == nil {
+			return nil
+		} else if installer == "devicectl" {
+			// User explicitly forced devicectl — propagate the error, don't silently fall back.
+			return err
+		} else {
+			logger.Warn("devicectl install failed, falling back to zipconduit: %v", err)
+		}
+	}
+
+	return installViaZipconduit(udid, appPath)
+}
+
+// installViaSimctl installs on a simulator. Wrapped in a timeout so a stuck
+// simulator can't freeze the whole run.
+func installViaSimctl(udid, appPath string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), installTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "xcrun", "simctl", "install", udid, appPath).CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("simctl install timed out after %v", installTimeout)
+	}
+	if err != nil {
+		return fmt.Errorf("simctl install failed: %w\nOutput: %s", err, out)
+	}
+	return nil
+}
+
+// devicectlAvailable reports whether `xcrun devicectl` works on this host.
+// Requires macOS 14 / Xcode 15+.
+func devicectlAvailable() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := exec.CommandContext(ctx, "xcrun", "devicectl", "--version").Run()
+	return err == nil
+}
+
+// installViaDevicectl uses Apple's modern CoreDevice installer.
+// Supported on iOS 17+ real devices; also works on earlier iOS via Xcode 15+.
+func installViaDevicectl(udid, appPath string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), installTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "xcrun", "devicectl", "device", "install", "app",
+		"--device", udid, appPath).CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("devicectl install timed out after %v", installTimeout)
+	}
+	if err != nil {
+		return fmt.Errorf("devicectl install failed: %w\nOutput: %s", err, string(out))
+	}
+	return nil
+}
+
+// installViaZipconduit uses the go-ios Go-native installer. Kept as a fallback
+// for hosts without devicectl (older macOS / Xcode). Wrapped in a timeout —
+// without it, SendFile can hang indefinitely when the install service accepts
+// the connection but never acks completion (observed on iOS 26 / iPhone 13).
+func installViaZipconduit(udid, appPath string) error {
 	entry, err := goios.GetDevice(udid)
 	if err != nil {
 		return fmt.Errorf("device %s not found: %w", udid, err)
@@ -360,10 +462,20 @@ func installIOSApp(udid string, appPath string, isSimulator bool) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to device install service: %w", err)
 	}
-	if err := conn.SendFile(appPath); err != nil {
-		return fmt.Errorf("failed to install app: %w", err)
+
+	done := make(chan error, 1)
+	go func() { done <- conn.SendFile(appPath) }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("failed to install app: %w", err)
+		}
+		return nil
+	case <-time.After(installTimeout):
+		return fmt.Errorf("app install timed out after %v (try: xcrun devicectl device install app --device %s %s)",
+			installTimeout, udid, appPath)
 	}
-	return nil
 }
 
 // getSimulatorInfo gets information about an iOS simulator.
@@ -421,31 +533,43 @@ func extractIOSVersion(runtime string) string {
 	return runtime
 }
 
-// getIOSAppVersion queries the iOS simulator for an app's version.
-func getIOSAppVersion(udid, bundleID string) string {
+// getIOSAppVersionAndBuild reads an installed simulator app's marketing version
+// and build number — CFBundleShortVersionString and CFBundleVersion.
+//
+// One release version covers many CI builds, so the version alone does not say
+// which binary a run used. Both live in the same Info.plist.
+func getIOSAppVersionAndBuild(udid, bundleID string) (version, build string) {
 	if bundleID == "" {
-		return ""
+		return "", ""
 	}
 
 	// Get app container path
 	out, err := runCommand("xcrun", "simctl", "get_app_container", udid, bundleID)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 
 	appPath := strings.TrimSpace(out)
 	if appPath == "" {
-		return ""
+		return "", ""
 	}
 
-	// Read Info.plist from app bundle
+	return readBundleVersionAndBuild(appPath)
+}
+
+// readBundleVersionAndBuild reads the two version keys out of a .app bundle's
+// Info.plist. Either is empty when it cannot be read, since a missing version is
+// worth reporting as unknown rather than failing a run over.
+func readBundleVersionAndBuild(appPath string) (version, build string) {
 	plistPath := filepath.Join(appPath, "Info.plist")
-	version, err := runCommand("/usr/libexec/PlistBuddy", "-c", "Print CFBundleShortVersionString", plistPath)
-	if err != nil {
-		return ""
+	read := func(key string) string {
+		out, err := runCommand("/usr/libexec/PlistBuddy", "-c", "Print "+key, plistPath)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(out)
 	}
-
-	return strings.TrimSpace(version)
+	return read("CFBundleShortVersionString"), read("CFBundleVersion")
 }
 
 // autoDetectIOSDevices finds up to N available booted iOS simulators that are not in use.

@@ -7,6 +7,8 @@ package devicelab
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,12 +44,14 @@ type DeviceLabClient interface {
 	LongClickElement(elementID string, durationMs int) error
 	ScrollInArea(area uiautomator2.RectModel, direction string, percent float64, speed int) error
 	SwipeInArea(area uiautomator2.RectModel, direction string, percent float64, speed int) error
+	SwipeCoords(startX, startY, endX, endY, durationMs int) error
 
 	// Navigation
 	Back() error
 	HideKeyboard() error
 	PressKeyCode(keyCode int) error
 	SendKeyActions(text string) error
+	AddMedia(name, mime string, data []byte) error
 
 	// Device state
 	Screenshot() ([]byte, error)
@@ -66,6 +70,24 @@ type DeviceLabClient interface {
 
 	// Settings
 	SetAppiumSettings(settings map[string]interface{}) error
+
+	// Settle detection
+	WaitForSettle(timeoutMs, quietMs int) (bool, error)
+
+	// TreeHash returns a hash of the current accessibility tree. Used by
+	// lazy retry: capture pre-tap, compare after a failing assertion to
+	// detect "screen unchanged → tap had no effect → retry the tap".
+	TreeHash() (uint64, error)
+
+	// FindFirstOf tries multiple (strategy, selector) pairs in a single
+	// RPC, returning the first match. Avoids paying the tree-fetch cost
+	// once per strategy. Pairs are passed flat: [s1, sel1, s2, sel2, ...].
+	FindFirstOf(strategiesAndSelectors []string) (*uiautomator2.Element, error)
+
+	// WaitForWindowUpdate blocks up to timeoutMs for a window-content-changed
+	// event on the target package. Returns true if updated, false if window
+	// stayed stable for the full timeout. Mirrors Maestro's isWindowUpdating.
+	WaitForWindowUpdate(appID string, timeoutMs int) (bool, error)
 }
 
 // Driver implements core.Driver using the DeviceLab Android Driver.
@@ -73,6 +95,13 @@ type Driver struct {
 	client DeviceLabClient
 	info   *core.PlatformInfo
 	device ShellExecutor // for ADB commands (fallback)
+
+	// currentAppID is the app the flow last launched, remembered so a
+	// mid-flow death can be explained rather than surfacing as "not found".
+	currentAppID string
+
+	// Parent context for element-finding operations (nil = context.Background())
+	ctx context.Context
 
 	// Timeouts (0 = use defaults)
 	findTimeout         int // ms, for required elements
@@ -84,16 +113,60 @@ type Driver struct {
 	// Cached values to avoid repeated ADB shell calls
 	cachedAPILevel   int
 	cachedActivities map[string]string // appID -> activity
+	cachedScreenW    int               // physical display width  (from `wm size`)
+	cachedScreenH    int               // physical display height (from `wm size`)
 
 	// CDP state from background push events (nil = not wired)
 	cdpStateFunc func() *core.CDPInfo
 
 	// WebView CDP connection manager (nil = not wired)
-	webView        *webViewManager
-	lastCDPScan    time.Time     // rate-limit ADB shell CDP scans
-	lastCDPResult  *core.CDPInfo // cached result from last scan
-	knownCDPType   string        // "browser" or "webview" — set from socket name, cleared on CDP down
+	webView       *webViewManager
+	lastCDPScan   time.Time     // rate-limit ADB shell CDP scans
+	lastCDPResult *core.CDPInfo // cached result from last scan
+	knownCDPType  string        // "browser" or "webview" — set from socket name, cleared on CDP down
+	// Backoff for a WebView CDP endpoint that fails to connect. A stalled/
+	// unreachable devtools socket makes connect() spend its full timeout
+	// (~20s), and ensureWebViewConnection retries on every command while
+	// disconnected — so without a backoff a single flaky WebView adds ~20s to
+	// every step. We record the failing socket + time and skip re-connecting
+	// to that same socket until the backoff elapses; commands fall through to
+	// native finding meanwhile.
+	lastWebViewConnectFail   time.Time
+	lastWebViewConnectFailSk string
+
+	// Lazy retry state: each successful tap captures the pre-tap tree hash
+	// + selector + time. If the NEXT element-based command can't find its
+	// target within lazyRetryProbeMs, we check if the screen has changed
+	// since the tap (hash unchanged → tap had no effect → re-tap, up to
+	// lazyRetryMax times). Zero overhead on success paths.
+	lastTapHash     uint64
+	lastTapSelector flow.Selector
+	lastTapTime     time.Time
+	lastTapRetries  int
 }
+
+// Lazy retry tunables. Window: how long after a tap we still consider it
+// "recent enough" to retry. Probe: how long we let the next command poll
+// before doing the hash check. Max: retry cap per original tap.
+const (
+	lazyRetryWindow  = 2 * time.Second
+	lazyRetryProbeMs = 500
+	lazyRetryMax     = 2
+)
+
+// lazyRetryEnabled gates the host-side lazy tap-retry. OFF by default.
+//
+// The retry fires when "tree hash unchanged since the tap AND the tap target
+// is still findable", treating that as "the tap had no effect, re-issue it".
+// That predicate cannot distinguish a genuinely dropped tap from a successful
+// tap whose effect is async (submit-then-navigate) or that merely disables the
+// source button without changing the hash — so it can re-issue a tap across a
+// navigation boundary and land on the next screen's CTA (issue #95). Disabled
+// by default; set MAESTRO_DEVICELAB_LAZY_RETRY=1 to opt back in.
+var lazyRetryEnabled = func() bool {
+	v := os.Getenv("MAESTRO_DEVICELAB_LAZY_RETRY")
+	return v == "1" || strings.EqualFold(v, "true")
+}()
 
 // New creates a new DeviceLab driver.
 func New(client DeviceLabClient, info *core.PlatformInfo, device ShellExecutor) *Driver {
@@ -102,6 +175,164 @@ func New(client DeviceLabClient, info *core.PlatformInfo, device ShellExecutor) 
 		info:   info,
 		device: device,
 	}
+}
+
+// WaitForSettle delegates to the on-device agent's tree-comparison settle detection.
+func (d *Driver) WaitForSettle(timeoutMs, quietMs int) (bool, error) {
+	return d.client.WaitForSettle(timeoutMs, quietMs)
+}
+
+// tapHadEffect (kept as dead code) — element-presence post-tap check.
+// Currently NOT called from the tap path. Was problematic because some
+// apps (React Navigation showcase) have buttons that persist across
+// multiple screens, producing false negatives (tap navigated but source
+// still findable on the next screen).
+//
+//nolint:unused
+func (d *Driver) tapHadEffect() bool {
+	if d.lastTapTime.IsZero() {
+		return true
+	}
+	for i := 0; i < tapVerifyAttempts; i++ {
+		_, _, err := d.findElementFast(d.lastTapSelector, true, 50)
+		if err != nil {
+			return true
+		}
+		if i < tapVerifyAttempts-1 {
+			time.Sleep(tapVerifyInterval)
+		}
+	}
+	return false
+}
+
+// tapHadEffectViaWindowUpdate uses Maestro's isWindowUpdating signal —
+// asks the agent to subscribe to AccessibilityEvent stream and wait up
+// to windowUpdateTimeoutMs for a window content-changed event on the
+// app's package. Returns true if any event fires (tap caused something
+// in the window), false if nothing fires (tap likely eaten).
+//
+// Currently NOT called from the tap path (commented out). Wired up so
+// callers can opt in once we know it doesn't fire false positives /
+// negatives on the React Navigation showcase suite.
+//
+//nolint:unused
+func (d *Driver) tapHadEffectViaWindowUpdate(appID string) bool {
+	if appID == "" {
+		return true // no app context — assume effect (avoid false retry)
+	}
+	updated, err := d.client.WaitForWindowUpdate(appID, windowUpdateTimeoutMs)
+	if err != nil {
+		return true // can't verify — assume effect
+	}
+	return updated
+}
+
+const (
+	tapVerifyAttempts     = 3                     //nolint:unused
+	tapVerifyInterval     = 30 * time.Millisecond //nolint:unused
+	windowUpdateTimeoutMs = 500                   //nolint:unused
+)
+
+// recordTap captures the current tree hash so a later failing assertion can
+// detect "tap had no effect" (hash unchanged) and retry. Must be called
+// BEFORE the click fires. Resets the retry counter to 0 — this is a new
+// original tap, not a re-attempt.
+func (d *Driver) recordTap(sel flow.Selector) {
+	if !lazyRetryEnabled {
+		return // lazy retry disabled — skip the per-tap TreeHash round-trip
+	}
+	hash, err := d.client.TreeHash()
+	if err != nil {
+		// If we can't read the hash, just clear state — lazy retry will skip.
+		logger.Info("[devicelab] recordTap CLEAR (TreeHash error): %v on %s", err, sel.Describe())
+		d.lastTapHash = 0
+		d.lastTapTime = time.Time{}
+		return
+	}
+	d.lastTapHash = hash
+	d.lastTapSelector = sel
+	d.lastTapTime = time.Now()
+	d.lastTapRetries = 0
+	logger.Info("[devicelab] recordTap SET hash=%x for %s", hash, sel.Describe())
+}
+
+// maybeLazyRetryTap is called from element-based commands (assertVisible,
+// extendedWaitUntil, inputText — NOT assertNotVisible) after they've polled
+// for lazyRetryProbeMs without finding the target. It checks if:
+//   - a tap happened recently (within lazyRetryWindow)
+//   - the tree hash hasn't changed since that tap (screen unchanged)
+//   - we haven't exceeded lazyRetryMax for this tap
+//
+// If all true, it re-issues the prior tap and returns true so the caller
+// knows to keep polling. Returns false otherwise (caller continues its
+// normal failure path).
+func (d *Driver) maybeLazyRetryTap() bool {
+	if !lazyRetryEnabled {
+		return false // lazy retry disabled by default (issue #95)
+	}
+	if d.lastTapTime.IsZero() {
+		logger.Info("[devicelab] lazy retry skip: no recent tap recorded")
+		return false
+	}
+	if time.Since(d.lastTapTime) > lazyRetryWindow {
+		logger.Info("[devicelab] lazy retry skip: tap was %v ago (>%v)", time.Since(d.lastTapTime), lazyRetryWindow)
+		return false
+	}
+	if d.lastTapRetries >= lazyRetryMax {
+		logger.Info("[devicelab] lazy retry skip: hit max retries (%d)", d.lastTapRetries)
+		return false
+	}
+
+	// Gate: the screen must be UNCHANGED since the tap. recordTap captured the
+	// tree hash immediately before the click; if a fresh hash now differs, the
+	// tap demonstrably caused something — an error message rendered, an async
+	// submit resolved, a dialog opened, a partial transition began. Re-tapping
+	// in that state is wrong: e.g. a failed-login flow keeps the login button
+	// on screen (so the element-presence check below would wrongly fire) while
+	// the "Invalid credentials" error renders — that render flips the hash, so
+	// we correctly treat the original tap as effective and skip the retry.
+	// A genuinely missed tap (fired at phantom off-screen bounds, nothing hit)
+	// produces no ripple and leaves the hash identical, so real misses still
+	// retry. On hash-read failure we fall through to the element check rather
+	// than skip, preserving prior behaviour.
+	if curHash, hashErr := d.client.TreeHash(); hashErr == nil && curHash != d.lastTapHash {
+		logger.Info("[devicelab] lazy retry skip: tree hash changed since tap (%x→%x) — tap had effect", d.lastTapHash, curHash)
+		return false
+	}
+
+	// Secondary signal: is the tap's target element STILL findable? If yes,
+	// the tap clearly didn't navigate away from it → tap had no effect →
+	// retry. Combined with the hash gate above this is precise: same screen
+	// (hash unchanged) AND source button still present → the tap was eaten.
+	// Animations, ripples, focus changes etc. do not remove the original
+	// button — only a real navigation does.
+	_, _, findErr := d.findElementFast(d.lastTapSelector, true, 50)
+	if findErr != nil {
+		// Source element gone → tap navigated → don't retry.
+		logger.Info("[devicelab] lazy retry skip: tap target %s no longer findable — tap had effect", d.lastTapSelector.Describe())
+		return false
+	}
+	logger.Info("[devicelab] lazy retry triggered: tap target %s still findable → tap had no effect", d.lastTapSelector.Describe())
+
+	// Re-issue the tap via FindAndClick. Reset the timer so further probes
+	// keep counting from this re-attempt, not the original.
+	for _, s := range buildClickableOrAllStrategies(d.lastTapSelector) {
+		if _, err := d.client.FindAndClick(s.Strategy, s.Value); err == nil {
+			d.lastTapRetries++
+			d.lastTapTime = time.Now()
+			return true
+		}
+	}
+	return false
+}
+
+// buildClickableOrAllStrategies returns the strategy chain used for a tap.
+// Mirrors what tapOn's fast path does: clickable-first for text, fall back
+// to non-clickable. Pure helper so maybeLazyRetryTap can re-issue the tap.
+func buildClickableOrAllStrategies(sel flow.Selector) []LocatorStrategy {
+	clickable, _ := buildClickableOnlyStrategies(sel)
+	all, _ := buildSelectors(sel, 0)
+	return append(clickable, all...)
 }
 
 // SetCDPStateFunc sets the function used to retrieve real-time CDP socket state
@@ -140,6 +371,91 @@ func (d *Driver) screenSize() (int, int, error) {
 	return 0, 0, fmt.Errorf("screen dimensions not available")
 }
 
+// physicalScreenSize returns the full physical display size (e.g. 1080x2340 from
+// `wm size`), cached for the session. Unlike screenSize() — which returns the
+// on-device-reported USABLE size (it can exclude the status bar, e.g. 1080x2204) —
+// this matches the coordinate space of the accessibility hierarchy (whose root spans
+// the full display), so it is the correct reference for on-screen geometry checks
+// against element bounds. Returns ok=false if it cannot be determined.
+func (d *Driver) physicalScreenSize() (int, int, bool) {
+	if d.cachedScreenW > 0 && d.cachedScreenH > 0 {
+		return d.cachedScreenW, d.cachedScreenH, true
+	}
+	if d.device == nil {
+		return 0, 0, false
+	}
+	out, err := d.device.Shell("wm size")
+	if err != nil {
+		return 0, 0, false
+	}
+	w, h := parseWmSize(out)
+	if w <= 0 || h <= 0 {
+		return 0, 0, false
+	}
+	d.cachedScreenW, d.cachedScreenH = w, h
+	return w, h, true
+}
+
+// tappableScreenSize returns the screen size used to validate element bounds: the
+// full physical display (same coordinate space as the accessibility hierarchy that
+// produced the bounds), falling back to the on-device-reported size when the
+// physical size is unavailable.
+func (d *Driver) tappableScreenSize() (int, int, error) {
+	if w, h, ok := d.physicalScreenSize(); ok {
+		return w, h, nil
+	}
+	return d.screenSize()
+}
+
+// parseWmSize extracts width x height from `wm size` output. It prefers an
+// "Override size" line (the effective display size when one is set) over the
+// "Physical size" line.
+func parseWmSize(out string) (int, int) {
+	var pw, ph, ow, oh int
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "Physical size:"):
+			pw, ph = parseWxH(strings.TrimPrefix(line, "Physical size:"))
+		case strings.HasPrefix(line, "Override size:"):
+			ow, oh = parseWxH(strings.TrimPrefix(line, "Override size:"))
+		}
+	}
+	if ow > 0 && oh > 0 {
+		return ow, oh
+	}
+	return pw, ph
+}
+
+// parseWxH parses "1080x2340" (tolerating surrounding spaces) into width, height.
+func parseWxH(s string) (int, int) {
+	s = strings.TrimSpace(s)
+	i := strings.IndexByte(s, 'x')
+	if i <= 0 {
+		return 0, 0
+	}
+	w, err1 := strconv.Atoi(strings.TrimSpace(s[:i]))
+	h, err2 := strconv.Atoi(strings.TrimSpace(s[i+1:]))
+	if err1 != nil || err2 != nil {
+		return 0, 0
+	}
+	return w, h
+}
+
+// SetContext sets the parent context for element-finding operations.
+func (d *Driver) SetContext(ctx context.Context) {
+	d.ctx = ctx
+}
+
+// parentContext returns the parent context for element-finding operations.
+// Returns context.Background() if no context was set.
+func (d *Driver) parentContext() context.Context {
+	if d.ctx != nil {
+		return d.ctx
+	}
+	return context.Background()
+}
+
 // SetFindTimeout sets the timeout for finding required elements.
 func (d *Driver) SetFindTimeout(ms int) {
 	d.findTimeout = ms
@@ -175,6 +491,8 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 		result = d.longPressOn(s)
 	case *flow.TapOnPointStep:
 		result = d.tapOnPoint(s)
+	case *flow.DragAndDropStep:
+		result = d.dragAndDrop(s)
 
 	// Assert commands
 	case *flow.AssertVisibleStep:
@@ -205,6 +523,8 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 		result = d.back(s)
 	case *flow.PressKeyStep:
 		result = d.pressKey(s)
+	case *flow.OpenNotificationsStep:
+		result = d.openNotifications(s)
 
 	// App lifecycle
 	case *flow.LaunchAppStep:
@@ -237,6 +557,14 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 		result = d.setAirplaneMode(s)
 	case *flow.ToggleAirplaneModeStep:
 		result = d.toggleAirplaneMode(s)
+	case *flow.SetDarkModeStep:
+		result = d.setDarkMode(s)
+	case *flow.ToggleDarkModeStep:
+		result = d.toggleDarkMode(s)
+	case *flow.AssertDarkModeStep:
+		result = d.assertDarkMode(s)
+	case *flow.AssertLightModeStep:
+		result = d.assertLightMode(s)
 	case *flow.TravelStep:
 		result = d.travel(s)
 
@@ -255,10 +583,14 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	// Media
 	case *flow.TakeScreenshotStep:
 		result = d.takeScreenshot(s)
+	case *flow.AssertScreenshotStep:
+		result = d.takeScreenshot(&flow.TakeScreenshotStep{CropOn: s.CropOn})
 	case *flow.StartRecordingStep:
 		result = d.startRecording(s)
 	case *flow.StopRecordingStep:
 		result = d.stopRecording(s)
+	case *flow.RemoveMediaStep:
+		result = d.removeMedia(s)
 	case *flow.AddMediaStep:
 		result = d.addMedia(s)
 
@@ -334,7 +666,9 @@ func (d *Driver) ensureWebViewConnection() {
 			logger.Info("[cdp:3-connection] CDP socket gone, disconnecting webview")
 			d.webView.disconnect()
 		}
-		d.knownCDPType = "" // Clear browser mode when CDP goes away
+		d.knownCDPType = ""                    // Clear browser mode when CDP goes away
+		d.lastWebViewConnectFail = time.Time{} // reset backoff — socket is gone
+		d.lastWebViewConnectFailSk = ""
 		return
 	}
 
@@ -353,11 +687,40 @@ func (d *Driver) ensureWebViewConnection() {
 	//   - chrome_devtools_remote sockets are only reported when a browser is in the foreground
 	// So we trust whatever socket the agent sends us.
 	if !d.webView.isConnected() {
-		logger.Info("[cdp:3-connection] CDP socket available, initiating connection to %s (type=%s)", cdpInfo.Socket, cdpType)
-		if err := d.webView.connect(cdpInfo, cdpType); err != nil {			logger.Info("[cdp:3-connection] connect failed: %v (socket=%s)", err, cdpInfo.Socket)
+		// Skip re-connecting to a socket that failed recently — connect() can
+		// spend ~20s on a stalled endpoint, and this runs on every command, so
+		// without the backoff one flaky WebView slows every step. Keyed on the
+		// socket so a different/new WebView still connects immediately.
+		if inWebViewConnectBackoff(cdpInfo.Socket, d.lastWebViewConnectFailSk, d.lastWebViewConnectFail, time.Now()) {
 			return
 		}
+		logger.Info("[cdp:3-connection] CDP socket available, initiating connection to %s (type=%s)", cdpInfo.Socket, cdpType)
+		if err := d.webView.connect(cdpInfo, cdpType); err != nil {
+			logger.Info("[cdp:3-connection] connect failed: %v (socket=%s)", err, cdpInfo.Socket)
+			d.lastWebViewConnectFail = time.Now()
+			d.lastWebViewConnectFailSk = cdpInfo.Socket
+			return
+		}
+		// Connected — clear any backoff state.
+		d.lastWebViewConnectFail = time.Time{}
+		d.lastWebViewConnectFailSk = ""
 	}
+}
+
+// webViewConnectBackoff is how long ensureWebViewConnection waits before
+// re-attempting a WebView CDP connect that just failed for the same socket,
+// so a stalled/unreachable devtools endpoint can't add the full connect
+// timeout to every command (mirrors Maestro's MA-4119 bound).
+const webViewConnectBackoff = 5 * time.Second
+
+// inWebViewConnectBackoff reports whether a connect to socket should be skipped
+// because the same socket failed to connect within webViewConnectBackoff of now.
+// A different socket (or no prior failure) is never in backoff.
+func inWebViewConnectBackoff(socket, lastFailSocket string, lastFail, now time.Time) bool {
+	if lastFail.IsZero() || socket != lastFailSocket {
+		return false
+	}
+	return now.Sub(lastFail) < webViewConnectBackoff
 }
 
 // getCDPInfo returns the current CDP socket info.
@@ -439,19 +802,19 @@ func (d *Driver) scanCDPSocket() *core.CDPInfo {
 // knownBrowserPackages is the set of Android packages that are browsers.
 // Matches the on-device Java agent's browser detection logic.
 var knownBrowserPackages = map[string]bool{
-	"com.android.chrome":        true,
-	"com.chrome.beta":           true,
-	"com.chrome.dev":            true,
-	"com.chrome.canary":         true,
-	"org.chromium.chrome":       true,
-	"app.vanadium.browser":      true,
-	"org.mozilla.firefox":       true,
-	"org.mozilla.firefox_beta":  true,
-	"com.opera.browser":         true,
-	"com.opera.mini.native":     true,
-	"com.brave.browser":         true,
-	"com.microsoft.emmx":        true,
-	"com.vivaldi.browser":       true,
+	"com.android.chrome":           true,
+	"com.chrome.beta":              true,
+	"com.chrome.dev":               true,
+	"com.chrome.canary":            true,
+	"org.chromium.chrome":          true,
+	"app.vanadium.browser":         true,
+	"org.mozilla.firefox":          true,
+	"org.mozilla.firefox_beta":     true,
+	"com.opera.browser":            true,
+	"com.opera.mini.native":        true,
+	"com.brave.browser":            true,
+	"com.microsoft.emmx":           true,
+	"com.vivaldi.browser":          true,
 	"com.sec.android.app.sbrowser": true,
 }
 
@@ -489,7 +852,7 @@ func (d *Driver) findFocused() (core.Element, error) {
 	// Try native
 	if d.webView == nil || d.webView.webViewType() != "browser" {
 		active, err := d.client.ActiveElement()
-		if err == nil {
+		if err == nil && active != nil {
 			info := &core.ElementInfo{Visible: true, Enabled: true}
 			if text, textErr := active.Text(); textErr == nil {
 				info.Text = text
@@ -528,6 +891,43 @@ func (d *Driver) findElementFast(sel flow.Selector, optional bool, stepTimeoutMs
 	return d.findElementWithOptions(sel, optional, stepTimeoutMs, false, true)
 }
 
+// findElementFastWithLazyRetry wraps findElementFast with lazy retry of a
+// preceding tap. Tries the find for lazyRetryProbeMs first; if not found,
+// asks maybeLazyRetryTap whether to re-issue the prior tap; loops up to
+// lazyRetryMax times. Falls through to the standard timeout if hash has
+// changed (real "element not visible") or if no recent tap is recorded.
+func (d *Driver) findElementFastWithLazyRetry(sel flow.Selector, optional bool, stepTimeoutMs int) (*uiautomator2.Element, *core.ElementInfo, error) {
+	logger.Info("[devicelab] findElementFastWithLazyRetry start for %s (lastTapTime zero=%v)", sel.Describe(), d.lastTapTime.IsZero())
+	if elem, info, err := d.findElementFast(sel, optional, lazyRetryProbeMs); err == nil {
+		return elem, info, nil
+	}
+	logger.Info("[devicelab] findElementFastWithLazyRetry first probe failed, calling maybeLazyRetryTap")
+	for d.maybeLazyRetryTap() {
+		logger.Info("[devicelab] lazy retry: re-issued tap on %s after assertion probe failed", d.lastTapSelector.Describe())
+		if elem, info, err := d.findElementFast(sel, optional, lazyRetryProbeMs); err == nil {
+			return elem, info, nil
+		}
+	}
+	logger.Info("[devicelab] findElementFastWithLazyRetry falling through to full timeout for %s", sel.Describe())
+	return d.findElementFast(sel, optional, stepTimeoutMs)
+}
+
+// findElementWithLazyRetry is the same wrapper for the standard (3-call)
+// findElement path. Used by inputText, where the next step actually consumes
+// the element (vs. assertVisible which just checks visibility).
+func (d *Driver) findElementWithLazyRetry(sel flow.Selector, optional bool, stepTimeoutMs int) (*uiautomator2.Element, *core.ElementInfo, error) {
+	if elem, info, err := d.findElement(sel, optional, lazyRetryProbeMs); err == nil {
+		return elem, info, nil
+	}
+	for d.maybeLazyRetryTap() {
+		logger.Info("[devicelab] lazy retry: re-issued tap on %s before inputText", d.lastTapSelector.Describe())
+		if elem, info, err := d.findElement(sel, optional, lazyRetryProbeMs); err == nil {
+			return elem, info, nil
+		}
+	}
+	return d.findElement(sel, optional, stepTimeoutMs)
+}
+
 // findElementForTap finds an element for tap commands.
 // DeviceLab behavior: non-clickable first (fastest match), then clickable fallback.
 // No page source fallback for text-based selectors (UiAutomator strategies only).
@@ -535,7 +935,7 @@ func (d *Driver) findElementForTap(sel flow.Selector, optional bool, stepTimeout
 	// For relative selectors (below, above, etc.), use page source which handles them correctly
 	if sel.HasRelativeSelector() {
 		timeout := d.calculateTimeout(optional, stepTimeoutMs)
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		ctx, cancel := context.WithTimeout(d.parentContext(), timeout)
 		defer cancel()
 		return d.findElementRelativeWithContext(ctx, sel)
 	}
@@ -554,7 +954,7 @@ func (d *Driver) findElementForTap(sel flow.Selector, optional bool, stepTimeout
 	// Non-clickable strategies first, then clickable fallback
 	if sel.Text != "" {
 		timeout := d.calculateTimeout(optional, stepTimeoutMs)
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		ctx, cancel := context.WithTimeout(d.parentContext(), timeout)
 		defer cancel()
 		return d.findElementDirectWithContext(ctx, sel)
 	}
@@ -566,26 +966,27 @@ func (d *Driver) findElementForTap(sel flow.Selector, optional bool, stepTimeout
 // findElementDirectWithContext finds an element for tap using only UiAutomator strategies.
 // Non-clickable strategies first (fastest match), then clickable fallback. No page source.
 func (d *Driver) findElementDirectWithContext(ctx context.Context, sel flow.Selector) (*uiautomator2.Element, *core.ElementInfo, error) {
-	// Non-clickable first: finds element in 1 round-trip when it exists.
-	// Clickable strategies appended as fallback for disambiguation.
-	allStrategies, _ := buildSelectors(sel, 0)
+	// Clickable first: for tap commands, prefer buttons over labels.
+	// General strategies as fallback when no clickable element matches.
 	clickableStrategies, _ := buildClickableOnlyStrategies(sel)
-	combined := append(allStrategies, clickableStrategies...)
+	allStrategies, _ := buildSelectors(sel, 0)
+	combined := append(clickableStrategies, allStrategies...)
 
-	// When text triggers regex detection, also add literal textContains/descriptionContains
+	// When text triggers regex detection, also add literal textMatches
 	// as fallback. Handles false positives like "alice@example.com (locked out)" where
 	// parentheses trigger regex detection but the text is actually literal.
 	if looksLikeRegex(sel.Text) {
 		escaped := escapeUIAutomatorString(sel.Text)
 		stateFilters := buildStateFilters(sel)
+		pattern := `(?is).*\Q` + escaped + `\E.*`
 		combined = append(combined,
 			LocatorStrategy{
 				Strategy: uiautomator2.StrategyUIAutomator,
-				Value:    `new UiSelector().textContains("` + escaped + `")` + stateFilters,
+				Value:    `new UiSelector().textMatches("` + pattern + `")` + stateFilters,
 			},
 			LocatorStrategy{
 				Strategy: uiautomator2.StrategyUIAutomator,
-				Value:    `new UiSelector().descriptionContains("` + escaped + `")` + stateFilters,
+				Value:    `new UiSelector().descriptionMatches("` + pattern + `")` + stateFilters,
 			},
 		)
 	}
@@ -640,7 +1041,11 @@ func buildClickableOnlyStrategies(sel flow.Selector) ([]LocatorStrategy, error) 
 
 	if sel.Text != "" {
 		escaped := escapeUIAutomatorString(sel.Text)
-		// Always try textContains/descriptionContains first (no regex needed)
+		// Case-sensitive text/description/hint first, then case-insensitive fallback.
+		// hintContains is a DeviceLab-agent extension — matches EditText android:hint
+		// placeholder so "tapOn: 'Email'" finds an empty field by its hint text.
+		// (Tried exact-match-first à la Maestro but it broke too many flows
+		// where users expect substring matching for tab labels with counts.)
 		strategies = append(strategies, LocatorStrategy{
 			Strategy: uiautomator2.StrategyUIAutomator,
 			Value:    `new UiSelector().textContains("` + escaped + `").clickable(true)` + stateFilters,
@@ -649,9 +1054,30 @@ func buildClickableOnlyStrategies(sel flow.Selector) ([]LocatorStrategy, error) 
 			Strategy: uiautomator2.StrategyUIAutomator,
 			Value:    `new UiSelector().descriptionContains("` + escaped + `").clickable(true)` + stateFilters,
 		})
-		// Fall back to regex match (case-insensitive) for partial/pattern matches
+		strategies = append(strategies, LocatorStrategy{
+			Strategy: uiautomator2.StrategyUIAutomator,
+			Value:    `new UiSelector().hintContains("` + escaped + `").clickable(true)` + stateFilters,
+		})
+		ciPattern := `(?is).*\Q` + escaped + `\E.*`
+		strategies = append(strategies, LocatorStrategy{
+			Strategy: uiautomator2.StrategyUIAutomator,
+			Value:    `new UiSelector().textMatches("` + ciPattern + `").clickable(true)` + stateFilters,
+		})
+		strategies = append(strategies, LocatorStrategy{
+			Strategy: uiautomator2.StrategyUIAutomator,
+			Value:    `new UiSelector().descriptionMatches("` + ciPattern + `").clickable(true)` + stateFilters,
+		})
+		strategies = append(strategies, LocatorStrategy{
+			Strategy: uiautomator2.StrategyUIAutomator,
+			Value:    `new UiSelector().hintMatches("` + ciPattern + `").clickable(true)` + stateFilters,
+		})
+		// Fall back to regex match (case-insensitive) for partial/pattern matches.
+		// looksLikeRegex(text) was true → text IS a regex. Pass it through
+		// unmodified (only escape Java-string quotes); do NOT escape regex
+		// metachars, or `.*For You.*` becomes `\.\*For You\.\*` which matches
+		// the literal string ".*For You.*" instead of "anything around For You".
 		if looksLikeRegex(sel.Text) {
-			regexEscaped := escapeUIAutomator(sel.Text)
+			regexEscaped := escapeUIAutomatorString(sel.Text)
 			pattern := "(?is)" + regexEscaped
 			strategies = append(strategies, LocatorStrategy{
 				Strategy: uiautomator2.StrategyUIAutomator,
@@ -674,7 +1100,7 @@ func buildClickableOnlyStrategies(sel flow.Selector) ([]LocatorStrategy, error) 
 // findElementWithOptions is the internal implementation with clickable preference option.
 func (d *Driver) findElementWithOptions(sel flow.Selector, optional bool, stepTimeoutMs int, preferClickable bool, fastMode bool) (*uiautomator2.Element, *core.ElementInfo, error) {
 	timeout := d.calculateTimeout(optional, stepTimeoutMs)
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(d.parentContext(), timeout)
 	defer cancel()
 
 	return d.findElementWithContext(ctx, sel, preferClickable, fastMode)
@@ -859,6 +1285,14 @@ func (d *Driver) findElementQuick(sel flow.Selector, timeoutMs int) (*uiautomato
 
 // tryFindElementFast attempts to find element using given strategies (single attempt).
 // Returns minimal info - just element ID and visible=true. No extra HTTP calls.
+//
+// We tried batching all strategies into UI.findFirstOf (~6× faster per call)
+// but it regressed transient-element detection. The reason: 6 sequential
+// per-strategy RPCs produce 6 fresh tree snapshots spread across ~900ms,
+// which is what gives RN's brief mid-animation states multiple chances to
+// be caught. The batched call (even with implicit-wait polling) produces
+// fewer snapshot moments per call. The wire infrastructure (FindFirstOf)
+// is left in place for future re-enabling when polling parity is sorted.
 func (d *Driver) tryFindElementFast(strategies []LocatorStrategy) (*uiautomator2.Element, *core.ElementInfo, error) {
 	var lastErr error
 	for _, s := range strategies {
@@ -1295,26 +1729,47 @@ func buildSelectorsWithOptions(sel flow.Selector, timeoutMs int, preferClickable
 	var strategies []LocatorStrategy
 	stateFilters := buildStateFilters(sel)
 
-	// ID-based selector - use resourceIdMatches for partial matching
-	// Always wrap with .* — works for both literal IDs and regex patterns
+	// ID-based selector — exact match FIRST, substring fallback ONLY if exact
+	// fails. Mirrors the parallel fix in pkg/driver/uiautomator2: substring-
+	// only `resourceIdMatches(".*X.*")` triggered internal scrolling and
+	// returned a wrong element when the target id wasn't in the rendered
+	// tree (lazy ListView with target offscreen). Web driver does the same
+	// cascade — exact → testid → substring → name → aria-label.
 	if sel.ID != "" {
 		escaped := escapeUIAutomatorString(sel.ID)
 		if preferClickable {
+			// Exact match — clickable first for tap commands.
+			strategies = append(strategies, LocatorStrategy{
+				Strategy: uiautomator2.StrategyUIAutomator,
+				Value:    `new UiSelector().resourceId("` + escaped + `").clickable(true)` + stateFilters,
+			})
+		}
+		// Exact match — any element.
+		strategies = append(strategies, LocatorStrategy{
+			Strategy: uiautomator2.StrategyUIAutomator,
+			Value:    `new UiSelector().resourceId("` + escaped + `")` + stateFilters,
+		})
+		if preferClickable {
+			// Substring fallback — clickable. Backward compat with users
+			// relying on substring behaviour.
 			strategies = append(strategies, LocatorStrategy{
 				Strategy: uiautomator2.StrategyUIAutomator,
 				Value:    `new UiSelector().resourceIdMatches(".*` + escaped + `.*").clickable(true)` + stateFilters,
 			})
 		}
+		// Substring fallback — any.
 		strategies = append(strategies, LocatorStrategy{
 			Strategy: uiautomator2.StrategyUIAutomator,
 			Value:    `new UiSelector().resourceIdMatches(".*` + escaped + `.*")` + stateFilters,
 		})
 	}
 
-	// Text-based selector
+	// Text-based selector: case-sensitive first, case-insensitive fallback.
+	// hintContains / hintMatches are DeviceLab-agent extensions — match EditText
+	// android:hint placeholder so "tapOn: 'Email'" finds an empty field by hint.
 	if sel.Text != "" {
 		escaped := escapeUIAutomatorString(sel.Text)
-		// Always try textContains/descriptionContains first (no regex needed, handles special chars)
+		ciPattern := `(?is).*\Q` + escaped + `\E.*`
 		if preferClickable {
 			strategies = append(strategies, LocatorStrategy{
 				Strategy: uiautomator2.StrategyUIAutomator,
@@ -1323,6 +1778,10 @@ func buildSelectorsWithOptions(sel flow.Selector, timeoutMs int, preferClickable
 			strategies = append(strategies, LocatorStrategy{
 				Strategy: uiautomator2.StrategyUIAutomator,
 				Value:    `new UiSelector().descriptionContains("` + escaped + `").clickable(true)` + stateFilters,
+			})
+			strategies = append(strategies, LocatorStrategy{
+				Strategy: uiautomator2.StrategyUIAutomator,
+				Value:    `new UiSelector().hintContains("` + escaped + `").clickable(true)` + stateFilters,
 			})
 		}
 		strategies = append(strategies, LocatorStrategy{
@@ -1333,9 +1792,43 @@ func buildSelectorsWithOptions(sel flow.Selector, timeoutMs int, preferClickable
 			Strategy: uiautomator2.StrategyUIAutomator,
 			Value:    `new UiSelector().descriptionContains("` + escaped + `")` + stateFilters,
 		})
-		// Fall back to regex match (case-insensitive) with proper escaping
+		strategies = append(strategies, LocatorStrategy{
+			Strategy: uiautomator2.StrategyUIAutomator,
+			Value:    `new UiSelector().hintContains("` + escaped + `")` + stateFilters,
+		})
+		// Case-insensitive fallback
+		if preferClickable {
+			strategies = append(strategies, LocatorStrategy{
+				Strategy: uiautomator2.StrategyUIAutomator,
+				Value:    `new UiSelector().textMatches("` + ciPattern + `").clickable(true)` + stateFilters,
+			})
+			strategies = append(strategies, LocatorStrategy{
+				Strategy: uiautomator2.StrategyUIAutomator,
+				Value:    `new UiSelector().descriptionMatches("` + ciPattern + `").clickable(true)` + stateFilters,
+			})
+			strategies = append(strategies, LocatorStrategy{
+				Strategy: uiautomator2.StrategyUIAutomator,
+				Value:    `new UiSelector().hintMatches("` + ciPattern + `").clickable(true)` + stateFilters,
+			})
+		}
+		strategies = append(strategies, LocatorStrategy{
+			Strategy: uiautomator2.StrategyUIAutomator,
+			Value:    `new UiSelector().textMatches("` + ciPattern + `")` + stateFilters,
+		})
+		strategies = append(strategies, LocatorStrategy{
+			Strategy: uiautomator2.StrategyUIAutomator,
+			Value:    `new UiSelector().descriptionMatches("` + ciPattern + `")` + stateFilters,
+		})
+		strategies = append(strategies, LocatorStrategy{
+			Strategy: uiautomator2.StrategyUIAutomator,
+			Value:    `new UiSelector().hintMatches("` + ciPattern + `")` + stateFilters,
+		})
+		// Fall back to regex match (case-insensitive). Text is already a regex
+		// per looksLikeRegex — use it as-is; only escape Java-string quotes.
+		// Escaping regex metachars here would defeat the regex (turns `.*` into
+		// `\.\*` which matches the literal string ".*").
 		if looksLikeRegex(sel.Text) {
-			regexEscaped := escapeUIAutomator(sel.Text)
+			regexEscaped := escapeUIAutomatorString(sel.Text)
 			pattern := "(?is)" + regexEscaped
 			if preferClickable {
 				strategies = append(strategies, LocatorStrategy{
@@ -1378,6 +1871,14 @@ func looksLikeRegex(text string) bool {
 	for i := 0; i < len(text); i++ {
 		c := text[i]
 		if i > 0 && text[i-1] == '\\' {
+			// A backslash-escaped metacharacter is regex syntax (\. matches a
+			// literal dot, \$ a literal $), so the whole pattern is a regex.
+			// Classifying it as literal would match the backslash verbatim and
+			// never hit an element whose text has no backslash (#136).
+			switch c {
+			case '.', '*', '+', '?', '[', ']', '{', '}', '|', '(', ')', '^', '$', '\\':
+				return true
+			}
 			continue
 		}
 		switch c {

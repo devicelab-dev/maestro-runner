@@ -7,3 +7,5 @@ ignore:
   - "pkg/logger/**"
   - "pkg/driver/wda/runner.go"
   - "pkg/driver/wda/setup.go"
+  - "pkg/driver/devicelab/webview.go"
+  - "pkg/driver/devicelab_ios/**"

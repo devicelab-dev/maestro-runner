@@ -30,7 +30,7 @@ func FindEmulatorBinary() (string, error) {
 	}
 
 	// Try PATH
-	if path, err := exec.LookPath("emulator"); err == nil {
+	if path, err := execLookPath("emulator"); err == nil {
 		return path, nil
 	}
 
@@ -55,7 +55,7 @@ func FindAVDManagerBinary() (string, error) {
 	}
 
 	// Try PATH
-	if path, err := exec.LookPath("avdmanager"); err == nil {
+	if path, err := execLookPath("avdmanager"); err == nil {
 		return path, nil
 	}
 
@@ -86,7 +86,7 @@ func ListAVDs() ([]AVDInfo, error) {
 	}
 
 	// Run emulator -list-avds
-	cmd := exec.Command(emulatorPath, "-list-avds")
+	cmd := execCommand(emulatorPath, "-list-avds")
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list AVDs: %w", err)
@@ -113,7 +113,7 @@ func ListAVDs() ([]AVDInfo, error) {
 // RunningAVDNames returns a set of AVD names that are currently running.
 // It queries each connected emulator serial via adb for its AVD name.
 func RunningAVDNames() map[string]bool {
-	cmd := exec.Command("adb", "devices")
+	cmd := execCommand("adb", "devices")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil
@@ -125,7 +125,7 @@ func RunningAVDNames() map[string]bool {
 		parts := strings.Fields(line)
 		if len(parts) >= 2 && parts[1] == "device" && strings.HasPrefix(parts[0], "emulator-") {
 			serial := parts[0]
-			nameCmd := exec.Command("adb", "-s", serial, "shell", "getprop", "ro.boot.qemu.avd_name")
+			nameCmd := execCommand("adb", "-s", serial, "shell", "getprop", "ro.boot.qemu.avd_name")
 			nameOut, err := nameCmd.Output()
 			if err == nil {
 				name := strings.TrimSpace(string(nameOut))
@@ -141,7 +141,7 @@ func RunningAVDNames() map[string]bool {
 // RunningEmulatorPorts returns the console ports of all currently running emulators.
 // Parses "emulator-NNNN" serials from `adb devices`.
 func RunningEmulatorPorts() []int {
-	cmd := exec.Command("adb", "devices")
+	cmd := execCommand("adb", "devices")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil
@@ -170,7 +170,7 @@ func CheckBootStatus(serial string) (*BootStatus, error) {
 	status := &BootStatus{}
 
 	// Stage 1: Check device state
-	stateCmd := exec.Command("adb", "-s", serial, "get-state")
+	stateCmd := execCommand("adb", "-s", serial, "get-state")
 	stateOut, err := stateCmd.Output()
 	status.StateReady = (err == nil && strings.TrimSpace(string(stateOut)) == "device")
 
@@ -179,18 +179,18 @@ func CheckBootStatus(serial string) (*BootStatus, error) {
 	}
 
 	// Stage 2: Check boot completed property
-	bootCmd := exec.Command("adb", "-s", serial, "shell", "getprop", "sys.boot_completed")
+	bootCmd := execCommand("adb", "-s", serial, "shell", "getprop", "sys.boot_completed")
 	bootOut, err := bootCmd.Output()
 	status.BootCompleted = (err == nil && strings.TrimSpace(string(bootOut)) == "1")
 
 	// Stage 3: Check service readiness
 	// Check settings service
-	settingsCmd := exec.Command("adb", "-s", serial, "shell", "settings", "list", "global")
+	settingsCmd := execCommand("adb", "-s", serial, "shell", "settings", "list", "global")
 	_, err = settingsCmd.Output()
 	status.SettingsReady = (err == nil)
 
 	// Check package manager
-	pmCmd := exec.Command("adb", "-s", serial, "shell", "pm", "get-max-users")
+	pmCmd := execCommand("adb", "-s", serial, "shell", "pm", "get-max-users")
 	_, err = pmCmd.Output()
 	status.PackageManager = (err == nil)
 
@@ -239,7 +239,7 @@ func WaitForDeviceState(serial string, timeout time.Duration) error {
 	defer ticker.Stop()
 
 	for time.Now().Before(deadline) {
-		cmd := exec.Command("adb", "-s", serial, "get-state")
+		cmd := execCommand("adb", "-s", serial, "get-state")
 		output, err := cmd.Output()
 		if err == nil && strings.TrimSpace(string(output)) == "device" {
 			logger.Info("Device state ready: %s", serial)
@@ -266,7 +266,7 @@ func StartEmulator(avdName string, consolePort int, timeout time.Duration) (stri
 	serial := fmt.Sprintf("emulator-%d", consolePort)
 
 	// Start emulator process (devicelab flags + Maestro optimizations)
-	cmd := exec.Command(emulatorPath,
+	cmd := execCommand(emulatorPath,
 		"-avd", avdName,
 		"-port", fmt.Sprintf("%d", consolePort),
 		"-netdelay", "none",
@@ -338,7 +338,7 @@ func ShutdownEmulator(serial string, timeout time.Duration) error {
 	logger.Info("Shutting down emulator: %s", serial)
 
 	// Step 1: Try adb emu kill
-	cmd := exec.Command("adb", "-s", serial, "emu", "kill")
+	cmd := execCommand("adb", "-s", serial, "emu", "kill")
 	if err := cmd.Run(); err != nil {
 		logger.Warn("adb emu kill failed for %s: %v", serial, err)
 	}
@@ -350,7 +350,7 @@ func ShutdownEmulator(serial string, timeout time.Duration) error {
 
 	for time.Now().Before(deadline) {
 		// Check if device is gone
-		checkCmd := exec.Command("adb", "-s", serial, "get-state")
+		checkCmd := execCommand("adb", "-s", serial, "get-state")
 		if _, err := checkCmd.Output(); err != nil {
 			logger.Info("Emulator shutdown confirmed: %s", serial)
 			return nil
@@ -378,11 +378,11 @@ func forceKillEmulator(serial string) error {
 	}
 
 	// Find emulator process by port
-	cmd := exec.Command("pgrep", "-f", fmt.Sprintf("emulator.*-port %d", port))
+	cmd := execCommand("pgrep", "-f", fmt.Sprintf("emulator.*-port %d", port))
 	output, err := cmd.Output()
 	if err != nil {
 		// Try alternative search
-		cmd = exec.Command("pgrep", "-f", "qemu-system.*-avd")
+		cmd = execCommand("pgrep", "-f", "qemu-system.*-avd")
 		output, err = cmd.Output()
 		if err != nil {
 			return fmt.Errorf("could not find emulator process")
@@ -397,11 +397,11 @@ func forceKillEmulator(serial string) error {
 	// Kill all found processes
 	for _, pid := range pids {
 		// Try SIGTERM first
-		killCmd := exec.Command("kill", "-TERM", pid)
+		killCmd := execCommand("kill", "-TERM", pid)
 		if err := killCmd.Run(); err != nil {
 			// If TERM fails, use SIGKILL
 			logger.Warn("SIGTERM failed for PID %s, using SIGKILL", pid)
-			killCmd = exec.Command("kill", "-KILL", pid)
+			killCmd = execCommand("kill", "-KILL", pid)
 			if err := killCmd.Run(); err != nil {
 				logger.Error("SIGKILL failed for PID %s: %v", pid, err)
 			}

@@ -200,7 +200,7 @@ func TestReportResult_RDC(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		body, _ := io.ReadAll(r.Body)
-		json.Unmarshal(body, &gotBody)
+		_ = json.Unmarshal(body, &gotBody)
 		w.WriteHeader(200)
 	}))
 	defer srv.Close()
@@ -210,7 +210,7 @@ func TestReportResult_RDC(t *testing.T) {
 	result := &TestResult{Passed: true}
 
 	// Override apiBase by using the test server URL directly
-	err := updateJob(srv.URL+"/v1/rdc/jobs/job-abc", "user", "key", true)
+	err := updateJob(srv.URL+"/v1/rdc/jobs/job-abc", "user", "key", true, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -234,12 +234,12 @@ func TestReportResult_VMs(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		body, _ := io.ReadAll(r.Body)
-		json.Unmarshal(body, &gotBody)
+		_ = json.Unmarshal(body, &gotBody)
 		w.WriteHeader(200)
 	}))
 	defer srv.Close()
 
-	err := updateJob(srv.URL+"/rest/v1/myuser/jobs/session-123", "myuser", "mykey", false)
+	err := updateJob(srv.URL+"/rest/v1/myuser/jobs/session-123", "myuser", "mykey", false, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -263,12 +263,358 @@ func TestReportResult_EmptyJobID(t *testing.T) {
 func TestUpdateJob_ServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)
-		w.Write([]byte("internal error"))
+		_, _ = w.Write([]byte("internal error"))
 	}))
 	defer srv.Close()
 
-	err := updateJob(srv.URL+"/v1/rdc/jobs/123", "user", "key", true)
+	err := updateJob(srv.URL+"/v1/rdc/jobs/123", "user", "key", true, "")
 	if err == nil {
 		t.Error("expected error for 500 response")
 	}
+}
+
+// --- New behavior added in PR #66 ---
+
+// TestExtractMeta_RealDeviceCaps_FallbackWhenJobUUIDEmpty verifies that when
+// caps look like a real device (no emu/sim marker) but jobUuid is missing,
+// ExtractMeta falls back to type=vms with the session id as the job id —
+// matching Sauce's virtual-device REST paths so ReportResult still works.
+func TestExtractMeta_RealDeviceCaps_FallbackWhenJobUUIDEmpty(t *testing.T) {
+	p := &sauceLabs{}
+	caps := map[string]interface{}{
+		// Real device by name, but no appium:jobUuid present.
+		"appium:deviceName": "Samsung Galaxy S21",
+	}
+	meta := make(map[string]string)
+	p.ExtractMeta("session-fallback", caps, meta)
+
+	if meta["type"] != "vms" {
+		t.Errorf("type = %q, want vms (fallback)", meta["type"])
+	}
+	if meta["jobID"] != "session-fallback" {
+		t.Errorf("jobID = %q, want session-fallback (sessionID fallback)", meta["jobID"])
+	}
+	if meta[MetaSessionID] != "session-fallback" {
+		t.Errorf("MetaSessionID = %q, want session-fallback", meta[MetaSessionID])
+	}
+}
+
+// TestExtractMeta_StoresSessionID guards the new MetaSessionID convention so
+// downstream callers (OnFlowStart / executeScript context) keep working.
+func TestExtractMeta_StoresSessionID(t *testing.T) {
+	p := &sauceLabs{}
+	caps := map[string]interface{}{
+		"appium:jobUuid":    "uuid-1",
+		"appium:deviceName": "Samsung Galaxy S21",
+	}
+	meta := make(map[string]string)
+	p.ExtractMeta("  session-trim  ", caps, meta)
+
+	if meta[MetaSessionID] != "session-trim" {
+		t.Errorf("MetaSessionID = %q, want trimmed session-trim", meta[MetaSessionID])
+	}
+}
+
+func TestSauceJobRESTURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		apiBase  string
+		jobType  string
+		jobID    string
+		username string
+		want     string
+		wantErr  bool
+	}{
+		{
+			name: "rdc",
+			apiBase:  "https://api.us-west-1.saucelabs.com",
+			jobType:  "rdc",
+			jobID:    "job-abc",
+			username: "user",
+			want:     "https://api.us-west-1.saucelabs.com/v1/rdc/jobs/job-abc",
+		},
+		{
+			name: "vms",
+			apiBase:  "https://api.eu-central-1.saucelabs.com",
+			jobType:  "vms",
+			jobID:    "session-123",
+			username: "myuser",
+			want:     "https://api.eu-central-1.saucelabs.com/rest/v1/myuser/jobs/session-123",
+		},
+		{
+			name: "trims trailing slash on apiBase",
+			apiBase:  "https://api.us-west-1.saucelabs.com/",
+			jobType:  "rdc",
+			jobID:    "x",
+			username: "u",
+			want:     "https://api.us-west-1.saucelabs.com/v1/rdc/jobs/x",
+		},
+		{
+			name: "escapes weird ids",
+			apiBase:  "https://api.us-west-1.saucelabs.com",
+			jobType:  "vms",
+			jobID:    "id with space",
+			username: "user/name",
+			want:     "https://api.us-west-1.saucelabs.com/rest/v1/user%2Fname/jobs/id%20with%20space",
+		},
+		{
+			name:    "unknown type errors",
+			apiBase: "https://api.us-west-1.saucelabs.com",
+			jobType: "bogus",
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := sauceJobRESTURL(tt.apiBase, tt.jobType, tt.jobID, tt.username)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error, got url %q", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("url = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNameFromSauceGetJobResponse(t *testing.T) {
+	tests := []struct {
+		name string
+		body map[string]interface{}
+		want string
+	}{
+		{name: "nil map", body: nil, want: ""},
+		{name: "top-level name", body: map[string]interface{}{"name": "my test"}, want: "my test"},
+		{name: "trims whitespace", body: map[string]interface{}{"name": "  my test  "}, want: "my test"},
+		{name: "value wrapper", body: map[string]interface{}{"value": map[string]interface{}{"name": "wrapped"}}, want: "wrapped"},
+		{name: "job wrapper", body: map[string]interface{}{"job": map[string]interface{}{"name": "from job"}}, want: "from job"},
+		{name: "data wrapper", body: map[string]interface{}{"data": map[string]interface{}{"name": "from data"}}, want: "from data"},
+		{name: "no name field", body: map[string]interface{}{"id": "abc"}, want: ""},
+		{name: "name not a string", body: map[string]interface{}{"name": 42}, want: ""},
+		{name: "top-level wins over wrapper", body: map[string]interface{}{"name": "outer", "value": map[string]interface{}{"name": "inner"}}, want: "outer"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := nameFromSauceGetJobResponse(tt.body)
+			if got != tt.want {
+				t.Errorf("name = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShouldSetJobNameFromFlowYAML(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{name: "empty", in: "", want: true},
+		{name: "whitespace only", in: "   ", want: true},
+		{name: "default appium test", in: "Default Appium Test", want: true},
+		{name: "default with surrounding whitespace", in: "  Default Appium Test  ", want: true},
+		{name: "real custom name", in: "My Suite", want: false},
+		{name: "name containing default substring", in: "Not Default Appium Test", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldSetJobNameFromFlowYAML(tt.in); got != tt.want {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFirstFlowFileStemWithoutYAMLExt(t *testing.T) {
+	tests := []struct {
+		name   string
+		result *TestResult
+		want   string
+	}{
+		{name: "nil", result: nil, want: ""},
+		{name: "empty flows", result: &TestResult{}, want: ""},
+		{name: "first flow with .yaml", result: &TestResult{Flows: []FlowResult{{File: "flows/login.yaml"}}}, want: "login"},
+		{name: "first flow with .yml", result: &TestResult{Flows: []FlowResult{{File: "flows/login.yml"}}}, want: "login"},
+		{name: "uppercase extension", result: &TestResult{Flows: []FlowResult{{File: "flows/login.YAML"}}}, want: "login"},
+		{name: "no extension", result: &TestResult{Flows: []FlowResult{{File: "flows/login"}}}, want: "login"},
+		{name: "non-yaml extension", result: &TestResult{Flows: []FlowResult{{File: "flows/login.json"}}}, want: "login"},
+		{name: "skips empty File then takes next", result: &TestResult{Flows: []FlowResult{{File: ""}, {File: "second.yaml"}}}, want: "second"},
+		{name: "all empty", result: &TestResult{Flows: []FlowResult{{File: ""}, {File: "  "}}}, want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := firstFlowFileStemWithoutYAMLExt(tt.result); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestUpdateJob_WithPutName verifies the new putName arg shows up in the PUT
+// body so Sauce will rename a job whose original name was empty/default.
+func TestUpdateJob_WithPutName(t *testing.T) {
+	var gotBody map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &gotBody)
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	if err := updateJob(srv.URL+"/v1/rdc/jobs/abc", "user", "key", true, "login_flow"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotBody["passed"] != true {
+		t.Errorf("body passed = %v, want true", gotBody["passed"])
+	}
+	if gotBody["name"] != "login_flow" {
+		t.Errorf("body name = %v, want login_flow", gotBody["name"])
+	}
+}
+
+// TestUpdateJob_EmptyPutNameOmitsField is a regression guard: an empty
+// putName must not put "name":"" in the body, since that would overwrite a
+// good Sauce-side name with an empty string.
+func TestUpdateJob_EmptyPutNameOmitsField(t *testing.T) {
+	var gotBody map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &gotBody)
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	if err := updateJob(srv.URL+"/v1/rdc/jobs/abc", "user", "key", true, ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, present := gotBody["name"]; present {
+		t.Errorf("expected no 'name' field when putName empty, got %v", gotBody["name"])
+	}
+}
+
+// TestSauceLabs_OnFlowStart_SkipsWhenMissingMeta verifies the early return
+// when appiumURL or sessionID is missing — should not error and should not
+// hit the network.
+func TestSauceLabs_OnFlowStart_SkipsWhenMissingMeta(t *testing.T) {
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = true
+	}))
+	defer srv.Close()
+
+	p := &sauceLabs{}
+	cases := []map[string]string{
+		{},
+		{MetaAppiumURL: srv.URL},
+		{MetaSessionID: "session-1"},
+		{MetaAppiumURL: "", MetaSessionID: "session-1"},
+		{MetaAppiumURL: srv.URL, MetaSessionID: ""},
+	}
+	for i, meta := range cases {
+		if err := p.OnFlowStart(meta, 0, 1, "Login", "login.yaml"); err != nil {
+			t.Errorf("case %d: unexpected error: %v", i, err)
+		}
+	}
+	if hit {
+		t.Error("server was hit despite missing meta")
+	}
+}
+
+// TestSauceLabs_OnFlowStart_PostsContext exercises the happy path: the
+// provider should POST to /session/<id>/execute/sync with a sauce:context
+// body that names the YAML file.
+func TestSauceLabs_OnFlowStart_PostsContext(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &gotBody)
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"value":null}`))
+	}))
+	defer srv.Close()
+
+	p := &sauceLabs{}
+	meta := map[string]string{
+		MetaAppiumURL: srv.URL,
+		MetaSessionID: "session-xyz",
+	}
+	if err := p.OnFlowStart(meta, 1, 3, "Login", "flows/login.yaml"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/session/session-xyz/execute/sync" {
+		t.Errorf("path = %q, want /session/session-xyz/execute/sync", gotPath)
+	}
+	script, _ := gotBody["script"].(string)
+	if script == "" {
+		t.Errorf("body.script empty, body = %v", gotBody)
+	}
+	// We don't assert exact format (it has changed across patches) — just that
+	// the YAML basename made it into the script.
+	if !contains(script, "login.yaml") {
+		t.Errorf("body.script = %q, expected to mention login.yaml", script)
+	}
+}
+
+// TestGetSauceJobNameFromEndpoint covers happy + error paths so the
+// ReportResult name-detection logic doesn't regress silently.
+func TestGetSauceJobNameFromEndpoint(t *testing.T) {
+	t.Run("happy", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user, pass, ok := r.BasicAuth()
+			if !ok || user != "u" || pass != "k" {
+				t.Errorf("basic auth = %q/%q, want u/k", user, pass)
+			}
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{"name":"hello"}`))
+		}))
+		defer srv.Close()
+
+		got, err := getSauceJobNameFromEndpoint(srv.URL+"/v1/rdc/jobs/abc", "u", "k")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "hello" {
+			t.Errorf("name = %q, want hello", got)
+		}
+	})
+	t.Run("non-2xx", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(404)
+		}))
+		defer srv.Close()
+
+		if _, err := getSauceJobNameFromEndpoint(srv.URL+"/x", "u", "k"); err == nil {
+			t.Error("expected error for 404")
+		}
+	})
+	t.Run("malformed json", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte("not-json"))
+		}))
+		defer srv.Close()
+
+		if _, err := getSauceJobNameFromEndpoint(srv.URL+"/x", "u", "k"); err == nil {
+			t.Error("expected error for malformed json")
+		}
+	})
+}
+
+// contains is a tiny helper to keep table-test bodies short without pulling
+// strings.Contains into every line.
+func contains(haystack, needle string) bool {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return true
+		}
+	}
+	return false
 }

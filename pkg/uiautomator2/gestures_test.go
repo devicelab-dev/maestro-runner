@@ -362,3 +362,77 @@ func TestPinchClose(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestDragAndDrop(t *testing.T) {
+	client, server := newTestClientWithSession(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/actions") {
+			t.Errorf("expected /actions, got %s", r.URL.Path)
+		}
+
+		var req struct {
+			Actions []struct {
+				Type       string                   `json:"type"`
+				Parameters map[string]interface{}   `json:"parameters"`
+				Actions    []map[string]interface{} `json:"actions"`
+			} `json:"actions"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if len(req.Actions) != 1 || req.Actions[0].Type != "pointer" {
+			t.Fatalf("expected one pointer sequence, got %+v", req.Actions)
+		}
+		if pt := req.Actions[0].Parameters["pointerType"]; pt != "touch" {
+			t.Errorf("pointerType = %v, want touch", pt)
+		}
+
+		seq := req.Actions[0].Actions
+		// Move-to-start, down, hold, 20 moves, settle, up.
+		if len(seq) != 25 {
+			t.Fatalf("sequence length = %d, want 25", len(seq))
+		}
+		if seq[0]["type"] != "pointerMove" || seq[0]["x"].(float64) != 100 || seq[0]["y"].(float64) != 900 {
+			t.Errorf("first action must move to the start point, got %+v", seq[0])
+		}
+		if seq[1]["type"] != "pointerDown" {
+			t.Errorf("second action = %+v, want pointerDown", seq[1])
+		}
+		if seq[2]["type"] != "pause" || seq[2]["duration"].(float64) != 800 {
+			t.Errorf("hold pause = %+v, want 800ms", seq[2])
+		}
+		last, penult := seq[len(seq)-1], seq[len(seq)-2]
+		if penult["type"] != "pause" || penult["duration"].(float64) != 250 {
+			t.Errorf("settle pause = %+v, want 250ms", penult)
+		}
+		if last["type"] != "pointerUp" {
+			t.Errorf("last action = %+v, want pointerUp", last)
+		}
+		// The interpolated moves end exactly on the drop point and their
+		// durations sum to the move duration.
+		finalMove := seq[len(seq)-3]
+		if finalMove["x"].(float64) != 100 || finalMove["y"].(float64) != 300 {
+			t.Errorf("final move = %+v, want (100, 300)", finalMove)
+		}
+		total := 0.0
+		for _, a := range seq[3 : len(seq)-2] {
+			if a["type"] != "pointerMove" {
+				t.Fatalf("expected only pointerMoves in the drag phase, got %+v", a)
+			}
+			total += a["duration"].(float64)
+		}
+		if total != 1000 {
+			t.Errorf("move durations sum to %v, want 1000", total)
+		}
+
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	})
+	defer server.Close()
+
+	if err := client.DragAndDrop(100, 900, 100, 300, 800, 1000); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

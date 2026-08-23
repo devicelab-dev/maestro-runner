@@ -9,7 +9,10 @@
 // Consumers poll report.json and only fetch changed flow details as needed.
 package report
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // Version is the report schema version.
 const Version = "1.0.0"
@@ -67,7 +70,32 @@ type Device struct {
 type App struct {
 	ID      string `json:"id"` // Bundle ID or package name
 	Name    string `json:"name,omitempty"`
-	Version string `json:"version,omitempty"`
+	Version string `json:"version,omitempty"` // Version name, e.g. "1.16.0"
+	// Build is the build number behind the version name — Android's
+	// versionCode, iOS's CFBundleVersion. Reports outlive the run that produced
+	// them, and a shared report site holds many runs of the same version, so
+	// the build number is what identifies which binary was actually tested.
+	Build string `json:"build,omitempty"`
+}
+
+// VersionLabel renders the app version for display, including the build number
+// when it is known: "v1.16.0 (10009107)".
+//
+// The build number alone is still worth showing — an app can ship without a
+// marketing version, and "which build" is the question the label exists to
+// answer — so that case reads "build 10009107" rather than a bare parenthetical.
+// Empty when neither is known, so callers can omit the field entirely.
+func (a App) VersionLabel() string {
+	switch {
+	case a.Version != "" && a.Build != "":
+		return fmt.Sprintf("v%s (%s)", a.Version, a.Build)
+	case a.Version != "":
+		return "v" + a.Version
+	case a.Build != "":
+		return "build " + a.Build
+	default:
+		return ""
+	}
 }
 
 // CI contains CI/CD build information.
@@ -144,16 +172,29 @@ type AttemptEntry struct {
 
 // FlowDetail contains full flow execution details.
 type FlowDetail struct {
-	ID         string        `json:"id"`
-	Name       string        `json:"name"`
-	SourceFile string        `json:"sourceFile"`
-	Tags       []string      `json:"tags,omitempty"`
-	Device     *Device       `json:"device,omitempty"` // Device that ran this flow (for multi-device runs)
-	StartTime  time.Time     `json:"startTime"`
-	EndTime    *time.Time    `json:"endTime,omitempty"`
-	Duration   *int64        `json:"duration,omitempty"` // milliseconds
-	Commands   []Command     `json:"commands"`
-	Artifacts  FlowArtifacts `json:"artifacts"`
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	SourceFile string   `json:"sourceFile"`
+	Tags       []string `json:"tags,omitempty"`
+	// Properties are the flow's custom `properties:` map, emitted as JUnit
+	// testcase properties so flows can carry test-tracking ids into CI.
+	Properties  map[string]string `json:"properties,omitempty"`
+	Device      *Device           `json:"device,omitempty"` // Device that ran this flow (for multi-device runs)
+	StartTime   time.Time         `json:"startTime"`
+	EndTime     *time.Time        `json:"endTime,omitempty"`
+	Duration    *int64            `json:"duration,omitempty"` // milliseconds
+	Commands    []Command         `json:"commands"`
+	StepLatency *StepLatency      `json:"stepLatency,omitempty"` // p50/p95/max over this flow's commands
+	Artifacts   FlowArtifacts     `json:"artifacts"`
+	ConsoleLogs []ConsoleLog      `json:"consoleLogs,omitempty"` // Browser console / page errors captured during the flow (web only)
+}
+
+// ConsoleLog represents a single browser console message or uncaught JS
+// exception captured during a web flow. Levels: "log", "warn", "error",
+// "info", "debug", "exception".
+type ConsoleLog struct {
+	Level   string `json:"level"`
+	Message string `json:"message"`
 }
 
 // Command represents a single command execution.

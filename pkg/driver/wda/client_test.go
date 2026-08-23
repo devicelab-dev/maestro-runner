@@ -3,6 +3,7 @@ package wda
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1158,7 +1159,7 @@ func TestWDAError(t *testing.T) {
 
 	_, err := client.FindElement("xpath", "//invalid")
 	if err == nil {
-		t.Error("Expected error for WDA error response")
+		t.Fatal("Expected error for WDA error response")
 	}
 
 	if !strings.Contains(err.Error(), "WDA error") {
@@ -1233,5 +1234,56 @@ func TestElementAttributeInvalidResponse(t *testing.T) {
 	_, err := client.ElementAttribute("switch-1", "value")
 	if err == nil {
 		t.Error("Expected error for non-string attribute value")
+	}
+}
+
+// TestIsTransientAXError checks the transient kAXErrorInvalidUIElement matcher.
+func TestIsTransientAXError(t *testing.T) {
+	cases := map[error]bool{
+		nil: false,
+		fmt.Errorf("WDA error: kAXErrorInvalidUIElement"): true,
+		fmt.Errorf("WDA error: some failure (-25202)"):    true,
+		fmt.Errorf("WDA error: no such element"):          false,
+		fmt.Errorf("connection refused"):                  false,
+	}
+	for err, want := range cases {
+		if got := isTransientAXError(err); got != want {
+			t.Errorf("isTransientAXError(%v) = %v, want %v", err, got, want)
+		}
+	}
+}
+
+// TestSource_RetriesOnTransientAXError verifies Source() retries once when the
+// first snapshot fails with a transient kAXErrorInvalidUIElement, then succeeds.
+func TestSource_RetriesOnTransientAXError(t *testing.T) {
+	var calls int
+	server := mockWDAServer(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{
+					"error":   "unknown error",
+					"message": "kAXErrorInvalidUIElement",
+				},
+			})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"value": "<XCUIElementTypeApplication/>"})
+	})
+	defer server.Close()
+
+	c := NewClient(8100)
+	c.baseURL = server.URL
+	c.sessionID = "s1"
+
+	src, err := c.Source()
+	if err != nil {
+		t.Fatalf("Source after retry: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("expected 2 calls (fail + retry), got %d", calls)
+	}
+	if src == "" {
+		t.Errorf("expected source XML after retry, got empty")
 	}
 }

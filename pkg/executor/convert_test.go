@@ -82,7 +82,7 @@ func TestCommandResultToErrorClassification(t *testing.T) {
 		}
 	})
 
-	t.Run("uses message over error", func(t *testing.T) {
+	t.Run("uses message wrapping cause", func(t *testing.T) {
 		r := &core.CommandResult{
 			Error:   fmt.Errorf("raw error"),
 			Message: "Connection refused to device",
@@ -94,8 +94,9 @@ func TestCommandResultToErrorClassification(t *testing.T) {
 		if got.Type != "network" {
 			t.Errorf("Type = %q, want %q", got.Type, "network")
 		}
-		if got.Message != "Connection refused to device" {
-			t.Errorf("Message = %q, want message from result", got.Message)
+		want := "Connection refused to device (cause: raw error)"
+		if got.Message != want {
+			t.Errorf("Message = %q, want %q", got.Message, want)
 		}
 	})
 }

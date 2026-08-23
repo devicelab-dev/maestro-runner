@@ -458,7 +458,12 @@ func TestTapOnKeyboardHintMessage(t *testing.T) {
 		}
 	})
 
-	t.Run("no input step before — no keyboard check", func(t *testing.T) {
+	// This case used to assert the opposite — that a covered element taps
+	// "successfully" as long as the previous step wasn't an input. That was #139:
+	// the tap landed on the keyboard, the step reported success, and the next
+	// inputText typed into whatever still held focus. A keyboard raised by an
+	// autoFocus field is just as blocking as one raised by typing.
+	t.Run("keyboard covering element without a preceding input step also fails", func(t *testing.T) {
 		server := mockElementServer(t, core.Bounds{X: 100, Y: 1800, Width: 200, Height: 60})
 		defer server.Close()
 
@@ -475,8 +480,11 @@ func TestTapOnKeyboardHintMessage(t *testing.T) {
 		step.Selector = flow.Selector{Text: "Sign In"}
 		result := d.tapOn(step)
 
-		if !result.Success {
-			t.Fatalf("expected success (no input before), got: %s", result.Message)
+		if result.Success {
+			t.Fatal("expected failure: the element is behind the keyboard (#139)")
+		}
+		if !strings.Contains(result.Message, "hideKeyboard") {
+			t.Errorf("expected the actionable hideKeyboard hint, got: %s", result.Message)
 		}
 	})
 }
@@ -527,4 +535,42 @@ func TestAssertVisibleKeyboardBlocking(t *testing.T) {
 			t.Fatalf("expected success (element above keyboard), got: %s", result.Message)
 		}
 	})
+}
+
+// TestCheckKeyboardBlocking_RunsWhenKeyboardUpWithoutPriorInput is the #139
+// regression, mirrored from the devicelab driver so the two can't drift. The
+// keyboard can be up because a field auto-focused on screen entry, not because
+// the previous step typed. The old `if !wasInput { return }` gate skipped the
+// check entirely then, so the coordinate tap landed on the keyboard while the
+// step still reported success.
+func TestCheckKeyboardBlocking_RunsWhenKeyboardUpWithoutPriorInput(t *testing.T) {
+	shell := &MockShellExecutor{
+		response: `    touchable region=SkRegion((0,1428,1080,2340))
+    isOnScreen=true`,
+	}
+	d := New(&MockUIA2Client{}, nil, shell)
+
+	d.checkKeyboardBlocking(false, flow.Selector{ID: "rewrite_no_sp_input"})
+
+	queried := false
+	for _, cmd := range shell.commands {
+		if strings.Contains(cmd, "InputMethod") {
+			queried = true
+		}
+	}
+	if !queried {
+		t.Errorf("keyboard must be consulted even without a preceding input step (#139); shell saw %v", shell.commands)
+	}
+}
+
+// TestCheckKeyboardBlocking_SkipsWhenKeyboardDown guards the cost side of the
+// widened gate: with the keyboard down there is nothing to check, so the tap
+// must not pay for an element lookup.
+func TestCheckKeyboardBlocking_SkipsWhenKeyboardDown(t *testing.T) {
+	shell := &MockShellExecutor{response: `mInputShown=false`}
+	d := New(&MockUIA2Client{}, nil, shell)
+
+	if res := d.checkKeyboardBlocking(false, flow.Selector{ID: "some-button"}); res != nil {
+		t.Errorf("check must not apply while the keyboard is down, got %+v", res)
+	}
 }

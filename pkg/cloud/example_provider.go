@@ -39,6 +39,25 @@ func (p *exampleProvider) ExtractMeta(sessionID string, caps map[string]interfac
 	meta["jobID"] = sessionID
 }
 
+func (p *exampleProvider) OnRunStart(meta map[string]string, totalFlows int) error {
+	// TODO (optional): signal run start to your provider's dashboard
+	// (e.g., create a suite, tag the job with totalFlows, etc.)
+	return nil
+}
+
+func (p *exampleProvider) OnFlowStart(meta map[string]string, flowIdx, totalFlows int, name, file string) error {
+	// TODO (optional): mark test case as "started" in your provider's dashboard
+	// flowIdx is 0-based, totalFlows is the count, name is the flow title
+	return nil
+}
+
+func (p *exampleProvider) OnFlowEnd(meta map[string]string, result *FlowResult) error {
+	// TODO (optional): mark test case as completed (pass/fail) in your
+	// provider's dashboard. Useful for live updates before the run ends.
+	// result.Name, result.File, result.Passed, result.Duration, result.Error
+	return nil
+}
+
 func (p *exampleProvider) ReportResult(appiumURL string, meta map[string]string, result *TestResult) error {
 	jobID := meta["jobID"]
 	if jobID == "" {

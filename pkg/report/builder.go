@@ -80,6 +80,7 @@ func BuildSkeleton(flows []flow.Flow, cfg BuilderConfig) (*Index, []FlowDetail, 
 			Name:       flowName,
 			SourceFile: f.SourcePath,
 			Tags:       f.Config.Tags,
+			Properties: f.Config.Properties,
 			Device:     &cfg.Device, // Device that runs this flow (for multi-device support)
 			Commands:   commands,
 			Artifacts:  FlowArtifacts{},

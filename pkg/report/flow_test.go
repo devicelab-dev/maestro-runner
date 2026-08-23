@@ -226,6 +226,29 @@ func TestFlowWriter_SetFlowArtifacts(t *testing.T) {
 	}
 }
 
+func TestFlowWriter_SetConsoleLogs(t *testing.T) {
+	fw, iw, _ := createTestFlowWriter(t)
+	defer iw.Close()
+
+	logs := []ConsoleLog{
+		{Level: "error", Message: "boom"},
+		{Level: "warning", Message: "hot stove"},
+		{Level: "exception", Message: "Error: kaboom"},
+	}
+
+	fw.SetConsoleLogs(logs)
+
+	if got := len(fw.flow.ConsoleLogs); got != 3 {
+		t.Fatalf("ConsoleLogs length = %d, want 3", got)
+	}
+	if fw.flow.ConsoleLogs[0].Level != "error" || fw.flow.ConsoleLogs[0].Message != "boom" {
+		t.Errorf("ConsoleLogs[0] = %+v, want {error, boom}", fw.flow.ConsoleLogs[0])
+	}
+	if fw.flow.ConsoleLogs[2].Level != "exception" {
+		t.Errorf("ConsoleLogs[2].Level = %q, want exception", fw.flow.ConsoleLogs[2].Level)
+	}
+}
+
 func TestFlowWriter_AddVideoTimestamp(t *testing.T) {
 	fw, iw, _ := createTestFlowWriter(t)
 	defer iw.Close()

@@ -1,6 +1,7 @@
 package cdp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -13,26 +14,29 @@ import (
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
+	"github.com/devicelab-dev/maestro-runner/pkg/report"
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/proto"
 )
 
 const (
-	defaultFindTimeoutMs  = 17000
-	optionalFindTimeoutMs = 7000
-	defaultViewportW      = 1280
-	defaultViewportH      = 800
+	defaultFindTimeoutMs       = 17000
+	defaultActionableTimeoutMs = 2000 // brief window to wait for the actionable gate to pass post-find
+	optionalFindTimeoutMs      = 7000
+	defaultViewportW           = 1280
+	defaultViewportH           = 800
 )
 
 // Config holds browser driver configuration.
 type Config struct {
-	Headless  bool
-	URL       string // Initial URL to navigate to
-	ChromeBin string // Path to Chrome binary (empty = auto-download)
-	Browser   string // "chrome", "chromium", or path to binary (default: chromium)
-	ViewportW int
-	ViewportH int
+	Headless    bool
+	URL         string // Initial URL to navigate to
+	ChromeBin   string // Path to Chrome binary (empty = auto-download)
+	Browser     string // "chrome", "chromium", or path to binary (default: chromium)
+	UserDataDir string // Persistent profile directory (empty = ephemeral profile)
+	ViewportW   int
+	ViewportH   int
 }
 
 // Driver implements core.Driver for desktop browser testing using Rod + CDP.
@@ -101,11 +105,16 @@ func New(cfg Config) (*Driver, error) {
 		Set("disable-background-timer-throttling").
 		Set("disable-component-update").
 		Set("password-store", "basic")
-
-	// GitHub Actions (and other CI environments) run as root without a kernel
-	// sandbox, so Chrome requires --no-sandbox to launch.
-	if os.Getenv("CI") != "" {
+	// Chrome's setuid sandbox relies on user namespaces, which CI runners
+	// (e.g. GitHub Actions) restrict — causing the zygote to abort on launch.
+	// Disable the sandbox only under CI or when explicitly requested.
+	if os.Getenv("CI") != "" || os.Getenv("MAESTRO_NO_SANDBOX") != "" {
 		l = l.Set("no-sandbox")
+	}
+	if cfg.UserDataDir != "" {
+		// Persistent profile: cookies / localStorage / extensions survive
+		// across runs. Caller is responsible for the directory's lifecycle.
+		l = l.Set("user-data-dir", cfg.UserDataDir)
 	}
 	if chromeBin != "" {
 		l = l.Bin(chromeBin)
@@ -477,6 +486,8 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 		result = d.scrollUntilVisible(s)
 	case *flow.SwipeStep:
 		result = d.swipe(s)
+	case *flow.DragAndDropStep:
+		result = d.dragAndDrop(s)
 
 	// Navigation commands
 	case *flow.BackStep:
@@ -521,6 +532,8 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	// Media
 	case *flow.TakeScreenshotStep:
 		result = d.takeScreenshot(s)
+	case *flow.AssertScreenshotStep:
+		result = d.takeScreenshot(&flow.TakeScreenshotStep{CropOn: s.CropOn})
 
 	// Alert handling
 	case *flow.AcceptAlertStep:
@@ -581,6 +594,17 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 		result = d.waitForRequest(s)
 	case *flow.ClearNetworkMocksStep:
 		result = d.clearNetworkMocks()
+
+	// Dark mode is the page's prefers-color-scheme rather than an OS switch —
+	// see applyDarkMode.
+	case *flow.SetDarkModeStep:
+		result = d.applyDarkMode(s.Enabled)
+	case *flow.ToggleDarkModeStep:
+		result = d.toggleDarkMode()
+	case *flow.AssertDarkModeStep:
+		result = d.assertDarkModeIs(true)
+	case *flow.AssertLightModeStep:
+		result = d.assertDarkModeIs(false)
 
 	// Unsupported — mobile-only or not applicable to web
 	case *flow.SetAirplaneModeStep, *flow.ToggleAirplaneModeStep:
@@ -665,6 +689,9 @@ func (d *Driver) SetWaitForIdleTimeout(ms int) error {
 	return nil
 }
 
+// SetContext is a no-op for browser — Rod waits use their own timeouts.
+func (d *Driver) SetContext(ctx context.Context) {}
+
 // successResult creates a success result.
 func successResult(msg string, elem *core.ElementInfo) *core.CommandResult {
 	return &core.CommandResult{
@@ -705,6 +732,39 @@ func (d *Driver) ConsoleLogs() []ConsoleEntry {
 	out := make([]ConsoleEntry, len(d.consoleLogs))
 	copy(out, d.consoleLogs)
 	return out
+}
+
+// ConsoleLogReport returns the captured console entries shaped for the
+// per-flow report. Implements the executor's consoleLogReporter interface so
+// the flow runner can auto-surface JS errors without requiring users to
+// invoke `getConsoleLogs` explicitly. Web flows only — other drivers don't
+// implement this method, and the executor's type assertion returns nil for
+// them.
+func (d *Driver) ConsoleLogReport() []report.ConsoleLog {
+	d.consoleMu.Lock()
+	defer d.consoleMu.Unlock()
+	if len(d.consoleLogs) == 0 {
+		return nil
+	}
+	out := make([]report.ConsoleLog, len(d.consoleLogs))
+	for i, e := range d.consoleLogs {
+		out[i] = report.ConsoleLog{Level: e.Level, Message: e.Message}
+	}
+	return out
+}
+
+// ClearConsoleLogReport resets the captured-console buffer. Called by the
+// flow runner at the start of each top-level flow so pre-flow noise (events
+// captured during driver construction's initial navigation, before the
+// user's first step ran) doesn't pollute the per-flow report — and so
+// per-flow auto-surface counts match what the user's flow actually
+// triggered. Same buffer the existing `clearConsoleLogs` flow step writes
+// to; this method exists separately so the executor can call it via the
+// consoleLogReporter interface without needing to dispatch a flow command.
+func (d *Driver) ClearConsoleLogReport() {
+	d.consoleMu.Lock()
+	defer d.consoleMu.Unlock()
+	d.consoleLogs = nil
 }
 
 // startConsoleHandler starts a background goroutine to capture console.log/error/warn

@@ -96,7 +96,7 @@ func (m *webViewManager) connectViaUnixSocket(cdpInfo *core.CDPInfo, cdpType str
 	logger.Info("[cdp:5-websocket] connecting CDP WebSocket via unix socket: %s", socketPath)
 	if err := ws.Connect(connectCtx, "ws://localhost/devtools/browser", nil); err != nil {
 		logger.Info("[cdp:5-websocket] CDP WebSocket connection failed: %v", err)
-		m.forwarder.RemoveSocketForward(socketPath)
+		_ = m.forwarder.RemoveSocketForward(socketPath)
 		os.Remove(socketPath)
 		return fmt.Errorf("failed to connect CDP WebSocket: %w", err)
 	}
@@ -111,7 +111,7 @@ func (m *webViewManager) connectViaUnixSocket(cdpInfo *core.CDPInfo, cdpType str
 	browserTimeout := browser.Timeout(10 * time.Second)
 	if err := browserTimeout.Connect(); err != nil {
 		logger.Info("[cdp:6-browser] Rod browser connection failed: %v", err)
-		m.forwarder.RemoveSocketForward(socketPath)
+		_ = m.forwarder.RemoveSocketForward(socketPath)
 		os.Remove(socketPath)
 		return fmt.Errorf("failed to connect Rod browser: %w", err)
 	}
@@ -120,7 +120,7 @@ func (m *webViewManager) connectViaUnixSocket(cdpInfo *core.CDPInfo, cdpType str
 	if err != nil || len(pages) == 0 {
 		logger.Info("[cdp:6-browser] no pages found in WebView (err=%v)", err)
 		browser.Close()
-		m.forwarder.RemoveSocketForward(socketPath)
+		_ = m.forwarder.RemoveSocketForward(socketPath)
 		os.Remove(socketPath)
 		return fmt.Errorf("no pages found in WebView")
 	}
@@ -203,7 +203,7 @@ func (m *webViewManager) connectBrowserViaHTTP(cdpInfo *core.CDPInfo, cdpType st
 	targets, err := m.fetchCDPTargets(socketPath)
 	if err != nil {
 		logger.Info("[cdp:5-discover] failed to fetch targets: %v", err)
-		m.forwarder.RemoveSocketForward(socketPath)
+		_ = m.forwarder.RemoveSocketForward(socketPath)
 		os.Remove(socketPath)
 		return fmt.Errorf("failed to fetch CDP targets: %w", err)
 	}
@@ -221,7 +221,7 @@ func (m *webViewManager) connectBrowserViaHTTP(cdpInfo *core.CDPInfo, cdpType st
 	}
 	if pageTarget == nil {
 		logger.Info("[cdp:5-discover] no page targets found in %d targets", len(targets))
-		m.forwarder.RemoveSocketForward(socketPath)
+		_ = m.forwarder.RemoveSocketForward(socketPath)
 		os.Remove(socketPath)
 		return fmt.Errorf("no page targets found")
 	}
@@ -243,7 +243,7 @@ func (m *webViewManager) connectBrowserViaHTTP(cdpInfo *core.CDPInfo, cdpType st
 	logger.Info("[cdp:6-websocket] connecting CDP WebSocket to page: %s", pageWSPath)
 	if err := ws.Connect(connectCtx, pageWSPath, nil); err != nil {
 		logger.Info("[cdp:6-websocket] page WebSocket connection failed: %v", err)
-		m.forwarder.RemoveSocketForward(socketPath)
+		_ = m.forwarder.RemoveSocketForward(socketPath)
 		os.Remove(socketPath)
 		return fmt.Errorf("failed to connect page WebSocket: %w", err)
 	}
@@ -259,7 +259,7 @@ func (m *webViewManager) connectBrowserViaHTTP(cdpInfo *core.CDPInfo, cdpType st
 
 	if err := browser.Connect(); err != nil {
 		logger.Info("[cdp:7-browser] Rod browser connection failed: %v", err)
-		m.forwarder.RemoveSocketForward(socketPath)
+		_ = m.forwarder.RemoveSocketForward(socketPath)
 		os.Remove(socketPath)
 		return fmt.Errorf("failed to connect Rod browser: %w", err)
 	}
@@ -269,7 +269,7 @@ func (m *webViewManager) connectBrowserViaHTTP(cdpInfo *core.CDPInfo, cdpType st
 	if err != nil {
 		logger.Info("[cdp:7-browser] PageFromTarget failed: %v", err)
 		browser.Close()
-		m.forwarder.RemoveSocketForward(socketPath)
+		_ = m.forwarder.RemoveSocketForward(socketPath)
 		os.Remove(socketPath)
 		return fmt.Errorf("failed to create Rod page: %w", err)
 	}
@@ -375,7 +375,7 @@ func (m *webViewManager) disconnectLocked() {
 	m.network = nil
 	if m.socketPath != "" {
 		logger.Info("[cdp:disconnect] removing ADB forward and cleaning up: %s", m.socketPath)
-		m.forwarder.RemoveSocketForward(m.socketPath)
+		_ = m.forwarder.RemoveSocketForward(m.socketPath)
 		os.Remove(m.socketPath)
 		m.socketPath = ""
 	}
@@ -402,7 +402,7 @@ func (m *webViewManager) cleanup() {
 
 	if socketPath != "" {
 		logger.Info("[cdp:cleanup] removing ADB forward: %s", socketPath)
-		m.forwarder.RemoveSocketForward(socketPath)
+		_ = m.forwarder.RemoveSocketForward(socketPath)
 		logger.Info("[cdp:cleanup] removing local socket file: %s", socketPath)
 		os.Remove(socketPath)
 		m.socketPath = ""

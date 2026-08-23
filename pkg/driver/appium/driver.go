@@ -22,11 +22,14 @@ type Driver struct {
 	capabilities              map[string]interface{} // stored for session recreation (deep copy of original)
 	platform                  string                 // detected from page source or capabilities
 	appID                     string                 // current app ID
+	ctx                       context.Context        // parent context for element-finding operations (nil = context.Background())
 	findTimeout               time.Duration          // configurable timeout for finding elements
 	currentWaitForIdleTimeout int                    // track current value to skip redundant calls
 	waitForIdleTimeoutSet     bool                   // whether waitForIdleTimeout has been set
 	lastTappedElementID       string                 // iOS: last element clicked via ClickElement, used by inputText
 	warnedFields              map[string]bool
+	appVersion                string // version name, supplied by the caller
+	appBuild                  string // build number, supplied by the caller
 }
 
 // NewDriver creates a new Appium driver.
@@ -81,6 +84,13 @@ func (d *Driver) SessionID() string {
 // SessionCaps returns the merged capabilities from the session creation response.
 func (d *Driver) SessionCaps() map[string]interface{} {
 	return d.client.SessionCaps()
+}
+
+// Keepalive sends a lightweight session-scoped command to reset the server's
+// newCommandTimeout idle timer. Used while --parallel pre-creates all sessions
+// so an early session isn't reaped by a cloud farm before its flow runs (#124).
+func (d *Driver) Keepalive() error {
+	return d.client.Keepalive()
 }
 
 // RestartSession closes the existing Appium session and creates a fresh one.
@@ -142,6 +152,8 @@ func (d *Driver) executeStep(step flow.Step) *core.CommandResult {
 		return d.longPressOn(s)
 	case *flow.TapOnPointStep:
 		return d.tapOnPoint(s)
+	case *flow.DragAndDropStep:
+		return d.dragAndDrop(s)
 	case *flow.SwipeStep:
 		return d.swipe(s)
 	case *flow.ScrollStep:
@@ -190,6 +202,8 @@ func (d *Driver) executeStep(step flow.Step) *core.CommandResult {
 		return d.inputRandom(s)
 	case *flow.TakeScreenshotStep:
 		return d.takeScreenshot(s)
+	case *flow.AssertScreenshotStep:
+		return d.takeScreenshot(&flow.TakeScreenshotStep{CropOn: s.CropOn})
 	default:
 		return errorResult(fmt.Errorf("unsupported step type: %T", step), "")
 	}
@@ -232,7 +246,33 @@ func (d *Driver) GetPlatformInfo() *core.PlatformInfo {
 		ScreenWidth:  w,
 		ScreenHeight: h,
 		AppID:        d.appID,
+		AppVersion:   d.appVersion,
+		AppBuild:     d.appBuild,
 	}
+}
+
+// SetAppInfo records the app's version name and build number for reports.
+//
+// Appium session capabilities do not carry either one, and this driver has no
+// device access of its own to look them up — on a cloud device farm there is no
+// local app bundle and no adb/simctl to ask. So the caller resolves them when it
+// can and supplies them here, leaving them empty when it cannot.
+func (d *Driver) SetAppInfo(version, build string) {
+	d.appVersion = version
+	d.appBuild = build
+}
+
+// SetContext sets the parent context for element-finding operations.
+func (d *Driver) SetContext(ctx context.Context) {
+	d.ctx = ctx
+}
+
+// parentContext returns the parent context for element-finding operations.
+func (d *Driver) parentContext() context.Context {
+	if d.ctx != nil {
+		return d.ctx
+	}
+	return context.Background()
 }
 
 // SetFindTimeout implements core.Driver.
@@ -306,6 +346,10 @@ func (d *Driver) findElement(sel flow.Selector, timeout time.Duration) (*core.El
 	deadline := time.Now().Add(timeout)
 
 	for {
+		if err := d.parentContext().Err(); err != nil {
+			return nil, fmt.Errorf("element '%s' not found: %w", sel.Describe(), err)
+		}
+
 		info, err := d.findElementDirect(sel)
 		if err == nil && info != nil {
 			return info, nil
@@ -387,26 +431,31 @@ func (d *Driver) findElementDirect(sel flow.Selector) (*core.ElementInfo, error)
 					return d.getElementInfo(elemID)
 				}
 			} else {
-				// Try exact text match first
+				// Try case-sensitive first (preserves existing behavior)
 				uiSelector := fmt.Sprintf(`new UiSelector().text("%s")`, escaped)
 				if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
 					return d.getElementInfo(elemID)
 				}
-
-				// Try textContains
 				uiSelector = fmt.Sprintf(`new UiSelector().textContains("%s")`, escaped)
 				if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
 					return d.getElementInfo(elemID)
 				}
-
-				// Try description (content-desc)
 				uiSelector = fmt.Sprintf(`new UiSelector().description("%s")`, escaped)
 				if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
 					return d.getElementInfo(elemID)
 				}
-
-				// Try descriptionContains
 				uiSelector = fmt.Sprintf(`new UiSelector().descriptionContains("%s")`, escaped)
+				if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
+					return d.getElementInfo(elemID)
+				}
+
+				// Case-insensitive fallback
+				ciPattern := fmt.Sprintf(`(?is).*\Q%s\E.*`, escaped)
+				uiSelector = fmt.Sprintf(`new UiSelector().textMatches("%s")`, ciPattern)
+				if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
+					return d.getElementInfo(elemID)
+				}
+				uiSelector = fmt.Sprintf(`new UiSelector().descriptionMatches("%s")`, ciPattern)
 				if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
 					return d.getElementInfo(elemID)
 				}
@@ -475,6 +524,10 @@ func (d *Driver) findElementByPageSource(sel flow.Selector) (*core.ElementInfo, 
 func (d *Driver) findElementByPageSourceWithPolling(sel flow.Selector, timeout time.Duration) (*core.ElementInfo, error) {
 	deadline := time.Now().Add(timeout)
 	for {
+		if err := d.parentContext().Err(); err != nil {
+			return nil, fmt.Errorf("element '%s' not found: %w", sel.Describe(), err)
+		}
+
 		info, err := d.findElementByPageSource(sel)
 		if err == nil {
 			return info, nil
@@ -511,6 +564,10 @@ func (d *Driver) findElementForTap(sel flow.Selector, timeout time.Duration) (*c
 	deadline := time.Now().Add(timeout)
 
 	for {
+		if err := d.parentContext().Err(); err != nil {
+			return nil, fmt.Errorf("element '%s' not found: %w", sel.Describe(), err)
+		}
+
 		var info *core.ElementInfo
 		var err error
 
@@ -539,16 +596,23 @@ func (d *Driver) findElementForTap(sel flow.Selector, timeout time.Duration) (*c
 // findElementForTapDirect finds element for tap, trying clickable first then fallback to page source.
 func (d *Driver) findElementForTapDirect(sel flow.Selector) (*core.ElementInfo, error) {
 	escaped := escapeUIAutomatorString(sel.Text)
+	ciPattern := fmt.Sprintf(`(?is).*\Q%s\E.*`, escaped)
 
-	// Step 1: Try clickable elements first (fast path)
-	// Try textContains with clickable filter
+	// Step 1: Try clickable elements first — case-sensitive, then case-insensitive fallback
 	uiSelector := fmt.Sprintf(`new UiSelector().textContains("%s").clickable(true)`, escaped)
 	if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
 		return d.getElementInfo(elemID)
 	}
-
-	// Try descriptionContains with clickable filter
 	uiSelector = fmt.Sprintf(`new UiSelector().descriptionContains("%s").clickable(true)`, escaped)
+	if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
+		return d.getElementInfo(elemID)
+	}
+	// Case-insensitive clickable fallback
+	uiSelector = fmt.Sprintf(`new UiSelector().textMatches("%s").clickable(true)`, ciPattern)
+	if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
+		return d.getElementInfo(elemID)
+	}
+	uiSelector = fmt.Sprintf(`new UiSelector().descriptionMatches("%s").clickable(true)`, ciPattern)
 	if elemID, err := d.client.FindElement("-android uiautomator", uiSelector); err == nil && elemID != "" {
 		return d.getElementInfo(elemID)
 	}
@@ -558,8 +622,16 @@ func (d *Driver) findElementForTapDirect(sel flow.Selector) (*core.ElementInfo, 
 	_, textExistsErr := d.client.FindElement("-android uiautomator", uiSelector)
 
 	if textExistsErr != nil {
-		// Also try description
 		uiSelector = fmt.Sprintf(`new UiSelector().descriptionContains("%s")`, escaped)
+		_, textExistsErr = d.client.FindElement("-android uiautomator", uiSelector)
+	}
+	if textExistsErr != nil {
+		// Case-insensitive fallback
+		uiSelector = fmt.Sprintf(`new UiSelector().textMatches("%s")`, ciPattern)
+		_, textExistsErr = d.client.FindElement("-android uiautomator", uiSelector)
+	}
+	if textExistsErr != nil {
+		uiSelector = fmt.Sprintf(`new UiSelector().descriptionMatches("%s")`, ciPattern)
 		_, textExistsErr = d.client.FindElement("-android uiautomator", uiSelector)
 	}
 
@@ -602,7 +674,7 @@ func (d *Driver) findElementForTapIOS(sel flow.Selector) (*core.ElementInfo, err
 // findElementRelative handles relative selectors (below, above, etc.)
 // Deprecated: Use findElementRelativeWithContext for new code.
 func (d *Driver) findElementRelative(sel flow.Selector, timeout time.Duration) (*core.ElementInfo, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(d.parentContext(), timeout)
 	defer cancel()
 	return d.findElementRelativeWithContext(ctx, sel)
 }

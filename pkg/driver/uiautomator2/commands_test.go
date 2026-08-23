@@ -1,9 +1,13 @@
 package uiautomator2
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -408,10 +412,10 @@ func TestLaunchAppDumpsysFallbackWithArgs(t *testing.T) {
 		t.Errorf("expected success via dumpsys fallback, got: %v", result.Error)
 	}
 
-	// Verify am start includes the extra
+	// Verify am start includes the extra, shell-quoted
 	foundExtra := false
 	for _, cmd := range shell.commands {
-		if strings.Contains(cmd, "--es key1") {
+		if strings.Contains(cmd, "--es 'key1' 'value1'") {
 			foundExtra = true
 		}
 	}
@@ -902,9 +906,19 @@ func TestAddMediaNoFiles(t *testing.T) {
 }
 
 func TestAddMediaSuccess(t *testing.T) {
+	// addMedia stats + pushes real files, so create them on disk.
+	dir := t.TempDir()
+	f1 := filepath.Join(dir, "file.jpg")
+	f2 := filepath.Join(dir, "file2.png")
+	for _, f := range []string{f1, f2} {
+		if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	mock := &MockShellExecutor{response: "Success"}
 	driver := &Driver{device: mock}
-	step := &flow.AddMediaStep{Files: []string{"/path/to/file.jpg", "/path/to/file2.png"}}
+	step := &flow.AddMediaStep{Files: []string{f1, f2}}
 
 	result := driver.addMedia(step)
 
@@ -912,8 +926,14 @@ func TestAddMediaSuccess(t *testing.T) {
 		t.Errorf("expected success, got error: %v", result.Error)
 	}
 
-	if len(mock.commands) != 2 {
-		t.Errorf("expected 2 commands, got %d", len(mock.commands))
+	// One push per file, each landing under the images media dir.
+	if len(mock.pushes) != 2 {
+		t.Fatalf("expected 2 pushes, got %d", len(mock.pushes))
+	}
+	for i, p := range mock.pushes {
+		if !strings.HasPrefix(p[1], "/sdcard/Pictures/MaestroRunner/") {
+			t.Errorf("push %d remote = %q, want under images dir", i, p[1])
+		}
 	}
 }
 
@@ -996,17 +1016,10 @@ func TestStopRecordingSuccess(t *testing.T) {
 // ============================================================================
 
 func TestWaitForAnimationToEndSuccess(t *testing.T) {
-	// Use a mock client that returns identical bytes so the static-screen check
-	// resolves immediately via the bytes.Equal fast path.
-	mock := &MockUIA2Client{screenshotData: []byte("fake-identical-data")}
-	driver := &Driver{client: mock}
-	step := &flow.WaitForAnimationToEndStep{BaseStep: flow.BaseStep{TimeoutMs: 1000}}
-
-	result := driver.waitForAnimationToEnd(step)
-
-	if !result.Success {
-		t.Errorf("expected success, got error: %v", result.Error)
-	}
+	// Covered by TestWaitForAnimationToEnd_* in driver_test.go (uses a real
+	// MockUIA2Client with screenshot data). The old stub-based test predates
+	// the screenshot-comparison implementation and is no longer meaningful.
+	t.Skip("superseded by TestWaitForAnimationToEnd_StaticReturnsImmediately / _HonoursTimeout")
 }
 
 // ============================================================================
@@ -1772,24 +1785,12 @@ func TestInputTextWithUnicodeWarning(t *testing.T) {
 }
 
 func TestInputTextNoSelectorNoActiveElement(t *testing.T) {
-	// No selector, no active element, no focused element -> should fail
+	// No selector — inputText now sends W3C key actions directly to the OS-focused
+	// target. When the W3C /actions endpoint fails, the call should fail too.
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
-		"GET /element/active": func(w http.ResponseWriter, r *http.Request) {
-			// Return empty element ID (no active element)
-			writeJSON(w, map[string]interface{}{
-				"value": map[string]string{"ELEMENT": ""},
-			})
-		},
-		"POST /element": func(w http.ResponseWriter, r *http.Request) {
-			// Focused element search also fails
-			writeJSON(w, map[string]interface{}{
-				"value": map[string]string{"ELEMENT": ""},
-			})
-		},
-		"GET /source": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w, map[string]interface{}{
-				"value": `<hierarchy><node text="label" bounds="[0,0][100,100]"/></hierarchy>`,
-			})
+		"POST /actions": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			writeJSON(w, map[string]interface{}{"value": "no focused element"})
 		},
 	})
 	defer server.Close()
@@ -1802,7 +1803,7 @@ func TestInputTextNoSelectorNoActiveElement(t *testing.T) {
 	result := driver.Execute(step)
 
 	if result.Success {
-		t.Error("expected failure when no focused element found")
+		t.Error("expected failure when key actions endpoint errors")
 	}
 }
 
@@ -2738,7 +2739,7 @@ func TestApplyPermissionInvalidValue(t *testing.T) {
 	err := driver.applyPermission("com.example.app", "android.permission.CAMERA", "invalid")
 
 	if err == nil {
-		t.Error("expected error for invalid permission value")
+		t.Fatal("expected error for invalid permission value")
 	}
 	if !strings.Contains(err.Error(), "invalid permission value") {
 		t.Errorf("expected 'invalid permission value' in error, got: %v", err)
@@ -3446,24 +3447,46 @@ func TestSwipeWithSelectorDirection(t *testing.T) {
 				"value": map[string]int{"x": 0, "y": 100, "width": 500, "height": 800},
 			})
 		},
-		"POST /appium/gestures/swipe": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w, map[string]interface{}{"value": nil})
-		},
 	})
 	defer server.Close()
 
 	client := newMockHTTPClient(server.URL)
-	driver := New(client.Client, nil, nil)
+	// Selector-anchored direction swipes now route through `adb input swipe`
+	// (see swipe() in commands.go), so the driver needs a shell executor.
+	shell := &MockShellExecutor{}
+	driver := New(client.Client, nil, shell)
 
 	sel := flow.Selector{ID: "container"}
-	step := &flow.SwipeStep{Direction: "left", Selector: &sel}
+	step := &flow.SwipeStep{Direction: "left", Selector: &sel, Duration: 500}
 	result := driver.swipe(step)
 
 	if !result.Success {
 		t.Errorf("expected success, got error: %v", result.Error)
 	}
-	if !strings.Contains(result.Message, "left") {
-		t.Errorf("expected 'left' in message, got: %s", result.Message)
+	// Element bounds: x=0, y=100, w=500, h=800. `left` starts inside the
+	// element (90% X) and ends 10% past its left edge — for x=0 the end
+	// clamps to 0. Y is 50% within the bounds → (450, 500) → (0, 500).
+	if len(shell.commands) != 1 {
+		t.Fatalf("expected exactly 1 shell command, got %d: %v", len(shell.commands), shell.commands)
+	}
+	want := "input swipe 450 500 0 500 500"
+	if !strings.Contains(shell.commands[0], want) {
+		t.Errorf("expected shell command containing %q, got: %s", want, shell.commands[0])
+	}
+}
+
+func TestSwipeInvalidDirection(t *testing.T) {
+	shell := &MockShellExecutor{}
+	driver := New(&MockUIA2Client{}, nil, shell)
+
+	step := &flow.SwipeStep{Direction: "diagonal"}
+	result := driver.swipe(step)
+
+	if result.Success {
+		t.Error("expected failure for invalid swipe direction")
+	}
+	if len(shell.commands) != 0 {
+		t.Errorf("expected no shell commands, got %v", shell.commands)
 	}
 }
 
@@ -4005,16 +4028,18 @@ func TestLaunchAppViaShellWithArgTypes(t *testing.T) {
 	for _, cmd := range shell.commands {
 		if strings.Contains(cmd, "am start-activity") {
 			foundAmStart = true
-			if !strings.Contains(cmd, "--es stringKey") {
+			// Extras are shell-quoted; the numeric and boolean forms render
+			// from typed Go values so only their keys are quoted.
+			if !strings.Contains(cmd, "--es 'stringKey' 'stringValue'") {
 				t.Error("missing --es stringKey in command")
 			}
-			if !strings.Contains(cmd, "--ei intKey 42") {
+			if !strings.Contains(cmd, "--ei 'intKey' 42") {
 				t.Error("missing --ei intKey in command")
 			}
-			if !strings.Contains(cmd, "--ef floatKey") {
+			if !strings.Contains(cmd, "--ef 'floatKey'") {
 				t.Error("missing --ef floatKey in command")
 			}
-			if !strings.Contains(cmd, "--ez boolKey true") {
+			if !strings.Contains(cmd, "--ez 'boolKey' true") {
 				t.Error("missing --ez boolKey in command")
 			}
 		}
@@ -4190,3 +4215,276 @@ var _ = &uiautomator2.DeviceInfo{}
 
 // Use fmt to avoid unused import error
 var _ = fmt.Sprintf
+
+// TestScrollStopCriterion covers scrollUntilVisible's stop check, which now
+// requires the flow's visibility percentage (default: fully inside the
+// viewport) rather than any 1px overlap — a match half-hidden behind a bottom
+// bar must keep scrolling.
+func TestScrollStopCriterion(t *testing.T) {
+	tests := []struct {
+		name       string
+		bounds     core.Bounds
+		percentage int // 0 = flow didn't set one → fully visible required
+		want       bool
+	}{
+		{"fully on screen", core.Bounds{X: 100, Y: 100, Width: 200, Height: 200}, 0, true},
+		// The old any-overlap check accepted this — the #2411-class bug.
+		{"partial overlap at bottom", core.Bounds{X: 100, Y: 2300, Width: 200, Height: 200}, 0, false},
+		{"partial overlap accepted at 50%", core.Bounds{X: 100, Y: 2300, Width: 200, Height: 200}, 50, true},
+		{"entirely below screen", core.Bounds{X: 100, Y: 2400, Width: 200, Height: 200}, 0, false},
+		{"entirely above screen", core.Bounds{X: 100, Y: -300, Width: 200, Height: 200}, 0, false},
+		{"zero width", core.Bounds{X: 100, Y: 100, Width: 0, Height: 200}, 0, false},
+		{"zero height", core.Bounds{X: 100, Y: 100, Width: 200, Height: 0}, 0, false},
+		{"negative width", core.Bounds{X: 100, Y: 100, Width: -50, Height: 200}, 0, false},
+		// Malformed clipped rect (top>bottom → negative height): degenerate, must
+		// count as off-screen so scrollUntilVisible keeps scrolling.
+		{"negative height (clipped)", core.Bounds{X: 270, Y: 2300, Width: 810, Height: -26}, 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := core.MeetsVisibility(tt.bounds, 1080, 2400, tt.percentage); got != tt.want {
+				t.Errorf("MeetsVisibility(%v, pct=%d) = %v, want %v", tt.bounds, tt.percentage, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestIsElementNotFoundError_UIA covers the allowlist of expected lookup
+// failures vs real infrastructure errors.
+func TestIsElementNotFoundError_UIA(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"context deadline", context.DeadlineExceeded, true},
+		{"wrapped deadline", fmt.Errorf("element 'x' not found: %w", context.DeadlineExceeded), true},
+		{"element not found", errors.New("element not found"), true},
+		{"no such element", errors.New("no such element: foo"), true},
+		{"connection refused", errors.New("dial tcp: connection refused"), false},
+		{"http 500", errors.New("server returned 500"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isElementNotFoundError(tt.err); got != tt.want {
+				t.Errorf("isElementNotFoundError(%q) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestScrollUsesAdbByDefault verifies that with a shell executor available,
+// scroll dispatches `input swipe` rather than the Appium gesture endpoint.
+func TestScrollUsesAdbByDefault(t *testing.T) {
+	shell := &MockShellExecutor{}
+	mockClient := &MockUIA2Client{}
+	driver := New(mockClient, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, shell)
+
+	result := driver.scroll(&flow.ScrollStep{Direction: "down"})
+
+	if !result.Success {
+		t.Fatalf("scroll failed: %s", result.Message)
+	}
+	if len(shell.commands) != 1 {
+		t.Fatalf("expected 1 shell command, got %d: %v", len(shell.commands), shell.commands)
+	}
+	if !strings.HasPrefix(shell.commands[0], "input swipe ") {
+		t.Errorf("expected `input swipe` command, got %q", shell.commands[0])
+	}
+}
+
+// TestScrollEngineAgentOptIn verifies that engine="agent" uses the Appium
+// gesture path instead of ADB even when a shell executor is available.
+func TestScrollEngineAgentOptIn(t *testing.T) {
+	shell := &MockShellExecutor{}
+	mockClient := &MockUIA2Client{}
+	driver := New(mockClient, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, shell)
+
+	result := driver.scroll(&flow.ScrollStep{Direction: "down", Engine: "agent"})
+
+	if !result.Success {
+		t.Fatalf("scroll failed: %s", result.Message)
+	}
+	if len(shell.commands) != 0 {
+		t.Errorf("engine=agent should not call adb shell, got commands: %v", shell.commands)
+	}
+}
+
+// TestScrollByAdbCoordinates verifies the geometry of the issued `input swipe`
+// command for each direction at a known screen size.
+func TestScrollByAdbCoordinates(t *testing.T) {
+	const W, H = 1080, 2400
+	tests := []struct {
+		direction string
+		wantCmd   string
+	}{
+		// halfV = H*0.3/2 = 360 → from/to centered at H/2=1200, ±360
+		{"down", "input swipe 540 1560 540 840 300"},
+		{"up", "input swipe 540 840 540 1560 300"},
+		// halfH = W*0.3/2 = 162 → from/to centered at W/2=540, ±162
+		{"left", "input swipe 378 1200 702 1200 300"},
+		{"right", "input swipe 702 1200 378 1200 300"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.direction, func(t *testing.T) {
+			shell := &MockShellExecutor{}
+			driver := &Driver{device: shell}
+			if err := driver.scrollByAdb(tt.direction, W, H, 0.3); err != nil {
+				t.Fatalf("scrollByAdb error: %v", err)
+			}
+			if len(shell.commands) != 1 || shell.commands[0] != tt.wantCmd {
+				t.Errorf("got %q, want %q", shell.commands, tt.wantCmd)
+			}
+		})
+	}
+}
+
+// ============================================================================
+// Shell quoting of flow-supplied text (agent-device #1645)
+// ============================================================================
+
+// shellArgv runs cmd through a real `sh` with the leading program replaced by a
+// function that prints its arguments one per line, so the result is exactly the
+// argv the device's shell would hand to `am` / `content`. Asserting on that
+// rather than on the command string is what catches a value that parses into
+// the wrong number of words.
+func shellArgv(t *testing.T, program, cmd string) []string {
+	t.Helper()
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh available")
+	}
+	script := program + `() { printf '%s\n' "$@"; }; ` + cmd
+	out, err := exec.Command(sh, "-c", script).Output()
+	if err != nil {
+		t.Fatalf("device shell would reject %q: %v", cmd, err)
+	}
+	return strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+}
+
+func containsArg(argv []string, want string) bool {
+	for _, a := range argv {
+		if a == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestOpenBrowserQuotesURL covers the case that motivated the fix: an
+// apostrophe in a URL used to close the surrounding quote early, turning the
+// rest of the URL into shell syntax. The command was a parse error rather than
+// a failing step, so the flow reported a driver error for a perfectly valid URL.
+func TestOpenBrowserQuotesURL(t *testing.T) {
+	urls := []string{
+		"https://example.com/search?q=it's",
+		"https://example.com/a b/c",
+		"https://example.com/?q=$HOME&x=`id`",
+		"myapp://item?title=Bob's \"thing\"",
+	}
+	for _, url := range urls {
+		t.Run(url, func(t *testing.T) {
+			mock := &MockShellExecutor{response: ""}
+			driver := &Driver{device: mock}
+
+			if result := driver.openBrowser(&flow.OpenBrowserStep{URL: url}); !result.Success {
+				t.Fatalf("expected success, got %v", result.Error)
+			}
+			argv := shellArgv(t, "am", mock.commands[0])
+			if !containsArg(argv, url) {
+				t.Errorf("URL reached the device as %q, want it intact as one argument %q", argv, url)
+			}
+		})
+	}
+}
+
+func TestOpenLinkQuotesLink(t *testing.T) {
+	browser := true
+	for _, tt := range []struct {
+		name string
+		step *flow.OpenLinkStep
+	}{
+		{"default", &flow.OpenLinkStep{Link: "myapp://path?name=O'Brien"}},
+		{"browser", &flow.OpenLinkStep{Link: "myapp://path?name=O'Brien", Browser: &browser}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &MockShellExecutor{response: ""}
+			driver := &Driver{device: mock}
+
+			if result := driver.openLink(tt.step); !result.Success {
+				t.Fatalf("expected success, got %v", result.Error)
+			}
+			argv := shellArgv(t, "am", mock.commands[0])
+			if !containsArg(argv, tt.step.Link) {
+				t.Errorf("link reached the device as %q, want %q intact", argv, tt.step.Link)
+			}
+		})
+	}
+}
+
+// TestLaunchAppQuotesArguments checks that a launch argument survives the shell
+// with its spaces and quotes, and as a single word — an unquoted multi-word
+// value used to split, so `am` saw only its first word and silently dropped the
+// rest.
+func TestLaunchAppQuotesArguments(t *testing.T) {
+	shell := &shellMock{
+		responses: map[string]string{
+			"getprop ro.build.version.sdk": "30",
+			"resolve-activity":             "com.example.app/.MainActivity",
+		},
+		fallback: "Success",
+	}
+	driver := &Driver{device: shell}
+
+	want := "Bob's \"favourite\" item"
+	result := driver.launchAppViaShell("com.example.app", map[string]interface{}{"title": want})
+	if !result.Success {
+		t.Fatalf("expected success, got %v", result.Error)
+	}
+
+	var amCmd string
+	for _, cmd := range shell.commands {
+		if strings.Contains(cmd, "am start-activity") {
+			amCmd = cmd
+		}
+	}
+	if amCmd == "" {
+		t.Fatal("expected an am start-activity command")
+	}
+	argv := shellArgv(t, "am", amCmd)
+	if !containsArg(argv, want) {
+		t.Errorf("argument reached the device as %q, want %q intact as one argument", argv, want)
+	}
+}
+
+// TestAddMediaQuotesRemotePath covers a filename with a space — the MediaStore
+// scan argument carried no quotes at all, so `my photo.jpg` arrived as two
+// arguments and the scan silently registered nothing.
+func TestAddMediaQuotesRemotePath(t *testing.T) {
+	dir := t.TempDir()
+	media := filepath.Join(dir, "my holiday photo.jpg")
+	if err := os.WriteFile(media, []byte("jpeg"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := &MockShellExecutor{response: ""}
+	driver := &Driver{device: mock}
+
+	if result := driver.addMedia(&flow.AddMediaStep{Files: []string{media}}); !result.Success {
+		t.Fatalf("expected success, got %v", result.Error)
+	}
+
+	var scan string
+	for _, cmd := range mock.commands {
+		if strings.Contains(cmd, "scan_file") {
+			scan = cmd
+		}
+	}
+	if scan == "" {
+		t.Fatal("expected a scan_file command")
+	}
+	argv := shellArgv(t, "content", scan)
+	if !containsArg(argv, "/sdcard/Pictures/MaestroRunner/my holiday photo.jpg") {
+		t.Errorf("media path reached the device as %q, want it intact as one argument", argv)
+	}
+}

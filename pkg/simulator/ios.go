@@ -3,16 +3,26 @@ package simulator
 import (
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/logger"
 )
 
+// XcodebuildArch translates Go's GOARCH vocabulary into xcodebuild's:
+// Go says "amd64" where xcodebuild's destination resolver only knows
+// "x86_64", so on Intel Macs no `-destination arch=` ever matched (#117).
+// "arm64" happens to be spelled the same in both.
+func XcodebuildArch(goarch string) string {
+	if goarch == "amd64" {
+		return "x86_64"
+	}
+	return goarch
+}
+
 // FindSimctlBinary verifies that xcrun/simctl is available.
 func FindSimctlBinary() (string, error) {
-	path, err := exec.LookPath("xcrun")
+	path, err := execLookPath("xcrun")
 	if err != nil {
 		return "", fmt.Errorf("xcrun not found; install Xcode Command Line Tools: xcode-select --install")
 	}
@@ -37,7 +47,7 @@ func ListSimulators() ([]SimulatorDevice, error) {
 		return nil, err
 	}
 
-	cmd := exec.Command("xcrun", "simctl", "list", "devices", "available", "-j")
+	cmd := execCommand("xcrun", "simctl", "list", "devices", "available", "-j")
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list simulators: %w", err)
@@ -176,7 +186,7 @@ func WaitForBoot(udid string, timeout time.Duration) error {
 func BootSimulator(udid string, timeout time.Duration) error {
 	logger.Info("Booting simulator: %s", udid)
 
-	cmd := exec.Command("xcrun", "simctl", "boot", udid)
+	cmd := execCommand("xcrun", "simctl", "boot", udid)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		// Check if already booted
 		if strings.Contains(string(output), "current state: Booted") {
@@ -192,7 +202,7 @@ func BootSimulator(udid string, timeout time.Duration) error {
 	}
 
 	// Open the Simulator UI
-	openCmd := exec.Command("open", "-a", "Simulator")
+	openCmd := execCommand("open", "-a", "Simulator")
 	if err := openCmd.Run(); err != nil {
 		logger.Debug("Failed to open Simulator app: %v", err)
 	}
@@ -204,7 +214,7 @@ func BootSimulator(udid string, timeout time.Duration) error {
 func ShutdownSimulator(udid string, timeout time.Duration) error {
 	logger.Info("Shutting down simulator: %s", udid)
 
-	cmd := exec.Command("xcrun", "simctl", "shutdown", udid)
+	cmd := execCommand("xcrun", "simctl", "shutdown", udid)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		// Check if already shutdown
 		if strings.Contains(string(output), "current state: Shutdown") {
@@ -262,7 +272,7 @@ func LatestIOSRuntime() (*IOSRuntime, error) {
 		return nil, err
 	}
 
-	cmd := exec.Command("xcrun", "simctl", "list", "runtimes", "available", "-j")
+	cmd := execCommand("xcrun", "simctl", "list", "runtimes", "available", "-j")
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list runtimes: %w", err)
@@ -313,7 +323,7 @@ func CreateSimulator(name, deviceTypeID, runtimeID string) (string, error) {
 		return "", err
 	}
 
-	cmd := exec.Command("xcrun", "simctl", "create", name, deviceTypeID, runtimeID)
+	cmd := execCommand("xcrun", "simctl", "create", name, deviceTypeID, runtimeID)
 	output, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("failed to create simulator: %w", err)
@@ -334,7 +344,7 @@ func DeleteSimulator(udid string) error {
 		return err
 	}
 
-	cmd := exec.Command("xcrun", "simctl", "delete", udid)
+	cmd := execCommand("xcrun", "simctl", "delete", udid)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to delete simulator %s: %s", udid, strings.TrimSpace(string(output)))
 	}

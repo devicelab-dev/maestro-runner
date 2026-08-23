@@ -32,9 +32,16 @@ const (
 // UIAutomator2Config holds configuration for the UIAutomator2 server.
 type UIAutomator2Config struct {
 	SocketPath string        // Unix socket path (Linux/Mac only, default: /tmp/uia2-<serial>.sock)
-	LocalPort  int           // TCP port (Windows only, default: auto-find free port)
+	LocalPort  int           // TCP port (Windows or TCPForward, default: auto-find free port)
 	DevicePort int           // Port on device (default: 6790)
 	Timeout    time.Duration // Startup timeout (default: 30s)
+	// TCPForward forces TCP-to-TCP forwarding (adb forward tcp:N tcp:M)
+	// instead of the default Linux/Mac unix-socket forward. Required on
+	// sandboxed environments like AWS Device Farm whose adb-proxy blocks
+	// localfilesystem:/localabstract: forwards but allows plain tcp:.
+	// Windows always uses TCP regardless of this flag. Auto-set from
+	// $DEVICEFARM_DEVICE_UDID in the CLI layer.
+	TCPForward bool
 }
 
 // DefaultUIAutomator2Config returns default configuration.
@@ -60,8 +67,12 @@ func (d *AndroidDevice) StartUIAutomator2(cfg UIAutomator2Config) error {
 		logger.Warn("failed to stop existing UIAutomator2 instance: %v", err)
 	}
 
-	// Set up forwarding based on OS
-	if runtime.GOOS == "windows" {
+	// Set up forwarding. TCP-to-TCP path is mandatory on Windows (where
+	// adb doesn't support localfilesystem: forwards) and used on Unix
+	// when cfg.TCPForward is set (e.g. AWS Device Farm — see GH #83).
+	// Default Unix path uses a unix-socket forward so multiple devices
+	// can share a single host without TCP port allocation games.
+	if runtime.GOOS == "windows" || cfg.TCPForward {
 		if err := d.setupTCPForward(cfg); err != nil {
 			return err
 		}

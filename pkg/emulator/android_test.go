@@ -441,8 +441,7 @@ func TestForceKillEmulator_ValidSerialNoProcess(t *testing.T) {
 	// This test exercises the code path where pgrep fails.
 	err := forceKillEmulator("emulator-59998")
 	if err == nil {
-		t.Error("forceKillEmulator should error when no matching process found")
-		return // guard: avoid nil dereference below
+		t.Fatal("forceKillEmulator should error when no matching process found")
 	}
 	if !strings.Contains(err.Error(), "could not find emulator process") {
 		t.Errorf("unexpected error message: %v", err)

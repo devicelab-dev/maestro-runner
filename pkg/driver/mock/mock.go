@@ -2,6 +2,7 @@
 package mock
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -143,6 +144,11 @@ func (d *Driver) SetFindTimeout(ms int) {
 func (d *Driver) SetWaitForIdleTimeout(ms int) error {
 	// Mock driver doesn't have actual idle timeout
 	return nil
+}
+
+// SetContext is a no-op for mock driver.
+func (d *Driver) SetContext(ctx context.Context) {
+	// Mock driver doesn't use context
 }
 
 // needsElement returns true if the step type typically returns element info.

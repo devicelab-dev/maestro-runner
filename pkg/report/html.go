@@ -58,15 +58,18 @@ func GenerateHTML(reportDir string, cfg HTMLConfig) error {
 
 // HTMLData contains all data needed for the HTML template.
 type HTMLData struct {
-	Title         string
-	GeneratedAt   string
-	Index         *Index
-	Flows         []FlowHTMLData
-	TotalDuration string
-	PassRate      float64
-	MaxDuration   int64
-	StatusClass   map[Status]string
-	JSONData      template.JS // JSON data for JavaScript
+	Title       string
+	GeneratedAt string
+	// AppVersionLabel is the app version and build number, ready to display.
+	// Computed once so the page title and the header agree.
+	AppVersionLabel string
+	Index           *Index
+	Flows           []FlowHTMLData
+	TotalDuration   string
+	PassRate        float64
+	MaxDuration     int64
+	StatusClass     map[Status]string
+	JSONData        template.JS // JSON data for JavaScript
 }
 
 // FlowHTMLData contains flow data formatted for HTML.
@@ -175,15 +178,16 @@ func buildHTMLData(index *Index, flows []FlowDetail, cfg HTMLConfig) HTMLData {
 	})
 
 	return HTMLData{
-		Title:         cfg.Title,
-		GeneratedAt:   time.Now().Format("2006-01-02 15:04:05"),
-		Index:         index,
-		Flows:         flowsData,
-		TotalDuration: formatDuration(&totalDurationMs),
-		PassRate:      passRate,
-		MaxDuration:   maxDuration,
-		StatusClass:   statusClass,
-		JSONData:      template.JS(jsonBytes),
+		Title:           cfg.Title,
+		GeneratedAt:     time.Now().Format("2006-01-02 15:04:05"),
+		AppVersionLabel: index.App.VersionLabel(),
+		Index:           index,
+		Flows:           flowsData,
+		TotalDuration:   formatDuration(&totalDurationMs),
+		PassRate:        passRate,
+		MaxDuration:     maxDuration,
+		StatusClass:     statusClass,
+		JSONData:        template.JS(jsonBytes),
 	}
 }
 
@@ -237,7 +241,7 @@ const htmlTemplate = `<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{.Title}}</title>
+    <title>{{.Title}}{{if .AppVersionLabel}} — {{.AppVersionLabel}}{{end}}</title>
     <style>
         :root {
             --bg-primary: #ffffff;
@@ -1027,6 +1031,61 @@ const htmlTemplate = `<!DOCTYPE html>
             border-radius: 8px;
         }
 
+        .console-logs { margin-top: 16px; }
+        .flow-video { margin-bottom: 12px; }
+        .flow-video summary { cursor: pointer; font-size: 13px; color: var(--text-secondary, #666); user-select: none; }
+        .flow-video video { display: block; margin-top: 8px; max-width: 100%; max-height: 480px; border-radius: 6px; }
+
+        .console-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: #fff8e1;
+            border: 1px solid #ffe082;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9em;
+            user-select: none;
+        }
+        .console-header:hover { background: #fff3c4; }
+        .console-expand { color: #888; }
+        .console-title { font-weight: 600; color: #f57c00; }
+        .console-count { color: #555; }
+        .console-errors { color: #c62828; font-weight: 600; }
+        .console-warns { color: #ef6c00; font-weight: 600; }
+        .console-body {
+            margin-top: 8px;
+            border: 1px solid #eee;
+            border-radius: 4px;
+            background: #fafafa;
+            max-height: 320px;
+            overflow-y: auto;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 0.85em;
+        }
+        .console-entry {
+            display: flex;
+            gap: 8px;
+            padding: 6px 10px;
+            border-bottom: 1px solid #eee;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .console-entry:last-child { border-bottom: none; }
+        .console-level {
+            flex-shrink: 0;
+            text-transform: uppercase;
+            font-weight: 600;
+            min-width: 70px;
+        }
+        .console-error .console-level,
+        .console-exception .console-level { color: #c62828; }
+        .console-warn .console-level,
+        .console-warning .console-level { color: #ef6c00; }
+        .console-info .console-level { color: #1565c0; }
+        .console-log .console-level,
+        .console-debug .console-level { color: #666; }
     </style>
 </head>
 <body>
@@ -1046,7 +1105,7 @@ const htmlTemplate = `<!DOCTYPE html>
                 <div class="header-divider"></div>
                 <div class="header-title">
                     <span class="header-title-main">{{.Title}}</span>
-                    <span class="header-title-sub">{{.GeneratedAt}}</span>
+                    <span class="header-title-sub">{{if .AppVersionLabel}}{{.AppVersionLabel}} &middot; {{end}}{{.GeneratedAt}}</span>
                 </div>
             </div>
             <div class="header-right">
@@ -1101,7 +1160,7 @@ const htmlTemplate = `<!DOCTYPE html>
                 </div>
                 <div class="env-item">
                     <span class="env-label">App</span>
-                    <span class="env-value">{{if .Index.App.ID}}{{.Index.App.ID}}{{if .Index.App.Version}} v{{.Index.App.Version}}{{end}}{{else}}-{{end}}</span>
+                    <span class="env-value">{{if .Index.App.ID}}{{.Index.App.ID}}{{with .Index.App.VersionLabel}} {{.}}{{end}}{{else}}{{with .Index.App.VersionLabel}}{{.}}{{else}}-{{end}}{{end}}</span>
                 </div>
                 <div class="env-item">
                     <span class="env-label">Driver</span>
@@ -1186,7 +1245,9 @@ const htmlTemplate = `<!DOCTYPE html>
                     <div class="detail-title" id="detail-title"></div>
                 </div>
                 <div class="detail-info" id="detail-info"></div>
+                <div id="flow-video"></div>
                 <div class="command-list" id="command-list"></div>
+                <div class="console-logs" id="console-logs"></div>
             </div>
         </div>
     </div>
@@ -1632,8 +1693,51 @@ const htmlTemplate = `<!DOCTYPE html>
             infoHtml += '<div class="info-item"><span class="info-label">Source</span><span class="info-value">' + flow.sourceFile + '</span></div>';
             document.getElementById('detail-info').innerHTML = infoHtml;
 
+            // Screen recording (--record) — collapsed by default, above the steps
+            const videoEl = document.getElementById('flow-video');
+            if (flow.artifacts && flow.artifacts.video) {
+                videoEl.innerHTML = '<details class="flow-video"><summary>Screen recording</summary>' +
+                    '<video controls preload="metadata" src="' + encodeURI(flow.artifacts.video) + '"></video></details>';
+            } else {
+                videoEl.innerHTML = '';
+            }
+
             // Commands - compact format with sub-commands support
             document.getElementById('command-list').innerHTML = renderCommands(flow.commands, flowIndex, 0);
+
+            // Browser console / page errors (web flows only — empty for mobile)
+            document.getElementById('console-logs').innerHTML = renderConsoleLogs(flow.consoleLogs);
+        }
+
+        function renderConsoleLogs(logs) {
+            if (!logs || logs.length === 0) return '';
+            const errorCount = logs.filter(l => l.level === 'error' || l.level === 'exception').length;
+            const warnCount = logs.filter(l => l.level === 'warning' || l.level === 'warn').length;
+            let header = '<div class="console-header" onclick="toggleConsoleLogs(this)">' +
+                '<span class="console-expand">▶</span>' +
+                '<span class="console-title">Browser console</span>' +
+                '<span class="console-count">' + logs.length + ' entr' + (logs.length === 1 ? 'y' : 'ies');
+            if (errorCount > 0) header += ' · <span class="console-errors">' + errorCount + ' error' + (errorCount === 1 ? '' : 's') + '</span>';
+            if (warnCount > 0) header += ' · <span class="console-warns">' + warnCount + ' warning' + (warnCount === 1 ? '' : 's') + '</span>';
+            header += '</span></div>';
+            let body = '<div class="console-body" style="display:none">';
+            logs.forEach(l => {
+                const lvl = (l.level || 'log').toLowerCase();
+                body += '<div class="console-entry console-' + escapeHtml(lvl) + '">' +
+                    '<span class="console-level">' + escapeHtml(lvl) + '</span>' +
+                    '<span class="console-message">' + escapeHtml(l.message || '') + '</span>' +
+                    '</div>';
+            });
+            body += '</div>';
+            return header + body;
+        }
+
+        function toggleConsoleLogs(el) {
+            const body = el.nextElementSibling;
+            const arrow = el.querySelector('.console-expand');
+            const open = body.style.display === 'none';
+            body.style.display = open ? '' : 'none';
+            if (arrow) arrow.textContent = open ? '▼' : '▶';
         }
 
         function renderCommands(commands, flowIndex, depth) {

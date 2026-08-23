@@ -112,6 +112,49 @@ func (a *Adapter) wireElementActions(elem *uiautomator2.Element, elementID strin
 	})
 }
 
+// FindFirstOf tries multiple (strategy, selector) pairs in a single RPC,
+// returning the first match (in input order). Much cheaper than calling
+// FindElement N times since the agent only fetches the accessibility tree
+// once (~80-120ms saved per skipped call).
+//
+// Pairs are passed as flat alternating slices to avoid coupling this package
+// to a caller-specific struct type.
+func (a *Adapter) FindFirstOf(strategiesAndSelectors []string) (*uiautomator2.Element, error) {
+	if len(strategiesAndSelectors)%2 != 0 {
+		return nil, fmt.Errorf("findFirstOf: pairs must alternate (strategy, selector)")
+	}
+	pairs := len(strategiesAndSelectors) / 2
+	payload := make([]map[string]string, pairs)
+	for i := 0; i < pairs; i++ {
+		payload[i] = map[string]string{
+			"strategy": strategiesAndSelectors[i*2],
+			"selector": strategiesAndSelectors[i*2+1],
+		}
+	}
+	resp, err := a.client.Call("UI.findFirstOf", map[string]interface{}{
+		"strategies": payload,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var result ElementResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return nil, fmt.Errorf("parse findFirstOf result: %w", err)
+	}
+	elem := uiautomator2.NewCachedElement(
+		result.ElementID,
+		result.Text,
+		uiautomator2.ElementRect{
+			X:      result.Bounds.X,
+			Y:      result.Bounds.Y,
+			Width:  result.Bounds.Width,
+			Height: result.Bounds.Height,
+		},
+	)
+	a.wireElementActions(elem, result.ElementID)
+	return elem, nil
+}
+
 // FindAndClick finds an element and clicks it in a single RPC call.
 func (a *Adapter) FindAndClick(strategy, selector string) (*uiautomator2.Element, error) {
 	resp, err := a.client.Call("Gesture.findAndClick", map[string]interface{}{
@@ -221,6 +264,25 @@ func (a *Adapter) SwipeInArea(area uiautomator2.RectModel, direction string, per
 	return err
 }
 
+// SwipeCoords runs a swipe between explicit points over durationMs, injected
+// in-process by the agent.
+//
+// The alternative, `adb shell input swipe`, always lifts the pointer at speed,
+// so the view flings and the scroll distance depends on momentum the platform
+// computes from timings that shift with machine load (#141). The agent's path
+// primes the touch slop and holds the pointer still before lifting, which the
+// shell command cannot express.
+func (a *Adapter) SwipeCoords(startX, startY, endX, endY, durationMs int) error {
+	_, err := a.client.Call("Gesture.swipe", map[string]interface{}{
+		"startX":     startX,
+		"startY":     startY,
+		"endX":       endX,
+		"endY":       endY,
+		"durationMs": durationMs,
+	})
+	return err
+}
+
 // --- Navigation ---
 
 // Back presses the back button.
@@ -249,6 +311,17 @@ func (a *Adapter) PressKeyCode(keyCode int) error {
 func (a *Adapter) SendKeyActions(text string) error {
 	_, err := a.client.Call("Input.sendKeyActions", map[string]interface{}{
 		"text": text,
+	})
+	return err
+}
+
+// AddMedia inserts a single media file into the device MediaStore via the
+// on-device agent (base64-encoded bytes over the RPC channel).
+func (a *Adapter) AddMedia(name, mime string, data []byte) error {
+	_, err := a.client.Call("Media.add", map[string]interface{}{
+		"name": name,
+		"mime": mime,
+		"data": base64.StdEncoding.EncodeToString(data),
 	})
 	return err
 }
@@ -403,6 +476,66 @@ func (a *Adapter) GrantPermissions(appID string, permissions []string) error {
 func (a *Adapter) SetAppiumSettings(settings map[string]interface{}) error {
 	_, err := a.client.Call("Settings.update", settings)
 	return err
+}
+
+// WaitForSettle waits for the UI to settle using accessibility event tracking.
+// Returns true if settled within timeout, false if timed out.
+func (a *Adapter) WaitForSettle(timeoutMs, quietMs int) (bool, error) {
+	resp, err := a.client.Call("UI.waitForSettle", map[string]interface{}{
+		"timeout": timeoutMs,
+		"quiet":   quietMs,
+	})
+	if err != nil {
+		return false, err
+	}
+
+	var result struct {
+		Settled bool `json:"settled"`
+	}
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return false, err
+	}
+	return result.Settled, nil
+}
+
+// WaitForWindowUpdate asks the agent to wait for a window-content-changed
+// accessibility event on the target package. Returns true if such an event
+// fires within timeoutMs (window is animating / updating), false if no
+// event fires (window is stable). Mirrors Maestro's isWindowUpdating.
+func (a *Adapter) WaitForWindowUpdate(appID string, timeoutMs int) (bool, error) {
+	resp, err := a.client.Call("UI.waitForWindowUpdate", map[string]interface{}{
+		"appId":   appID,
+		"timeout": timeoutMs,
+	})
+	if err != nil {
+		return false, err
+	}
+	var result struct {
+		Updated bool `json:"updated"`
+	}
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return false, err
+	}
+	return result.Updated, nil
+}
+
+// TreeHash returns a hash of the current accessibility tree. Used by lazy
+// retry: capture before tap, compare after a failing assertion to detect
+// "screen unchanged → tap had no effect → retry". Returned as uint64 but
+// the wire type is int64 (Java's signed long) — we convert via bit pattern
+// so values are comparable across calls.
+func (a *Adapter) TreeHash() (uint64, error) {
+	resp, err := a.client.Call("UI.treeHash", map[string]interface{}{})
+	if err != nil {
+		return 0, err
+	}
+	var result struct {
+		Hash int64 `json:"hash"`
+	}
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return 0, err
+	}
+	return uint64(result.Hash), nil
 }
 
 // --- Session management ---

@@ -230,6 +230,28 @@ func (s *Selector) HasNonZeroIndex() bool {
 	return err == nil && idx != 0
 }
 
+// EffectiveNth returns the integer index to use when picking among multiple
+// matches, unifying the mobile-style `index` (string) and web-style `nth`
+// (int) selectors. When both are set, `nth` wins (it's already typed and was
+// the original web spelling). Negative or unparseable values are treated as 0.
+//
+// This lets the web driver accept the same `index: N` syntax that flows on
+// Android/iOS use, instead of forcing users to remember a separate `nth` field
+// per platform.
+func (s *Selector) EffectiveNth() int {
+	if s.Nth > 0 {
+		return s.Nth
+	}
+	if s.Index == "" {
+		return 0
+	}
+	idx, err := strconv.Atoi(strings.TrimSpace(s.Index))
+	if err != nil || idx < 0 {
+		return 0
+	}
+	return idx
+}
+
 // Describe returns a human-readable description.
 func (s *Selector) Describe() string {
 	switch {
@@ -320,7 +342,8 @@ var platformSupportedFields = map[string]map[string]bool{
 		"enabled": true, "selected": true, "checked": true, "focused": true,
 		"placeholder": true, "role": true, "textContains": true,
 		"href": true, "alt": true, "title": true,
-		"name": true, "testId": true, "textRegex": true, "nth": true,
+		"name": true, "testId": true, "textRegex": true,
+		"nth": true, "index": true,
 	},
 }
 

@@ -544,3 +544,94 @@ func TestNoDevicesError_WithParallelSuggestion(t *testing.T) {
 	// This is environment-dependent so we just verify it doesn't panic
 	t.Logf("Error message:\n%s", errMsg)
 }
+
+// =============================================================================
+// GetAppVersionAndBuild — dumpsys parsing (#144)
+// =============================================================================
+
+// TestGetAppVersionAndBuild covers the dumpsys shapes this has to survive. The
+// version code shares its line with other fields, which is the detail most
+// likely to be parsed wrong — taking the rest of the line would report
+// "10009107 minSdk=24 targetSdk=34" as the build number.
+func TestGetAppVersionAndBuild(t *testing.T) {
+	tests := []struct {
+		name        string
+		dumpsys     string
+		wantVersion string
+		wantBuild   string
+	}{
+		{
+			name: "both present, build shares its line",
+			dumpsys: "    versionCode=10009107 minSdk=24 targetSdk=34\n" +
+				"    versionName=1.16.0\n",
+			wantVersion: "1.16.0",
+			wantBuild:   "10009107",
+		},
+		{
+			name:        "version name only",
+			dumpsys:     "    versionName=2.2.0\n",
+			wantVersion: "2.2.0",
+			wantBuild:   "",
+		},
+		{
+			name:        "version code only",
+			dumpsys:     "    versionCode=42 minSdk=21\n",
+			wantVersion: "",
+			wantBuild:   "42",
+		},
+		// Split APKs list a base and a per-split code; the first is the app's.
+		{
+			name: "first version code wins",
+			dumpsys: "    versionCode=100 minSdk=24\n" +
+				"    versionName=1.0.0\n" +
+				"    versionCode=200 minSdk=24\n",
+			wantVersion: "1.0.0",
+			wantBuild:   "100",
+		},
+		{
+			name:        "version name containing spaces is kept whole",
+			dumpsys:     "    versionName=1.16.0 beta 3\n",
+			wantVersion: "1.16.0 beta 3",
+			wantBuild:   "",
+		},
+		{
+			name:        "empty value does not panic",
+			dumpsys:     "    versionCode=\n    versionName=\n",
+			wantVersion: "",
+			wantBuild:   "",
+		},
+		{
+			name:        "unrelated output",
+			dumpsys:     "Unable to find package\n",
+			wantVersion: "",
+			wantBuild:   "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withFakeExec(t, fakeExec(tt.dumpsys))
+			d := &AndroidDevice{serial: "test", adbPath: "adb"}
+
+			version, build := d.GetAppVersionAndBuild("com.example.app")
+			if version != tt.wantVersion {
+				t.Errorf("version = %q, want %q", version, tt.wantVersion)
+			}
+			if build != tt.wantBuild {
+				t.Errorf("build = %q, want %q", build, tt.wantBuild)
+			}
+			// The older single-value accessor has to keep behaving.
+			if got := d.GetAppVersion("com.example.app"); got != tt.wantVersion {
+				t.Errorf("GetAppVersion() = %q, want %q", got, tt.wantVersion)
+			}
+		})
+	}
+}
+
+func TestGetAppVersionAndBuildEmptyPackage(t *testing.T) {
+	d := &AndroidDevice{serial: "test", adbPath: "adb"}
+	version, build := d.GetAppVersionAndBuild("")
+	if version != "" || build != "" {
+		t.Errorf("expected empty results for an empty package, got %q / %q", version, build)
+	}
+}

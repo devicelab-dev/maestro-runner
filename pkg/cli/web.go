@@ -11,15 +11,11 @@ import (
 // CreateWebDriver creates a browser driver using Rod + CDP.
 // Exported for library use.
 func CreateWebDriver(cfg *RunConfig) (core.Driver, func(), error) {
-	headless := !cfg.Headed
+	driverConfig := buildWebDriverConfig(cfg)
 	printSetupStep("Launching browser...")
-	logger.Info("Creating web driver (headless=%v)", headless)
+	logger.Info("Creating web driver (headless=%v)", driverConfig.Headless)
 
-	driver, err := cdpdriver.New(cdpdriver.Config{
-		Headless: headless,
-		URL:      cfg.AppID,
-		Browser:  cfg.Browser,
-	})
+	driver, err := cdpdriver.New(driverConfig)
 	if err != nil {
 		logger.Error("Failed to launch browser: %v", err)
 		return nil, nil, fmt.Errorf("launch browser: %w", err)
@@ -32,4 +28,18 @@ func CreateWebDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		}
 	}
 	return driver, cleanup, nil
+}
+
+// buildWebDriverConfig expands the flow header with the runner environment
+// before the CDP driver's initial navigation. Expansion also happens once
+// centrally when the header is resolved; repeating it here is idempotent and
+// keeps this entry point correct for library callers that build a RunConfig
+// themselves.
+func buildWebDriverConfig(cfg *RunConfig) cdpdriver.Config {
+	return cdpdriver.Config{
+		Headless:    !cfg.Headed,
+		URL:         expandRunnerVars(cfg.AppID, cfg.Env),
+		Browser:     cfg.Browser,
+		UserDataDir: cfg.UserDataDir,
+	}
 }
