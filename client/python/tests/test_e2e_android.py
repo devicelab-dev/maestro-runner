@@ -2,10 +2,13 @@
 
 Prerequisites:
   1. Android emulator running (adb devices shows device)
-  2. maestro-runner server started:
-       ./maestro-runner --platform android server --port 9999
-  3. Python deps installed:
+  2. Python deps installed:
        pip install requests pytest
+  3. A maestro-runner server is started automatically by the shared conftest
+     (maestro_server fixture) — do NOT start a second one or open a second
+     session by hand. The uiautomator2 driver locks the device per process, so
+     only one session may be active at a time; this file reuses the conftest
+     ``client`` session via the ``session_id`` fixture below.
 
 Run:
   pytest tests/test_e2e_android.py -v
@@ -20,15 +23,18 @@ SERVER_URL = os.environ.get("MAESTRO_SERVER_URL", "http://localhost:9999")
 
 
 @pytest.fixture(scope="module")
-def session_id():
-    """Create a session at module scope; delete it when done."""
-    resp = requests.post(f"{SERVER_URL}/session", json={
-        "platformName": "android",
-    }, timeout=30)
-    assert resp.status_code == 200, f"Failed to create session: {resp.text}"
-    sid = resp.json()["sessionId"]
-    yield sid
-    requests.delete(f"{SERVER_URL}/session/{sid}")
+def session_id(client):
+    """Reuse the conftest-managed session instead of opening a second one.
+
+    The shared conftest already opens a session per test process (via the
+    autouse ``_track_client`` fixture -> ``client`` fixture). Opening another
+    session here would hit the uiautomator2 device lock
+    (``/tmp/uia2-<serial>.sock`` → "device already in use"). Reusing the
+    existing session keeps the raw-HTTP assertions below intact while staying
+    within the single-session limit. Teardown is handled by the ``client``
+    fixture, so we don't delete the session ourselves.
+    """
+    yield client.session_id
 
 
 def _execute(session_id: str, step: dict) -> dict:
