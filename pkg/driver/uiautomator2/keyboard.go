@@ -36,8 +36,10 @@ var (
 //  3. mFrame alone — only if the frame looks like a keyboard (not a full-screen window).
 func parseKeyboardFrame(dumpsysOutput string) *core.Bounds {
 	// isOnScreen= is present on all Android versions (10+). mViewVisibility=0x8 means GONE.
+	// mInputShown=false means the IME is dismissed even when a frame is present.
 	if strings.Contains(dumpsysOutput, "isOnScreen=false") ||
-		strings.Contains(dumpsysOutput, "mViewVisibility=0x8") {
+		strings.Contains(dumpsysOutput, "mViewVisibility=0x8") ||
+		strings.Contains(dumpsysOutput, "mInputShown=false") {
 		return nil
 	}
 
@@ -111,13 +113,11 @@ func (d *Driver) getKeyboardBounds() *core.Bounds {
 	if d.device == nil {
 		return nil
 	}
-	// TODO: Check for other api versions as well
-	// Check mInputShown from dumpsys input_method (most reliable on all SDK levels).
-	// On SDK 36+, dumpsys window InputMethod no longer contains mInputShown.
-	if !d.isInputShown() {
-		return nil
-	}
 
+	// Parse the keyboard frame directly from "dumpsys window InputMethod".
+	// parseKeyboardFrame returns nil when the keyboard isn't shown (e.g.
+	// isOnScreen=false or no touchable/visible frame), so we don't need a
+	// separate isInputShown pre-check here.
 	output, err := d.device.Shell("dumpsys window InputMethod")
 	if err != nil {
 		return nil
