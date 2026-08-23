@@ -778,14 +778,15 @@ func TestWaitForAnimationToEnd_HonoursTimeout(t *testing.T) {
 	result := driver.Execute(step)
 	elapsed := time.Since(start)
 
-	if !result.Success {
-		t.Fatalf("step should soft-pass even on timeout, got error %v", result.Error)
+	// The fork fails (Success:false) when the screen never stabilizes.
+	if result.Success {
+		t.Fatalf("step should fail when the screen never settles, got message %q", result.Message)
 	}
 	if elapsed < 450*time.Millisecond {
 		t.Errorf("returned after %v — should have polled until ~500ms timeout", elapsed)
 	}
-	if !strings.Contains(result.Message, "did not settle") {
-		t.Errorf("message = %q, want it to contain 'did not settle'", result.Message)
+	if !strings.Contains(result.Message, "Timed out") {
+		t.Errorf("message = %q, want it to contain 'Timed out'", result.Message)
 	}
 }
 

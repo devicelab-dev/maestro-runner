@@ -675,6 +675,13 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 // scrollDurationMs is the swipe duration (in ms) used for adb input swipe.
 const scrollDurationMs = 300
 
+const (
+	defaultAnimationTimeoutMs = 15000
+	defaultAnimationSleepMs   = 200   // pause between the two comparison screenshots
+	screenshotDiffThreshold   = 0.005 // 0.5 % — default pixel-diff threshold
+	screenshotRetryIntervalMs = 100   // outer loop retry interval
+)
+
 // performScroll dispatches a scroll gesture. Default ("" or "adb") uses adb
 // input swipe (matches upstream Maestro and is the most reliable path across
 // Android skins, including OneUI where /appium/gestures/scroll often no-ops).
@@ -1876,41 +1883,52 @@ func (d *Driver) waitUntil(step *flow.WaitUntilStep) *core.CommandResult {
 }
 
 func (d *Driver) waitForAnimationToEnd(step *flow.WaitForAnimationToEndStep) *core.CommandResult {
-	return waitForScreenStatic(d, step.TimeoutMs)
+	timeoutMs := step.TimeoutMs
+	if timeoutMs <= 0 {
+		timeoutMs = defaultAnimationTimeoutMs
+	}
+	sleepMs := step.SleepMs
+	if sleepMs <= 0 {
+		sleepMs = defaultAnimationSleepMs
+	}
+	threshold := step.Threshold
+	if threshold <= 0 {
+		threshold = screenshotDiffThreshold
+	}
+
+	res := core.WaitForScreenStatic(
+		func() ([]byte, error) { return d.client.Screenshot() },
+		time.Duration(timeoutMs)*time.Millisecond,
+		time.Duration(sleepMs)*time.Millisecond,
+		time.Duration(screenshotRetryIntervalMs)*time.Millisecond,
+		threshold,
+	)
+
+	if res.Settled {
+		return successResult(
+			fmt.Sprintf("Animation ended (%.1f%% diff, %dms)", res.Diffs[len(res.Diffs)-1]*100, res.Elapsed.Milliseconds()),
+			nil,
+		)
+	}
+	return &core.CommandResult{
+		Success: false,
+		Message: fmt.Sprintf(
+			"Timed out after %dms (%d iteration(s)) waiting for screen to become static; diffs=%s threshold=%.4f",
+			timeoutMs, res.Iterations, formatAnimationDiffs(res.Diffs), threshold,
+		),
+	}
 }
 
-// waitForScreenStatic polls two consecutive screenshots and returns when the
-// pixel-difference falls below the threshold, or after the timeout.
-//
-// Matches upstream Maestro: default 15s timeout, 0.5% threshold. The step is
-// "soft" — it never fails, even when the screen never stabilizes, since the
-// surrounding flow may genuinely involve an indefinite animation and we don't
-// want to block test progress.
-func waitForScreenStatic(d *Driver, timeoutMs int) *core.CommandResult {
-	if timeoutMs <= 0 {
-		timeoutMs = 15000
+// formatAnimationDiffs formats a slice of diff values as "[0.000764 0.000821 ...]"
+func formatAnimationDiffs(diffs []float64) string {
+	if len(diffs) == 0 {
+		return "[]"
 	}
-	const threshold = 0.005 // 0.5%, matches upstream Maestro
-
-	deadline := time.Now().Add(time.Duration(timeoutMs) * time.Millisecond)
-	start := time.Now()
-	for time.Now().Before(deadline) {
-		prev, err := d.client.Screenshot()
-		if err != nil {
-			return errorResult(err, fmt.Sprintf("Failed to take screenshot: %v", err))
-		}
-		curr, err := d.client.Screenshot()
-		if err != nil {
-			return errorResult(err, fmt.Sprintf("Failed to take screenshot: %v", err))
-		}
-		diff := core.ImageDifference(prev, curr)
-		if diff <= threshold {
-			elapsed := time.Since(start)
-			return successResult(fmt.Sprintf("Animation ended (%.1f%% diff, %dms)", diff*100, elapsed.Milliseconds()), nil)
-		}
+	parts := make([]string, len(diffs))
+	for i, d := range diffs {
+		parts[i] = fmt.Sprintf("%.6f", d)
 	}
-
-	return successResult(fmt.Sprintf("Animation did not settle within %dms — continuing", timeoutMs), nil)
+	return "[" + strings.Join(parts, " ") + "]"
 }
 
 // ============================================================================

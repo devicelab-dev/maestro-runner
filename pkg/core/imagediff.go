@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const maestroPixelTolerance = 0.1
@@ -29,6 +30,14 @@ const maestroPixelTolerance = 0.1
 // pixels per comparison; in practice screenshots arrive every ~200ms so the
 // polling rate is bounded by ADB round-trip, not pixel work.
 func ImageDifference(a, b []byte) float64 {
+	// Fast path: byte-identical screenshots are trivially static. This also
+	// covers drivers whose mock/clients return opaque-but-equal payloads that
+	// don't decode as real images — matching the fork's consecutiveScreenshot
+	// diff, which short-circuited on bytes.Equal to 0.
+	if bytes.Equal(a, b) {
+		return 0
+	}
+
 	imgA, _, err := image.Decode(bytes.NewReader(a))
 	if err != nil {
 		return 1.0
@@ -60,6 +69,72 @@ func ImageDifference(a, b []byte) float64 {
 		}
 	}
 	return float64(differing) / float64(total)
+}
+
+// AnimationSettleResult is the outcome of WaitForScreenStatic.
+type AnimationSettleResult struct {
+	// Settled is true when two consecutive screenshots (sleep apart) were
+	// pixel-similar within Threshold before the timeout elapsed.
+	Settled bool
+	// Iterations is the number of comparison iterations performed.
+	Iterations int
+	// Elapsed is how long the wait ran (≈ timeout when it never settled).
+	Elapsed time.Duration
+	// Diffs holds the per-iteration differing-pixel fractions (diagnostics).
+	Diffs []float64
+}
+
+// WaitForScreenStatic polls two consecutive screenshots (separated by sleep)
+// until their differing-pixel fraction (ImageDifference) is at or below
+// threshold, or until timeout elapses. Screenshot capture failures are treated
+// as transient: the iteration is retried after retryInterval rather than
+// aborting the wait, so a flaky capture doesn't fail a still-animating screen.
+//
+// It is the single implementation behind every screenshot-based driver's
+// waitForAnimationToEnd step (uiautomator2, wda, devicelab, appium), so the
+// four drivers behave identically: all honor sleepMs/threshold config and all
+// fail (Settled=false) when the screen never stabilizes. Callers map the
+// result to a CommandResult, failing the step when Settled is false.
+func WaitForScreenStatic(
+	screenshot func() ([]byte, error),
+	timeout, sleep, retryInterval time.Duration,
+	threshold float64,
+) AnimationSettleResult {
+	start := time.Now()
+	deadline := start.Add(timeout)
+	var diffs []float64
+	i := 0
+	for time.Now().Before(deadline) {
+		i++
+		prev, err := screenshot()
+		if err != nil {
+			time.Sleep(retryInterval)
+			continue
+		}
+		time.Sleep(sleep)
+		curr, err := screenshot()
+		if err != nil {
+			time.Sleep(retryInterval)
+			continue
+		}
+		diff := ImageDifference(prev, curr)
+		diffs = append(diffs, diff)
+		if diff <= threshold {
+			return AnimationSettleResult{
+				Settled:    true,
+				Iterations: i,
+				Elapsed:    time.Since(start),
+				Diffs:      diffs,
+			}
+		}
+		time.Sleep(retryInterval)
+	}
+	return AnimationSettleResult{
+		Settled:    false,
+		Iterations: i,
+		Elapsed:    time.Since(start),
+		Diffs:      diffs,
+	}
 }
 
 // CheckImageDifference is a convenience wrapper that returns an explicit error

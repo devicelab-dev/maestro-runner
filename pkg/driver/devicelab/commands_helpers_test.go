@@ -1308,7 +1308,12 @@ func TestWaitForAnimationToEnd_ScreenshotError(t *testing.T) {
 		err:            errors.New("screenshot blocked"),
 	}
 	driver := New(client, &core.PlatformInfo{}, &mockShell{})
-	res := driver.waitForAnimationToEnd(&flow.WaitForAnimationToEndStep{})
+	// Screenshot always fails → the wait retries until the (short) timeout and
+	// then reports failure, matching the fail-on-timeout behaviour for a screen
+	// that can never be captured.
+	res := driver.waitForAnimationToEnd(&flow.WaitForAnimationToEndStep{
+		BaseStep: flow.BaseStep{TimeoutMs: 200},
+	})
 	if res.Success {
 		t.Error("waitForAnimationToEnd should fail when screenshot errors")
 	}

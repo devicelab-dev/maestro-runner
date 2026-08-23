@@ -994,6 +994,13 @@ func (d *Driver) scrollByAdb(direction string, screenWidth, screenHeight int, pe
 // Android's input pipeline to register as a scroll.
 const scrollDurationMs = 300
 
+const (
+	defaultAnimationTimeoutMs = 15000
+	defaultAnimationSleepMs   = 200   // pause between the two comparison screenshots
+	screenshotDiffThreshold   = 0.005 // 0.5 % — default pixel-diff threshold
+	screenshotRetryIntervalMs = 100   // outer loop retry interval
+)
+
 // isElementNotFoundError distinguishes expected "not on screen yet" errors
 // (which scrollUntilVisible should swallow and keep scrolling) from real
 // infrastructure failures that should propagate immediately.
@@ -2102,29 +2109,50 @@ func (d *Driver) waitUntil(step *flow.WaitUntilStep) *core.CommandResult {
 func (d *Driver) waitForAnimationToEnd(step *flow.WaitForAnimationToEndStep) *core.CommandResult {
 	timeoutMs := step.TimeoutMs
 	if timeoutMs <= 0 {
-		timeoutMs = 15000
+		timeoutMs = defaultAnimationTimeoutMs
 	}
-	const threshold = 0.005
-
-	deadline := time.Now().Add(time.Duration(timeoutMs) * time.Millisecond)
-	start := time.Now()
-	for time.Now().Before(deadline) {
-		prev, err := d.client.Screenshot()
-		if err != nil {
-			return errorResult(err, fmt.Sprintf("Failed to take screenshot: %v", err))
-		}
-		curr, err := d.client.Screenshot()
-		if err != nil {
-			return errorResult(err, fmt.Sprintf("Failed to take screenshot: %v", err))
-		}
-		diff := core.ImageDifference(prev, curr)
-		if diff <= threshold {
-			elapsed := time.Since(start)
-			return successResult(fmt.Sprintf("Animation ended (%.1f%% diff, %dms)", diff*100, elapsed.Milliseconds()), nil)
-		}
+	sleepMs := step.SleepMs
+	if sleepMs <= 0 {
+		sleepMs = defaultAnimationSleepMs
+	}
+	threshold := step.Threshold
+	if threshold <= 0 {
+		threshold = screenshotDiffThreshold
 	}
 
-	return successResult(fmt.Sprintf("Animation did not settle within %dms — continuing", timeoutMs), nil)
+	res := core.WaitForScreenStatic(
+		func() ([]byte, error) { return d.client.Screenshot() },
+		time.Duration(timeoutMs)*time.Millisecond,
+		time.Duration(sleepMs)*time.Millisecond,
+		time.Duration(screenshotRetryIntervalMs)*time.Millisecond,
+		threshold,
+	)
+
+	if res.Settled {
+		return successResult(
+			fmt.Sprintf("Animation ended (%.1f%% diff, %dms)", res.Diffs[len(res.Diffs)-1]*100, res.Elapsed.Milliseconds()),
+			nil,
+		)
+	}
+	return &core.CommandResult{
+		Success: false,
+		Message: fmt.Sprintf(
+			"Timed out after %dms (%d iteration(s)) waiting for screen to become static; diffs=%s threshold=%.4f",
+			timeoutMs, res.Iterations, formatAnimationDiffs(res.Diffs), threshold,
+		),
+	}
+}
+
+// formatAnimationDiffs formats a slice of diff values as "[0.000764 0.000821 ...]"
+func formatAnimationDiffs(diffs []float64) string {
+	if len(diffs) == 0 {
+		return "[]"
+	}
+	parts := make([]string, len(diffs))
+	for i, d := range diffs {
+		parts[i] = fmt.Sprintf("%.6f", d)
+	}
+	return "[" + strings.Join(parts, " ") + "]"
 }
 
 // ============================================================================

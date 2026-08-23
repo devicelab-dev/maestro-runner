@@ -1,12 +1,8 @@
 package appium
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"image"
-	"image/png"
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -978,29 +974,31 @@ func (d *Driver) waitForAnimationToEnd(step *flow.WaitForAnimationToEndStep) *co
 	logger.Info("waitForAnimationToEnd starting: timeoutMs=%d sleepMs=%d threshold=%.4f",
 		timeoutMs, sleepMs, threshold)
 
-	settled, iterations, elapsed, allDiffs := d.waitUntilScreenIsStatic(
+	res := core.WaitForScreenStatic(
+		func() ([]byte, error) { return d.client.Screenshot() },
 		time.Duration(timeoutMs)*time.Millisecond,
 		time.Duration(sleepMs)*time.Millisecond,
+		time.Duration(screenshotRetryIntervalMs)*time.Millisecond,
 		threshold,
 	)
 
-	if settled {
+	if res.Settled {
 		logger.Info("waitForAnimationToEnd: screen became static after %d iteration(s) (%.0fms elapsed), diffs=%s",
-			iterations, elapsed.Seconds()*1000, formatAnimationDiffs(allDiffs))
+			res.Iterations, res.Elapsed.Seconds()*1000, formatAnimationDiffs(res.Diffs))
 		return successResult(
 			fmt.Sprintf("Animation ended (screen became static) after %d iteration(s) in %.0fms, diffs=%s",
-				iterations, elapsed.Seconds()*1000, formatAnimationDiffs(allDiffs)),
+				res.Iterations, res.Elapsed.Seconds()*1000, formatAnimationDiffs(res.Diffs)),
 			nil,
 		)
 	}
 
 	logger.Info("waitForAnimationToEnd: timed out after %d iteration(s) (%.0fms), diffs=%s threshold=%.4f",
-		iterations, elapsed.Seconds()*1000, formatAnimationDiffs(allDiffs), threshold)
+		res.Iterations, res.Elapsed.Seconds()*1000, formatAnimationDiffs(res.Diffs), threshold)
 	return &core.CommandResult{
 		Success: false,
 		Message: fmt.Sprintf(
 			"Timed out after %dms (%d iteration(s)) waiting for screen to become static; diffs=%s threshold=%.4f",
-			timeoutMs, iterations, formatAnimationDiffs(allDiffs), threshold,
+			timeoutMs, res.Iterations, formatAnimationDiffs(res.Diffs), threshold,
 		),
 	}
 }
@@ -1015,94 +1013,6 @@ func formatAnimationDiffs(diffs []float64) string {
 		parts[i] = fmt.Sprintf("%.6f", d)
 	}
 	return "[" + strings.Join(parts, " ") + "]"
-}
-
-// waitUntilScreenIsStatic polls until two consecutive screenshots taken sleep
-// apart are pixel-similar within threshold, or the deadline is reached.
-// Returns: (settled, iterations, elapsed, allDiffs).
-func (d *Driver) waitUntilScreenIsStatic(timeout, sleep time.Duration, threshold float64) (bool, int, time.Duration, []float64) {
-	start := time.Now()
-	deadline := start.Add(timeout)
-	var allDiffs []float64
-	i := 0
-	for time.Now().Before(deadline) {
-		i++
-		diff, err := d.consecutiveScreenshotDiff(sleep)
-		if err != nil {
-			logger.Debug("waitForAnimationToEnd iter=%d screenshot error: %v", i, err)
-			time.Sleep(time.Duration(screenshotRetryIntervalMs) * time.Millisecond)
-			continue
-		}
-		allDiffs = append(allDiffs, diff)
-		elapsed := time.Since(start)
-		logger.Debug("waitForAnimationToEnd iter=%d elapsed=%.0fms diff=%.6f threshold=%.4f",
-			i, elapsed.Seconds()*1000, diff, threshold)
-		if diff <= threshold {
-			return true, i, elapsed, allDiffs
-		}
-		time.Sleep(time.Duration(screenshotRetryIntervalMs) * time.Millisecond)
-	}
-	return false, i, time.Since(start), allDiffs
-}
-
-// consecutiveScreenshotDiff takes two screenshots separated by sleep and
-// returns the pixel-diff percentage.  Returns (0, nil) if bytes are identical.
-func (d *Driver) consecutiveScreenshotDiff(sleep time.Duration) (float64, error) {
-	startBytes, err := d.client.Screenshot()
-	if err != nil {
-		return 0, fmt.Errorf("screenshot 1: %w", err)
-	}
-
-	time.Sleep(sleep)
-
-	endBytes, err := d.client.Screenshot()
-	if err != nil {
-		return 0, fmt.Errorf("screenshot 2: %w", err)
-	}
-
-	if bytes.Equal(startBytes, endBytes) {
-		return 0, nil
-	}
-
-	startImg, err := png.Decode(bytes.NewReader(startBytes))
-	if err != nil {
-		return 0, fmt.Errorf("decode screenshot 1: %w", err)
-	}
-	endImg, err := png.Decode(bytes.NewReader(endBytes))
-	if err != nil {
-		return 0, fmt.Errorf("decode screenshot 2: %w", err)
-	}
-
-	sb := startImg.Bounds()
-	eb := endImg.Bounds()
-	if sb.Dx() != eb.Dx() || sb.Dy() != eb.Dy() {
-		// Dimensions changed — treat as maximally different.
-		return 1.0, nil
-	}
-
-	return screenshotDiffPercent(startImg, endImg), nil
-}
-
-func screenshotDiffPercent(a, b image.Image) float64 {
-	ab := a.Bounds()
-	bb := b.Bounds()
-	w, h := ab.Dx(), ab.Dy()
-	if w <= 0 || h <= 0 || w != bb.Dx() || h != bb.Dy() {
-		return 1.0
-	}
-	var total float64
-	const max = 65535.0
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			ar, ag, abC, aa := a.At(ab.Min.X+x, ab.Min.Y+y).RGBA()
-			br, bg, bbC, ba := b.At(bb.Min.X+x, bb.Min.Y+y).RGBA()
-			total += math.Abs(float64(ar) - float64(br))
-			total += math.Abs(float64(ag) - float64(bg))
-			total += math.Abs(float64(abC) - float64(bbC))
-			total += math.Abs(float64(aa) - float64(ba))
-		}
-	}
-	return total / (float64(w*h) * 4.0 * max)
 }
 
 func (d *Driver) waitUntil(step *flow.WaitUntilStep) *core.CommandResult {
