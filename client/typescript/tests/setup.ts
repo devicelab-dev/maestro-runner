@@ -305,6 +305,11 @@ export async function teardown(): Promise<void> {
     sharedClient = undefined;
   }
   if (serverProcess) {
+    // Detach the child's output pipes *before* closing the log stream so a
+    // final flush as the process exits can't write to an already-ended stream
+    // (which throws "write after end" and crashes the test runner).
+    serverProcess.stdout?.unpipe(serverLogStream);
+    serverProcess.stderr?.unpipe(serverLogStream);
     serverProcess.kill();
     serverProcess = undefined;
   }
