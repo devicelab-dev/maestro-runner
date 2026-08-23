@@ -101,7 +101,7 @@ jobs:
           # --- Python e2e tests (conftest.py auto-starts server) ---
           echo "::group::Python e2e tests"
           cd client/python
-          .venv/bin/python -m pytest tests/test_add_contact.py tests/test_contact_persists.py tests/test_wait_for_animation_to_end.py -v --junit-xml=../../reports/python/junit.xml || FAILED=1
+          .venv/bin/python -m pytest tests/test_add_contact.py tests/test_contact_persists.py tests/test_wait_for_animation_to_end.py tests/test_wait_for_animation_never_ends.py -v --junit-xml=../../reports/python/junit.xml || FAILED=1
           cd ../..
           echo "::endgroup::"
 
