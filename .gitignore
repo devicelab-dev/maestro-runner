@@ -61,3 +61,10 @@ LANDING-DOC-UPDATES-*.md
 SAUCE-LABS-HOOKS.md
 ROADMAP.md
 SNAPSHOT_MODE_SPEC.md
+
+# Track maestro-runner agent skills (exception to the `.claude/` ignore above).
+# Re-include the dir tree, then keep local-only config ignored.
+!.claude/
+.claude/settings.local.json
+!.claude/skills/
+!.claude/skills/**
