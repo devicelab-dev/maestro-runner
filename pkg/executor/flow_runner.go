@@ -155,6 +155,11 @@ func (fr *FlowRunner) Run() FlowResult {
 	// Mark flow as started
 	fr.flowWriter.Start()
 
+	// Declared before the recording defer below so that defer can read the
+	// outcome — a recording kept only on failure cannot know, at the time it
+	// starts, whether it will be wanted.
+	flowStatus := report.StatusPassed
+
 	// --record: capture the whole flow, onFlowComplete hooks included — this
 	// defer is registered before theirs, so it runs after them. Best-effort
 	// throughout: a driver that can't record must not fail the flow.
@@ -164,8 +169,18 @@ func (fr *FlowRunner) Run() FlowResult {
 				logger.Warn("--record: %v — continuing without recording", err)
 			} else {
 				defer func() {
-					if err := recorder.StopScreenRecording(fr.flowWriter.RecordingTarget()); err != nil {
+					target := fr.flowWriter.RecordingTarget()
+					if err := recorder.StopScreenRecording(target); err != nil {
 						logger.Warn("--record: failed to save recording: %v", err)
+						return
+					}
+					// A recording can only be made while the flow runs, so
+					// on-failure retention is a decision taken afterwards:
+					// record everything, keep what turned out to matter.
+					if fr.config.RecordMode == "on-failure" && flowStatus == report.StatusPassed {
+						if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+							logger.Warn("--video on-failure: could not discard the recording: %v", err)
+						}
 						return
 					}
 					fr.flowWriter.SetVideo()
@@ -185,7 +200,6 @@ func (fr *FlowRunner) Run() FlowResult {
 	resetConsoleLogs(fr.driver)
 
 	// Execute all steps
-	flowStatus := report.StatusPassed
 	var flowError string
 
 	// Execute onFlowComplete in defer (runs even on failure)

@@ -35,6 +35,10 @@ type RunnerConfig struct {
 	// Missing baselines are always seeded on first run regardless of this flag.
 	UpdateScreenshots bool
 
+	// RecordMode decides what happens to a finished recording: "always" keeps
+	// every one, "on-failure" keeps only the flows that failed. Empty behaves
+	// as "always", so a caller that only sets Record keeps the old behaviour.
+	RecordMode string
 	// Record captures a screen recording of every flow into its assets
 	// directory (--record). Best-effort: drivers that can't record are logged
 	// and the run continues without video.

@@ -186,7 +186,13 @@ Examples:
 		},
 		&cli.BoolFlag{
 			Name:  "record",
-			Usage: "Record the screen during every flow and save recording.mp4 into the flow's report assets (Android devices/emulators and iOS simulators)",
+			Usage: "Record the screen during every flow and save recording.mp4 into the flow's report assets (Android devices/emulators and iOS simulators). Shorthand for --video always",
+		},
+		&cli.StringFlag{
+			Name:    "video",
+			Usage:   "When to keep screen recordings: never (default), always, on-failure. A recording can only be made while the flow runs, so on-failure records every flow and keeps only the ones that failed",
+			Value:   "",
+			EnvVars: []string{"MAESTRO_VIDEO"},
 		},
 
 		// Emulator management flags (start-emulator, auto-start-emulator,
@@ -562,8 +568,11 @@ type RunConfig struct {
 	// UpdateScreenshots overwrites existing assertScreenshot baselines.
 	UpdateScreenshots bool
 
-	// Record captures a screen recording of every flow (--record).
+	// Record captures a screen recording of every flow (--record / --video).
 	Record bool
+	// RecordMode is the retention decision for those recordings:
+	// "always" or "on-failure". Empty means no recording at all.
+	RecordMode string
 
 	// Cloud provider (detected from AppiumURL, nil if not a cloud provider)
 	CloudProvider cloud.Provider
@@ -711,6 +720,10 @@ func runTest(c *cli.Context) error {
 		mergedEnv[k] = v // -e CLI overrides --env-file and workspace config
 	}
 
+	// Resolved once: resolveVideoMode warns about an unrecognised value, and a
+	// flag typo should be reported once, not once per field.
+	videoMode := resolveVideoMode(getString("video"), getBool("record"))
+
 	// Get appId from workspace config or will be extracted from flows later
 	appID := ""
 	if workspaceConfig != nil && workspaceConfig.AppID != "" {
@@ -760,7 +773,8 @@ func runTest(c *cli.Context) error {
 		AndroidTCPForward:  getBool("android-tcp-forward"),
 		Artifacts:          parseArtifactMode(getString("artifacts")),
 		UpdateScreenshots:  getBool("update-screenshots"),
-		Record:             getBool("record"),
+		Record:             videoMode != videoNever,
+		RecordMode:         videoMode,
 	}
 
 	// Apply waitForIdleTimeout with priority:
@@ -1451,6 +1465,7 @@ func executeSingleDevice(cfg *RunConfig, flows []flow.Flow) (*executor.RunResult
 		Artifacts:          cfg.Artifacts,
 		UpdateScreenshots:  cfg.UpdateScreenshots,
 		Record:             cfg.Record,
+		RecordMode:         cfg.RecordMode,
 		Device:             deviceInfo,
 		App:                buildAppReport(driver),
 		RunnerVersion:      Version,
@@ -1502,6 +1517,7 @@ func ExecuteFlowWithDriver(driver core.Driver, cfg *RunConfig, f flow.Flow) (*ex
 		Artifacts:          cfg.Artifacts,
 		UpdateScreenshots:  cfg.UpdateScreenshots,
 		Record:             cfg.Record,
+		RecordMode:         cfg.RecordMode,
 		Device:             deviceInfo,
 		App:                buildAppReport(driver),
 		RunnerVersion:      Version,
@@ -1830,6 +1846,7 @@ func executeAppiumSingleSession(cfg *RunConfig, flows []flow.Flow) (*executor.Ru
 		Artifacts:          cfg.Artifacts,
 		UpdateScreenshots:  cfg.UpdateScreenshots,
 		Record:             cfg.Record,
+		RecordMode:         cfg.RecordMode,
 		Device:             deviceInfo,
 		App:                buildAppReport(driver),
 		RunnerVersion:      Version,
@@ -2707,6 +2724,7 @@ func createParallelRunner(cfg *RunConfig, workers []executor.DeviceWorker, platf
 		Artifacts:          cfg.Artifacts,
 		UpdateScreenshots:  cfg.UpdateScreenshots,
 		Record:             cfg.Record,
+		RecordMode:         cfg.RecordMode,
 		Device:             deviceInfo,
 		App:                buildAppReport(firstDriver),
 		RunnerVersion:      Version,
@@ -2788,4 +2806,37 @@ func isLocalAppiumURL(appiumURL string) bool {
 		return true
 	}
 	return false
+}
+
+// Video retention modes. The vocabulary matches --artifacts (never / always /
+// on-failure) rather than inventing a second spelling for the same idea.
+const (
+	videoNever     = "never"
+	videoAlways    = "always"
+	videoOnFailure = "on-failure"
+)
+
+// resolveVideoMode reconciles --video with the older --record boolean.
+// --video wins when both are given; --record alone keeps meaning "always", so
+// existing invocations and CI jobs behave exactly as before.
+func resolveVideoMode(video string, record bool) string {
+	normalized := strings.ToLower(strings.TrimSpace(video))
+	switch normalized {
+	case videoAlways:
+		return videoAlways
+	case videoOnFailure:
+		return videoOnFailure
+	case videoNever:
+		return videoNever
+	case "":
+		// not given — fall through to --record below
+	default:
+		// Silently treating a typo as "never" would hand back a green run with
+		// no video and no explanation for it.
+		logger.Warn("--video %q is not one of never/always/on-failure — ignoring it", video)
+	}
+	if record {
+		return videoAlways
+	}
+	return videoNever
 }
