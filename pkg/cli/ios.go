@@ -621,3 +621,20 @@ func autoDetectIOSDevices(count int) ([]string, error) {
 
 	return devices, nil
 }
+
+// listPhysicalIOSUDIDs returns the UDIDs of every physical iOS device attached
+// over usbmux. Unlike findConnectedDevice it does not stop at the first one —
+// the `devices` command needs the whole list.
+func listPhysicalIOSUDIDs() ([]string, error) {
+	list, err := goios.ListDevices()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list devices: %w", err)
+	}
+	udids := make([]string, 0, len(list.DeviceList))
+	for _, d := range list.DeviceList {
+		if serial := d.Properties.SerialNumber; serial != "" {
+			udids = append(udids, serial)
+		}
+	}
+	return udids, nil
+}

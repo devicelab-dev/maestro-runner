@@ -164,6 +164,9 @@ Examples:
 			wdaCommand,
 			hierarchyCommand,
 			lintCommand,
+			devicesCommand,
+			doctorCommand,
+			screenshotCommand,
 		},
 	}
 
