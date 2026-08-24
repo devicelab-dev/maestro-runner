@@ -304,6 +304,25 @@ func createUIAutomator2Driver(cfg *RunConfig, dev *device.AndroidDevice, info de
 	return driver, cleanup, nil
 }
 
+// noAndroidDevicesMessage explains what to do about having no usable device.
+// The iOS path has carried a Hint line for a while; this brings Android to
+// parity, and names the case the bare message used to hide — every attached
+// device already being driven by another run.
+func noAndroidDevicesMessage(busy, notReady int) string {
+	switch {
+	case busy > 0:
+		return fmt.Sprintf("no available Android devices: all %d attached device(s) are already in use by another maestro-runner\n"+
+			"Hint: wait for the other run to finish, attach another device, or target one explicitly with --device <serial>", busy)
+	case notReady > 0:
+		return fmt.Sprintf("no available Android devices: %d attached device(s) are offline or unauthorized\n"+
+			"Hint: unlock the device and accept the USB debugging prompt, then check `adb devices`", notReady)
+	default:
+		return "no available Android devices found\n" +
+			"Hint: connect a device with USB debugging on, start an emulator, or pass --auto-start-emulator.\n" +
+			"      `maestro-runner devices` lists what this machine can see."
+	}
+}
+
 // autoDetectAndroidDevices finds up to N available Android devices that are not in use.
 // Skips devices whose UIAutomator2 socket is already bound by another maestro-runner instance.
 // Returns available devices (may be fewer than count) and an error only if zero found.
@@ -317,6 +336,10 @@ func autoDetectAndroidDevices(count int) ([]string, error) {
 
 	// Parse output to find device serials
 	var devices []string
+	// Tracked so the failure can distinguish "nothing is plugged in" from
+	// "everything plugged in is already driven by another run" — the fixes are
+	// completely different, and the old message covered both.
+	var busy, notReady int
 	lines := strings.Split(string(out), "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -325,20 +348,27 @@ func autoDetectAndroidDevices(count int) ([]string, error) {
 		}
 		// Line format: "serial\tdevice"
 		parts := strings.Fields(line)
-		if len(parts) >= 2 && parts[1] == "device" {
-			serial := parts[0]
-			// Skip devices whose socket is already in use
-			socketPath := fmt.Sprintf("/tmp/uia2-%s.sock", serial)
-			if isSocketInUse(socketPath) {
-				logger.Info("Skipping device %s: socket %s in use", serial, socketPath)
-				continue
-			}
-			devices = append(devices, serial)
+		if len(parts) < 2 {
+			continue
 		}
+		if parts[1] != "device" {
+			// offline / unauthorized — attached, but not usable yet.
+			notReady++
+			continue
+		}
+		serial := parts[0]
+		// Skip devices whose socket is already in use
+		socketPath := fmt.Sprintf("/tmp/uia2-%s.sock", serial)
+		if isSocketInUse(socketPath) {
+			logger.Info("Skipping device %s: socket %s in use", serial, socketPath)
+			busy++
+			continue
+		}
+		devices = append(devices, serial)
 	}
 
 	if len(devices) == 0 {
-		return nil, fmt.Errorf("no available Android devices found")
+		return nil, errors.New(noAndroidDevicesMessage(busy, notReady))
 	}
 
 	// Return up to count devices

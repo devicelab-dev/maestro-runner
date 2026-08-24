@@ -921,10 +921,18 @@ func executeTest(cfg *RunConfig) error {
 	if strings.EqualFold(cfg.Platform, "ios") && cfg.Driver != "appium" {
 		// team-id is only required for real devices, not simulators.
 		isSimTarget := iosTargetsSimulator(cfg)
+		// With nothing booted and no device named, iosTargetsSimulator answers
+		// "not a simulator" — which used to fall straight into the team-id
+		// error below and blame code signing for what is really an empty
+		// device list. Say what is actually wrong first.
+		if !isSimTarget && !anyIOSTargetAvailable(cfg) {
+			return errors.New(noIOSTargetMessage())
+		}
 		if cfg.TeamID == "" && !isSimTarget {
-			return fmt.Errorf("iOS with WDA driver requires --team-id for code signing (real devices only)\n" +
+			return fmt.Errorf("iOS on a real device requires --team-id to code-sign the runner\n" +
 				"Usage: maestro-runner --platform ios --team-id <APPLE_TEAM_ID> test <flow-files>\n" +
-				"Note: --team-id is not required for simulators")
+				"Note: --team-id is not required for simulators.\n" +
+				"      `maestro-runner --team-id <ID> doctor` checks it against the accounts Xcode has")
 		}
 		// clearState on iOS uninstalls + reinstalls. On real devices the host
 		// can't reach the installed .app bundle, so --app-file is mandatory.
@@ -2839,4 +2847,26 @@ func resolveVideoMode(video string, record bool) string {
 		return videoAlways
 	}
 	return videoNever
+}
+
+// anyIOSTargetAvailable reports whether there is any iOS device to run on: one
+// named explicitly, a booted simulator, or a connected phone.
+func anyIOSTargetAvailable(cfg *RunConfig) bool {
+	if len(cfg.Devices) > 0 || cfg.StartSimulator != "" || cfg.AutoStartEmulator {
+		return true
+	}
+	if hasBootedSimulator() {
+		return true
+	}
+	udids, err := listPhysicalIOSUDIDs()
+	return err == nil && len(udids) > 0
+}
+
+// noIOSTargetMessage explains an empty iOS device list. Kept separate from the
+// signing error because the two have nothing to do with each other, and
+// conflating them sent people hunting for a team ID they did not need.
+func noIOSTargetMessage() string {
+	return "no iOS device found: nothing is booted and no device is connected\n" +
+		"Hint: boot a simulator (`xcrun simctl boot <udid>`), connect an iPhone, or pass --start-simulator <name>.\n" +
+		"      `maestro-runner devices` lists what this machine can see"
 }
