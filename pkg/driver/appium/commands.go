@@ -386,6 +386,15 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 
 // Text input
 
+// textField adapts an Appium element id to the shape core verifies against.
+func (d *Driver) textField(elementID string) core.TextField {
+	return core.TextFieldFuncs(
+		func() (string, error) { return d.client.GetElementText(elementID) },
+		func(text string) error { return d.client.ElementSendKeys(elementID, text) },
+		func() error { return d.client.ClearElement(elementID) },
+	)
+}
+
 func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 	text := step.Text
 
@@ -405,12 +414,22 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 			return errorResult(err, fmt.Sprintf("Element not found: %s", step.Selector.Describe()))
 		}
 		if info != nil && info.ID != "" {
+			// Read first: after typing, a value that has not changed is the
+			// only thing separating a driver reporting an empty field's hint
+			// from a keystroke lost to a janky frame.
+			before, _ := d.client.GetElementText(info.ID)
 			if err := d.client.ElementSendKeys(info.ID, text); err != nil {
 				return errorResult(err, "Failed to input text")
 			}
-			return successResult(fmt.Sprintf("Input text: %s", text), info)
+			note := core.ConfirmTypedText(d.textField(info.ID), text, before, logger.Warn)
+			return successResult(fmt.Sprintf("Input text: %s%s", text, note), info)
 		}
 	}
+
+	// Set when typing went to an element we can read back; nil leaves the
+	// verification a no-op, which is the right answer for blind key events.
+	var verified core.TextField
+	var beforeText string
 
 	if d.platform == "ios" {
 		// On iOS, use ElementSendKeys (POST /element/{id}/value) which internally
@@ -425,9 +444,12 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 
 		if elemID != "" {
 			d.waitForKeyboardFocus(elemID)
+			before, _ := d.client.GetElementText(elemID)
 			if err := d.client.ElementSendKeys(elemID, text); err != nil {
 				return errorResult(err, "Failed to input text")
 			}
+			verified = d.textField(elemID)
+			beforeText = before
 		} else {
 			// Final fallback: use "mobile: keys" which types into currently focused element
 			_, err := d.client.ExecuteMobile("keys", map[string]interface{}{
@@ -449,8 +471,11 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		// no element has focus.
 		typed := false
 		if elemID, err := d.client.GetActiveElement(); err == nil && elemID != "" {
+			before, _ := d.client.GetElementText(elemID)
 			if err := d.client.ElementSendKeys(elemID, text); err == nil {
 				typed = true
+				verified = d.textField(elemID)
+				beforeText = before
 			}
 		}
 		if !typed {
@@ -460,7 +485,8 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		}
 	}
 
-	return successResult(fmt.Sprintf("Input text: %s", text), nil)
+	note := core.ConfirmTypedText(verified, text, beforeText, logger.Warn)
+	return successResult(fmt.Sprintf("Input text: %s%s", text, note), nil)
 }
 
 // waitForKeyboardFocus polls until the element has keyboard focus or timeout.

@@ -618,21 +618,31 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 	}
 
 	if step.KeyPress {
+		// Resolve and read the focused field first: after typing, "unchanged"
+		// is the only thing that separates a hint from a lost keystroke.
+		target, before := d.focusedFieldBefore()
 		if err := d.client.SendKeyActions(text); err != nil {
 			return errorResult(err, "Failed to input text via key press")
 		}
-		return successResult(fmt.Sprintf("Entered text (keyPress): %s%s", text, unicodeWarning), nil)
+		// Per-character key events are the path that loses characters when the
+		// app janks — the reason this verification exists at all.
+		note := core.ConfirmTypedText(target, text, before, logger.Warn)
+		return successResult(fmt.Sprintf("Entered text (keyPress): %s%s%s", text, unicodeWarning, note), nil)
 	}
 
+	var typedInto core.TextField
+	var beforeText string
 	if !step.Selector.IsEmpty() {
 		elem, _, err := d.findElementWithLazyRetry(step.Selector, step.IsOptional(), step.TimeoutMs)
 		if err != nil {
 			return errorResult(err, fmt.Sprintf("Element not found: %v", err))
 		}
 		if elem != nil {
+			before, _ := elem.Text()
 			if err := elem.SendKeys(text); err != nil {
 				return errorResult(err, fmt.Sprintf("Failed to input text: %v", err))
 			}
+			typedInto, beforeText = core.TextFieldFuncs(elem.Text, elem.SendKeys, elem.Clear), before
 		} else if d.webView != nil && d.webView.isConnected() {
 			// Web element was found by Rod during polling — re-find for interaction
 			webElem, webErr := d.webView.findWebOnce(step.Selector)
@@ -658,8 +668,10 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		// plain key-events fallback — no selector search.
 		typed := false
 		if focused, err := d.findFocused(); err == nil && focused != nil {
+			before, _ := focused.Text()
 			if err := focused.Input(text); err == nil {
 				typed = true
+				typedInto, beforeText = focused, before
 			}
 		}
 		if !typed {
@@ -669,7 +681,19 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		}
 	}
 
-	return successResult(fmt.Sprintf("Entered text: %s%s", text, unicodeWarning), nil)
+	note := core.ConfirmTypedText(typedInto, text, beforeText, logger.Warn)
+	return successResult(fmt.Sprintf("Entered text: %s%s%s", text, unicodeWarning, note), nil)
+}
+
+// focusedFieldBefore resolves the element that key events will reach and reads
+// it, so the value can be compared once typing is done.
+func (d *Driver) focusedFieldBefore() (core.TextField, string) {
+	focused, err := d.findFocused()
+	if err != nil || focused == nil {
+		return nil, ""
+	}
+	before, _ := focused.Text()
+	return focused, before
 }
 
 // inputTextBrowser handles inputText entirely via CDP for Chrome browser mode.

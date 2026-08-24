@@ -398,21 +398,31 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 	// keyPress mode: simulate real key presses via W3C Actions API.
 	// This triggers TextWatcher/onTextChanged per character (unlike setText injection).
 	if step.KeyPress {
+		// Resolve and read the focused field first: after typing, "unchanged"
+		// is the only thing that separates a hint from a lost keystroke.
+		target, before := d.focusedFieldBefore()
 		if err := d.client.SendKeyActions(text); err != nil {
 			return errorResult(err, "Failed to input text via key press")
 		}
-		return successResult(fmt.Sprintf("Entered text (keyPress): %s%s", text, unicodeWarning), nil)
+		// Per-character key events are the path that loses characters when the
+		// app janks — the whole reason this verification exists.
+		note := core.ConfirmTypedText(target, text, before, logger.Warn)
+		return successResult(fmt.Sprintf("Entered text (keyPress): %s%s%s", text, unicodeWarning, note), nil)
 	}
 
 	// If selector provided, find element and type into it
+	var typedInto core.TextField
+	var beforeText string
 	if !step.Selector.IsEmpty() {
 		elem, _, err := d.findElement(step.Selector, step.IsOptional(), step.TimeoutMs)
 		if err != nil {
 			return errorResult(err, fmt.Sprintf("Element not found: %v", err))
 		}
+		before, _ := elem.Text()
 		if err := elem.SendKeys(text); err != nil {
 			return errorResult(err, fmt.Sprintf("Failed to input text: %v", err))
 		}
+		typedInto, beforeText = core.TextFieldFuncs(elem.Text, elem.SendKeys, elem.Clear), before
 	} else {
 		// No selector — prefer element-scoped typing into the focused
 		// element (POST /element/{id}/value). Blind key events can silently
@@ -429,8 +439,10 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		// plain key-events fallback — no selector search.
 		typed := false
 		if active, err := d.client.ActiveElement(); err == nil && active != nil {
+			before, _ := active.Text()
 			if err := active.SendKeys(text); err == nil {
 				typed = true
+				typedInto, beforeText = core.TextFieldFuncs(active.Text, active.SendKeys, active.Clear), before
 			}
 		}
 		if !typed {
@@ -440,7 +452,19 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		}
 	}
 
-	return successResult(fmt.Sprintf("Entered text: %s%s", text, unicodeWarning), nil)
+	note := core.ConfirmTypedText(typedInto, text, beforeText, logger.Warn)
+	return successResult(fmt.Sprintf("Entered text: %s%s%s", text, unicodeWarning, note), nil)
+}
+
+// focusedFieldBefore resolves the element that key events will reach and reads
+// it, so the value can be compared once typing is done.
+func (d *Driver) focusedFieldBefore() (core.TextField, string) {
+	active, err := d.client.ActiveElement()
+	if err != nil || active == nil {
+		return nil, ""
+	}
+	before, _ := active.Text()
+	return core.TextFieldFuncs(active.Text, active.SendKeys, active.Clear), before
 }
 
 func (d *Driver) eraseText(step *flow.EraseTextStep) *core.CommandResult {
