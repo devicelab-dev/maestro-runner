@@ -678,6 +678,13 @@ func (d *Driver) scroll(step *flow.ScrollStep) *core.CommandResult {
 }
 
 func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.CommandResult {
+	// `from:` confines the scroll to a container. Only the UIAutomator2 driver
+	// implements it so far; refusing here is better than silently scrolling the
+	// whole screen and leaving the flow author to wonder why.
+	if !step.From.IsEmpty() {
+		return errorResult(fmt.Errorf("unsupported option"), "scrollUntilVisible `from:` is not supported on this driver yet — it currently works on the uiautomator2 driver")
+	}
+
 	direction := strings.ToLower(step.Direction)
 	if direction == "" {
 		direction = "down"

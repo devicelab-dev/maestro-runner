@@ -296,8 +296,12 @@ type ScrollStep struct {
 
 // ScrollUntilVisibleStep scrolls until element is visible.
 type ScrollUntilVisibleStep struct {
-	BaseStep              `yaml:",inline"`
-	Element               Selector `yaml:"element"`
+	BaseStep `yaml:",inline"`
+	Element  Selector `yaml:"element"`
+	// From restricts the scroll gesture to one container, for a screen with an
+	// inner list or a horizontal carousel that a full-width swipe would miss.
+	// Empty means scroll the screen, which is the usual case.
+	From                  Selector `yaml:"from"`
 	Direction             string   `yaml:"direction"`
 	MaxScrolls            int      `yaml:"maxScrolls"` // Legacy: max scroll attempts
 	Speed                 int      `yaml:"speed"`
