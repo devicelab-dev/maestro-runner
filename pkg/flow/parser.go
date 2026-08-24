@@ -259,7 +259,7 @@ func isStepType(key string) bool {
 		StepSetLocation, StepSetOrientation, StepSetAirplaneMode, StepToggleAirplaneMode,
 		StepSetDarkMode, StepToggleDarkMode, StepAssertDarkMode, StepAssertLightMode,
 		StepTravel, StepOpenLink, StepOpenBrowser, StepRepeat, StepRetry, StepRunFlow,
-		StepRunScript, StepEvalScript, StepEvalBrowserScript,
+		StepRunScript, StepRunShell, StepEvalScript, StepEvalBrowserScript,
 		StepRunBrowserScript, StepEvalWebViewScript, StepRunWebViewScript,
 		StepGetConsoleLogs, StepClearConsoleLogs, StepAssertNoJSErrors,
 		StepSetCookies, StepGetCookies, StepSaveAuthState, StepLoadAuthState,
@@ -721,6 +721,19 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 			return nil, wrapParseError(sourcePath, valueNode.Line, err)
 		}
 		s.StepType = StepRunScript
+		return &s, nil
+
+	case StepRunShell:
+		var s RunShellStep
+		if valueNode.Kind == yaml.ScalarNode {
+			s.Command = valueNode.Value
+		} else if err := valueNode.Decode(&s); err != nil {
+			return nil, wrapParseError(sourcePath, valueNode.Line, err)
+		}
+		if s.Command == "" {
+			return nil, wrapParseError(sourcePath, valueNode.Line, fmt.Errorf("runShell needs a command"))
+		}
+		s.StepType = StepRunShell
 		return &s, nil
 
 	case StepEvalScript:

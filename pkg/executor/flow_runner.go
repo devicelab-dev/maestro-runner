@@ -401,6 +401,8 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 		result = fr.script.ExecuteDefineVariables(s)
 	case *flow.RunScriptStep:
 		result = fr.script.ExecuteRunScript(s)
+	case *flow.RunShellStep:
+		result = fr.executeRunShell(s)
 	case *flow.EvalScriptStep:
 		result = fr.script.ExecuteEvalScript(s)
 	case *flow.AssertTrueStep:

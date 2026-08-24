@@ -112,6 +112,17 @@ func (se *ScriptEngine) GetVariable(name string) string {
 	return se.variables[name]
 }
 
+// Variables returns a copy of every variable currently defined, for callers
+// that need to hand the whole set to something outside the engine — a shell
+// command's environment, for instance.
+func (se *ScriptEngine) Variables() map[string]string {
+	out := make(map[string]string, len(se.variables))
+	for name, value := range se.variables {
+		out[name] = value
+	}
+	return out
+}
+
 // SetPlatform sets the platform in the JS engine.
 func (se *ScriptEngine) SetPlatform(platform string) {
 	se.js.SetPlatform(platform)

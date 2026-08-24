@@ -77,6 +77,7 @@ const (
 	StepRetry             StepType = "retry"
 	StepRunFlow           StepType = "runFlow"
 	StepRunScript         StepType = "runScript"
+	StepRunShell          StepType = "runShell"
 	StepEvalScript        StepType = "evalScript"
 	StepEvalBrowserScript StepType = "evalBrowserScript"
 	StepRunBrowserScript  StepType = "runBrowserScript"
@@ -653,6 +654,26 @@ type RunScriptStep struct {
 	Script   string            `yaml:"script"` // Script content or filename (string form)
 	File     string            `yaml:"file"`   // Script filename (map form)
 	Env      map[string]string `yaml:"env"`
+}
+
+// RunShellStep runs a command on the machine driving the test — the host, not
+// the device. That is what makes it useful: it is the escape hatch for adb,
+// simctl, xcrun and the rest of the platform tooling a flow occasionally needs
+// and the runner deliberately does not wrap.
+type RunShellStep struct {
+	BaseStep `yaml:",inline"`
+	// Command is the shell command line. Handed to `sh -c`, so pipes,
+	// redirection and quoting all work as written.
+	Command string `yaml:"command"`
+	// Output names a flow variable to receive the command's trimmed stdout,
+	// making it available to later steps as ${NAME}.
+	Output string `yaml:"output"`
+	// Env adds variables to the command's environment, on top of the runner's
+	// own and the MAESTRO_* values describing the device under test.
+	//
+	// `timeout` comes from BaseStep and bounds the command; it defaults to 30s
+	// here, because a hung shell call must not hang the run.
+	Env map[string]string `yaml:"env"`
 }
 
 // ScriptPath returns the script path (either Script or File field).
