@@ -640,7 +640,15 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		if elem != nil {
 			before, _ := elem.Text()
 			if err := elem.SendKeys(text); err != nil {
-				return errorResult(err, fmt.Sprintf("Failed to input text: %v", err))
+				// The element reference can go stale between the find and the
+				// write — a Compose recomposition is enough — and the write is
+				// then rejected for a field that is perfectly typeable. Key
+				// events go to whatever holds focus, which after a tap is that
+				// same field, so they get the text in without a second lookup.
+				logger.Warn("inputText: send-keys failed (%v), falling back to key events", err)
+				if keyErr := d.client.SendKeyActions(text); keyErr != nil {
+					return errorResult(err, fmt.Sprintf("Failed to input text: %v (key events also failed: %v)", err, keyErr))
+				}
 			}
 			typedInto, beforeText = core.TextFieldFuncs(elem.Text, elem.SendKeys, elem.Clear), before
 		} else if d.webView != nil && d.webView.isConnected() {
