@@ -252,6 +252,14 @@ func (se *ScriptEngine) RunScript(script string, env map[string]string) error {
 	return nil
 }
 
+// expandEnvMap expands `${VAR}` / `${VAR || "default"}` in every value of a
+// YAML `env:` map, in place.
+func (se *ScriptEngine) expandEnvMap(env map[string]string) {
+	for k, v := range env {
+		env[k] = se.ExpandVariables(v)
+	}
+}
+
 // applyScopedEnv sets env vars (with their values variable-expanded) for one
 // script run and returns a restore func. Each var is reverted to its prior
 // value afterward — or unset if it had none — so runScript env never persists
@@ -770,9 +778,29 @@ func (se *ScriptEngine) ExpandStep(step flow.Step) {
 		if s.When != nil {
 			se.ExpandCondition(s.When)
 		}
-		for k, v := range s.Env {
-			s.Env[k] = se.ExpandVariables(v)
-		}
+		se.expandEnvMap(s.Env)
+
+	// Every other step type carrying a YAML `env:` map. Without these, a
+	// value like `TOKEN: "${AUTH}"` reached the step verbatim: the `${AUTH}`
+	// went through as six literal characters and whatever read it got nonsense
+	// rather than the token.
+	case *flow.RetryStep:
+		se.expandEnvMap(s.Env)
+	case *flow.RunBrowserScriptStep:
+		se.expandEnvMap(s.Env)
+	case *flow.RunWebViewScriptStep:
+		se.expandEnvMap(s.Env)
+	case *flow.DefineVariablesStep:
+		se.expandEnvMap(s.Env)
+	case *flow.RunShellStep:
+		// Only `env:`. The command itself is deliberately left alone so shell
+		// syntax stays shell syntax — `${VAR}` means the same thing in both
+		// languages, and expanding it here would blank the MAESTRO_* values the
+		// step puts in the environment for the command to use. Flow variables
+		// are already exported into that environment, so `$MY_VAR` in a command
+		// resolves without any expansion happening first.
+		se.expandEnvMap(s.Env)
+
 	// Device-control / gesture steps: string value fields were missing from
 	// this allowlist, so `${VAR}` reached the driver verbatim (e.g.
 	// setOrientation: ${VAR} → "invalid orientation", #137).
