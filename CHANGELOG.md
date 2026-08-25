@@ -7,11 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.1.25] - 2026-08-19
+## [1.1.25] - 2026-08-25
 
-This release is about **gestures that behave like a user's finger**: a real `dragAndDrop` on every driver — press, hold until the item lifts, move slowly, settle, release — and a `scrollUntilVisible` that stops when the element is actually visible instead of one pixel in. Flutter apps go from barely drivable to ahead of WDA on the DeviceLab iOS driver, `--step-delay` slows any flow down for demos and animation-heavy apps, and JUnit reports carry test-tracking properties and failure artifacts into CI.
+This release is about **the first five minutes and the oldest complaints**: a `doctor` that says exactly what your machine is missing, a `devices` listing, a `screenshot` command, `runShell` for the one adb call every suite eventually needs, and an `inputText` that checks what actually landed in the field. It is also about **gestures that behave like a user's finger**: a real `dragAndDrop` on every driver — press, hold until the item lifts, move slowly, settle, release — and a `scrollUntilVisible` that stops when the element is actually visible instead of one pixel in. Flutter apps go from barely drivable to ahead of WDA on the DeviceLab iOS driver, `--step-delay` slows any flow down for demos and animation-heavy apps, and JUnit reports carry test-tracking properties and failure artifacts into CI.
 
 ### Added
+- **`doctor`** — checks the toolchain and says what to do about each gap, with `--json` for CI. A missing platform is a warning rather than an error, so it gates a Linux runner without failing it for having no Xcode; only a broken install or a team ID Xcode does not have exits non-zero. Three checks earn their place: Command-Line-Tools-instead-of-full-Xcode, which otherwise surfaces far from its cause; an AVD naming a system image that is not installed, which nothing reports at run time and which shows up only as a driver polling for a device that will never boot; and `--team-id` checked against the signing certificates in the login keychain, which is the entire content of `error: No Account for Team "..."` at WDA build time.
+  ```
+  ✗ Signing identity for team abcd123456 — no certificate belongs to team abcd123456;
+    this Mac has: A3RCAA2YAX
+      Pass one of the team IDs listed above as --team-id, or add that team's account in Xcode.
+  ```
+- **`devices`** — Android devices and emulators, iOS simulators and connected phones in one listing, with `--json` and `--all` for the shut-down simulators. A phone that answers usbmux but refuses the lockdown handshake is listed as not-ready with the reason, instead of looking identical to a working one.
+- **`screenshot`** — capture the current screen with the same device and driver flags a run takes. Writes a file, or `-` for stdout.
+- **`runShell`** — run a host command from a flow, for the adb, simctl or xcrun call every suite eventually needs.
+  ```yaml
+  - runShell:
+      command: adb -s $MAESTRO_DEVICE_ID shell getprop ro.build.version.sdk
+      output: SDK
+  ```
+  `output:` binds the command's trimmed output to a flow variable for later steps. The environment carries the flow's variables, the step's own `env:`, and `MAESTRO_DEVICE_ID` / `MAESTRO_PLATFORM` / `MAESTRO_APP_ID` — the device id being the one that matters, since a bare `adb shell` fails outright when `--parallel` has two devices attached. Bounded at 30s by default (`timeout:` to change it), output capped at 64KB keeping the tail, and a non-zero exit fails the step unless it is `optional: true`.
+- **`scrollUntilVisible` can scroll inside a container** — `from:` names the scrollable element, for a screen whose scrolling part is an inner list or a horizontal carousel rather than the screen itself. The gesture is centred in the container and inset at each end, so a swipe starting on its edge is not claimed by the parent list instead. UIAutomator2 for now; the other drivers refuse `from:` by name rather than silently scrolling the screen.
+  ```yaml
+  - scrollUntilVisible:
+      element:
+        id: "product-item-Playwright"
+      from:
+        id: "products-list"
+  ```
+- **`--video never|always|on-failure`** — keep screen recordings only for the runs worth watching. `--record` still means `always`. A recording cannot be started retroactively, so `on-failure` records every flow and discards the passing ones at the end. The vocabulary matches `--artifacts` rather than inventing a second spelling for the same idea.
+- **`lint --json`** — `{checked, failed, results[]}` on stdout, for editors, CI and anything generating flows that wants to check its own output before it costs a device.
 - **`dragAndDrop`** — long-press an element (or point) and drag it to another, the way reorder UIs expect. `from:`/`to:` each take a selector or a `point:`; `holdDuration` (ms, default 1000) is the press before movement, `duration` (ms, default 1000) the movement itself. Works on every driver: UIAutomator2 (W3C actions with precise hold and paced moves), DeviceLab Android (`input draganddrop`, Android 12+ — hold length comes from the system long-press timeout), WDA (`press(forDuration:thenDragTo:)` — XCUITest paces the move itself), DeviceLab iOS (runner drag with a new backward-compatible `moveDurationMs` field), web (paced CDP mouse sequence), and Appium (W3C actions).
   ```yaml
   - dragAndDrop:
@@ -41,6 +66,8 @@ This release is about **gestures that behave like a user's finger**: a real `dra
 - **The DeviceLab iOS runner source ships inside the Go module** — library consumers previously built the runner from whatever was in `~/.maestro-runner/drivers/ios`, a hidden runtime dependency and a protocol-skew hazard where a pinned Go client could drive runner sources from a different version. The runner a consumer runs is now version-locked to the module it compiled against, with no maestro-runner installation needed. The CLI keeps using the installed directory — identical content, shared build cache.
 
 ### Fixed
+- **`inputText` reported success without checking that the text arrived** — nothing read the field back, so a character lost to a janky frame was indistinguishable from a clean run, and the flow failed several steps later on an assertion that had nothing to do with the cause. Every Android path now reads the field after typing and, when characters are missing, clears and types once more; a dropped keystroke is a timing accident, and the second attempt almost always succeeds. Three rules keep it from causing more harm than it prevents: the check is a suffix rather than an equality, because mobile text entry appends to whatever the field held; a reading that did not change is treated as telling us nothing, because some drivers report an empty field's hint, so "Username" comes back whether or not a name was typed; and a value at least as long as what was typed has been reformatted by the app — a phone mask, an autocomplete, a secure field reporting bullets — so those are recognised and left alone. A field that still disagrees after the retry is reported in the step result rather than failed. Measured on a Pixel 4a at roughly 75ms per field. Not yet wired on WDA or DeviceLab iOS.
+- **Two device errors described something other than what had happened** — on iOS, with nothing booted and no device named, an empty device list was reported as a code-signing error demanding `--team-id`, because the "is this a simulator?" check correctly answers no when there is no simulator. An empty device list now says so, before signing is considered at all. On Android, the parallel path reported "no available Android devices found" whether nothing was attached or every attached device was already being driven by another maestro-runner; those have completely different fixes, and offline or unauthorized devices are now counted separately again. Both point at `maestro-runner devices` for what the machine can actually see.
 - **`scrollUntilVisible` stopped on elements it shouldn't have** — every driver accepted any 1px viewport overlap (or mere presence) as "visible", and the documented `visibilityPercentage` knob was parsed but wired to nothing. The stop criterion is now a real visibility check on every driver: fully visible by default, honoring `visibilityPercentage` when set. Heads-up: flows that relied on a sliver of the element counting as visible may scroll one step further now. On DeviceLab iOS, frames that arrive pre-clipped to the viewport (Flutter semantics especially) additionally need to hold still across one extra scroll before being accepted, so a 12pt sliver of an 80pt row can't masquerade as fully visible.
 - **Flutter apps were undrivable on the DeviceLab iOS driver** — four stacked causes, each fixed: the Flutter VM fallback was wired only into the WDA path; the driver implemented neither the coordinate-tap step the fallback delivers taps through nor `tapOn: point:`; the fallback's short find windows leaked into the runner's HTTP timeout and cut XCUITest calls off mid-flight; and scroll gestures released mid-motion, so iOS spent the next tap cancelling residual deceleration instead of activating anything — a silent no-op. Scrolls now hold still 250ms before lifting, the same dead-stop lesson the Android agent swipes learned. On the Flutter issue-repro suite the driver goes from 9/19 to 17/19 — ahead of WDA-with-fallback at 14/19; the two remaining failures reproduce open Flutter framework bugs and fail on every driver.
 
