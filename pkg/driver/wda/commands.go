@@ -945,7 +945,11 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 			var applyList []struct{ perm, action string }
 			for name, value := range permissions {
 				lower := strings.ToLower(value)
-				if lower != "allow" && lower != "deny" {
+				if lower == "unset" {
+					continue // already reset above; leave it "not determined"
+				}
+				if !iosPermissionValueSupported(name, lower) {
+					logger.Warn("launchApp: ignoring unsupported value %q for permission %q", value, name)
 					continue
 				}
 				if strings.ToLower(name) == "all" {
@@ -986,7 +990,11 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 		var applyList []struct{ perm, action string }
 		for name, value := range permissions {
 			lower := strings.ToLower(value)
-			if lower != "allow" && lower != "deny" {
+			if lower == "unset" {
+				continue // already reset above; leave it "not determined"
+			}
+			if !iosPermissionValueSupported(name, lower) {
+				logger.Warn("launchApp: ignoring unsupported value %q for permission %q", value, name)
 				continue
 			}
 			if strings.ToLower(name) == "all" {
@@ -1774,7 +1782,11 @@ func (d *Driver) setPermissions(step *flow.SetPermissionsStep) *core.CommandResu
 	var applied, errors []string
 	for name, value := range step.Permissions {
 		lower := strings.ToLower(value)
-		if lower != "allow" && lower != "deny" {
+		if lower == "unset" {
+			continue // already reset above; leave it "not determined"
+		}
+		if !iosPermissionValueSupported(name, lower) {
+			logger.Warn("setPermissions: ignoring unsupported value %q for permission %q", value, name)
 			continue
 		}
 		if strings.ToLower(name) == "all" {
@@ -1807,22 +1819,76 @@ func (d *Driver) setPermissions(step *flow.SetPermissionsStep) *core.CommandResu
 	}
 }
 
+// iosPermissionAction resolves one `name: value` pair from a flow into the
+// simctl privacy action and service to run.
+//
+// Most permissions are a plain three-way allow / deny / unset. Location is not:
+// iOS distinguishes "while using the app" from "always", so it takes
+// `always`, `inuse`, `never` and `unset`, and the two services behind them are
+// different — `location` for in-use, `location-always` for background. Maestro
+// accepts the same words, and a flow written against it must behave the same
+// here.
+//
+// Returns ok=false for a value this permission does not accept. Callers report
+// that rather than skipping it: silently ignoring `location: never` is what
+// made this look like a broken feature instead of a rejected value — the
+// permission was reset to "not determined" and the app asked the user, which is
+// the exact opposite of what the flow said (#147).
+func iosPermissionAction(service, value string) (action string, resolvedService string, ok bool) {
+	v := strings.ToLower(strings.TrimSpace(value))
+
+	if service == "location-always" || service == "location" {
+		switch v {
+		case "always", "allow":
+			return "grant", "location-always", true
+		case "inuse", "wheninuse", "when-in-use":
+			return "grant", "location", true
+		case "never", "deny":
+			return "revoke", "location-always", true
+		case "unset":
+			return "reset", "location-always", true
+		default:
+			return "", "", false
+		}
+	}
+
+	switch v {
+	case "allow":
+		return "grant", service, true
+	case "deny":
+		return "revoke", service, true
+	case "unset":
+		return "reset", service, true
+	default:
+		return "", "", false
+	}
+}
+
+// iosPermissionValueSupported reports whether value means anything for the
+// permission named in the flow. Checked against the first service the shortcut
+// resolves to, since a shortcut never mixes location with anything else.
+func iosPermissionValueSupported(name, value string) bool {
+	if strings.ToLower(name) == "all" {
+		_, _, ok := iosPermissionAction("camera", value)
+		return ok
+	}
+	services := resolveIOSPermissionShortcut(name)
+	if len(services) == 0 {
+		return false
+	}
+	_, _, ok := iosPermissionAction(services[0], value)
+	return ok
+}
+
 // applyIOSPermission grants or revokes a single permission using xcrun simctl privacy.
 func (d *Driver) applyIOSPermission(appID, permission, value string) error {
-	var action string
-	switch strings.ToLower(value) {
-	case "allow":
-		action = "grant"
-	case "deny":
-		action = "revoke"
-	case "unset":
-		action = "reset"
-	default:
-		return fmt.Errorf("invalid permission value: %s (use allow/deny/unset)", value)
+	action, service, ok := iosPermissionAction(permission, value)
+	if !ok {
+		return fmt.Errorf("invalid value %q for permission %q", value, permission)
 	}
 
 	// xcrun simctl privacy <device> <action> <service> <bundle-id>
-	cmd := exec.Command("xcrun", "simctl", "privacy", d.udid, action, permission, appID)
+	cmd := exec.Command("xcrun", "simctl", "privacy", d.udid, action, service, appID)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s: %s", err, string(output))

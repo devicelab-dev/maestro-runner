@@ -1622,8 +1622,11 @@ func TestApplyIOSPermissionInvalidValue(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Expected error for invalid permission value")
 	}
-	if !strings.Contains(err.Error(), "invalid permission value") {
-		t.Errorf("Expected 'invalid permission value' in error, got: %v", err)
+	// The message names the permission as well as the value: location accepts
+	// words the others do not, so "invalid" on its own leaves the reader
+	// guessing which half was wrong.
+	if !strings.Contains(err.Error(), `invalid value "invalid" for permission "camera"`) {
+		t.Errorf("error should name both the value and the permission, got: %v", err)
 	}
 }
 
