@@ -450,6 +450,15 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 		}
 		s.AppID = fr.script.ExpandVariables(s.AppID)
 		result = fr.driver.Execute(step)
+	case *flow.SetPermissionsStep:
+		// Same defaulting as the steps above. Without it a `setPermissions`
+		// that omits appId — the form the docs show, since the flow already
+		// declares one — reached the driver with an empty app and failed.
+		if s.AppID == "" {
+			s.AppID = fr.flow.Config.EffectiveAppID()
+		}
+		s.AppID = fr.script.ExpandVariables(s.AppID)
+		result = fr.driver.Execute(step)
 
 	// EvalBrowserScript - execute JS in browser, store output variable
 	case *flow.EvalBrowserScriptStep:
@@ -1395,6 +1404,12 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 		fr.script.ExpandStep(step)
 		result = fr.driver.Execute(step)
 	case *flow.KillAppStep:
+		if s.AppID == "" {
+			s.AppID = fr.flow.Config.EffectiveAppID()
+		}
+		fr.script.ExpandStep(step)
+		result = fr.driver.Execute(step)
+	case *flow.SetPermissionsStep:
 		if s.AppID == "" {
 			s.AppID = fr.flow.Config.EffectiveAppID()
 		}

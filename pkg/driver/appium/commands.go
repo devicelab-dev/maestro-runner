@@ -1209,3 +1209,78 @@ func getAllPermissions() []string {
 		"android.permission.ACTIVITY_RECOGNITION",
 	}
 }
+
+// setPermissions grants or revokes Android runtime permissions mid-flow.
+//
+// The step was parsed and then rejected by the dispatcher, so a flow using it
+// aborted with "unsupported step type" before anything reached Appium (#148).
+// The capability was already here: `mobile: changePermissions` takes an
+// explicit list and an action, which is exactly what this needs.
+//
+// Android only. iOS permissions are decided when the app is installed and
+// Appium exposes no equivalent, so saying so is better than a silent no-op.
+func (d *Driver) setPermissions(step *flow.SetPermissionsStep) *core.CommandResult {
+	if d.platform == "ios" {
+		return errorResult(
+			fmt.Errorf("unsupported on iOS"),
+			"setPermissions is not supported on the Appium iOS driver — set appium:autoAcceptAlerts in --caps, or use the wda driver",
+		)
+	}
+
+	appID := step.AppID
+	if appID == "" {
+		return errorResult(fmt.Errorf("no appId"), "setPermissions needs an appId")
+	}
+	if len(step.Permissions) == 0 {
+		return errorResult(fmt.Errorf("no permissions"), "setPermissions needs at least one permission")
+	}
+
+	// Group by action so each one is a single call: changePermissions takes a
+	// whole list, and issuing one request per permission is what made launchApp
+	// slow enough to be worth fixing in the first place.
+	byAction := map[string][]string{}
+	for name, value := range step.Permissions {
+		action := ""
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "allow":
+			action = "grant"
+		case "deny":
+			action = "revoke"
+		case "unset":
+			// Android has no per-permission reset — `pm reset-permissions`
+			// resets the whole app. Revoking is the closest honest answer, and
+			// saying which is better than pretending they are the same.
+			logger.Warn("setPermissions: Android cannot reset a single permission; revoking %q instead", name)
+			action = "revoke"
+		default:
+			logger.Warn("setPermissions: ignoring unsupported value %q for permission %q", value, name)
+			continue
+		}
+
+		var names []string
+		if strings.EqualFold(name, "all") {
+			names = getAllPermissions()
+		} else {
+			names = core.AndroidPermissionShortcut(name)
+		}
+		byAction[action] = append(byAction[action], names...)
+	}
+
+	if len(byAction) == 0 {
+		return errorResult(fmt.Errorf("no usable permissions"), "setPermissions: no recognised permission values")
+	}
+
+	var applied int
+	for action, names := range byAction {
+		if _, err := d.client.ExecuteMobile("changePermissions", map[string]interface{}{
+			"permissions": names,
+			"appPackage":  appID,
+			"action":      action,
+		}); err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to %s permissions: %v", action, err))
+		}
+		applied += len(names)
+	}
+
+	return successResult(fmt.Sprintf("Permissions updated: %d", applied), nil)
+}
