@@ -1367,7 +1367,13 @@ func (d *Driver) applyPermissions(appID string, permissions map[string]string) *
 			allPerms := getAllPermissions()
 			for _, perm := range allPerms {
 				err := d.applyPermission(appID, perm, value)
-				if err != nil {
+				if err != nil && core.IsUndeclaredPermissionError(err.Error()) {
+					// "all" always names permissions a given app never wanted.
+					// One line each would bury the run; the explicit branch
+					// below is where a flow author asked for something specific
+					// and deserves to hear it did not apply.
+					logger.Debug("permissions: %s does not declare %s", appID, perm)
+				} else if err != nil {
 					errors = append(errors, fmt.Sprintf("%s: %v", perm, err))
 				} else if value == "allow" {
 					granted = append(granted, perm)
@@ -1382,7 +1388,9 @@ func (d *Driver) applyPermissions(appID string, permissions map[string]string) *
 		perms := resolvePermissionShortcut(name)
 		for _, perm := range perms {
 			err := d.applyPermission(appID, perm, value)
-			if err != nil {
+			if err != nil && core.IsUndeclaredPermissionError(err.Error()) {
+				logger.Warn("setPermissions: %s does not declare %s — skipping", appID, perm)
+			} else if err != nil {
 				errors = append(errors, fmt.Sprintf("%s: %v", perm, err))
 			} else if value == "allow" {
 				granted = append(granted, perm)

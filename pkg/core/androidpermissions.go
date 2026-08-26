@@ -89,3 +89,18 @@ func AndroidPermissionShortcut(shortcut string) []string {
 		return []string{"android.permission." + strings.ToUpper(shortcut)}
 	}
 }
+
+// IsUndeclaredPermissionError reports whether an Android permission failure is
+// the app simply not having asked for it.
+//
+// `pm grant` raises a SecurityException for any permission absent from the
+// manifest. That is not a broken run — Maestro ignores it, and a flow saying
+// `all: allow` will always name permissions a given app never wanted — so it
+// must not fail the step. It should still be reported: silently discarding
+// these is what let three drivers ship a setPermissions that quietly did
+// nothing (#148).
+func IsUndeclaredPermissionError(message string) bool {
+	m := strings.ToLower(message)
+	return strings.Contains(m, "has not requested permission") ||
+		strings.Contains(m, "not a changeable permission type")
+}

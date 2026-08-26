@@ -1653,21 +1653,29 @@ func (d *Driver) applyPermissions(appID string, permissions map[string]string) *
 		}
 	}
 
-	if len(toGrant) > 0 {
-		var parts []string
-		for _, perm := range toGrant {
-			parts = append(parts, fmt.Sprintf("pm grant %s %s 2>/dev/null", appID, perm))
+	// Batched into one shell round trip, but no longer with stderr thrown away:
+	// discarding it meant a permission the app never declared looked identical
+	// to one that applied, and setPermissions reported success either way.
+	run := func(verb string, perms []string) {
+		if len(perms) == 0 {
+			return
 		}
-		_, _ = d.device.Shell(strings.Join(parts, "; "))
-	}
-
-	if len(toRevoke) > 0 {
 		var parts []string
-		for _, perm := range toRevoke {
-			parts = append(parts, fmt.Sprintf("pm revoke %s %s 2>/dev/null", appID, perm))
+		for _, perm := range perms {
+			parts = append(parts, fmt.Sprintf("pm %s %s %s", verb, appID, perm))
 		}
-		_, _ = d.device.Shell(strings.Join(parts, "; "))
+		out, err := d.device.Shell(strings.Join(parts, "; "))
+		if err == nil && !strings.Contains(out, "Exception") {
+			return
+		}
+		if core.IsUndeclaredPermissionError(out) {
+			logger.Warn("setPermissions: %s does not declare one or more of %v — skipping those", appID, perms)
+			return
+		}
+		logger.Warn("setPermissions: pm %s reported: %s", verb, strings.TrimSpace(out))
 	}
+	run("grant", toGrant)
+	run("revoke", toRevoke)
 
 	return successResult(fmt.Sprintf("Permissions updated: %d granted, %d revoked", len(toGrant), len(toRevoke)), nil)
 }
