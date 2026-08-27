@@ -107,16 +107,24 @@ func (m *webViewManager) connectViaUnixSocket(cdpInfo *core.CDPInfo, cdpType str
 	client := cdp.New().Start(ws)
 
 	browser := rod.New().Client(client).NoDefaultDevice()
-	// Use a temporary timeout for Connect + Pages — the browser object itself is long-lived
-	browserTimeout := browser.Timeout(10 * time.Second)
-	if err := browserTimeout.Connect(); err != nil {
+	// Connect on the long-lived object, not on a timeout clone.
+	//
+	// rod's Timeout() returns a shallow copy of the Browser struct, and
+	// Connect() initialises the browser's event observable on whichever copy it
+	// is called on. Connecting through a clone therefore left the object we
+	// keep with a nil observable — valid pointer, unusable browser — and the
+	// next call that reached Browser.Event() dereferenced nil and took the
+	// whole process down (#149). Bound the individual calls instead; the
+	// underlying CDP client is already started, so Connect itself is one round
+	// trip that fails fast when the socket is dead.
+	if err := browser.Connect(); err != nil {
 		logger.Info("[cdp:6-browser] Rod browser connection failed: %v", err)
 		_ = m.forwarder.RemoveSocketForward(socketPath)
 		os.Remove(socketPath)
 		return fmt.Errorf("failed to connect Rod browser: %w", err)
 	}
 
-	pages, err := browserTimeout.Pages()
+	pages, err := browser.Timeout(10 * time.Second).Pages()
 	if err != nil || len(pages) == 0 {
 		logger.Info("[cdp:6-browser] no pages found in WebView (err=%v)", err)
 		browser.Close()
@@ -156,10 +164,10 @@ func (m *webViewManager) connectViaUnixSocket(cdpInfo *core.CDPInfo, cdpType str
 
 // cdpTarget represents a Chrome DevTools Protocol target from /json endpoint.
 type cdpTarget struct {
-	ID                 string `json:"id"`
-	Type               string `json:"type"`
-	Title              string `json:"title"`
-	URL                string `json:"url"`
+	ID                   string `json:"id"`
+	Type                 string `json:"type"`
+	Title                string `json:"title"`
+	URL                  string `json:"url"`
 	WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
 }
 
@@ -1119,4 +1127,3 @@ func (m *webViewManager) getNetworkTracker() *webViewNetworkTracker {
 	defer m.mu.RUnlock()
 	return m.network
 }
-
