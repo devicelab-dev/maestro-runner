@@ -108,70 +108,9 @@ func runHierarchy(c *cli.Context) error {
 		logger.Info("Capturing hierarchy from device: %s", runDevice)
 	}
 
-	// Helper to get flag value from current or parent context
-	// When run as subcommand, global flags are in parent context
-	// NOTE: This are duplicated from pkg/cli/test.go, may want to refactor
-	getString := func(name string) string {
-		if c.IsSet(name) {
-			return c.String(name)
-		}
-		if c.Lineage()[1] != nil {
-			return c.Lineage()[1].String(name)
-		}
-		return c.String(name)
-	}
-	getInt := func(name string) int {
-		if c.IsSet(name) {
-			return c.Int(name)
-		}
-		if c.Lineage()[1] != nil {
-			return c.Lineage()[1].Int(name)
-		}
-		return c.Int(name)
-	}
-	getBool := func(name string) bool {
-		if c.IsSet(name) {
-			return c.Bool(name)
-		}
-		if c.Lineage()[1] != nil {
-			return c.Lineage()[1].Bool(name)
-		}
-		return c.Bool(name)
-	}
-
-	// Load Appium capabilities if provided
-	capsFile := getString("caps")
-	var caps map[string]interface{}
-	if capsFile != "" {
-		var err error
-		caps, err = loadCapabilities(capsFile)
-		if err != nil {
-			return err
-		}
-	}
-
-	// Build run configuration, limited to elements relevant to hierarchy subcommand
-	cfg := &RunConfig{
-		Headed:             getBool("headed"),
-		Browser:            getString("browser"),
-		UserDataDir:        getString("user-data-dir"),
-		Platform:           getString("platform"),
-		Devices:            parseDevices(getString("device")),
-		Driver:             getString("driver"),
-		AppiumURL:          getString("appium-url"),
-		AppiumSessionFile:  getString("appium-session-file"),
-		CapsFile:           capsFile,
-		Capabilities:       caps,
-		TeamID:             getString("team-id"),
-		WDABundleID:        getString("wda-bundle-id"),
-		StartEmulator:      getString("start-emulator"),
-		StartSimulator:     getString("start-simulator"),
-		AutoStartEmulator:  getBool("auto-start-emulator"),
-		BootTimeout:        getInt("boot-timeout"),
-		DriverStartTimeout: getInt("driver-start-timeout"),
-		NoDriverInstall:    getBool("no-driver-install"),
-		NoFlutterFallback:  getBool("no-flutter-fallback"),
-		AndroidTCPForward:  getBool("android-tcp-forward"),
+	cfg, err := buildDeviceRunConfig(c)
+	if err != nil {
+		return err
 	}
 
 	// Driver setup and teardown print progress to stdout; redirect that to
@@ -243,4 +182,63 @@ func captureHierarchyScreenshot(driver core.Driver, path string) error {
 		return fmt.Errorf("write screenshot %s: %w", path, wErr)
 	}
 	return nil
+}
+
+// buildDeviceRunConfig assembles the RunConfig for the subcommands that open a
+// driver session but do not run a flow — hierarchy, screenshot. Global flags may
+// be given before the subcommand or after it, so each is read from the current
+// context first and the parent's second.
+func buildDeviceRunConfig(c *cli.Context) (*RunConfig, error) {
+	getString := func(name string) string { return globalString(c, name) }
+	getInt := func(name string) int {
+		if c.IsSet(name) {
+			return c.Int(name)
+		}
+		if lineage := c.Lineage(); len(lineage) > 1 && lineage[1] != nil {
+			return lineage[1].Int(name)
+		}
+		return c.Int(name)
+	}
+	getBool := func(name string) bool {
+		if c.IsSet(name) {
+			return c.Bool(name)
+		}
+		if lineage := c.Lineage(); len(lineage) > 1 && lineage[1] != nil {
+			return lineage[1].Bool(name)
+		}
+		return c.Bool(name)
+	}
+
+	capsFile := getString("caps")
+	var caps map[string]interface{}
+	if capsFile != "" {
+		var err error
+		caps, err = loadCapabilities(capsFile)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &RunConfig{
+		Headed:             getBool("headed"),
+		Browser:            getString("browser"),
+		UserDataDir:        getString("user-data-dir"),
+		Platform:           getString("platform"),
+		Devices:            parseDevices(getString("device")),
+		Driver:             getString("driver"),
+		AppiumURL:          getString("appium-url"),
+		AppiumSessionFile:  getString("appium-session-file"),
+		CapsFile:           capsFile,
+		Capabilities:       caps,
+		TeamID:             getString("team-id"),
+		WDABundleID:        getString("wda-bundle-id"),
+		StartEmulator:      getString("start-emulator"),
+		StartSimulator:     getString("start-simulator"),
+		AutoStartEmulator:  getBool("auto-start-emulator"),
+		BootTimeout:        getInt("boot-timeout"),
+		DriverStartTimeout: getInt("driver-start-timeout"),
+		NoDriverInstall:    getBool("no-driver-install"),
+		NoFlutterFallback:  getBool("no-flutter-fallback"),
+		AndroidTCPForward:  getBool("android-tcp-forward"),
+	}, nil
 }

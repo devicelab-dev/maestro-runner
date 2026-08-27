@@ -112,6 +112,17 @@ func (se *ScriptEngine) GetVariable(name string) string {
 	return se.variables[name]
 }
 
+// Variables returns a copy of every variable currently defined, for callers
+// that need to hand the whole set to something outside the engine — a shell
+// command's environment, for instance.
+func (se *ScriptEngine) Variables() map[string]string {
+	out := make(map[string]string, len(se.variables))
+	for name, value := range se.variables {
+		out[name] = value
+	}
+	return out
+}
+
 // SetPlatform sets the platform in the JS engine.
 func (se *ScriptEngine) SetPlatform(platform string) {
 	se.js.SetPlatform(platform)
@@ -239,6 +250,14 @@ func (se *ScriptEngine) RunScript(script string, env map[string]string) error {
 	// Sync output back to variables
 	se.SyncOutputToVariables()
 	return nil
+}
+
+// expandEnvMap expands `${VAR}` / `${VAR || "default"}` in every value of a
+// YAML `env:` map, in place.
+func (se *ScriptEngine) expandEnvMap(env map[string]string) {
+	for k, v := range env {
+		env[k] = se.ExpandVariables(v)
+	}
 }
 
 // applyScopedEnv sets env vars (with their values variable-expanded) for one
@@ -759,9 +778,29 @@ func (se *ScriptEngine) ExpandStep(step flow.Step) {
 		if s.When != nil {
 			se.ExpandCondition(s.When)
 		}
-		for k, v := range s.Env {
-			s.Env[k] = se.ExpandVariables(v)
-		}
+		se.expandEnvMap(s.Env)
+
+	// Every other step type carrying a YAML `env:` map. Without these, a
+	// value like `TOKEN: "${AUTH}"` reached the step verbatim: the `${AUTH}`
+	// went through as six literal characters and whatever read it got nonsense
+	// rather than the token.
+	case *flow.RetryStep:
+		se.expandEnvMap(s.Env)
+	case *flow.RunBrowserScriptStep:
+		se.expandEnvMap(s.Env)
+	case *flow.RunWebViewScriptStep:
+		se.expandEnvMap(s.Env)
+	case *flow.DefineVariablesStep:
+		se.expandEnvMap(s.Env)
+	case *flow.RunShellStep:
+		// Only `env:`. The command itself is deliberately left alone so shell
+		// syntax stays shell syntax — `${VAR}` means the same thing in both
+		// languages, and expanding it here would blank the MAESTRO_* values the
+		// step puts in the environment for the command to use. Flow variables
+		// are already exported into that environment, so `$MY_VAR` in a command
+		// resolves without any expansion happening first.
+		se.expandEnvMap(s.Env)
+
 	// Device-control / gesture steps: string value fields were missing from
 	// this allowlist, so `${VAR}` reached the driver verbatim (e.g.
 	// setOrientation: ${VAR} → "invalid orientation", #137).

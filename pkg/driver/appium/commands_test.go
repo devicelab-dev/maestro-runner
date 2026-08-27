@@ -2,6 +2,7 @@ package appium
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1050,14 +1051,22 @@ func TestGrantPermissionsWithExplicitPermissions(t *testing.T) {
 }
 
 func TestGrantPermissionsWithAllPermissions(t *testing.T) {
-	callCount := 0
+	var scripts []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(r.URL.Path, "/execute/sync") {
-			callCount++
-			writeJSON(w, map[string]interface{}{
-				"value": nil,
-			})
+			var body struct {
+				Script string `json:"script"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			scripts = append(scripts, body.Script)
+			if body.Script == "mobile: getPermissions" {
+				writeJSON(w, map[string]interface{}{
+					"value": []interface{}{"android.permission.CAMERA"},
+				})
+				return
+			}
+			writeJSON(w, map[string]interface{}{"value": nil})
 			return
 		}
 		writeJSON(w, map[string]interface{}{"value": nil})
@@ -1065,24 +1074,40 @@ func TestGrantPermissionsWithAllPermissions(t *testing.T) {
 	defer server.Close()
 	driver := createTestAppiumDriver(server)
 
-	// nil permissions should grant all permissions
+	// nil permissions means "whatever the app declares"
 	driver.grantPermissions("com.test.app", nil)
 
-	expectedCount := len(getAllPermissions())
-	if callCount != expectedCount {
-		t.Fatalf("expected %d grant calls for all permissions, got %d", expectedCount, callCount)
+	// Read what the manifest declares, then grant that list in one call —
+	// two requests, regardless of how many permissions exist. The old
+	// behaviour shelled out once per entry in a hardcoded list of 32.
+	want := []string{"mobile: getPermissions", "mobile: changePermissions"}
+	if len(scripts) != len(want) {
+		t.Fatalf("issued %v, want exactly %v", scripts, want)
+	}
+	for i := range want {
+		if scripts[i] != want[i] {
+			t.Fatalf("issued %v, want %v", scripts, want)
+		}
 	}
 }
 
 func TestGrantPermissionsWithEmptyMap(t *testing.T) {
-	callCount := 0
+	var scripts []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(r.URL.Path, "/execute/sync") {
-			callCount++
-			writeJSON(w, map[string]interface{}{
-				"value": nil,
-			})
+			var body struct {
+				Script string `json:"script"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			scripts = append(scripts, body.Script)
+			if body.Script == "mobile: getPermissions" {
+				writeJSON(w, map[string]interface{}{
+					"value": []interface{}{"android.permission.CAMERA"},
+				})
+				return
+			}
+			writeJSON(w, map[string]interface{}{"value": nil})
 			return
 		}
 		writeJSON(w, map[string]interface{}{"value": nil})
@@ -1090,12 +1115,20 @@ func TestGrantPermissionsWithEmptyMap(t *testing.T) {
 	defer server.Close()
 	driver := createTestAppiumDriver(server)
 
-	// Empty map should grant all permissions (len(permissions) == 0)
+	// An empty map is the same as nil: no explicit list was given.
 	driver.grantPermissions("com.test.app", map[string]string{})
 
-	expectedCount := len(getAllPermissions())
-	if callCount != expectedCount {
-		t.Fatalf("expected %d grant calls for all permissions with empty map, got %d", expectedCount, callCount)
+	// Read what the manifest declares, then grant that list in one call —
+	// two requests, regardless of how many permissions exist. The old
+	// behaviour shelled out once per entry in a hardcoded list of 32.
+	want := []string{"mobile: getPermissions", "mobile: changePermissions"}
+	if len(scripts) != len(want) {
+		t.Fatalf("issued %v, want exactly %v", scripts, want)
+	}
+	for i := range want {
+		if scripts[i] != want[i] {
+			t.Fatalf("issued %v, want %v", scripts, want)
+		}
 	}
 }
 

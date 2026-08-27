@@ -2346,3 +2346,47 @@ func TestParse_DragAndDrop_RequiresFromAndTo(t *testing.T) {
 		}
 	}
 }
+
+func TestParseRunShellStep(t *testing.T) {
+	yamlSrc := `appId: com.example
+---
+- runShell: adb devices
+- runShell:
+    command: echo hi
+    output: GREETING
+    env:
+      NAME: value
+    timeout: 500
+`
+	f, err := Parse([]byte(yamlSrc), "test.yaml")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(f.Steps) != 2 {
+		t.Fatalf("got %d steps, want 2", len(f.Steps))
+	}
+
+	short, ok := f.Steps[0].(*RunShellStep)
+	if !ok {
+		t.Fatalf("first step is %T, want *RunShellStep", f.Steps[0])
+	}
+	if short.Command != "adb devices" {
+		t.Errorf("string form should become the command, got %q", short.Command)
+	}
+
+	full, ok := f.Steps[1].(*RunShellStep)
+	if !ok {
+		t.Fatalf("second step is %T, want *RunShellStep", f.Steps[1])
+	}
+	if full.Command != "echo hi" || full.Output != "GREETING" || full.Env["NAME"] != "value" || full.TimeoutMs != 500 {
+		t.Errorf("map form parsed as %+v", full)
+	}
+}
+
+func TestParseRunShellRejectsAnEmptyCommand(t *testing.T) {
+	// A runShell with nothing to run is a mistake worth catching at lint time
+	// rather than at the device.
+	if _, err := Parse([]byte("appId: com.example\n---\n- runShell:\n    output: X\n"), "test.yaml"); err == nil {
+		t.Error("expected an error for a runShell with no command")
+	}
+}

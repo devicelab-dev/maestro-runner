@@ -1508,7 +1508,7 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector) (*core.ElementInfo, 
 
 	candidates = SortClickableFirst(candidates)
 
-	selected := SelectByIndex(candidates, sel.Index)
+	selected := selectRelativeCandidate(candidates, sel.Index, filterType)
 
 	clickableElem := GetClickableElement(selected)
 
@@ -1585,7 +1585,7 @@ func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements 
 
 	candidates = SortClickableFirst(candidates)
 
-	selected := SelectByIndex(candidates, sel.Index)
+	selected := selectRelativeCandidate(candidates, sel.Index, filterType)
 
 	clickableElem := GetClickableElement(selected)
 
@@ -1963,4 +1963,29 @@ func successResult(msg string, elem *core.ElementInfo) *core.CommandResult {
 
 func errorResult(err error, msg string) *core.CommandResult {
 	return core.ErrorResult(err, msg)
+}
+
+// selectRelativeCandidate picks which of the filtered candidates a relative
+// selector means.
+//
+// Directional filters (below/above/leftOf/rightOf) sort candidates by distance
+// from the anchor, so the nearest one is what the flow author meant — matching
+// Maestro. Without an explicit index, SelectByIndex would instead fall through
+// to DeepestMatchingElement and could return a far-away, deeply-nested node.
+//
+// This runs after SortClickableFirst, which is a stable partition: it moves the
+// clickable candidates ahead of the rest without disturbing distance order
+// inside either group. So the first candidate is the nearest clickable one, or
+// the nearest of any kind when none are clickable — which is what a tap wants.
+//
+// Non-directional filters keep the old behaviour: containsChild and friends do
+// not order by distance, and depth is the useful tiebreak there.
+func selectRelativeCandidate(candidates []*ParsedElement, index string, filterType relativeFilterType) *ParsedElement {
+	if index == "" {
+		switch filterType {
+		case filterBelow, filterAbove, filterLeftOf, filterRightOf:
+			return candidates[0]
+		}
+	}
+	return SelectByIndex(candidates, index)
 }

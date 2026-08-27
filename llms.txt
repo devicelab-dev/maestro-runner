@@ -5,7 +5,8 @@ It runs the same Maestro YAML flow files with no migration — swap the binary, 
 
 - GitHub: https://github.com/devicelab-dev/maestro-runner
 - Docs: https://open.devicelab.dev/maestro-runner
-- Install: curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash
+- Install (npm): npx maestro-runner  —  or  npm install --save-dev maestro-runner
+- Install (shell): curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash
 - Built by: DeviceLab (https://devicelab.dev)
 - License: Apache 2.0
 

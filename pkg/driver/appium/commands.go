@@ -336,6 +336,13 @@ func (d *Driver) dragAndDrop(step *flow.DragAndDropStep) *core.CommandResult {
 }
 
 func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.CommandResult {
+	// `from:` confines the scroll to a container. Only the UIAutomator2 driver
+	// implements it so far; refusing here is better than silently scrolling the
+	// whole screen and leaving the flow author to wonder why.
+	if !step.From.IsEmpty() {
+		return errorResult(fmt.Errorf("unsupported option"), "scrollUntilVisible `from:` is not supported on this driver yet — it currently works on the uiautomator2 driver")
+	}
+
 	direction := strings.ToLower(step.Direction)
 	if direction == "" {
 		direction = "down"
@@ -386,6 +393,15 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 
 // Text input
 
+// textField adapts an Appium element id to the shape core verifies against.
+func (d *Driver) textField(elementID string) core.TextField {
+	return core.TextFieldFuncs(
+		func() (string, error) { return d.client.GetElementText(elementID) },
+		func(text string) error { return d.client.ElementSendKeys(elementID, text) },
+		func() error { return d.client.ClearElement(elementID) },
+	)
+}
+
 func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 	text := step.Text
 
@@ -405,12 +421,22 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 			return errorResult(err, fmt.Sprintf("Element not found: %s", step.Selector.Describe()))
 		}
 		if info != nil && info.ID != "" {
+			// Read first: after typing, a value that has not changed is the
+			// only thing separating a driver reporting an empty field's hint
+			// from a keystroke lost to a janky frame.
+			before, _ := d.client.GetElementText(info.ID)
 			if err := d.client.ElementSendKeys(info.ID, text); err != nil {
 				return errorResult(err, "Failed to input text")
 			}
-			return successResult(fmt.Sprintf("Input text: %s", text), info)
+			note := core.ConfirmTypedText(d.textField(info.ID), text, before, logger.Warn)
+			return successResult(fmt.Sprintf("Input text: %s%s", text, note), info)
 		}
 	}
+
+	// Set when typing went to an element we can read back; nil leaves the
+	// verification a no-op, which is the right answer for blind key events.
+	var verified core.TextField
+	var beforeText string
 
 	if d.platform == "ios" {
 		// On iOS, use ElementSendKeys (POST /element/{id}/value) which internally
@@ -425,9 +451,12 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 
 		if elemID != "" {
 			d.waitForKeyboardFocus(elemID)
+			before, _ := d.client.GetElementText(elemID)
 			if err := d.client.ElementSendKeys(elemID, text); err != nil {
 				return errorResult(err, "Failed to input text")
 			}
+			verified = d.textField(elemID)
+			beforeText = before
 		} else {
 			// Final fallback: use "mobile: keys" which types into currently focused element
 			_, err := d.client.ExecuteMobile("keys", map[string]interface{}{
@@ -449,8 +478,11 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		// no element has focus.
 		typed := false
 		if elemID, err := d.client.GetActiveElement(); err == nil && elemID != "" {
+			before, _ := d.client.GetElementText(elemID)
 			if err := d.client.ElementSendKeys(elemID, text); err == nil {
 				typed = true
+				verified = d.textField(elemID)
+				beforeText = before
 			}
 		}
 		if !typed {
@@ -460,7 +492,8 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		}
 	}
 
-	return successResult(fmt.Sprintf("Input text: %s", text), nil)
+	note := core.ConfirmTypedText(verified, text, beforeText, logger.Warn)
+	return successResult(fmt.Sprintf("Input text: %s%s", text, note), nil)
 }
 
 // waitForKeyboardFocus polls until the element has keyboard focus or timeout.
@@ -565,6 +598,21 @@ func (d *Driver) assertVisible(step *flow.AssertVisibleStep) *core.CommandResult
 		return errorResult(err, fmt.Sprintf("Element not visible: %s", step.Selector.Describe()))
 	}
 
+	// Being findable is not the same as being visible: a UiAutomator selector
+	// matches an element whether or not it is on screen. This used to pass on
+	// mere presence, which made the same flow mean different things on this
+	// driver and on uiautomator2. The displayed state was already fetched and
+	// then ignored, so checking it costs nothing.
+	//
+	// Android only. XCUITest reports displayed=false for elements that are
+	// plainly on screen — verified against a simulator, where gating on it
+	// failed two auth flows whose target was large, centred and unobstructed.
+	// Whatever that attribute means there, it is not "the user can see this".
+	if d.platform != "ios" && info != nil && !info.Visible {
+		return errorResult(fmt.Errorf("element found but not visible"),
+			fmt.Sprintf("Element exists but is not visible: %s", step.Selector.Describe()))
+	}
+
 	return successResult(fmt.Sprintf("Element is visible: %s", step.Selector.Describe()), info)
 }
 
@@ -647,7 +695,14 @@ func (d *Driver) assertNotVisible(step *flow.AssertNotVisibleStep) *core.Command
 
 	for {
 		info, err := d.findElementOnce(step.Selector)
-		if err != nil || info == nil {
+		// Gone, or present but not on screen — either satisfies "not visible".
+		// Requiring it to be unfindable made a hidden element fail this
+		// assertion, which is the mirror of the bug in assertVisible.
+		// Android only, for the same reason as assertVisible: iOS reports
+		// displayed=false for visibly-rendered elements, which here would
+		// wrongly report a visible element as gone.
+		notVisible := d.platform != "ios" && info != nil && !info.Visible
+		if err != nil || info == nil || notVisible {
 			return successResult(fmt.Sprintf("Element is not visible: %s", step.Selector.Describe()), nil)
 		}
 
@@ -821,10 +876,12 @@ func (d *Driver) copyTextFrom(step *flow.CopyTextFromStep) *core.CommandResult {
 		return errorResult(err, "Element not found for copyTextFrom")
 	}
 
-	// Get text, falling back to AccessibilityLabel if empty
+	// Fall back to the accessibility description when the element carries no
+	// text. Fetched here rather than on every element lookup — this is the only
+	// command that reads it.
 	text := info.Text
-	if text == "" && info.AccessibilityLabel != "" {
-		text = info.AccessibilityLabel
+	if text == "" {
+		text = d.accessibilityLabelOf(info.ID)
 	}
 	if text == "" {
 		return errorResult(fmt.Errorf("element has no text"), "")
@@ -1165,14 +1222,11 @@ func (d *Driver) grantPermissions(appID string, permissions map[string]string) {
 		return
 	}
 
-	for _, perm := range getAllPermissions() {
-		if _, err := d.client.ExecuteMobile("shell", map[string]interface{}{
-			"command": "pm",
-			"args":    []string{"grant", appID, perm},
-		}); err != nil {
-			logger.Warn("failed to grant permission %s to %s: %v", perm, appID, err)
-		}
-	}
+	// No explicit list: grant what the app declares, in one call. Walking a
+	// hardcoded list of every runtime permission cost ~32 round trips and
+	// failed on most of them, since granting an undeclared permission raises
+	// a SecurityException.
+	d.client.GrantDeclaredPermissions(appID)
 }
 
 // getAllPermissions returns all common Android runtime permissions.

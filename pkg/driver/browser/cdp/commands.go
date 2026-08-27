@@ -700,6 +700,13 @@ func (d *Driver) scroll(step *flow.ScrollStep) *core.CommandResult {
 // the right primitive: it scrolls every ancestor scroll container in every
 // frame up the chain. Issues #71/#72 acting layer.
 func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.CommandResult {
+	// `from:` confines the scroll to a container. Only the UIAutomator2 driver
+	// implements it so far; refusing here is better than silently scrolling the
+	// whole page and leaving the flow author to wonder why.
+	if !step.From.IsEmpty() {
+		return errorResult(fmt.Errorf("unsupported option"), "scrollUntilVisible `from:` is not supported on this driver yet — it currently works on the uiautomator2 driver")
+	}
+
 	dir := strings.ToLower(step.Direction)
 	if dir == "" {
 		dir = "down"

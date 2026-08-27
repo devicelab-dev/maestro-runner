@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,6 +35,10 @@ Examples:
 			Name:  "quiet",
 			Usage: "Only print failures, not the per-file OK lines",
 		},
+		&cli.BoolFlag{
+			Name:  "json",
+			Usage: "Emit JSON instead of per-file lines",
+		},
 	},
 	Action: runLint,
 }
@@ -43,7 +48,66 @@ func runLint(c *cli.Context) error {
 	if len(targets) == 0 {
 		targets = []string{"."}
 	}
+	if c.Bool("json") {
+		return runLintJSON(targets)
+	}
 	return runLintPaths(targets, c.Bool("quiet"))
+}
+
+// LintResult is one file's verdict. The JSON tags are a public contract —
+// editors and CI read this shape.
+type LintResult struct {
+	File  string `json:"file"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
+// LintReport is the whole --json payload.
+type LintReport struct {
+	Checked int          `json:"checked"`
+	Failed  int          `json:"failed"`
+	Results []LintResult `json:"results"`
+}
+
+// runLintJSON writes the report to stdout as JSON. Unlike the text form it
+// keeps everything on stdout — a JSON consumer wants one stream, and the exit
+// code already signals failure.
+func runLintJSON(targets []string) error {
+	report, err := lintPathsReport(targets)
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if encErr := enc.Encode(report); encErr != nil {
+		return encErr
+	}
+	if report.Failed > 0 {
+		return cli.Exit("", 1)
+	}
+	return nil
+}
+
+// lintPathsReport parses every target and collects the verdicts.
+func lintPathsReport(targets []string) (*LintReport, error) {
+	paths, err := collectFlowPaths(targets)
+	if err != nil {
+		return nil, err
+	}
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("no flow files found in %s", strings.Join(targets, ", "))
+	}
+
+	report := &LintReport{Checked: len(paths), Results: make([]LintResult, 0, len(paths))}
+	for _, path := range paths {
+		if _, perr := flow.ParseFile(path); perr != nil {
+			report.Failed++
+			report.Results = append(report.Results, LintResult{File: path, Error: perr.Error()})
+			continue
+		}
+		report.Results = append(report.Results, LintResult{File: path, OK: true})
+	}
+	return report, nil
 }
 
 // runLintPaths is runLint without the cli.Context, so the parse-and-report

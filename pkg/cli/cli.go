@@ -119,6 +119,12 @@ var GlobalFlags = []cli.Flag{
 		Usage:   "Override driver start timeout in seconds (0 = use driver default — 30s for UIAutomator2 / DeviceLab Android, 90s for WDA iOS). Bump to 120+ for slow cloud farms (AWS Device Farm, low-end shared devices) where APK install + dex2oat takes >30s.",
 		EnvVars: []string{"MAESTRO_DRIVER_START_TIMEOUT"},
 	},
+	&cli.IntFlag{
+		Name:    "new-command-timeout",
+		Value:   0,
+		Usage:   "Set appium:newCommandTimeout (seconds) for the Appium session when it is not already set in --caps. 0 = leave unset (honor the caps-file value, else the Appium server default). Raise this for cloud farms where --parallel pre-creates sessions that sit idle during setup and would otherwise be reaped.",
+		EnvVars: []string{"MAESTRO_NEW_COMMAND_TIMEOUT"},
+	},
 }
 
 // Execute runs the CLI.
@@ -165,6 +171,9 @@ Examples:
 			serverCommand,
 			hierarchyCommand,
 			lintCommand,
+			devicesCommand,
+			doctorCommand,
+			screenshotCommand,
 		},
 	}
 

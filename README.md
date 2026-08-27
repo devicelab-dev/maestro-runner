@@ -15,6 +15,8 @@
 [![license](https://img.shields.io/badge/license-Apache_2.0-blue.svg?style=for-the-badge)](LICENSE)
 [![by](https://img.shields.io/badge/by-DeviceLab.dev-17a2b8.svg?style=for-the-badge)](https://devicelab.dev)
 
+[![npm](https://img.shields.io/npm/v/maestro-runner?label=npm&color=cb3837)](https://www.npmjs.com/package/maestro-runner)
+[![npm downloads](https://img.shields.io/npm/dm/maestro-runner)](https://www.npmjs.com/package/maestro-runner)
 [![CI](https://github.com/devicelab-dev/maestro-runner/actions/workflows/ci.yml/badge.svg)](https://github.com/devicelab-dev/maestro-runner/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/devicelab-dev/maestro-runner/branch/main/graph/badge.svg)](https://codecov.io/gh/devicelab-dev/maestro-runner)
 [![Go Report Card](https://goreportcard.com/badge/github.com/devicelab-dev/maestro-runner?v=2)](https://goreportcard.com/report/github.com/devicelab-dev/maestro-runner)
@@ -34,11 +36,31 @@
 
 ## Install
 
+**npm** — for React Native, Expo, or any project that already has a `package.json`:
+
+```bash
+npx maestro-runner test flows/          # no install step
+npm install --save-dev maestro-runner   # or pin it in the project
+```
+
+Pinning it means every machine and every CI job runs the same version with no separate bootstrap. There is no postinstall and nothing is downloaded at install time: the binary for your platform arrives as an ordinary optional dependency npm selects by `os` and `cpu`, so installs work offline, behind a proxy, and in CI that blocks postinstall network access.
+
+**Shell** — everywhere else:
+
 ```bash
 curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash
 
-# Install a specific version
-curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash -s -- --version 1.0.9
+# A specific version
+curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash -s -- --version 1.1.25
+```
+
+Both give you the same binary. macOS and Linux, arm64 and x64; on Windows, use WSL.
+
+## First run
+
+```bash
+maestro-runner doctor     # check the toolchain and hear exactly what is missing
+maestro-runner devices    # what this machine can drive right now
 ```
 
 ## Run Tests

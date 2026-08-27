@@ -1,0 +1,44 @@
+{
+  "name": "maestro-runner",
+  "version": "1.1.25",
+  "description": "Fast mobile UI test automation for Android, iOS, React Native, Flutter and Expo. Runs Maestro YAML flows from a single binary — no JVM.",
+  "keywords": [
+    "maestro",
+    "mobile-testing",
+    "e2e",
+    "android",
+    "ios",
+    "react-native",
+    "flutter",
+    "appium",
+    "test-automation",
+    "ui-testing"
+  ],
+  "homepage": "https://open.devicelab.dev/maestro-runner",
+  "bugs": "https://github.com/devicelab-dev/maestro-runner/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devicelab-dev/maestro-runner.git"
+  },
+  "license": "Apache-2.0",
+  "author": "DeviceLab (https://devicelab.dev)",
+  "type": "commonjs",
+  "main": "lib/resolve.js",
+  "bin": {
+    "maestro-runner": "bin/maestro-runner.js"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "maestro-runner-darwin-arm64": "1.1.25",
+    "maestro-runner-darwin-x64": "1.1.25",
+    "maestro-runner-linux-arm64": "1.1.25",
+    "maestro-runner-linux-x64": "1.1.25"
+  }
+}

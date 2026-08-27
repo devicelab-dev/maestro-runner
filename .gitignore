@@ -1,10 +1,14 @@
 # Binaries
-maestro-runner
+# Anchored: the built binary at the repo root. Unanchored, this pattern
+# also swallowed npm/maestro-runner/, the published npm package source.
+/maestro-runner
 maestro-runner-*
 *.exe
 
 # Build artifacts
-bin/
+# Anchored for the same reason as the binary above: unanchored, `bin/` also
+# hid npm/maestro-runner/bin/, which holds the published CLI shim.
+/bin/
 dist/
 build-release.sh
 build-dist.sh
@@ -68,3 +72,8 @@ SNAPSHOT_MODE_SPEC.md
 .claude/settings.local.json
 !.claude/skills/
 !.claude/skills/**
+
+# npm platform packages are assembled from dist/<version>/ by npm/build-npm.sh.
+# Each carries a ~50MB binary plus drivers; they are build output, not source.
+npm/platforms/
+npm/**/node_modules/

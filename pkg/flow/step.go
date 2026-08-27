@@ -77,6 +77,7 @@ const (
 	StepRetry             StepType = "retry"
 	StepRunFlow           StepType = "runFlow"
 	StepRunScript         StepType = "runScript"
+	StepRunShell          StepType = "runShell"
 	StepEvalScript        StepType = "evalScript"
 	StepEvalBrowserScript StepType = "evalBrowserScript"
 	StepRunBrowserScript  StepType = "runBrowserScript"
@@ -301,8 +302,12 @@ type ScrollStep struct {
 type ScrollUntilVisibleStep struct {
 	BaseStep              `yaml:",inline" json:",inline"`
 	Element               Selector `yaml:"element" json:"element"`
+	// From restricts the scroll gesture to one container, for a screen with an
+	// inner list or a horizontal carousel that a full-width swipe would miss.
+	// Empty means scroll the screen, which is the usual case.
+	From                  Selector `yaml:"from" json:"from,omitempty"`
 	Direction             string   `yaml:"direction" json:"direction,omitempty"`
-	MaxScrolls            int      `yaml:"maxScrolls" json:"maxScrolls,omitempty"` // Legacy: max scroll attempts
+	MaxScrolls            int      `yaml:"maxScrolls" json:"maxScrolls,omitempty"`
 	Speed                 int      `yaml:"speed" json:"speed,omitempty"`
 	VisibilityPercentage  int      `yaml:"visibilityPercentage" json:"visibilityPercentage,omitempty"`
 	CenterElement         bool     `yaml:"centerElement" json:"centerElement,omitempty"`
@@ -664,6 +669,26 @@ type RunScriptStep struct {
 	Script   string            `yaml:"script" json:"script,omitempty"` // Script content or filename (string form)
 	File     string            `yaml:"file" json:"file,omitempty"`     // Script filename (map form)
 	Env      map[string]string `yaml:"env" json:"env,omitempty"`
+}
+
+// RunShellStep runs a command on the machine driving the test — the host, not
+// the device. That is what makes it useful: it is the escape hatch for adb,
+// simctl, xcrun and the rest of the platform tooling a flow occasionally needs
+// and the runner deliberately does not wrap.
+type RunShellStep struct {
+	BaseStep `yaml:",inline"`
+	// Command is the shell command line. Handed to `sh -c`, so pipes,
+	// redirection and quoting all work as written.
+	Command string `yaml:"command"`
+	// Output names a flow variable to receive the command's trimmed stdout,
+	// making it available to later steps as ${NAME}.
+	Output string `yaml:"output"`
+	// Env adds variables to the command's environment, on top of the runner's
+	// own and the MAESTRO_* values describing the device under test.
+	//
+	// `timeout` comes from BaseStep and bounds the command; it defaults to 30s
+	// here, because a hung shell call must not hang the run.
+	Env map[string]string `yaml:"env"`
 }
 
 // ScriptPath returns the script path (either Script or File field).

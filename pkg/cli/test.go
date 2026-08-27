@@ -186,7 +186,13 @@ Examples:
 		},
 		&cli.BoolFlag{
 			Name:  "record",
-			Usage: "Record the screen during every flow and save recording.mp4 into the flow's report assets (Android devices/emulators and iOS simulators)",
+			Usage: "Record the screen during every flow and save recording.mp4 into the flow's report assets (Android devices/emulators and iOS simulators). Shorthand for --video always",
+		},
+		&cli.StringFlag{
+			Name:    "video",
+			Usage:   "When to keep screen recordings: never (default), always, on-failure. A recording can only be made while the flow runs, so on-failure records every flow and keeps only the ones that failed",
+			Value:   "",
+			EnvVars: []string{"MAESTRO_VIDEO"},
 		},
 
 		// Emulator management flags (start-emulator, auto-start-emulator,
@@ -527,6 +533,11 @@ type RunConfig struct {
 	AppiumSessionFile string
 	CapsFile          string                 // Appium capabilities JSON file path
 	Capabilities      map[string]interface{} // Parsed Appium capabilities
+	// NewCommandTimeout, when > 0, sets appium:newCommandTimeout (seconds) for the
+	// Appium session unless the --caps file already specifies it (an explicit caps
+	// value is authoritative). Sourced from --new-command-timeout /
+	// MAESTRO_NEW_COMMAND_TIMEOUT. See issue #124.
+	NewCommandTimeout int
 
 	// Driver settings
 	WaitForIdleTimeout int    // Wait for device idle in ms (0 = disabled, default 200)
@@ -567,8 +578,11 @@ type RunConfig struct {
 	// UpdateScreenshots overwrites existing assertScreenshot baselines.
 	UpdateScreenshots bool
 
-	// Record captures a screen recording of every flow (--record).
+	// Record captures a screen recording of every flow (--record / --video).
 	Record bool
+	// RecordMode is the retention decision for those recordings:
+	// "always" or "on-failure". Empty means no recording at all.
+	RecordMode string
 
 	// Cloud provider (detected from AppiumURL, nil if not a cloud provider)
 	CloudProvider cloud.Provider
@@ -716,6 +730,10 @@ func runTest(c *cli.Context) error {
 		mergedEnv[k] = v // -e CLI overrides --env-file and workspace config
 	}
 
+	// Resolved once: resolveVideoMode warns about an unrecognised value, and a
+	// flag typo should be reported once, not once per field.
+	videoMode := resolveVideoMode(getString("video"), getBool("record"))
+
 	// Get appId from workspace config or will be extracted from flows later
 	appID := ""
 	if workspaceConfig != nil && workspaceConfig.AppID != "" {
@@ -747,6 +765,7 @@ func runTest(c *cli.Context) error {
 		AppiumSessionFile:  getString("appium-session-file"),
 		CapsFile:           capsFile,
 		Capabilities:       caps,
+		NewCommandTimeout:  getInt("new-command-timeout"),
 		WaitForIdleTimeout: getInt("wait-for-idle-timeout"),
 		ConditionTimeout:   getInt("condition-timeout"),
 		StepDelay:          getInt("step-delay"),
@@ -765,7 +784,8 @@ func runTest(c *cli.Context) error {
 		AndroidTCPForward:  getBool("android-tcp-forward"),
 		Artifacts:          parseArtifactMode(getString("artifacts")),
 		UpdateScreenshots:  getBool("update-screenshots"),
-		Record:             getBool("record"),
+		Record:             videoMode != videoNever,
+		RecordMode:         videoMode,
 	}
 
 	// Apply waitForIdleTimeout with priority:
@@ -912,10 +932,18 @@ func executeTest(cfg *RunConfig) error {
 	if strings.EqualFold(cfg.Platform, "ios") && cfg.Driver != "appium" {
 		// team-id is only required for real devices, not simulators.
 		isSimTarget := iosTargetsSimulator(cfg)
+		// With nothing booted and no device named, iosTargetsSimulator answers
+		// "not a simulator" — which used to fall straight into the team-id
+		// error below and blame code signing for what is really an empty
+		// device list. Say what is actually wrong first.
+		if !isSimTarget && !anyIOSTargetAvailable(cfg) {
+			return errors.New(noIOSTargetMessage())
+		}
 		if cfg.TeamID == "" && !isSimTarget {
-			return fmt.Errorf("iOS with WDA driver requires --team-id for code signing (real devices only)\n" +
+			return fmt.Errorf("iOS on a real device requires --team-id to code-sign the runner\n" +
 				"Usage: maestro-runner --platform ios --team-id <APPLE_TEAM_ID> test <flow-files>\n" +
-				"Note: --team-id is not required for simulators")
+				"Note: --team-id is not required for simulators.\n" +
+				"      `maestro-runner --team-id <ID> doctor` checks it against the accounts Xcode has")
 		}
 		// clearState on iOS uninstalls + reinstalls. On real devices the host
 		// can't reach the installed .app bundle, so --app-file is mandatory.
@@ -1456,6 +1484,7 @@ func executeSingleDevice(cfg *RunConfig, flows []flow.Flow) (*executor.RunResult
 		Artifacts:          cfg.Artifacts,
 		UpdateScreenshots:  cfg.UpdateScreenshots,
 		Record:             cfg.Record,
+		RecordMode:         cfg.RecordMode,
 		Device:             deviceInfo,
 		App:                buildAppReport(driver),
 		RunnerVersion:      Version,
@@ -1507,6 +1536,7 @@ func ExecuteFlowWithDriver(driver core.Driver, cfg *RunConfig, f flow.Flow) (*ex
 		Artifacts:          cfg.Artifacts,
 		UpdateScreenshots:  cfg.UpdateScreenshots,
 		Record:             cfg.Record,
+		RecordMode:         cfg.RecordMode,
 		Device:             deviceInfo,
 		App:                buildAppReport(driver),
 		RunnerVersion:      Version,
@@ -1835,6 +1865,7 @@ func executeAppiumSingleSession(cfg *RunConfig, flows []flow.Flow) (*executor.Ru
 		Artifacts:          cfg.Artifacts,
 		UpdateScreenshots:  cfg.UpdateScreenshots,
 		Record:             cfg.Record,
+		RecordMode:         cfg.RecordMode,
 		Device:             deviceInfo,
 		App:                buildAppReport(driver),
 		RunnerVersion:      Version,
@@ -2020,6 +2051,19 @@ func createAppiumDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	// Auto-grant permissions by default (user can override with false in caps file)
 	if caps["appium:autoGrantPermissions"] == nil {
 		caps["appium:autoGrantPermissions"] = true
+	}
+	// Honor a user-supplied appium:newCommandTimeout. An explicit value in the
+	// --caps file is authoritative and is never overridden. When it is absent and
+	// --new-command-timeout / MAESTRO_NEW_COMMAND_TIMEOUT is set, inject it so the
+	// session command timeout can be raised without editing the caps file — e.g.
+	// cloud --parallel runs where the earliest-created sessions idle during the
+	// serial pre-creation phase and would otherwise be reaped. See issue #124.
+	if cfg.NewCommandTimeout > 0 {
+		_, hasPrefixed := caps["appium:newCommandTimeout"]
+		_, hasBare := caps["newCommandTimeout"]
+		if !hasPrefixed && !hasBare {
+			caps["appium:newCommandTimeout"] = cfg.NewCommandTimeout
+		}
 	}
 
 	// Add waitForIdleTimeout to capabilities for session creation
@@ -2712,6 +2756,7 @@ func createParallelRunner(cfg *RunConfig, workers []executor.DeviceWorker, platf
 		Artifacts:          cfg.Artifacts,
 		UpdateScreenshots:  cfg.UpdateScreenshots,
 		Record:             cfg.Record,
+		RecordMode:         cfg.RecordMode,
 		Device:             deviceInfo,
 		App:                buildAppReport(firstDriver),
 		RunnerVersion:      Version,
@@ -2793,4 +2838,59 @@ func isLocalAppiumURL(appiumURL string) bool {
 		return true
 	}
 	return false
+}
+
+// Video retention modes. The vocabulary matches --artifacts (never / always /
+// on-failure) rather than inventing a second spelling for the same idea.
+const (
+	videoNever     = "never"
+	videoAlways    = "always"
+	videoOnFailure = "on-failure"
+)
+
+// resolveVideoMode reconciles --video with the older --record boolean.
+// --video wins when both are given; --record alone keeps meaning "always", so
+// existing invocations and CI jobs behave exactly as before.
+func resolveVideoMode(video string, record bool) string {
+	normalized := strings.ToLower(strings.TrimSpace(video))
+	switch normalized {
+	case videoAlways:
+		return videoAlways
+	case videoOnFailure:
+		return videoOnFailure
+	case videoNever:
+		return videoNever
+	case "":
+		// not given — fall through to --record below
+	default:
+		// Silently treating a typo as "never" would hand back a green run with
+		// no video and no explanation for it.
+		logger.Warn("--video %q is not one of never/always/on-failure — ignoring it", video)
+	}
+	if record {
+		return videoAlways
+	}
+	return videoNever
+}
+
+// anyIOSTargetAvailable reports whether there is any iOS device to run on: one
+// named explicitly, a booted simulator, or a connected phone.
+func anyIOSTargetAvailable(cfg *RunConfig) bool {
+	if len(cfg.Devices) > 0 || cfg.StartSimulator != "" || cfg.AutoStartEmulator {
+		return true
+	}
+	if hasBootedSimulator() {
+		return true
+	}
+	udids, err := listPhysicalIOSUDIDs()
+	return err == nil && len(udids) > 0
+}
+
+// noIOSTargetMessage explains an empty iOS device list. Kept separate from the
+// signing error because the two have nothing to do with each other, and
+// conflating them sent people hunting for a team ID they did not need.
+func noIOSTargetMessage() string {
+	return "no iOS device found: nothing is booted and no device is connected\n" +
+		"Hint: boot a simulator (`xcrun simctl boot <udid>`), connect an iPhone, or pass --start-simulator <name>.\n" +
+		"      `maestro-runner devices` lists what this machine can see"
 }

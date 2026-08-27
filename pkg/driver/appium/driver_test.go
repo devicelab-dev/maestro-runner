@@ -1266,6 +1266,74 @@ func TestFindElementRelativeWithElementsContainsDescendants(t *testing.T) {
 	}
 }
 
+// mockAppiumServerForRelativeDepthTest creates a server with elements that test
+// distance vs. depth selection in directional relative selectors.
+func mockAppiumServerForRelativeDepthTest() *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		if strings.HasSuffix(path, "/source") {
+			writeJSON(w, map[string]interface{}{
+				"value": `<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <android.widget.FrameLayout bounds="[0,0][1080,2340]">
+    <android.widget.TextView text="Email Address" bounds="[100,100][500,130]"/>
+    <android.widget.EditText text="email input" clickable="true" enabled="true" bounds="[100,140][500,180]"/>
+    <android.widget.FrameLayout bounds="[100,300][500,500]">
+      <android.widget.FrameLayout bounds="[100,300][500,500]">
+        <android.widget.FrameLayout bounds="[100,300][500,500]">
+          <android.widget.TextView text="deep link" clickable="true" enabled="true" bounds="[100,350][500,380]"/>
+        </android.widget.FrameLayout>
+      </android.widget.FrameLayout>
+    </android.widget.FrameLayout>
+  </android.widget.FrameLayout>
+</hierarchy>`,
+			})
+			return
+		}
+
+		if strings.Contains(path, "/window/rect") {
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 1080.0, "height": 2340.0, "x": 0.0, "y": 0.0},
+			})
+			return
+		}
+
+		writeJSON(w, map[string]interface{}{"value": nil})
+	}))
+}
+
+// TestFindElementRelativePrefersClosestOverDeepest verifies that directional
+// relative selectors pick the closest element by distance rather than the
+// deepest in the DOM.
+func TestFindElementRelativePrefersClosestOverDeepest(t *testing.T) {
+	server := mockAppiumServerForRelativeDepthTest()
+	defer server.Close()
+	driver := createTestAppiumDriver(server)
+
+	source, _ := driver.client.Source()
+	elements, platform, _ := ParsePageSource(source)
+
+	sel := flow.Selector{
+		Below: &flow.Selector{Text: "Email Address"},
+	}
+
+	info, err := driver.findElementRelativeWithElements(sel, elements, platform)
+	if err != nil {
+		t.Fatalf("Expected success, got: %v", err)
+	}
+	if info == nil {
+		t.Fatal("Expected element info")
+	}
+
+	// The closest element below "Email Address" (bottom at y=130) is the
+	// EditText at y=140, not the deeply-nested TextView at y=350.
+	if info.Bounds.Y != 140 {
+		t.Errorf("Expected element at y=140, got y=%d", info.Bounds.Y)
+	}
+}
+
 // TestFindElementRelativeWithNestedRelative tests nested relative selector
 func TestFindElementRelativeWithNestedRelative(t *testing.T) {
 	server := mockAppiumServerForRelativeElements()
@@ -1672,15 +1740,15 @@ func TestGetElementInfoAndroidAttribute(t *testing.T) {
 	driver := createTestAppiumDriver(server)
 	driver.platform = "android"
 
-	info, err := driver.getElementInfo("elem-1")
-	if err != nil {
-		t.Fatalf("Expected success, got error: %v", err)
-	}
+	// The accessibility description is no longer fetched for every element —
+	// only copyTextFrom wants it — but the platform-specific attribute choice
+	// still has to be right.
+	label := driver.accessibilityLabelOf("elem-1")
 	if requestedAttr != "content-desc" {
 		t.Errorf("Expected Android to request 'content-desc', got '%s'", requestedAttr)
 	}
-	if info.AccessibilityLabel != "Submit button" {
-		t.Errorf("Expected AccessibilityLabel 'Submit button', got '%s'", info.AccessibilityLabel)
+	if label != "Submit button" {
+		t.Errorf("Expected label 'Submit button', got '%s'", label)
 	}
 }
 
@@ -1718,15 +1786,12 @@ func TestGetElementInfoIOSAttribute(t *testing.T) {
 	driver := createTestAppiumDriver(server)
 	driver.platform = "ios"
 
-	info, err := driver.getElementInfo("elem-1")
-	if err != nil {
-		t.Fatalf("Expected success, got error: %v", err)
-	}
+	label := driver.accessibilityLabelOf("elem-1")
 	if requestedAttr != "label" {
 		t.Errorf("Expected iOS to request 'label', got '%s'", requestedAttr)
 	}
-	if info.AccessibilityLabel != "Submit button" {
-		t.Errorf("Expected AccessibilityLabel 'Submit button', got '%s'", info.AccessibilityLabel)
+	if label != "Submit button" {
+		t.Errorf("Expected label 'Submit button', got '%s'", label)
 	}
 }
 
@@ -2071,7 +2136,10 @@ func TestAssertNotVisibleWhenVisible(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.HasSuffix(r.URL.Path, "/source") {
 			writeJSON(w, map[string]interface{}{
-				"value": `<hierarchy><android.widget.Button text="Login" bounds="[0,0][100,50]"/></hierarchy>`,
+				// Real Appium page source always carries displayed=; verified
+				// against a device. Without it the element parses as hidden,
+				// which is now a pass rather than a failure.
+				"value": `<hierarchy><android.widget.Button text="Login" displayed="true" bounds="[0,0][100,50]"/></hierarchy>`,
 			})
 			return
 		}
@@ -2744,4 +2812,90 @@ func TestAppiumScrollUntilVisibleRespectsMaxScrolls(t *testing.T) {
 	if scrollCount != 3 {
 		t.Errorf("Expected exactly 3 scrolls (maxScrolls=3), got %d", scrollCount)
 	}
+}
+
+// getElementInfo used to fetch five attributes for every element. Two of them
+// were never read: nothing consumes ElementInfo.Enabled on this path, and the
+// accessibility description is wanted by exactly one command. On a real device
+// each request costs roughly the same regardless of what it asks for, so the
+// call count is the cost.
+func TestGetElementInfo_AsksOnlyForWhatIsRead(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/rect"):
+			_, _ = w.Write([]byte(`{"value":{"x":10,"y":20,"width":100,"height":50}}`))
+		case strings.HasSuffix(r.URL.Path, "/text"):
+			_, _ = w.Write([]byte(`{"value":"Products"}`))
+		case strings.HasSuffix(r.URL.Path, "/displayed"):
+			_, _ = w.Write([]byte(`{"value":true}`))
+		default:
+			_, _ = w.Write([]byte(`{"value":""}`))
+		}
+	}))
+	defer server.Close()
+
+	d := createTestAppiumDriver(server)
+	info, err := d.getElementInfo("elem-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(paths) != 3 {
+		t.Errorf("made %d requests (%v), want 3", len(paths), paths)
+	}
+	for _, p := range paths {
+		if strings.Contains(p, "/enabled") || strings.Contains(p, "/attribute/") {
+			t.Errorf("unexpected request %q — nothing reads it", p)
+		}
+	}
+
+	// The fields that survive still have to be right.
+	if info.Text != "Products" || !info.Visible {
+		t.Errorf("info = %+v", info)
+	}
+	if info.Bounds.Width != 100 || info.Bounds.Height != 50 {
+		t.Errorf("bounds = %+v", info.Bounds)
+	}
+}
+
+func TestAccessibilityLabelOf(t *testing.T) {
+	t.Run("fetches for a real element handle", func(t *testing.T) {
+		var asked string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			asked = r.URL.Path
+			_, _ = w.Write([]byte(`{"value":"Add to cart"}`))
+		}))
+		defer server.Close()
+
+		d := createTestAppiumDriver(server)
+		if got := d.accessibilityLabelOf("elem-1"); got != "Add to cart" {
+			t.Errorf("got %q", got)
+		}
+		if !strings.Contains(asked, "content-desc") {
+			t.Errorf("asked for %q, want the Android content-desc attribute", asked)
+		}
+	})
+
+	t.Run("skips page-source elements without a request", func(t *testing.T) {
+		// These carry a resource id rather than an Appium handle, and already
+		// fold the description into Text when parsed — a lookup could only fail.
+		var calls int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			_, _ = w.Write([]byte(`{"value":""}`))
+		}))
+		defer server.Close()
+
+		d := createTestAppiumDriver(server)
+		for _, id := range []string{"com.testhiveapp:id/action_bar_root", ""} {
+			if got := d.accessibilityLabelOf(id); got != "" {
+				t.Errorf("accessibilityLabelOf(%q) = %q, want empty", id, got)
+			}
+		}
+		if calls != 0 {
+			t.Errorf("made %d requests, want 0", calls)
+		}
+	})
 }

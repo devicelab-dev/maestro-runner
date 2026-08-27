@@ -2372,6 +2372,52 @@ func TestTapOnRelativeSelectorBelow(t *testing.T) {
 	}
 }
 
+// TestResolveRelativeSelectorPrefersClosestOverDeepest verifies that directional
+// relative selectors pick the closest element by distance rather than the
+// deepest in the DOM.
+func TestResolveRelativeSelectorPrefersClosestOverDeepest(t *testing.T) {
+	pageSource := `<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy>
+    <node text="Email Address" bounds="[100,100][500,130]" class="android.widget.TextView" />
+    <node text="email input" bounds="[100,140][500,180]" class="android.widget.EditText" clickable="true" enabled="true" />
+    <node bounds="[100,300][500,500]" class="android.widget.FrameLayout">
+        <node bounds="[100,300][500,500]" class="android.widget.FrameLayout">
+            <node bounds="[100,300][500,500]" class="android.widget.FrameLayout">
+                <node text="deep link" bounds="[100,350][500,380]" class="android.widget.TextView" clickable="true" enabled="true" />
+            </node>
+        </node>
+    </node>
+</hierarchy>`
+
+	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
+		"GET /source": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{"value": pageSource})
+		},
+	})
+	defer server.Close()
+
+	client := newMockHTTPClient(server.URL)
+	driver := New(client.Client, nil, nil)
+
+	sel := flow.Selector{
+		Below: &flow.Selector{Text: "Email Address"},
+	}
+
+	info, err := driver.resolveRelativeSelector(sel)
+	if err != nil {
+		t.Fatalf("Expected success, got: %v", err)
+	}
+	if info == nil {
+		t.Fatal("Expected element info")
+	}
+
+	// The closest element below "Email Address" (bottom at y=130) is the
+	// EditText at y=140, not the deeply-nested TextView at y=350.
+	if info.Bounds.Y != 140 {
+		t.Errorf("Expected element at y=140, got y=%d", info.Bounds.Y)
+	}
+}
+
 func TestTapOnRelativeSelectorClickError(t *testing.T) {
 	pageSource := `<?xml version="1.0" encoding="UTF-8"?>
 <hierarchy>

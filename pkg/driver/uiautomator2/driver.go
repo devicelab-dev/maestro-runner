@@ -867,7 +867,14 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector) (*core.ElementInfo, 
 	// Prioritize clickable elements
 	candidates = SortClickableFirst(candidates)
 
-	selected := SelectByIndex(candidates, sel.Index)
+	var selected *ParsedElement
+	if sel.Index == "" && (filterType == filterBelow || filterType == filterAbove || filterType == filterLeftOf || filterType == filterRightOf) {
+		// Directional filters sort candidates by distance. Pick the closest
+		// (first) element to match Maestro's .firstOrNull() behavior.
+		selected = candidates[0]
+	} else {
+		selected = SelectByIndex(candidates, sel.Index)
+	}
 
 	// If element isn't clickable, try to find a clickable parent
 	// This handles React Native pattern where text nodes aren't clickable but containers are
@@ -956,7 +963,14 @@ func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements 
 	// Prioritize clickable elements
 	candidates = SortClickableFirst(candidates)
 
-	selected := SelectByIndex(candidates, sel.Index)
+	var selected *ParsedElement
+	if sel.Index == "" && (filterType == filterBelow || filterType == filterAbove || filterType == filterLeftOf || filterType == filterRightOf) {
+		// Directional filters sort candidates by distance. Pick the closest
+		// (first) element to match Maestro's .firstOrNull() behavior.
+		selected = candidates[0]
+	} else {
+		selected = SelectByIndex(candidates, sel.Index)
+	}
 
 	// If element isn't clickable, try to find a clickable parent
 	// This handles React Native pattern where text nodes aren't clickable but containers are
