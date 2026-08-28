@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   maestro-runner --driver appium --caps caps.json --new-command-timeout 300 --parallel 4 test flows/
   ```
 
+### Fixed
+- **Appium Android `checked:` selectors used the unrelated `selected` state** — the page-source parser now retains the XML `checked` attribute and state filtering reads it directly, so checked and unchecked switches match correctly even when `selected` differs ([#153](https://github.com/devicelab-dev/maestro-runner/issues/153)).
+
 ## [1.1.25] - 2026-08-25
 
 This release is about **the first five minutes and the oldest complaints**: a `doctor` that says exactly what your machine is missing, a `devices` listing, a `screenshot` command, `runShell` for the one adb call every suite eventually needs, and an `inputText` that checks what actually landed in the field. It is also about **gestures that behave like a user's finger**: a real `dragAndDrop` on every driver — press, hold until the item lifts, move slowly, settle, release — and a `scrollUntilVisible` that stops when the element is actually visible instead of one pixel in. Flutter apps go from barely drivable to ahead of WDA on the DeviceLab iOS driver, `--step-delay` slows any flow down for demos and animation-heavy apps, and JUnit reports carry test-tracking properties and failure artifacts into CI.
