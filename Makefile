@@ -12,7 +12,10 @@ INSTALL_DIR=$(HOME)/.maestro-runner
 
 # Go commands
 GOCMD=go
-GOBUILD=$(GOCMD) build
+# -trimpath keeps the build machine's absolute paths out of the binary, so a
+# panic reported by a user does not carry the builder's home directory through
+# every stack frame (#149).
+GOBUILD=$(GOCMD) build -trimpath
 GOCLEAN=$(GOCMD) clean
 GOTEST=$(GOCMD) test
 GOVET=$(GOCMD) vet
