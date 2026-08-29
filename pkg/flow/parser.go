@@ -67,6 +67,16 @@ func Parse(data []byte, sourcePath string) (*Flow, error) {
 }
 
 func splitYAMLDocuments(content string) []string {
+	// Normalise CRLF first. Splitting on "\n" alone leaves a trailing "\r" on
+	// every line, and the separator test below compares the untrimmed line
+	// against "---" to tell a real document break from an indented "---" inside
+	// a block scalar. "---\r" fails that test, so the break was never found:
+	// the whole file parsed as one document and the header's map was handed to
+	// the step list, producing "cannot unmarshal !!map into []yaml.Node" on
+	// line 1 of every flow. Windows checks out with core.autocrlf=true by
+	// default, so this was every flow on Windows (#159).
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+
 	var parts []string
 	var current strings.Builder
 	inMultiline := false

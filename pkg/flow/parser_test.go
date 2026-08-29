@@ -2390,3 +2390,36 @@ func TestParseRunShellRejectsAnEmptyCommand(t *testing.T) {
 		t.Error("expected an error for a runShell with no command")
 	}
 }
+
+// Windows checks out with core.autocrlf=true by default, so a flow file there
+// arrives with \r\n. Splitting on "\n" alone left a trailing \r that made the
+// "---" separator unrecognisable, and the header's map was then handed to the
+// step list — every flow on Windows failed to parse (#159).
+func TestParseHandlesCRLFLineEndings(t *testing.T) {
+	crlf := "appId: com.example\r\n---\r\n- launchApp\r\n- assertVisible: \"Hello\"\r\n"
+
+	f, err := Parse([]byte(crlf), "windows.yaml")
+	if err != nil {
+		t.Fatalf("CRLF flow should parse: %v", err)
+	}
+	if f.Config.AppID != "com.example" {
+		t.Errorf("appId = %q, want com.example", f.Config.AppID)
+	}
+	if len(f.Steps) != 2 {
+		t.Fatalf("got %d steps, want 2 — the document separator was not recognised", len(f.Steps))
+	}
+}
+
+// A "---" inside a block scalar is content, not a separator. The CRLF
+// normalisation must not change that.
+func TestParseCRLFKeepsBlockScalarSeparatorsAsContent(t *testing.T) {
+	src := "appId: com.example\r\n---\r\n- runScript: |\r\n    const dashes = '---';\r\n- launchApp\r\n"
+
+	f, err := Parse([]byte(src), "windows.yaml")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(f.Steps) != 2 {
+		t.Errorf("got %d steps, want 2 — a --- inside a block scalar split the document", len(f.Steps))
+	}
+}

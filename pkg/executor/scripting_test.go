@@ -565,10 +565,15 @@ func TestScriptEngine_ResolvePath(t *testing.T) {
 		t.Errorf("ResolvePath with abs path = %q, want %q", got, "/abs/path.js")
 	}
 
-	// With flow dir
-	se.SetFlowDir("/flows/login")
-	if got := se.ResolvePath("helper.js"); got != "/flows/login/helper.js" {
-		t.Errorf("ResolvePath with flowDir = %q, want %q", got, "/flows/login/helper.js")
+	// With flow dir. Built with filepath.Join rather than written literally:
+	// ResolvePath joins with the host separator, so a hard-coded "/" made this
+	// fail on Windows against the identical answer spelled with backslashes
+	// (#159).
+	flowDir := filepath.Join(string(filepath.Separator), "flows", "login")
+	se.SetFlowDir(flowDir)
+	want := filepath.Join(flowDir, "helper.js")
+	if got := se.ResolvePath("helper.js"); got != want {
+		t.Errorf("ResolvePath with flowDir = %q, want %q", got, want)
 	}
 }
 
