@@ -76,6 +76,40 @@ func TestParseAndroidPageSource(t *testing.T) {
 	}
 }
 
+func TestFilterBySelector_AndroidCheckedState(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <android.widget.Switch resource-id="notifications" checkable="true" checked="true" selected="false" enabled="true" displayed="true" bounds="[0,0][100,50]" />
+  <android.widget.Switch resource-id="marketing" checkable="true" checked="false" selected="true" enabled="true" displayed="true" bounds="[0,50][100,100]" />
+</hierarchy>`
+
+	elements, platform, err := ParsePageSource(xml)
+	if err != nil {
+		t.Fatalf("ParsePageSource failed: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		checked    bool
+		resourceID string
+	}{
+		{name: "checked", checked: true, resourceID: "notifications"},
+		{name: "unchecked", checked: false, resourceID: "marketing"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := FilterBySelector(elements, flow.Selector{Checked: &tt.checked}, platform)
+			if len(result) != 1 {
+				t.Fatalf("Expected 1 %s element, got %d", tt.name, len(result))
+			}
+			if result[0].ResourceID != tt.resourceID {
+				t.Errorf("Expected %s switch %q, got %q", tt.name, tt.resourceID, result[0].ResourceID)
+			}
+		})
+	}
+}
+
 func TestParseIOSPageSource(t *testing.T) {
 	xml := `<?xml version="1.0" encoding="UTF-8"?>
 <AppiumAUT>
