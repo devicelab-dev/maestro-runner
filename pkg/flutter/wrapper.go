@@ -80,7 +80,7 @@ func (d *FlutterDriver) Execute(step flow.Step) *core.CommandResult {
 	// If the app was already determined to be non-Flutter, don't retry.
 	if _, ok := step.(*flow.LaunchAppStep); ok {
 		if d.client != nil {
-			d.client.Close()
+			_ = d.client.Close()
 			d.client = nil
 			d.attempted = false // Was Flutter before — re-discover after restart
 		}

@@ -28,11 +28,11 @@ func StartRecording(udid string) (*Recording, error) {
 		return nil, err
 	}
 	path := f.Name()
-	f.Close()
+	_ = f.Close()
 
 	cmd := execCommand("xcrun", "simctl", "io", udid, "recordVideo", "--codec", "h264", "--force", path)
 	if err := cmd.Start(); err != nil {
-		os.Remove(path)
+		_ = os.Remove(path)
 		return nil, fmt.Errorf("start recordVideo: %w", err)
 	}
 
@@ -41,7 +41,7 @@ func StartRecording(udid string) (*Recording, error) {
 
 	select {
 	case waitErr := <-rec.done:
-		os.Remove(path)
+		_ = os.Remove(path)
 		return nil, fmt.Errorf("recordVideo exited immediately: %v", waitErr)
 	case <-time.After(500 * time.Millisecond):
 	}
@@ -57,7 +57,7 @@ func (r *Recording) Stop(hostPath string) error {
 	case <-r.done:
 	case <-time.After(15 * time.Second):
 		_ = r.cmd.Process.Kill()
-		os.Remove(r.path)
+		_ = os.Remove(r.path)
 		return fmt.Errorf("recordVideo did not finish writing within 15s")
 	}
 	return moveFile(r.path, hostPath)
@@ -79,7 +79,7 @@ func moveFile(src, dst string) error {
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
+		_ = out.Close()
 		return err
 	}
 	if err := out.Close(); err != nil {

@@ -129,7 +129,7 @@ func ensureBuiltFrom(ctx context.Context, simulatorUDID, sourcePath string) (str
 	if _, err := os.Stat(projectPath); err != nil {
 		return "", fmt.Errorf(
 			"devicelab-ios-runner source not found at %s — bundled runner missing from install.\n"+
-				"Reinstall maestro-runner.",
+				"Reinstall maestro-runner",
 			sourcePath,
 		)
 	}

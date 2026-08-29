@@ -144,23 +144,6 @@ func (d *Driver) isKeyboardVisible() bool {
 	return d.getKeyboardBounds() != nil
 }
 
-// waitKeyboardHidden polls (up to ~600ms) until the soft keyboard is no longer
-// shown, allowing for the dismissal animation. Returns true once hidden. When
-// there's no shell to inspect (d.device == nil) it reports hidden immediately —
-// the caller can't verify, so it best-efforts the result.
-func (d *Driver) waitKeyboardHidden() bool {
-	if d.device == nil {
-		return true
-	}
-	for i := 0; i < 6; i++ {
-		if !d.isKeyboardVisible() {
-			return true
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	return !d.isKeyboardVisible()
-}
-
 // tapWouldHitKeyboard returns true if a tap on the element's center would land
 // on the keyboard area instead of the element.
 func tapWouldHitKeyboard(element, keyboard core.Bounds) bool {

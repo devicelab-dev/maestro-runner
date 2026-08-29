@@ -200,8 +200,8 @@ func Setup(ctx context.Context, opts SetupOptions) (*Client, *RunnerHandle, erro
 			// retry history (logFile may be closed if we hit the fallback
 			// branch above; guard before writing).
 			if opts.Stdout != os.Stderr {
-				fmt.Fprintln(opts.Stdout, banner)
-				fmt.Fprintf(opts.Stdout, "=== attempt %d/%d ===\n", attempt, maxStartupAttempts)
+				_, _ = fmt.Fprintln(opts.Stdout, banner)
+				_, _ = fmt.Fprintf(opts.Stdout, "=== attempt %d/%d ===\n", attempt, maxStartupAttempts)
 			}
 			// Reset the simulator before retrying. Killing xcodebuild
 			// alone doesn't unwedge a stuck CoreSimulator daemon — if
@@ -373,7 +373,7 @@ func injectPortIntoXctestrun(path string, port int) error {
 // usable again.
 func resetSimulator(ctx context.Context, udid string, logOut io.Writer) error {
 	if logOut != nil {
-		fmt.Fprintf(logOut, "  ⟳ Resetting simulator %s...\n", udid)
+		_, _ = fmt.Fprintf(logOut, "  ⟳ Resetting simulator %s...\n", udid)
 	}
 	shutdownCmd := exec.CommandContext(ctx, "xcrun", "simctl", "shutdown", udid)
 	if out, err := shutdownCmd.CombinedOutput(); err != nil {

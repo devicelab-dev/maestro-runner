@@ -36,7 +36,7 @@ def _launch_camera() -> None:
     # Open the camera capture intent. The emulated camera shows a live preview
     # that never settles, which is exactly what we need.
     subprocess.run(
-        ["adb", "shell", "am", "start", "-a", "android.media.action.IMAGE_CAPTURE"],
+        ["adb", "shell", "am", "start", "-a", "android.media.action.IMAGE_CAPTURE"],  # noqa: S607
         capture_output=True, text=True, check=True,
     )
 

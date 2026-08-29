@@ -217,8 +217,8 @@ func (r *Runner) Start(ctx context.Context) error {
 			// captures the full retry history. Use append mode so we
 			// don't lose the previous attempt's xcodebuild output.
 			if f, ferr := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644); ferr == nil {
-				fmt.Fprintln(f, banner)
-				fmt.Fprintf(f, "=== attempt %d/%d ===\n", attempt, maxStartupAttempts)
+				_, _ = fmt.Fprintln(f, banner)
+				_, _ = fmt.Fprintf(f, "=== attempt %d/%d ===\n", attempt, maxStartupAttempts)
 				_ = f.Close()
 			}
 			// Reset the simulator before retrying. Killing xcodebuild alone
