@@ -21,6 +21,7 @@ type ParsedElement struct {
 	Bounds      core.Bounds
 	Enabled     bool
 	Selected    bool
+	Checked     bool
 	Focused     bool
 	Displayed   bool
 	Clickable   bool
@@ -80,6 +81,8 @@ func ParsePageSource(xmlData string) ([]*ParsedElement, error) {
 						elem.Enabled = attr.Value == "true"
 					case "selected":
 						elem.Selected = attr.Value == "true"
+					case "checked":
+						elem.Checked = attr.Value == "true"
 					case "focused":
 						elem.Focused = attr.Value == "true"
 					case "displayed":
@@ -242,7 +245,7 @@ func matchesSelector(elem *ParsedElement, sel flow.Selector) bool {
 	if sel.Focused != nil && elem.Focused != *sel.Focused {
 		return false
 	}
-	if sel.Checked != nil && elem.Selected != *sel.Checked {
+	if sel.Checked != nil && elem.Checked != *sel.Checked {
 		// checked maps to selected in Android
 		return false
 	}
