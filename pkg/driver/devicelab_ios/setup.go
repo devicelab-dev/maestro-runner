@@ -272,7 +272,7 @@ func startOnce(ctx context.Context, opts SetupOptions, xctestrun, logPath string
 	)
 	cmd.Stdout = opts.Stdout
 	cmd.Stderr = opts.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setProcessGroup(cmd)
 
 	if err := cmd.Start(); err != nil {
 		return nil, nil, fmt.Errorf("start xcodebuild: %w", err)
