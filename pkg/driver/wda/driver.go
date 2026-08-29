@@ -553,6 +553,23 @@ func (d *Driver) findElementForTapWithContext(ctx context.Context, sel flow.Sele
 			}
 			return nil, fmt.Errorf("element '%s' not found: %w", sel.Describe(), ctx.Err())
 		default:
+			// A regex selector goes straight to page source. WDA predicates
+			// have no regex operator we can use safely: the text is
+			// interpolated into `CONTAINS[c] '...'`, so `^SIGN OUT$` asked for
+			// a literal caret and every query 404'd before the page-source path
+			// resolved it anyway — six wasted round trips per step (#151).
+			//
+			// NSPredicate does have MATCHES, but its ICU dialect is not Go's,
+			// and having two matchers disagree about what a pattern means is
+			// the bug underneath this one. One matcher decides.
+			if looksLikeRegex(sel.Text) {
+				if info, err := d.findElementByPageSourceOnce(sel); err == nil {
+					return info, nil
+				}
+				lastErr = fmt.Errorf("regex selector %q not found in page source", sel.Text)
+				continue
+			}
+
 			// Step 1: Try interactive element types first (TextField, SecureTextField, Button)
 			if info, err := d.findInteractiveElementByWDA(sel, stateFilter); err == nil {
 				return info, nil

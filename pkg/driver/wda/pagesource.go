@@ -292,7 +292,16 @@ func matchesID(pattern, id string) bool {
 func matchesText(pattern string, texts ...string) bool {
 	pattern = norm.NFC.String(pattern)
 	if looksLikeRegex(pattern) {
-		re, err := regexp.Compile("(?i)" + pattern)
+		// Case-sensitive, deliberately. Compiling with (?i) meant an anchored
+		// pattern could not distinguish what it was written to distinguish:
+		// `^SIGN OUT$` matched a "Sign out" row as readily as the "SIGN OUT"
+		// button, and whichever came first in the page source won (#151).
+		// Maestro matches regex selectors case-sensitively, and a flow written
+		// against it has to behave the same here.
+		//
+		// Plain text selectors are untouched — they are not regexes, and fall
+		// to the case-insensitive contains path below.
+		re, err := regexp.Compile(pattern)
 		if err != nil {
 			// Invalid regex - fall back to contains
 			for _, text := range texts {
