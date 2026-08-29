@@ -100,3 +100,38 @@ npm run test:device:ios
 | `deviceInfo()`        | Get device information                 |
 | `screenshot()`        | Get screenshot as ArrayBuffer          |
 | `viewHierarchy()`     | Get view hierarchy XML                 |
+| `setPermissions()`    | Grant/deny app permissions (`setPermissions`) |
+| `resetPermissions()`  | Reset browser permissions (`resetPermissions`) |
+| `evalWebViewScript()` | Run JS in a mobile WebView via CDP (`evalWebViewScript`) |
+| `runWebViewScript()`  | Load & run a JS file in a mobile WebView via CDP (`runWebViewScript`) |
+| `doubleTapOn()`       | Double-tap on an element (`doubleTapOn`) |
+| `longPressOn()`       | Long-press on an element (`longPressOn`) |
+| `dragAndDrop()`       | Drag one element onto another (`dragAndDrop`) |
+| `scrollUntilVisible()` | Scroll until an element appears (`scrollUntilVisible`) |
+| `assertScreenshot()` | Visual regression assert (`assertScreenshot`) |
+| `takeScreenshot()`    | Save a screenshot to disk (`takeScreenshot`) |
+| `copyTextFrom()`      | Copy text from an element to clipboard (`copyTextFrom`) |
+| `pasteText()`         | Paste clipboard text (`pasteText`) |
+| `setClipboard()`      | Set clipboard contents (`setClipboard`) |
+| `assertWithAI()`      | Natural-language assertion via AI (`assertWithAI`) |
+| `evalScript()`        | Run an inline JS snippet (`evalScript`) |
+| `runScript()`         | Run a JS file with env vars (`runScript`) |
+| `evalBrowserScript()` | Run JS in a desktop browser (`evalBrowserScript`) |
+| `setLocation()`       | Set device GPS location (`setLocation`) |
+| `setAirplaneMode()`   | Enable/disable airplane mode (`setAirplaneMode`) |
+| `toggleAirplaneMode()` | Toggle airplane mode (`toggleAirplaneMode`) |
+| `setNetworkConditions()` | Throttle/simulate network (`setNetworkConditions`) |
+| `openNotifications()` | Open the notification shade (`openNotifications`) |
+| `setDarkMode()`       | Enable/disable dark mode (`setDarkMode`) |
+| `setOrientation()`    | Set screen orientation (`setOrientation`) |
+| `openBrowser()`       | Open a URL in the desktop browser (`openBrowser`) |
+| `switchTab()`         | Switch browser tab (`switchTab`) |
+| `closeTab()`          | Close current browser tab (`closeTab`) |
+| `getConsoleLogs()`    | Read browser console logs (`getConsoleLogs`) |
+| `clearConsoleLogs()`  | Clear browser console logs (`clearConsoleLogs`) |
+| `assertNoJSErrors()`  | Assert no console JS errors (`assertNoJSErrors`) |
+| `mockNetwork()`       | Mock a network request (`mockNetwork`) |
+
+Any step type not listed here can still be sent via `executeStep({ type: "...", ... })` —
+the client forwards the raw step dict straight to the server, which supports ~90 step
+types in total.

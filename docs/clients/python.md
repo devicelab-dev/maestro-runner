@@ -213,6 +213,98 @@ next device (e.g. `emulator-5556`) on port `10000`, and so on.
 | `MAESTRO_PLATFORM`   | `android`                | Target platform                    |
 | `MAESTRO_RUNNER_BIN` | `../../maestro-runner`   | Path to the maestro-runner binary  |
 
+## 10. Permissions & WebView
+
+### set_permissions
+
+Grant or deny app permissions mid-flow. Values are `"allow"`, `"deny"`, or `"unset"`;
+shortcuts include `all`, `camera`, `contacts`, `phone`, `microphone`, `location`,
+`storage`, `notifications`, `calendar`, `sms`, and more:
+
+```python
+c.set_permissions("com.example.app", {
+    "camera": "allow",
+    "microphone": "deny",
+    # "all": "allow" grants every permission the app declares
+})
+```
+
+An undeclared permission (one the app never requested) no longer fails the step — the
+server skips it and logs it by name.
+
+### reset_permissions
+
+Resets all browser permissions (web platform only):
+
+```python
+c.reset_permissions()
+```
+
+### eval_webview_script / run_webview_script
+
+Run JavaScript inside a mobile WebView (Android/iOS) via CDP — distinct from desktop
+`evalBrowserScript`. `output` stores the return value in a flow variable:
+
+```python
+res = c.eval_webview_script(
+    "document.querySelector('h1')?.innerText",
+    output="title",
+)
+
+c.run_webview_script("scripts/login.js", env={"USERNAME": "alice"}, output="result")
+```
+
+## 11. More step types
+
+The client also wraps the most common gesture, media, device-control, and browser
+step types. Every method below maps 1:1 to a server step type:
+
+```python
+# Gestures
+c.double_tap_on(text="Star")
+c.long_press_on(text="Item", duration_ms=800)
+c.drag_and_drop(from_="Source", to="Target", hold_duration=1000)
+c.scroll_until_visible(element={"text": "Footer"}, direction="DOWN", max_scrolls=5)
+
+# Assertions & media
+c.assert_screenshot(path="baseline.png", threshold_percentage=95)
+c.take_screenshot(path="evidence.png")
+c.copy_text_from(id="title")
+c.paste_text()
+c.set_clipboard("hello")
+
+# AI & scripting
+c.assert_with_ai("the cart total is under $50")
+c.eval_script("console.log('hi')")
+c.run_script(file="setup.js", env={"MODE": "test"})
+c.eval_browser_script("window.scrollTo(0, 0)", output="ok")
+
+# Device control
+c.set_location("37.4219", "-122.0840")
+c.set_airplane_mode(True)
+c.toggle_airplane_mode()
+c.set_network_conditions(offline=False, latency=200, download_speed=5000)
+c.open_notifications()
+c.set_dark_mode(True)
+c.set_orientation("LANDSCAPE")
+
+# Browser (web platform)
+c.open_browser("https://example.com")
+c.switch_tab(index=1)
+c.close_tab()
+c.get_console_logs("logs")
+c.clear_console_logs()
+c.assert_no_js_errors()
+c.mock_network(
+    url="https://api.example.com/user",
+    method="GET",
+    response={"status": 200, "body": '{"id":1}'},
+)
+```
+
+Not every server step type has a typed method — but `c.execute_step({"type": "...", ...})`
+forwards any raw step dict to the server, which supports ~90 step types in total.
+
 ## Full API reference
 
 See [`client/python/maestro_runner/client.py`](../../client/python/maestro_runner/client.py)

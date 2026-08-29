@@ -171,3 +171,356 @@ export function openLink(link: string, label?: string): Step {
   if (label != null) step.label = label;
   return step;
 }
+
+export function setPermissions(
+  appId: string,
+  permissions: Record<string, string>,
+  label?: string,
+): Step {
+  const step: Step = { type: "setPermissions", appId, permissions };
+  if (label != null) step.label = label;
+  return step;
+}
+
+export function resetPermissions(label?: string): Step {
+  const step: Step = { type: "resetPermissions" };
+  if (label != null) step.label = label;
+  return step;
+}
+
+export function evalWebViewScript(
+  script: string,
+  opts?: { output?: string; label?: string },
+): Step {
+  const step: Step = { type: "evalWebViewScript", script };
+  if (opts?.output != null) step.output = opts.output;
+  if (opts?.label != null) step.label = opts.label;
+  return step;
+}
+
+export function runWebViewScript(
+  file: string,
+  opts?: { env?: Record<string, string>; output?: string; label?: string },
+): Step {
+  const step: Step = { type: "runWebViewScript", file };
+  if (opts?.env != null) step.env = opts.env;
+  if (opts?.output != null) step.output = opts.output;
+  if (opts?.label != null) step.label = opts.label;
+  return step;
+}
+
+// ---------------------------------------------------------------------------
+// Gestures
+// ---------------------------------------------------------------------------
+
+function coordOrSelector(
+  v: string | { text?: string; id?: string; selector?: ElementSelector },
+): SelectorValue {
+  return typeof v === "string" ? v : selectorValue(v);
+}
+
+export function doubleTapOn(opts: {
+  text?: string;
+  id?: string;
+  selector?: ElementSelector;
+  optional?: boolean;
+  retryTapIfNoChange?: boolean;
+  waitUntilVisible?: boolean;
+  waitToSettleTimeoutMs?: number;
+  label?: string;
+}): Step {
+  const step: Step = { type: "doubleTapOn" };
+  step.selector = selectorValue(opts);
+  if (opts.optional) step.optional = true;
+  if (opts.retryTapIfNoChange != null) step.retryTapIfNoChange = opts.retryTapIfNoChange;
+  if (opts.waitUntilVisible != null) step.waitUntilVisible = opts.waitUntilVisible;
+  if (opts.waitToSettleTimeoutMs != null) step.waitToSettleTimeoutMs = opts.waitToSettleTimeoutMs;
+  if (opts.label != null) step.label = opts.label;
+  return step;
+}
+
+export function longPressOn(opts: {
+  text?: string;
+  id?: string;
+  selector?: ElementSelector;
+  durationMs?: number;
+  optional?: boolean;
+  retryTapIfNoChange?: boolean;
+  waitUntilVisible?: boolean;
+  waitToSettleTimeoutMs?: number;
+  label?: string;
+}): Step {
+  const step: Step = { type: "longPressOn" };
+  step.selector = selectorValue(opts);
+  if (opts.durationMs != null) step.duration = opts.durationMs;
+  if (opts.optional) step.optional = true;
+  if (opts.retryTapIfNoChange != null) step.retryTapIfNoChange = opts.retryTapIfNoChange;
+  if (opts.waitUntilVisible != null) step.waitUntilVisible = opts.waitUntilVisible;
+  if (opts.waitToSettleTimeoutMs != null) step.waitToSettleTimeoutMs = opts.waitToSettleTimeoutMs;
+  if (opts.label != null) step.label = opts.label;
+  return step;
+}
+
+export function dragAndDrop(opts: {
+  from: string | { text?: string; id?: string; selector?: ElementSelector };
+  to: string | { text?: string; id?: string; selector?: ElementSelector };
+  holdDuration?: number;
+  duration?: number;
+  label?: string;
+}): Step {
+  const step: Step = { type: "dragAndDrop" };
+  step.from = coordOrSelector(opts.from);
+  step.to = coordOrSelector(opts.to);
+  if (opts.holdDuration != null) step.holdDuration = opts.holdDuration;
+  if (opts.duration != null) step.duration = opts.duration;
+  if (opts.label != null) step.label = opts.label;
+  return step;
+}
+
+export function scrollUntilVisible(opts: {
+  element: string | { text?: string; id?: string; selector?: ElementSelector };
+  from?: string | { text?: string; id?: string; selector?: ElementSelector };
+  direction?: string;
+  maxScrolls?: number;
+  speed?: number;
+  visibilityPercentage?: number;
+  centerElement?: boolean;
+  waitToSettleTimeoutMs?: number;
+  optional?: boolean;
+  label?: string;
+}): Step {
+  const step: Step = { type: "scrollUntilVisible" };
+  step.element = coordOrSelector(opts.element);
+  if (opts.from != null) step.from = coordOrSelector(opts.from);
+  if (opts.direction != null) step.direction = opts.direction;
+  if (opts.maxScrolls != null) step.maxScrolls = opts.maxScrolls;
+  if (opts.speed != null) step.speed = opts.speed;
+  if (opts.visibilityPercentage != null) step.visibilityPercentage = opts.visibilityPercentage;
+  if (opts.centerElement != null) step.centerElement = opts.centerElement;
+  if (opts.waitToSettleTimeoutMs != null) step.waitToSettleTimeoutMs = opts.waitToSettleTimeoutMs;
+  if (opts.optional) step.optional = true;
+  if (opts.label != null) step.label = opts.label;
+  return step;
+}
+
+// ---------------------------------------------------------------------------
+// Assertions & media
+// ---------------------------------------------------------------------------
+
+export function assertScreenshot(opts: {
+  path?: string;
+  cropOn?: string | { text?: string; id?: string; selector?: ElementSelector };
+  thresholdPercentage?: number;
+  optional?: boolean;
+  label?: string;
+}): Step {
+  const step: Step = { type: "assertScreenshot" };
+  if (opts.path != null) step.path = opts.path;
+  if (opts.cropOn != null) {
+    step.cropOn = typeof opts.cropOn === "string" ? opts.cropOn : selectorValue(opts.cropOn);
+  }
+  if (opts.thresholdPercentage != null) step.thresholdPercentage = opts.thresholdPercentage;
+  if (opts.optional) step.optional = true;
+  if (opts.label != null) step.label = opts.label;
+  return step;
+}
+
+export function takeScreenshot(opts: {
+  path?: string;
+  cropOn?: string | { text?: string; id?: string; selector?: ElementSelector };
+  label?: string;
+}): Step {
+  const step: Step = { type: "takeScreenshot" };
+  if (opts.path != null) step.path = opts.path;
+  if (opts.cropOn != null) {
+    step.cropOn = typeof opts.cropOn === "string" ? opts.cropOn : selectorValue(opts.cropOn);
+  }
+  if (opts.label != null) step.label = opts.label;
+  return step;
+}
+
+export function copyTextFrom(opts: {
+  text?: string;
+  id?: string;
+  selector?: ElementSelector;
+  label?: string;
+}): Step {
+  const step: Step = { type: "copyTextFrom" };
+  step.selector = selectorValue(opts);
+  if (opts.label != null) step.label = opts.label;
+  return step;
+}
+
+export function pasteText(label?: string): Step {
+  const step: Step = { type: "pasteText" };
+  if (label != null) step.label = label;
+  return step;
+}
+
+export function setClipboard(text: string, label?: string): Step {
+  const step: Step = { type: "setClipboard", text };
+  if (label != null) step.label = label;
+  return step;
+}
+
+// ---------------------------------------------------------------------------
+// AI & scripting
+// ---------------------------------------------------------------------------
+
+export function assertWithAI(assertion: string, label?: string): Step {
+  const step: Step = { type: "assertWithAI", assertion };
+  if (label != null) step.label = label;
+  return step;
+}
+
+export function evalScript(script: string, label?: string): Step {
+  const step: Step = { type: "evalScript", script };
+  if (label != null) step.label = label;
+  return step;
+}
+
+export function runScript(opts: {
+  script?: string;
+  file?: string;
+  env?: Record<string, string>;
+  label?: string;
+}): Step {
+  const step: Step = { type: "runScript" };
+  if (opts.script != null) step.script = opts.script;
+  if (opts.file != null) step.file = opts.file;
+  if (opts.env != null) step.env = opts.env;
+  if (opts.label != null) step.label = opts.label;
+  return step;
+}
+
+export function evalBrowserScript(
+  script: string,
+  opts?: { output?: string; label?: string },
+): Step {
+  const step: Step = { type: "evalBrowserScript", script };
+  if (opts?.output != null) step.output = opts.output;
+  if (opts?.label != null) step.label = opts.label;
+  return step;
+}
+
+// ---------------------------------------------------------------------------
+// Device control
+// ---------------------------------------------------------------------------
+
+export function setLocation(latitude: string, longitude: string, label?: string): Step {
+  const step: Step = { type: "setLocation", latitude, longitude };
+  if (label != null) step.label = label;
+  return step;
+}
+
+export function setAirplaneMode(enabled: boolean, label?: string): Step {
+  const step: Step = { type: "setAirplaneMode", enabled };
+  if (label != null) step.label = label;
+  return step;
+}
+
+export function toggleAirplaneMode(label?: string): Step {
+  const step: Step = { type: "toggleAirplaneMode" };
+  if (label != null) step.label = label;
+  return step;
+}
+
+export function setNetworkConditions(opts: {
+  offline?: boolean;
+  latency?: number;
+  downloadSpeed?: number;
+  uploadSpeed?: number;
+  label?: string;
+}): Step {
+  const step: Step = { type: "setNetworkConditions" };
+  if (opts.offline != null) step.offline = opts.offline;
+  if (opts.latency != null) step.latency = opts.latency;
+  if (opts.downloadSpeed != null) step.downloadSpeed = opts.downloadSpeed;
+  if (opts.uploadSpeed != null) step.uploadSpeed = opts.uploadSpeed;
+  if (opts.label != null) step.label = opts.label;
+  return step;
+}
+
+export function openNotifications(label?: string): Step {
+  const step: Step = { type: "openNotifications" };
+  if (label != null) step.label = label;
+  return step;
+}
+
+export function setDarkMode(enabled: boolean, label?: string): Step {
+  const step: Step = { type: "setDarkMode", enabled };
+  if (label != null) step.label = label;
+  return step;
+}
+
+export function setOrientation(orientation: string, label?: string): Step {
+  const step: Step = { type: "setOrientation", orientation };
+  if (label != null) step.label = label;
+  return step;
+}
+
+// ---------------------------------------------------------------------------
+// Browser (web platform)
+// ---------------------------------------------------------------------------
+
+export function openBrowser(url?: string, label?: string): Step {
+  const step: Step = { type: "openBrowser" };
+  if (url != null) step.url = url;
+  if (label != null) step.label = label;
+  return step;
+}
+
+export function switchTab(opts: {
+  tabLabel?: string;
+  index?: number;
+  url?: string;
+  label?: string;
+}): Step {
+  const step: Step = { type: "switchTab" };
+  if (opts.tabLabel != null) step.tabLabel = opts.tabLabel;
+  if (opts.index != null) step.index = opts.index;
+  if (opts.url != null) step.url = opts.url;
+  if (opts.label != null) step.label = opts.label;
+  return step;
+}
+
+export function closeTab(label?: string): Step {
+  const step: Step = { type: "closeTab" };
+  if (label != null) step.label = label;
+  return step;
+}
+
+export function getConsoleLogs(output: string, label?: string): Step {
+  const step: Step = { type: "getConsoleLogs", output };
+  if (label != null) step.label = label;
+  return step;
+}
+
+export function clearConsoleLogs(label?: string): Step {
+  const step: Step = { type: "clearConsoleLogs" };
+  if (label != null) step.label = label;
+  return step;
+}
+
+export function assertNoJSErrors(label?: string): Step {
+  const step: Step = { type: "assertNoJSErrors" };
+  if (label != null) step.label = label;
+  return step;
+}
+
+export function mockNetwork(opts: {
+  url: string;
+  method?: string;
+  response: { status?: number; headers?: Record<string, string>; body?: string };
+  label?: string;
+}): Step {
+  const step: Step = { type: "mockNetwork", url: opts.url };
+  if (opts.method != null) step.method = opts.method;
+  const response: Record<string, unknown> = {};
+  if (opts.response.status != null) response.status = opts.response.status;
+  if (opts.response.headers != null) response.headers = opts.response.headers;
+  if (opts.response.body != null) response.body = opts.response.body;
+  step.response = response;
+  if (opts.label != null) step.label = opts.label;
+  return step;
+}
