@@ -1736,126 +1736,97 @@ func buildSelectorsWithOptions(sel flow.Selector, timeoutMs int, preferClickable
 	var strategies []LocatorStrategy
 	stateFilters := buildStateFilters(sel)
 
-	// ID-based selector — exact match FIRST, substring fallback ONLY if exact
-	// fails. Mirrors the parallel fix in pkg/driver/uiautomator2: substring-
-	// only `resourceIdMatches(".*X.*")` triggered internal scrolling and
-	// returned a wrong element when the target id wasn't in the rendered
-	// tree (lazy ListView with target offscreen). Web driver does the same
-	// cascade — exact → testid → substring → name → aria-label.
-	if sel.ID != "" {
-		escaped := escapeUIAutomatorString(sel.ID)
-		if preferClickable {
-			// Exact match — clickable first for tap commands.
-			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUIAutomator,
-				Value:    `new UiSelector().resourceId("` + escaped + `").clickable(true)` + stateFilters,
-			})
+	// One tier is a set of equally-good queries; tiers are tried in order, and
+	// within a tier the clickable variants come first when a tap is being
+	// located.
+	emit := func(tiers [][]string) {
+		for _, tier := range tiers {
+			if preferClickable {
+				for _, body := range tier {
+					strategies = append(strategies, LocatorStrategy{
+						Strategy: uiautomator2.StrategyUIAutomator,
+						Value:    `new UiSelector()` + body + `.clickable(true)` + stateFilters,
+					})
+				}
+			}
+			for _, body := range tier {
+				strategies = append(strategies, LocatorStrategy{
+					Strategy: uiautomator2.StrategyUIAutomator,
+					Value:    `new UiSelector()` + body + stateFilters,
+				})
+			}
 		}
-		// Exact match — any element.
-		strategies = append(strategies, LocatorStrategy{
-			Strategy: uiautomator2.StrategyUIAutomator,
-			Value:    `new UiSelector().resourceId("` + escaped + `")` + stateFilters,
-		})
-		if preferClickable {
-			// Substring fallback — clickable. Backward compat with users
-			// relying on substring behaviour.
-			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUIAutomator,
-				Value:    `new UiSelector().resourceIdMatches(".*` + escaped + `.*").clickable(true)` + stateFilters,
-			})
-		}
-		// Substring fallback — any.
-		strategies = append(strategies, LocatorStrategy{
-			Strategy: uiautomator2.StrategyUIAutomator,
-			Value:    `new UiSelector().resourceIdMatches(".*` + escaped + `.*")` + stateFilters,
-		})
 	}
 
-	// Text-based selector: case-sensitive first, case-insensitive fallback.
-	// hintContains / hintMatches are DeviceLab-agent extensions — match EditText
-	// android:hint placeholder so "tapOn: 'Email'" finds an empty field by hint.
+	// ID — exact match FIRST, substring fallback ONLY if exact fails. Mirrors
+	// the parallel fix in pkg/driver/uiautomator2: substring-only
+	// `resourceIdMatches(".*X.*")` triggered internal scrolling and returned a
+	// wrong element when the target id wasn't in the rendered tree (lazy
+	// ListView with target offscreen).
+	var idTiers [][]string
+	if sel.ID != "" {
+		escaped := escapeUIAutomatorString(sel.ID)
+		idTiers = [][]string{
+			{`.resourceId("` + escaped + `")`},
+			{`.resourceIdMatches(".*` + escaped + `.*")`},
+		}
+	}
+
+	// Text — case-sensitive first, case-insensitive fallback. hintContains /
+	// hintMatches are DeviceLab-agent extensions: they match the EditText
+	// android:hint placeholder, so "tapOn: 'Email'" finds an empty field by
+	// hint.
+	var textTiers [][]string
 	if sel.Text != "" {
 		escaped := escapeUIAutomatorString(sel.Text)
 		ciPattern := `(?is).*\Q` + escaped + `\E.*`
-		if preferClickable {
-			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUIAutomator,
-				Value:    `new UiSelector().textContains("` + escaped + `").clickable(true)` + stateFilters,
-			})
-			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUIAutomator,
-				Value:    `new UiSelector().descriptionContains("` + escaped + `").clickable(true)` + stateFilters,
-			})
-			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUIAutomator,
-				Value:    `new UiSelector().hintContains("` + escaped + `").clickable(true)` + stateFilters,
-			})
+		textTiers = [][]string{
+			{
+				`.textContains("` + escaped + `")`,
+				`.descriptionContains("` + escaped + `")`,
+				`.hintContains("` + escaped + `")`,
+			},
+			{
+				`.textMatches("` + ciPattern + `")`,
+				`.descriptionMatches("` + ciPattern + `")`,
+				`.hintMatches("` + ciPattern + `")`,
+			},
 		}
-		strategies = append(strategies, LocatorStrategy{
-			Strategy: uiautomator2.StrategyUIAutomator,
-			Value:    `new UiSelector().textContains("` + escaped + `")` + stateFilters,
-		})
-		strategies = append(strategies, LocatorStrategy{
-			Strategy: uiautomator2.StrategyUIAutomator,
-			Value:    `new UiSelector().descriptionContains("` + escaped + `")` + stateFilters,
-		})
-		strategies = append(strategies, LocatorStrategy{
-			Strategy: uiautomator2.StrategyUIAutomator,
-			Value:    `new UiSelector().hintContains("` + escaped + `")` + stateFilters,
-		})
-		// Case-insensitive fallback
-		if preferClickable {
-			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUIAutomator,
-				Value:    `new UiSelector().textMatches("` + ciPattern + `").clickable(true)` + stateFilters,
-			})
-			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUIAutomator,
-				Value:    `new UiSelector().descriptionMatches("` + ciPattern + `").clickable(true)` + stateFilters,
-			})
-			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUIAutomator,
-				Value:    `new UiSelector().hintMatches("` + ciPattern + `").clickable(true)` + stateFilters,
-			})
-		}
-		strategies = append(strategies, LocatorStrategy{
-			Strategy: uiautomator2.StrategyUIAutomator,
-			Value:    `new UiSelector().textMatches("` + ciPattern + `")` + stateFilters,
-		})
-		strategies = append(strategies, LocatorStrategy{
-			Strategy: uiautomator2.StrategyUIAutomator,
-			Value:    `new UiSelector().descriptionMatches("` + ciPattern + `")` + stateFilters,
-		})
-		strategies = append(strategies, LocatorStrategy{
-			Strategy: uiautomator2.StrategyUIAutomator,
-			Value:    `new UiSelector().hintMatches("` + ciPattern + `")` + stateFilters,
-		})
-		// Fall back to regex match (case-insensitive). Text is already a regex
-		// per looksLikeRegex — use it as-is; only escape Java-string quotes.
-		// Escaping regex metachars here would defeat the regex (turns `.*` into
-		// `\.\*` which matches the literal string ".*").
+		// Text is already a regex per looksLikeRegex — use it as-is; only
+		// escape Java-string quotes. Escaping regex metachars here would defeat
+		// the regex (turns `.*` into `\.\*`, matching the literal ".*").
 		if looksLikeRegex(sel.Text) {
-			regexEscaped := escapeUIAutomatorString(sel.Text)
-			pattern := "(?is)" + regexEscaped
-			if preferClickable {
-				strategies = append(strategies, LocatorStrategy{
-					Strategy: uiautomator2.StrategyUIAutomator,
-					Value:    `new UiSelector().textMatches("` + pattern + `").clickable(true)` + stateFilters,
-				})
-				strategies = append(strategies, LocatorStrategy{
-					Strategy: uiautomator2.StrategyUIAutomator,
-					Value:    `new UiSelector().descriptionMatches("` + pattern + `").clickable(true)` + stateFilters,
-				})
-			}
-			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUIAutomator,
-				Value:    `new UiSelector().textMatches("` + pattern + `")` + stateFilters,
-			})
-			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUIAutomator,
-				Value:    `new UiSelector().descriptionMatches("` + pattern + `")` + stateFilters,
+			pattern := "(?is)" + escapeUIAutomatorString(sel.Text)
+			textTiers = append(textTiers, []string{
+				`.textMatches("` + pattern + `")`,
+				`.descriptionMatches("` + pattern + `")`,
 			})
 		}
+	}
+
+	// A selector naming both must match one element carrying both. Emitting the
+	// id-only and text-only queries as separate candidates made them an OR: the
+	// finder returns on the first that hits anything, so the id matched and the
+	// text was never read. Same defect as the WDA one fixed in #130.
+	switch {
+	case len(idTiers) > 0 && len(textTiers) > 0:
+		var combined [][]string
+		for _, idTier := range idTiers {
+			for _, textTier := range textTiers {
+				var tier []string
+				for _, id := range idTier {
+					for _, text := range textTier {
+						tier = append(tier, id+text)
+					}
+				}
+				combined = append(combined, tier)
+			}
+		}
+		emit(combined)
+	case len(idTiers) > 0:
+		emit(idTiers)
+	case len(textTiers) > 0:
+		emit(textTiers)
 	}
 
 	// CSS selector for web views
