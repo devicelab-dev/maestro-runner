@@ -36,6 +36,8 @@ func (d *Driver) executeStep(step flow.Step) *core.CommandResult {
 		return d.handleLaunchApp(s)
 	case *flow.ClearStateStep:
 		return d.handleClearState(s.AppID)
+	case *flow.SetPermissionsStep:
+		return d.handleSetPermissions(s)
 	case *flow.StopAppStep:
 		return d.handleStopApp(s)
 	case *flow.TapOnStep:

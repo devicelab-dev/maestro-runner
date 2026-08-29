@@ -176,6 +176,8 @@ func (d *Driver) executeStep(step flow.Step) *core.CommandResult {
 		return d.stopApp(s)
 	case *flow.ClearStateStep:
 		return d.clearState(s)
+	case *flow.SetPermissionsStep:
+		return d.setPermissions(s)
 	case *flow.SetLocationStep:
 		return d.setLocation(s)
 	case *flow.SetOrientationStep:

@@ -1161,17 +1161,22 @@ func TestResolveIOSPermissionShortcut(t *testing.T) {
 		{"phone", []string{"contacts"}},
 		{"microphone", []string{"microphone"}},
 		{"photos", []string{"photos"}},
-		{"medialibrary", []string{"photos"}},
 		{"calendar", []string{"calendar"}},
 		{"reminders", []string{"reminders"}},
-		{"notifications", []string{"notifications"}},
 		{"bluetooth", []string{"bluetooth-peripheral"}},
 		{"health", []string{"health"}},
 		{"homekit", []string{"homekit"}},
 		{"motion", []string{"motion"}},
 		{"speech", []string{"speech-recognition"}},
 		{"siri", []string{"siri"}},
-		{"faceid", []string{"faceid"}},
+		// Empty means iOS offers no host-side control. Verified against
+		// `xcrun simctl privacy` on Xcode 26.2: it rejects "notifications",
+		// "faceid" and "medialibrary" outright, while "media-library" is
+		// accepted. The old expectations here encoded those rejections as if
+		// they worked (#148).
+		{"faceid", nil},
+		{"notifications", nil},
+		{"medialibrary", []string{"media-library"}},
 		{"custom-permission", []string{"custom-permission"}},
 	}
 

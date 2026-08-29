@@ -43,7 +43,7 @@ mkdir -p "$PLATFORMS_DIR"
 
 for target in "${TARGETS[@]}"; do
     read -r go_os go_arch node_os node_arch <<< "$target"
-    pkg="maestro-runner-${node_os}-${node_arch}"
+    pkg="@devicelab/maestro-runner-${node_os}-${node_arch}"
     tarball="$DIST_DIR/maestro-runner-${VERSION}-${go_os}-${go_arch}.tar.gz"
 
     if [ ! -f "$tarball" ]; then
@@ -52,7 +52,7 @@ for target in "${TARGETS[@]}"; do
     fi
 
     echo "Packaging $pkg"
-    dest="$PLATFORMS_DIR/$pkg"
+    dest="$PLATFORMS_DIR/maestro-runner-${node_os}-${node_arch}"
     mkdir -p "$dest"
 
     # The tarball's own layout is the one the binary expects: it resolves its

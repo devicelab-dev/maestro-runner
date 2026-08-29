@@ -1847,49 +1847,10 @@ func (d *Driver) setPermissions(step *flow.SetPermissionsStep) *core.CommandResu
 	}
 }
 
-// iosPermissionAction resolves one `name: value` pair from a flow into the
-// simctl privacy action and service to run.
-//
-// Most permissions are a plain three-way allow / deny / unset. Location is not:
-// iOS distinguishes "while using the app" from "always", so it takes
-// `always`, `inuse`, `never` and `unset`, and the two services behind them are
-// different — `location` for in-use, `location-always` for background. Maestro
-// accepts the same words, and a flow written against it must behave the same
-// here.
-//
-// Returns ok=false for a value this permission does not accept. Callers report
-// that rather than skipping it: silently ignoring `location: never` is what
-// made this look like a broken feature instead of a rejected value — the
-// permission was reset to "not determined" and the app asked the user, which is
-// the exact opposite of what the flow said (#147).
-func iosPermissionAction(service, value string) (action string, resolvedService string, ok bool) {
-	v := strings.ToLower(strings.TrimSpace(value))
-
-	if service == "location-always" || service == "location" {
-		switch v {
-		case "always", "allow":
-			return "grant", "location-always", true
-		case "inuse", "wheninuse", "when-in-use":
-			return "grant", "location", true
-		case "never", "deny":
-			return "revoke", "location-always", true
-		case "unset":
-			return "reset", "location-always", true
-		default:
-			return "", "", false
-		}
-	}
-
-	switch v {
-	case "allow":
-		return "grant", service, true
-	case "deny":
-		return "revoke", service, true
-	case "unset":
-		return "reset", service, true
-	default:
-		return "", "", false
-	}
+// iosPermissionAction resolves a permission value to a simctl action. The
+// table is shared with the DeviceLab iOS driver in pkg/core.
+func iosPermissionAction(service, value string) (string, string, bool) {
+	return core.IOSPrivacyAction(service, value)
 }
 
 // iosPermissionValueSupported reports whether value means anything for the
@@ -1924,48 +1885,12 @@ func (d *Driver) applyIOSPermission(appID, permission, value string) error {
 	return nil
 }
 
-// resolveIOSPermissionShortcut maps shortcut names to iOS privacy service names.
+// resolveIOSPermissionShortcut maps a flow permission name to iOS privacy
+// service names. Shared with the DeviceLab iOS driver via pkg/core.
 func resolveIOSPermissionShortcut(shortcut string) []string {
-	switch strings.ToLower(shortcut) {
-	case "location", "location-always":
-		return []string{"location-always"}
-	case "camera":
-		return []string{"camera"}
-	case "contacts":
-		return []string{"contacts"}
-	case "phone":
-		return []string{"contacts"} // iOS doesn't have separate phone permission
-	case "microphone":
-		return []string{"microphone"}
-	case "photos", "medialibrary":
-		return []string{"photos"}
-	case "calendar":
-		return []string{"calendar"}
-	case "reminders":
-		return []string{"reminders"}
-	case "notifications":
-		return []string{"notifications"}
-	case "bluetooth":
-		return []string{"bluetooth-peripheral"}
-	case "health":
-		return []string{"health"}
-	case "homekit":
-		return []string{"homekit"}
-	case "motion":
-		return []string{"motion"}
-	case "speech":
-		return []string{"speech-recognition"}
-	case "siri":
-		return []string{"siri"}
-	case "faceid":
-		return []string{"faceid"}
-	default:
-		// Assume it's already a valid service name
-		return []string{shortcut}
-	}
+	return core.IOSPrivacyServices(shortcut)
 }
 
-// hasAllValue checks if all permission values match the given value.
 func hasAllValue(permissions map[string]string, value string) bool {
 	for _, v := range permissions {
 		if strings.ToLower(v) != value {
@@ -2023,6 +1948,10 @@ func resolveAlertAction(permissions map[string]string) string {
 }
 
 // getIOSPermissions returns all common iOS privacy services.
+// getIOSPermissions lists the privacy services simctl will accept for a
+// reset-everything pass. Deliberately excludes `notifications` and `faceid`:
+// simctl rejects both, and including them meant every reset logged failures
+// nobody could act on.
 func getIOSPermissions() []string {
 	return []string{
 		"location-always",
@@ -2032,7 +1961,6 @@ func getIOSPermissions() []string {
 		"contacts",
 		"calendar",
 		"reminders",
-		"notifications",
 	}
 }
 

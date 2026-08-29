@@ -9,10 +9,10 @@ const path = require('node:path');
 // npm's `cpu` field uses Node's process.arch names, so the package names below
 // use them too: x64 rather than the amd64 of the release tarballs.
 const PACKAGE_BY_TARGET = {
-  'darwin-arm64': 'maestro-runner-darwin-arm64',
-  'darwin-x64': 'maestro-runner-darwin-x64',
-  'linux-arm64': 'maestro-runner-linux-arm64',
-  'linux-x64': 'maestro-runner-linux-x64',
+  'darwin-arm64': '@devicelab/maestro-runner-darwin-arm64',
+  'darwin-x64': '@devicelab/maestro-runner-darwin-x64',
+  'linux-arm64': '@devicelab/maestro-runner-linux-arm64',
+  'linux-x64': '@devicelab/maestro-runner-linux-x64',
 };
 
 function target() {

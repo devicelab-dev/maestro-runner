@@ -1660,102 +1660,41 @@ func (d *Driver) applyPermissions(appID string, permissions map[string]string) *
 		}
 	}
 
-	if len(toGrant) > 0 {
-		var parts []string
-		for _, perm := range toGrant {
-			parts = append(parts, fmt.Sprintf("pm grant %s %s 2>/dev/null", appID, perm))
+	// Batched into one shell round trip, but no longer with stderr thrown away:
+	// discarding it meant a permission the app never declared looked identical
+	// to one that applied, and setPermissions reported success either way.
+	run := func(verb string, perms []string) {
+		if len(perms) == 0 {
+			return
 		}
-		_, _ = d.device.Shell(strings.Join(parts, "; "))
-	}
-
-	if len(toRevoke) > 0 {
 		var parts []string
-		for _, perm := range toRevoke {
-			parts = append(parts, fmt.Sprintf("pm revoke %s %s 2>/dev/null", appID, perm))
+		for _, perm := range perms {
+			parts = append(parts, fmt.Sprintf("pm %s %s %s", verb, appID, perm))
 		}
-		_, _ = d.device.Shell(strings.Join(parts, "; "))
+		out, err := d.device.Shell(strings.Join(parts, "; "))
+		if err == nil && !strings.Contains(out, "Exception") {
+			return
+		}
+		if core.IsUndeclaredPermissionError(out) {
+			logger.Warn("setPermissions: %s does not declare one or more of %v — skipping those", appID, perms)
+			return
+		}
+		logger.Warn("setPermissions: pm %s reported: %s", verb, strings.TrimSpace(out))
 	}
+	run("grant", toGrant)
+	run("revoke", toRevoke)
 
 	return successResult(fmt.Sprintf("Permissions updated: %d granted, %d revoked", len(toGrant), len(toRevoke)), nil)
 }
 
 // resolvePermissionShortcut maps Maestro permission shortcuts to Android permission names.
+// resolvePermissionShortcut maps a flow's permission name to Android permission
+// strings. The table is shared with the other drivers in pkg/core — it used to
+// be duplicated per driver, and the copies drifted (#148).
 func resolvePermissionShortcut(shortcut string) []string {
-	switch strings.ToLower(shortcut) {
-	case "location":
-		return []string{
-			"android.permission.ACCESS_FINE_LOCATION",
-			"android.permission.ACCESS_COARSE_LOCATION",
-			"android.permission.ACCESS_BACKGROUND_LOCATION",
-		}
-	case "camera":
-		return []string{"android.permission.CAMERA"}
-	case "contacts":
-		return []string{
-			"android.permission.READ_CONTACTS",
-			"android.permission.WRITE_CONTACTS",
-			"android.permission.GET_ACCOUNTS",
-		}
-	case "phone":
-		return []string{
-			"android.permission.READ_PHONE_STATE",
-			"android.permission.CALL_PHONE",
-			"android.permission.READ_CALL_LOG",
-			"android.permission.WRITE_CALL_LOG",
-			"android.permission.USE_SIP",
-			"android.permission.PROCESS_OUTGOING_CALLS",
-		}
-	case "microphone":
-		return []string{"android.permission.RECORD_AUDIO"}
-	case "bluetooth":
-		return []string{
-			"android.permission.BLUETOOTH_CONNECT",
-			"android.permission.BLUETOOTH_SCAN",
-			"android.permission.BLUETOOTH_ADVERTISE",
-		}
-	case "storage":
-		return []string{
-			"android.permission.READ_EXTERNAL_STORAGE",
-			"android.permission.WRITE_EXTERNAL_STORAGE",
-			"android.permission.READ_MEDIA_IMAGES",
-			"android.permission.READ_MEDIA_VIDEO",
-			"android.permission.READ_MEDIA_AUDIO",
-		}
-	case "notifications":
-		return []string{"android.permission.POST_NOTIFICATIONS"}
-	case "medialibrary":
-		return []string{
-			"android.permission.READ_MEDIA_IMAGES",
-			"android.permission.READ_MEDIA_VIDEO",
-			"android.permission.READ_MEDIA_AUDIO",
-		}
-	case "calendar":
-		return []string{
-			"android.permission.READ_CALENDAR",
-			"android.permission.WRITE_CALENDAR",
-		}
-	case "sms":
-		return []string{
-			"android.permission.SEND_SMS",
-			"android.permission.RECEIVE_SMS",
-			"android.permission.READ_SMS",
-			"android.permission.RECEIVE_WAP_PUSH",
-			"android.permission.RECEIVE_MMS",
-		}
-	case "sensors", "activity_recognition":
-		return []string{
-			"android.permission.BODY_SENSORS",
-			"android.permission.ACTIVITY_RECOGNITION",
-		}
-	default:
-		if strings.HasPrefix(shortcut, "android.permission.") {
-			return []string{shortcut}
-		}
-		return []string{"android.permission." + strings.ToUpper(shortcut)}
-	}
+	return core.AndroidPermissionShortcut(shortcut)
 }
 
-// getAllPermissions returns all common Android runtime permissions.
 func getAllPermissions() []string {
 	return []string{
 		"android.permission.ACCESS_FINE_LOCATION",

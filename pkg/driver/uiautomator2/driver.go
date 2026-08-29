@@ -210,6 +210,11 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 		result = d.killApp(s)
 	case *flow.ClearStateStep:
 		result = d.clearState(s)
+	case *flow.SetPermissionsStep:
+		// The grant/revoke machinery already existed for launchApp's
+		// `permissions:` block; only the step was never dispatched, so a flow
+		// using setPermissions aborted with "unknown step type" (#148).
+		result = d.applyPermissions(s.AppID, s.Permissions)
 
 	// Clipboard
 	case *flow.CopyTextFromStep:

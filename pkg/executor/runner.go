@@ -3,8 +3,12 @@ package executor
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"runtime/debug"
 	"sync"
+
+	"github.com/devicelab-dev/maestro-runner/pkg/logger"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
@@ -226,7 +230,29 @@ func (r *Runner) executeFlows(ctx context.Context, flows []flow.Flow, flowDetail
 }
 
 // executeFlow runs a single flow.
-func (r *Runner) executeFlow(ctx context.Context, f flow.Flow, detail *report.FlowDetail, indexWriter *report.IndexWriter, flowIdx, totalFlows int) FlowResult {
+//
+// A panic anywhere below this point is contained to the flow that caused it.
+// Without that, one bad step takes the process with it — and under --parallel
+// that means every flow in flight dies mid-execution and every flow not yet
+// scheduled never starts, turning a single flaky screen into a total run loss
+// (#149). A crashed flow is reported as a failed flow, with the panic and its
+// stack in the result, which is both more useful and more honest than an
+// exit code and a wall of goroutine dump.
+func (r *Runner) executeFlow(ctx context.Context, f flow.Flow, detail *report.FlowDetail, indexWriter *report.IndexWriter, flowIdx, totalFlows int) (result FlowResult) {
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			return
+		}
+		logger.Error("flow %q crashed the driver: %v\n%s", f.Config.Name, recovered, string(debug.Stack()))
+		result = FlowResult{
+			Name:       f.Config.Name,
+			SourceFile: f.SourcePath,
+			Status:     report.StatusFailed,
+			Error:      fmt.Sprintf("driver panic: %v", recovered),
+		}
+	}()
+
 	fr := &FlowRunner{
 		ctx:         ctx,
 		flow:        f,
