@@ -375,6 +375,18 @@ func (d *Driver) findElementDirect(sel flow.Selector) (*core.ElementInfo, error)
 		return d.findElementByPageSource(sel)
 	}
 
+	// Both an id and a text mean "the element with both", and none of the
+	// queries below can express that: each returns on the first match for the
+	// one attribute it knows about, so the id path answered and the text was
+	// never read. An assertVisible with the right id and a wrong text passed
+	// green, which is the dangerous direction (#157).
+	//
+	// Page source is where a selector's fields are all checked together — the
+	// same route state filters take above, and for the same reason.
+	if sel.ID != "" && sel.Text != "" {
+		return d.findElementByPageSource(sel)
+	}
+
 	// Try ID first
 	if sel.ID != "" {
 		if d.platform == "ios" {
