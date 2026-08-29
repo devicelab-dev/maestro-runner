@@ -92,6 +92,7 @@ jobs:
           adb install -r -g drivers/android/appium-uiautomator2-server-v9.11.1.apk
           adb install -r -g drivers/android/appium-uiautomator2-server-debug-androidTest.apk
           adb install -r -g drivers/android/settings_apk-debug.apk
+          adb install -r -g drivers/android/animation-test-app-debug.apk
 
           # --- YAML flow tests ---
           echo "::group::YAML flow tests"
