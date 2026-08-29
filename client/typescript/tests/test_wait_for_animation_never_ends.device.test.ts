@@ -1,15 +1,16 @@
 /**
  * Test that waitForAnimationToEnd times out when the animation never stops.
  *
- * The emulator's camera preview is a live (continuously changing) feed, so the
- * driver can never reach a "two consecutive identical screenshots" steady
- * state and waitForAnimationToEnd must time out and return success=false.
+ * A tiny offline Android app (dev.maestro.animationtest) shows a full-screen
+ * WebView rendering a perpetually rotating CSS spinner. Because the animation
+ * never ceases, the driver cannot reach a "two consecutive identical
+ * screenshots" steady state, so waitForAnimationToEnd must time out and return
+ * success=false.
  *
- * Using the camera avoids any dependency on external network access or a
- * browser, both of which are unreliable inside CI sandboxes: the emulator often
- * cannot reach the runner's loopback (so a locally served spinner page never
- * loads), and Chrome will not render a local file:// from an intent. The
- * camera preview is always available on the emulator and never settles.
+ * The WebView's CSS animation is independent of the system animator/window/
+ * transition scales, so it keeps rotating even when the emulator runs with
+ * `disable-animations: true` (which would suppress a native Android animation).
+ * No network or local HTTP server is involved — the HTML is embedded in the app.
  *
  * Prerequisites:
  *   1. Android emulator OR iOS simulator running
@@ -37,20 +38,41 @@ import { afterAll, describe, expect, it } from "@jest/globals";
 
 import { getClient, teardown } from "./setup";
 
+// Package/activity of the offline WebView spinner test app.
+const APP_PKG = "dev.maestro.animationtest";
+const APP_ACTIVITY = "dev.maestro.animationtest/.MainActivity";
+
 // Pause between the two consecutive screenshots (ms) — must be long enough for
-// the preview to advance at least one visible frame
+// the spinner to advance at least one visible frame
 const SLEEP_MS = 500;
 
-// Maximum pixel-diff fraction still considered "static". Far below what a live
-// camera preview produces, so any change is detected as animated.
+// Maximum pixel-diff fraction still considered "static". Far below what a
+// rotating spinner produces, so any rotation is detected as animated.
 const THRESHOLD = 0.0003;
 
-function launchCamera(): void {
-  // Open the camera capture intent. The emulated camera shows a live preview
-  // that never settles, which is exactly what we need.
-  execSync("adb shell am start -a android.media.action.IMAGE_CAPTURE", {
-    stdio: "ignore",
-  });
+// How long to wait for the app to come to the foreground before giving up (ms)
+const FOCUS_TIMEOUT_MS = 10_000;
+
+function launchApp(): void {
+  // Bring the WebView spinner app to the foreground.
+  execSync(`adb shell am start -n ${APP_ACTIVITY}`, { stdio: "ignore" });
+}
+
+function waitForAppFocused(): void {
+  // Ensure the app actually reached the foreground before we screenshot it;
+  // otherwise waitForAnimationToEnd could sample a stale/previous screen.
+  const deadline = Date.now() + FOCUS_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const out = execSync("adb shell dumpsys window", { encoding: "utf-8" });
+    if (out.includes(APP_PKG)) {
+      return;
+    }
+    execSync("sleep 0.5", { stdio: "ignore" });
+  }
+  throw new Error(
+    `${APP_PKG} did not become the focused app within ${FOCUS_TIMEOUT_MS}ms; ` +
+      "cannot run the animation-timeout test",
+  );
 }
 
 afterAll(async () => {
@@ -59,14 +81,15 @@ afterAll(async () => {
 
 describe("WaitForAnimationToEnd", () => {
   it(
-    "should time out on an infinite (camera preview) animation",
+    "should time out on an infinite (WebView spinner) animation",
     async () => {
       const client = await getClient();
 
-      launchCamera();
+      launchApp();
+      waitForAppFocused();
 
-      // Give the camera time to start rendering the live preview
-      await new Promise((resolve) => setTimeout(resolve, 5_000));
+      // Give the WebView a moment to render the first spinner frames
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
 
       // Swipe up a bit; assert it worked
       const swipeResult = await client.swipe("up", 400);
@@ -75,10 +98,10 @@ describe("WaitForAnimationToEnd", () => {
       await new Promise((resolve) => setTimeout(resolve, 1_000));
 
       await expect(
-        client.waitForAnimationToEnd(SLEEP_MS, THRESHOLD, "wait_for_animation_on_camera_preview"),
+        client.waitForAnimationToEnd(SLEEP_MS, THRESHOLD, "wait_for_animation_on_infinite_spinner"),
       ).rejects.toThrow("Timed out");
     },
-    // The server default timeout is 15 s; allow 60 s for camera start + swipe + animation check
+    // The server default timeout is 15 s; allow 60 s for app launch + swipe + animation check
     60_000,
   );
 });
