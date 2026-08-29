@@ -1816,7 +1816,16 @@ const htmlTemplate = `<!DOCTYPE html>
         }
 
         function extractKeyValue(cmd) {
-            // Extract the most meaningful value to show in the summary
+            // A label is the author saying, in their own words, what this step
+            // is for. It wins over anything derived from the step, which is why
+            // it is checked first: it used to be a fallback, so it only ever
+            // appeared on steps that had no selector, text or direction to show
+            // instead. A labelled tapOn showed its selector and the label went
+            // nowhere, while a labelled extendedWaitUntil displayed fine — the
+            // same flow, two different behaviours (#150).
+            if (cmd.label && cmd.label !== cmd.type) {
+                return cmd.label;
+            }
             if (cmd.params) {
                 if (cmd.params.selector && cmd.params.selector.value) {
                     return cmd.params.selector.value;
@@ -1827,10 +1836,6 @@ const htmlTemplate = `<!DOCTYPE html>
                 if (cmd.params.direction) {
                     return cmd.params.direction;
                 }
-            }
-            // Fallback: try to extract from label or return empty
-            if (cmd.label && cmd.label !== cmd.type) {
-                return cmd.label;
             }
             return '';
         }
