@@ -224,6 +224,102 @@ npm run build      # tsc — emits dist/ with type declarations
 | `MAESTRO_PLATFORM`    | `android`                  | Target platform                 |
 | `MAESTRO_RUNNER_BIN`  | `../../maestro-runner`     | Path to maestro-runner binary   |
 
+## 10. Permissions & WebView
+
+### setPermissions
+
+Grant or deny app permissions mid-flow. Values are `"allow"`, `"deny"`, or `"unset"`;
+shortcuts include `all`, `camera`, `contacts`, `phone`, `microphone`, `location`,
+`storage`, `notifications`, `calendar`, `sms`, and more. The flow's `appId` is used when
+omitted, but the typed client requires it explicitly:
+
+```ts
+await client.setPermissions("com.example.app", {
+  camera: "allow",
+  microphone: "deny",
+  // "all": "allow" grants every permission the app declares
+});
+```
+
+An undeclared permission (one the app never requested) no longer fails the step — the
+server skips it and logs it by name.
+
+### resetPermissions
+
+Resets all browser permissions (web platform only):
+
+```ts
+await client.resetPermissions();
+```
+
+### evalWebViewScript / runWebViewScript
+
+Run JavaScript inside a mobile WebView (Android/iOS) via CDP — distinct from desktop
+`evalBrowserScript`. `output` stores the return value in a flow variable:
+
+```ts
+const res = await client.evalWebViewScript(
+  "document.querySelector('h1')?.innerText",
+  { output: "title" },
+);
+
+await client.runWebViewScript("scripts/login.js", {
+  env: { USERNAME: "alice" },   // injected as window.__env
+  output: "result",
+});
+```
+
+## 11. More step types
+
+The client also wraps the most common gesture, media, device-control, and browser
+step types. Every method below maps 1:1 to a server step type:
+
+```ts
+// Gestures
+await client.doubleTapOn({ text: "Star" });
+await client.longPressOn({ text: "Item", durationMs: 800 });
+await client.dragAndDrop({ from: "Source", to: "Target", holdDuration: 1000 });
+await client.scrollUntilVisible({ element: { text: "Footer" }, direction: "DOWN", maxScrolls: 5 });
+
+// Assertions & media
+await client.assertScreenshot({ path: "baseline.png", thresholdPercentage: 95 });
+await client.takeScreenshot({ path: "evidence.png" });
+await client.copyTextFrom({ id: "title" });
+await client.pasteText();
+await client.setClipboard("hello");
+
+// AI & scripting
+await client.assertWithAI("the cart total is under $50");
+await client.evalScript("console.log('hi')");
+await client.runScript({ file: "setup.js", env: { MODE: "test" } });
+await client.evalBrowserScript("window.scrollTo(0, 0)", { output: "ok" });
+
+// Device control
+await client.setLocation("37.4219", "-122.0840");
+await client.setAirplaneMode(true);
+await client.toggleAirplaneMode();
+await client.setNetworkConditions({ offline: false, latency: 200, downloadSpeed: 5000 });
+await client.openNotifications();
+await client.setDarkMode(true);
+await client.setOrientation("LANDSCAPE");
+
+// Browser (web platform)
+await client.openBrowser("https://example.com");
+await client.switchTab({ index: 1 });
+await client.closeTab();
+await client.getConsoleLogs("logs");
+await client.clearConsoleLogs();
+await client.assertNoJSErrors();
+await client.mockNetwork({
+  url: "https://api.example.com/user",
+  method: "GET",
+  response: { status: 200, body: '{"id":1}' },
+});
+```
+
+Not every server step type has a typed method — but `executeStep({ type: "...", ... })`
+forwards any raw step dict to the server, which supports ~90 step types in total.
+
 ## Full API reference
 
 See the client [`README.md`](../../client/typescript/README.md) for the complete

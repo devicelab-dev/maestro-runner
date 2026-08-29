@@ -114,6 +114,18 @@ export class MaestroClient {
     return this.exec(commands.openLink(link, label));
   }
 
+  async setPermissions(
+    appId: string,
+    permissions: Record<string, string>,
+    label?: string,
+  ): Promise<ExecutionResult> {
+    return this.exec(commands.setPermissions(appId, permissions, label));
+  }
+
+  async resetPermissions(label?: string): Promise<ExecutionResult> {
+    return this.exec(commands.resetPermissions(label));
+  }
+
   // --- Tap ---
 
   async tap(opts: {
@@ -294,6 +306,22 @@ export class MaestroClient {
       throw new MaestroError(`source failed: ${text}`, resp.status);
     }
     return resp.text();
+  }
+
+  // --- WebView (mobile WebView via CDP) ---
+
+  async evalWebViewScript(
+    script: string,
+    opts?: { output?: string; label?: string },
+  ): Promise<ExecutionResult> {
+    return this.exec(commands.evalWebViewScript(script, opts));
+  }
+
+  async runWebViewScript(
+    file: string,
+    opts?: { env?: Record<string, string>; output?: string; label?: string },
+  ): Promise<ExecutionResult> {
+    return this.exec(commands.runWebViewScript(file, opts));
   }
 
   // --- Internals ---

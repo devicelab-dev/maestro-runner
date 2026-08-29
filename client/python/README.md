@@ -77,4 +77,38 @@ Worker `gw0` gets the first device (e.g. `emulator-5554`) on port 9999,
 
 ## API
 
-See `maestro_runner/client.py` for the full API.
+See `maestro_runner/client.py` for the full API. Highlights beyond the basics above:
+
+```python
+# Grant/deny app permissions (omitted appId falls back to the flow's appId)
+c.set_permissions("com.example.app", {"camera": "allow", "microphone": "deny"})
+
+# Reset browser permissions (web platform only)
+c.reset_permissions()
+
+# Run JavaScript inside a mobile WebView via CDP
+c.eval_webview_script("document.title", output="title")
+c.run_webview_script("scripts/login.js", env={"USERNAME": "alice"}, output="result")
+```
+
+### Wrapped step types
+
+| Method | Server step |
+|--------|-------------|
+| `set_permissions` / `reset_permissions` | `setPermissions` / `resetPermissions` |
+| `eval_webview_script` / `run_webview_script` | `evalWebViewScript` / `runWebViewScript` |
+| `double_tap_on` / `long_press_on` | `doubleTapOn` / `longPressOn` |
+| `drag_and_drop` / `scroll_until_visible` | `dragAndDrop` / `scrollUntilVisible` |
+| `assert_screenshot` / `take_screenshot` | `assertScreenshot` / `takeScreenshot` |
+| `copy_text_from` / `paste_text` / `set_clipboard` | `copyTextFrom` / `pasteText` / `setClipboard` |
+| `assert_with_ai` / `eval_script` / `run_script` | `assertWithAI` / `evalScript` / `runScript` |
+| `eval_browser_script` | `evalBrowserScript` |
+| `set_location` / `set_airplane_mode` / `toggle_airplane_mode` | `setLocation` / `setAirplaneMode` / `toggleAirplaneMode` |
+| `set_network_conditions` / `open_notifications` | `setNetworkConditions` / `openNotifications` |
+| `set_dark_mode` / `set_orientation` | `setDarkMode` / `setOrientation` |
+| `open_browser` / `switch_tab` / `close_tab` | `openBrowser` / `switchTab` / `closeTab` |
+| `get_console_logs` / `clear_console_logs` / `assert_no_js_errors` | `getConsoleLogs` / `clearConsoleLogs` / `assertNoJSErrors` |
+| `mock_network` | `mockNetwork` |
+
+Every method maps to a server step type; any step not yet wrapped as a typed method can
+still be sent via `c.execute_step({"type": "...", ...})`.
