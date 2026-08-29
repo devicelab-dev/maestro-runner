@@ -1119,115 +1119,95 @@ func buildSelectorsForTap(sel flow.Selector, timeoutMs int) ([]LocatorStrategy, 
 }
 
 // buildSelectorsWithOptions builds selectors with optional clickable-first prioritization.
+//
+// A selector naming both an id and a text must match **one element that has
+// both**. Emitting id-only and text-only strategies as separate candidates made
+// them an OR, because the finder returns on the first strategy that hits
+// anything: the id matched, the text was never read, and a wrong text: passed
+// green against the right element. Same defect as the WDA one fixed in v1.1.25
+// (#130). UiSelector chains, so the two are combined into one query instead.
 func buildSelectorsWithOptions(sel flow.Selector, timeoutMs int, preferClickable bool) ([]LocatorStrategy, error) {
 	var strategies []LocatorStrategy
 	stateFilters := buildStateFilters(sel)
 
-	// ID-based selector — exact match FIRST, substring fallback ONLY if exact
-	// fails. The substring-only behaviour from before this change silently
-	// returned the wrong element when the exact id wasn't in the rendered
-	// tree (e.g. lazy ListView with the target offscreen): UiAutomator's
-	// regex `resourceIdMatches(".*X.*")` triggers internal scrolling, and if
-	// no resource-id ever matched the substring, the search could still
-	// return an unrelated element it happened to land on. Mirrors the web
-	// driver's cascade: exact → testid → substring → name → aria-label.
-	if sel.ID != "" {
-		escaped := escapeUIAutomatorString(sel.ID)
-		if preferClickable {
-			// Exact match — clickable first for tap commands.
-			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUIAutomator,
-				Value:    `new UiSelector().resourceId("` + escaped + `").clickable(true)` + stateFilters,
-			})
+	// One tier is a set of equally-good queries; tiers are tried in order, and
+	// within a tier the clickable variants come first when a tap is being
+	// located. Preserved exactly as it was, so single-attribute selectors
+	// behave as before.
+	emit := func(tiers [][]string) {
+		for _, tier := range tiers {
+			if preferClickable {
+				for _, body := range tier {
+					strategies = append(strategies, LocatorStrategy{
+						Strategy: uiautomator2.StrategyUIAutomator,
+						Value:    `new UiSelector()` + body + `.clickable(true)` + stateFilters,
+					})
+				}
+			}
+			for _, body := range tier {
+				strategies = append(strategies, LocatorStrategy{
+					Strategy: uiautomator2.StrategyUIAutomator,
+					Value:    `new UiSelector()` + body + stateFilters,
+				})
+			}
 		}
-		// Exact match — any element.
-		strategies = append(strategies, LocatorStrategy{
-			Strategy: uiautomator2.StrategyUIAutomator,
-			Value:    `new UiSelector().resourceId("` + escaped + `")` + stateFilters,
-		})
-		if preferClickable {
-			// Substring fallback — clickable. Kept for backward compatibility
-			// with users relying on substring behaviour. Fires only after
-			// every exact-match strategy above failed.
-			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUIAutomator,
-				Value:    `new UiSelector().resourceIdMatches(".*` + escaped + `.*").clickable(true)` + stateFilters,
-			})
-		}
-		// Substring fallback — any.
-		strategies = append(strategies, LocatorStrategy{
-			Strategy: uiautomator2.StrategyUIAutomator,
-			Value:    `new UiSelector().resourceIdMatches(".*` + escaped + `.*")` + stateFilters,
-		})
 	}
 
-	// Text-based selector - use textContains for literal text, textMatches for regex
+	// Exact id first, substring second. The substring fallback is kept for
+	// users relying on it, and fires only after every exact-match strategy:
+	// UiAutomator's `resourceIdMatches(".*X.*")` triggers internal scrolling
+	// and could return an unrelated element it happened to land on.
+	var idTiers [][]string
+	if sel.ID != "" {
+		escaped := escapeUIAutomatorString(sel.ID)
+		idTiers = [][]string{
+			{`.resourceId("` + escaped + `")`},
+			{`.resourceIdMatches(".*` + escaped + `.*")`},
+		}
+	}
+
+	// Text: regex patterns go through textMatches, literals through
+	// textContains with a case-insensitive fallback — Android dialog buttons
+	// display "CANCEL" while the hierarchy says "Cancel".
+	var textTiers [][]string
 	if sel.Text != "" {
 		if looksLikeRegex(sel.Text) {
-			// Use textMatches for regex patterns (case-insensitive)
 			pattern := "(?is)" + escapeUIAutomatorString(sel.Text)
-			if preferClickable {
-				strategies = append(strategies, LocatorStrategy{
-					Strategy: uiautomator2.StrategyUIAutomator,
-					Value:    `new UiSelector().textMatches("` + pattern + `").clickable(true)` + stateFilters,
-				})
-				strategies = append(strategies, LocatorStrategy{
-					Strategy: uiautomator2.StrategyUIAutomator,
-					Value:    `new UiSelector().descriptionMatches("` + pattern + `").clickable(true)` + stateFilters,
-				})
+			textTiers = [][]string{
+				{`.textMatches("` + pattern + `")`, `.descriptionMatches("` + pattern + `")`},
 			}
-			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUIAutomator,
-				Value:    `new UiSelector().textMatches("` + pattern + `")` + stateFilters,
-			})
-			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUIAutomator,
-				Value:    `new UiSelector().descriptionMatches("` + pattern + `")` + stateFilters,
-			})
 		} else {
-			// Literal text: try case-sensitive textContains first (preserves existing behavior),
-			// then fall back to case-insensitive textMatches for cases like Android dialog
-			// buttons where textAllCaps displays "CANCEL" but hierarchy text is "Cancel".
 			escaped := escapeUIAutomatorString(sel.Text)
 			ciPattern := `(?is).*\Q` + escaped + `\E.*`
-			if preferClickable {
-				strategies = append(strategies, LocatorStrategy{
-					Strategy: uiautomator2.StrategyUIAutomator,
-					Value:    `new UiSelector().textContains("` + escaped + `").clickable(true)` + stateFilters,
-				})
-				strategies = append(strategies, LocatorStrategy{
-					Strategy: uiautomator2.StrategyUIAutomator,
-					Value:    `new UiSelector().descriptionContains("` + escaped + `").clickable(true)` + stateFilters,
-				})
+			textTiers = [][]string{
+				{`.textContains("` + escaped + `")`, `.descriptionContains("` + escaped + `")`},
+				{`.textMatches("` + ciPattern + `")`, `.descriptionMatches("` + ciPattern + `")`},
 			}
-			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUIAutomator,
-				Value:    `new UiSelector().textContains("` + escaped + `")` + stateFilters,
-			})
-			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUIAutomator,
-				Value:    `new UiSelector().descriptionContains("` + escaped + `")` + stateFilters,
-			})
-			// Case-insensitive fallback
-			if preferClickable {
-				strategies = append(strategies, LocatorStrategy{
-					Strategy: uiautomator2.StrategyUIAutomator,
-					Value:    `new UiSelector().textMatches("` + ciPattern + `").clickable(true)` + stateFilters,
-				})
-				strategies = append(strategies, LocatorStrategy{
-					Strategy: uiautomator2.StrategyUIAutomator,
-					Value:    `new UiSelector().descriptionMatches("` + ciPattern + `").clickable(true)` + stateFilters,
-				})
-			}
-			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUIAutomator,
-				Value:    `new UiSelector().textMatches("` + ciPattern + `")` + stateFilters,
-			})
-			strategies = append(strategies, LocatorStrategy{
-				Strategy: uiautomator2.StrategyUIAutomator,
-				Value:    `new UiSelector().descriptionMatches("` + ciPattern + `")` + stateFilters,
-			})
 		}
+	}
+
+	switch {
+	case len(idTiers) > 0 && len(textTiers) > 0:
+		// Both given: every query carries both, so nothing can match on one
+		// alone. Id tiers outer, so an exact id is preferred over a substring
+		// one whichever way the text matched.
+		var combined [][]string
+		for _, idTier := range idTiers {
+			for _, textTier := range textTiers {
+				var tier []string
+				for _, id := range idTier {
+					for _, text := range textTier {
+						tier = append(tier, id+text)
+					}
+				}
+				combined = append(combined, tier)
+			}
+		}
+		emit(combined)
+	case len(idTiers) > 0:
+		emit(idTiers)
+	case len(textTiers) > 0:
+		emit(textTiers)
 	}
 
 	// CSS selector for web views (no native wait support)
