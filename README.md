@@ -158,6 +158,55 @@ curl -X POST http://localhost:9999/session/$SID/execute \
   -d '{"type":"tapOn","selector":"Login"}'
 ```
 
+## Language Clients (TypeScript & Python)
+
+If you prefer writing tests in code instead of YAML, maestro-runner ships official
+clients that wrap the REST API above. You get the same drivers, selectors, and
+assertions as YAML flows — with IDE autocomplete, type checking, and Page Object
+Models.
+
+- **[TypeScript client](docs/clients/typescript.md)** — `MaestroClient` for Node.js / Jest / Vitest / Playwright test runners.
+- **[Python client](docs/clients/python.md)** — `MaestroClient` for pytest-based E2E suites, with built-in `pytest-xdist` parallel support.
+
+Both clients talk to the server started with `maestro-runner server`, so the only
+prerequisite is a running server:
+
+```bash
+maestro-runner server --port 9999
+```
+
+**TypeScript — quick taste:**
+
+```ts
+import { MaestroClient } from "maestro-runner";
+
+const client = new MaestroClient("http://localhost:9999");
+await client.createSession({ platformName: "android" });
+try {
+  await client.tap({ text: "Login" });
+  await client.inputText("user@example.com");
+  await client.assertVisible({ text: "Welcome" });
+} finally {
+  await client.close();
+}
+```
+
+**Python — quick taste:**
+
+```python
+from maestro_runner import MaestroClient
+
+with MaestroClient("http://localhost:9999",
+                  capabilities={"platformName": "android"}) as c:
+    c.tap(text="Login")
+    c.input_text("user@example.com")
+    c.assert_visible(text="Welcome")
+```
+
+See the [TypeScript tutorial](docs/clients/typescript.md) and
+[Python tutorial](docs/clients/python.md) for full setup, the Page Object Model
+pattern, parallel execution, and the complete method reference.
+
 ## CI/CD Integration
 
 maestro-runner is built for CI/CD pipelines — single binary, no JVM startup, low memory footprint. Works with GitHub Actions, GitLab CI, Jenkins, CircleCI, and any CI system that supports Android emulators or iOS simulators.
