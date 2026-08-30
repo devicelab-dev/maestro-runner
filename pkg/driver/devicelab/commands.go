@@ -843,8 +843,12 @@ func (d *Driver) eraseTextBrowser(chars int) *core.CommandResult {
 }
 
 func (d *Driver) hideKeyboard(_ *flow.HideKeyboardStep) *core.CommandResult {
-	// Retry up to 3 times — the on-device agent tries KEYCODE_ESCAPE first
-	// (keyboard-only, no navigation side-effects), then falls back to KEYCODE_BACK.
+	// Retry up to 3 times. The on-device agent sends KEYCODE_ESCAPE, which is
+	// keyboard-only, and deliberately never KEYCODE_BACK — Back navigates away
+	// when the IME is not actually up. It also guards on a real IME window
+	// (AccessibilityWindowInfo.TYPE_INPUT_METHOD) rather than guessing from the
+	// node tree, so calling this with no keyboard showing is a no-op rather
+	// than a stray back-navigation.
 	for attempt := 0; attempt < 3; attempt++ {
 		_ = d.client.HideKeyboard()
 
