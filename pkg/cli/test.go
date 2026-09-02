@@ -141,6 +141,11 @@ Examples:
 			Usage:   "Chrome user-data-dir for a persistent profile across runs (web only). Cookies / localStorage / extensions are reused.",
 			EnvVars: []string{"MAESTRO_USER_DATA_DIR"},
 		},
+		&cli.StringFlag{
+			Name:    "window-size",
+			Usage:   "Browser viewport as WxH, e.g. 390x844 (web only, default 1280x800). Lets one suite run against phone, tablet and desktop breakpoints.",
+			EnvVars: []string{"MAESTRO_WINDOW_SIZE"},
+		},
 
 		// Driver settings
 		&cli.IntFlag{
@@ -510,6 +515,7 @@ type RunConfig struct {
 	Headed      bool   // Show browser window (web only, default is headless)
 	Browser     string // chrome, chromium, or path to binary (web only)
 	UserDataDir string // Persistent Chrome profile directory (web only)
+	WindowSize  string // Browser viewport as WxH (web only, empty = 1280x800)
 
 	// Device
 	Platform string
@@ -750,6 +756,7 @@ func runTest(c *cli.Context) error {
 		Headed:             getBool("headed"),
 		Browser:            getString("browser"),
 		UserDataDir:        getString("user-data-dir"),
+		WindowSize:         getString("window-size"),
 		Platform:           getString("platform"),
 		Devices:            parseDevices(getString("device")),
 		Verbose:            getBool("verbose"),
