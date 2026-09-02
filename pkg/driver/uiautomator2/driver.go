@@ -450,7 +450,7 @@ func buildClickableOnlyStrategies(sel flow.Selector) ([]LocatorStrategy, error) 
 
 	if sel.Text != "" {
 		if looksLikeRegex(sel.Text) {
-			pattern := "(?is)" + escapeUIAutomatorString(sel.Text)
+			pattern := "(?s)" + escapeUIAutomatorString(sel.Text)
 			strategies = append(strategies, LocatorStrategy{
 				Strategy: uiautomator2.StrategyUIAutomator,
 				Value:    `new UiSelector().textMatches("` + pattern + `").clickable(true)` + stateFilters,
@@ -1172,7 +1172,7 @@ func buildSelectorsWithOptions(sel flow.Selector, timeoutMs int, preferClickable
 	var textTiers [][]string
 	if sel.Text != "" {
 		if looksLikeRegex(sel.Text) {
-			pattern := "(?is)" + escapeUIAutomatorString(sel.Text)
+			pattern := "(?s)" + escapeUIAutomatorString(sel.Text)
 			textTiers = [][]string{
 				{`.textMatches("` + pattern + `")`, `.descriptionMatches("` + pattern + `")`},
 			}

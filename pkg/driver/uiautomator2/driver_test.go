@@ -349,8 +349,17 @@ func TestBuildSelectorsRegexPattern(t *testing.T) {
 	if !strings.Contains(s.Value, ".+@.+") {
 		t.Errorf("expected regex pattern '.+@.+' to be preserved, got: %s", s.Value)
 	}
-	if !strings.Contains(s.Value, "(?is)") {
-		t.Error("expected case-insensitive flag in selector")
+	// Regex selectors are case-SENSITIVE, as Maestro's are. This test used to
+	// require (?i) and so pinned the defect: every regex was compiled
+	// case-insensitively, and an anchored pattern could not distinguish what
+	// it was written to distinguish — `^SIGN OUT$` matched a "Sign out" row as
+	// readily as the "SIGN OUT" button.
+	if strings.Contains(s.Value, "(?is)") {
+		t.Errorf("regex selectors must not be case-insensitive, got: %s", s.Value)
+	}
+	// (?s) stays: it only makes `.` span newlines, which multi-line labels need.
+	if !strings.Contains(s.Value, "(?s)") {
+		t.Errorf("expected the dotall flag to be preserved, got: %s", s.Value)
 	}
 }
 
@@ -399,8 +408,8 @@ func TestBuildSelectorsForTapID(t *testing.T) {
 	}
 
 	cases := []struct {
-		idx    int
-		want   string
+		idx     int
+		want    string
 		notWant string
 	}{
 		{0, `resourceId("login_btn").clickable(true)`, "resourceIdMatches"},

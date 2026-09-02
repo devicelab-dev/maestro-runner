@@ -1100,7 +1100,7 @@ func buildClickableOnlyStrategies(sel flow.Selector) ([]LocatorStrategy, error) 
 		// the literal string ".*For You.*" instead of "anything around For You".
 		if looksLikeRegex(sel.Text) {
 			regexEscaped := escapeUIAutomatorString(sel.Text)
-			pattern := "(?is)" + regexEscaped
+			pattern := "(?s)" + regexEscaped
 			strategies = append(strategies, LocatorStrategy{
 				Strategy: uiautomator2.StrategyUIAutomator,
 				Value:    `new UiSelector().textMatches("` + pattern + `").clickable(true)` + stateFilters,
@@ -1813,7 +1813,7 @@ func buildSelectorsWithOptions(sel flow.Selector, timeoutMs int, preferClickable
 		// escape Java-string quotes. Escaping regex metachars here would defeat
 		// the regex (turns `.*` into `\.\*`, matching the literal ".*").
 		if looksLikeRegex(sel.Text) {
-			pattern := "(?is)" + escapeUIAutomatorString(sel.Text)
+			pattern := "(?s)" + escapeUIAutomatorString(sel.Text)
 			textTiers = append(textTiers, []string{
 				`.textMatches("` + pattern + `")`,
 				`.descriptionMatches("` + pattern + `")`,
