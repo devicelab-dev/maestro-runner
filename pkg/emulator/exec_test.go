@@ -67,6 +67,13 @@ func withFakeExec(t *testing.T, fn func(name string, args ...string) *exec.Cmd) 
 
 func withFakeLookPath(t *testing.T, fn func(string) (string, error)) {
 	t.Helper()
+	// Binary discovery consults the SDK env vars before falling back to
+	// execLookPath, so faking only execLookPath leaves the first route live:
+	// on a machine with the Android SDK installed the real emulator is found
+	// and the fake never applies. Clear them so discovery is fully injected.
+	for _, k := range []string{"ANDROID_HOME", "ANDROID_SDK_ROOT", "ANDROID_SDK_HOME"} {
+		t.Setenv(k, "")
+	}
 	prev := execLookPath
 	execLookPath = fn
 	t.Cleanup(func() { execLookPath = prev })
