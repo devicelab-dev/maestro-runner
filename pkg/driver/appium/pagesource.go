@@ -305,6 +305,27 @@ func parseBounds(s string) core.Bounds {
 
 // FilterBySelector filters elements by selector properties.
 func FilterBySelector(elements []*ParsedElement, sel flow.Selector, platform string) []*ParsedElement {
+	// Literal-text selectors: prefer EXACT matches over contains matches. A
+	// price field "7000.00" contains "0" and would otherwise beat a switch
+	// whose text is exactly "0" — the failure seen on TW-ticket flows through
+	// Sauce/Appium, where the webview exposes price text that DCD's native
+	// driver never surfaces. When any element matches exactly, return only
+	// those; otherwise fall back to the contains semantics flows rely on.
+	if sel.Text != "" && !looksLikeRegex(sel.Text) {
+		var exact, rest []*ParsedElement
+		for _, elem := range elements {
+			if matchesTextExact(elem, sel.Text, platform) {
+				exact = append(exact, elem)
+			} else if matchesSelector(elem, sel, platform) {
+				rest = append(rest, elem)
+			}
+		}
+		if len(exact) > 0 {
+			return exact
+		}
+		return rest
+	}
+
 	var result []*ParsedElement
 
 	for _, elem := range elements {
@@ -315,6 +336,28 @@ func FilterBySelector(elements []*ParsedElement, sel flow.Selector, platform str
 	}
 
 	return result
+}
+
+// matchesTextExact reports whether any of the element's text-bearing fields
+// equals the literal pattern (case-sensitive equality).
+func matchesTextExact(elem *ParsedElement, pattern string, platform string) bool {
+	if pattern == "" {
+		return false
+	}
+	if platform == "ios" {
+		for _, text := range []string{elem.Label, elem.Name, elem.Value, elem.PlaceholderValue} {
+			if text == pattern {
+				return true
+			}
+		}
+		return false
+	}
+	for _, text := range []string{elem.Text, elem.ContentDesc, elem.HintText} {
+		if text == pattern {
+			return true
+		}
+	}
+	return false
 }
 
 func matchesSelector(elem *ParsedElement, sel flow.Selector, platform string) bool {
@@ -426,7 +469,32 @@ func matchesText(pattern string, texts ...string) bool {
 		return false
 	}
 
-	// Literal text - case-insensitive contains
+	// Literal text — prefer exact matches, then fall back to contains.
+	//
+	// Contains-only matching made a plain selector like `text: "0"` resolve to
+	// the first node whose text merely CONTAINS 0 — e.g. a TradingView order
+	// ticket's price field "7000.00" — instead of the switch whose text is
+	// exactly "0". DCD's native driver never sees the price text (webview
+	// exposure differs), which is why this only broke on Sauce/Appium. Exact
+	// first costs nothing for flows that already name full labels, and keeps
+	// the contains fallback for genuine substring usage.
+	exactMatched := false
+	for _, text := range texts {
+		if text != "" && text == pattern {
+			exactMatched = true
+			break
+		}
+	}
+	if exactMatched {
+		for _, text := range texts {
+			if text == pattern {
+				return true
+			}
+		}
+		return false
+	}
+
+	// No exact match — case-insensitive contains.
 	for _, text := range texts {
 		if containsIgnoreCase(text, pattern) {
 			return true
