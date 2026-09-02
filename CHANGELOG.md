@@ -7,14 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.26] - 2026-09-02
+
+This release is mostly about **taps and selectors landing where the flow says they should**. A tap used to be injected first and validated afterwards, so a rejected tap had already hit whatever sat under the fold — usually a bottom tab, which navigated away and left every later step running on the wrong screen. `scrollUntilVisible` would stop on a 9-pixel sliver of a button because the hierarchy handed us a rect it had already clipped. Two selector semantics move closer to Maestro's, and **both can change what an existing flow matches** — see the note below. Reaching the runner got easier too: it is on npm, it compiles on Windows, and it reads flow files with Windows line endings.
+
+### ⚠️ Two behaviour changes
+
+Both make selectors stricter. A flow that relied on the looser behaviour will start failing, and that is the point — the looser behaviour was matching things the flow did not ask for.
+
+**Regex selectors are case-sensitive.** Every regex was previously compiled with `(?i)`, so an anchored pattern could not distinguish what it was written to distinguish: `^SIGN OUT$` matched a "Sign out" row as readily as the "SIGN OUT" button, and page-source order decided which one was tapped. Plain text is not a regex and stays case-insensitive; add `(?i)` explicitly if you want an insensitive regex ([#151](https://github.com/devicelab-dev/maestro-runner/issues/151)).
+
+```yaml
+- tapOn: "^SIGN OUT$"          # now matches only the uppercase button
+- tapOn: "(?i)^sign out$"      # opt back in to insensitivity
+- tapOn: "sign out"            # plain text — unchanged, still insensitive
+```
+
+**A selector naming both `id:` and `text:` must match one element carrying both.** The two were emitted as separate queries, so the finder returned on whichever hit first — an AND written by the author behaving as an OR, matching an element that had the right id and completely different text ([#157](https://github.com/devicelab-dev/maestro-runner/issues/157), [#158](https://github.com/devicelab-dev/maestro-runner/pull/158)).
+
+```yaml
+- assertVisible:
+    id: "cart-button"
+    text: "Checkout"          # now both must be true of the same element
+```
+
 ### Added
-- **`--new-command-timeout <seconds>`** (env `MAESTRO_NEW_COMMAND_TIMEOUT`) — sets `appium:newCommandTimeout` on the Appium session when the caps file does not already specify it; an explicit value in `--caps` stays authoritative. Raising it matters on cloud `--parallel` runs, where the earliest sessions sit idle through the serial pre-creation phase and would otherwise be reaped at the server default, failing the first flow with `invalid session id`. Off by default. Contributed by [@JSap0914](https://github.com/JSap0914), requested by [@devrchoi](https://github.com/devrchoi) ([#124](https://github.com/devicelab-dev/maestro-runner/issues/124)).
+- **npm distribution** — `npx maestro-runner test flows/`, or `npm install --save-dev maestro-runner` to pin it alongside a React Native or Expo project. There is no postinstall and nothing is downloaded at install time: the binary arrives as an ordinary optional dependency npm selects by `os` and `cpu`, so installs work offline, behind a proxy, and in CI that blocks postinstall network access.
+- **`--window-size <WxH>`** (env `MAESTRO_WINDOW_SIZE`) — sets the browser viewport, so one suite can run against phone, tablet and desktop breakpoints. Defaults to 1280x800. A value that cannot be read falls back to the default rather than failing the run, since a wrong separator is a typo and refusing to start over it helps nobody.
   ```bash
-  maestro-runner --driver appium --caps caps.json --new-command-timeout 300 --parallel 4 test flows/
+  maestro-runner --platform web --window-size 390x844 test flows/
   ```
+- **`--new-command-timeout <seconds>`** (env `MAESTRO_NEW_COMMAND_TIMEOUT`) — sets `appium:newCommandTimeout` on the Appium session when the caps file does not already specify it; an explicit value in `--caps` stays authoritative. Raising it matters on cloud `--parallel` runs, where the earliest sessions sit idle through the serial pre-creation phase and would otherwise be reaped at the server default, failing the first flow with `invalid session id`. Off by default. Contributed by [@JSap0914](https://github.com/JSap0914), requested by [@devrchoi](https://github.com/devrchoi) ([#124](https://github.com/devicelab-dev/maestro-runner/issues/124)).
+- **Windows builds** — the runner compiles for Windows. `syscall.SysProcAttr.Setpgid` is Unix-only and was referenced unguarded, so the package would not build at all ([#159](https://github.com/devicelab-dev/maestro-runner/issues/159)).
 
 ### Fixed
+- **A tap was injected before it was validated** — `tapOn` on the DeviceLab Android driver found and clicked in one agent call, then read the rect and applied the off-screen guard, so the guard ran on a tap that had already landed. A clipped rect (top > bottom, so a negative height) puts its centre outside the element, and on a screen with a bottom tab bar that centre is a tab: the "rejected" tap switched tabs and the flow desynced. The check now runs on the agent, on the bounds it is about to click, and declines to click at all. Five host-side coordinate paths that never reached the agent guard — `tapOn` with `point:`, with `duration:`/`longPress`, its centre fallback, `doubleTapOn` and `longPressOn` — validate the resolved point too, as does the lazy-retry path, which previously had no check whatever and fires exactly when a clipped rect is most likely ([#162](https://github.com/devicelab-dev/maestro-runner/issues/162)).
+- **A tap is refused when a window above the target covers the point**, naming what covered it — a keyboard, a system or permission dialog. Geometry cannot tell you a tap will reach its target; a window's layer can.
+- **Chained `UiSelector` predicates were first-match-wins** — the DeviceLab agent evaluated a selector chain by returning on whichever predicate it tested first, so `.resourceId(…).textContains(…)` matched on text alone and ignored the id. Every predicate now has to hold ([#160](https://github.com/devicelab-dev/maestro-runner/issues/160)).
+- **`scrollUntilVisible` accepted a container-clipped sliver as fully visible** — Android reports bounds already clipped to the scroll container, so a 9-pixel sliver of a 126-pixel button arrived as a 9-pixel rect wholly inside the screen and scored 100%. Only clipping by the screen edge was ever detectable. A rect flush with its scrollable ancestor's leading edge now gets one confirming scroll: a sliver grows, an element resting at the end of a list does not ([#164](https://github.com/devicelab-dev/maestro-runner/issues/164)).
+- **"Driver not installed" was reported for any adb failure** — the installed-check swallowed the error, so a transport or permission problem surfaced as a missing package and sent people to reinstall something already there. The real error is now named. Matching also compares whole entries rather than substrings, since `pm list packages …server` also returns `…server.test`, and retries with `--user 0` for a device whose shell user cannot see a package installed for user 0 ([#163](https://github.com/devicelab-dev/maestro-runner/issues/163)).
+- **A CSS selector tapped the first DOM match even when it was hidden** — `document.querySelector`'s first hit might be a collapsed menu's copy of a button or a `display:none` template row, and the tap then sat there until the deadline and failed with `context deadline exceeded`. The visible match is chosen instead, which is what the `text:` path already did via the accessibility tree.
+- **`setPermissions` was missing on most drivers** — implemented everywhere, with the permission tables shared rather than copied per driver. iOS honours location's own vocabulary (`always`, `inuse`, `never`, `unset`), and a value a permission does not accept is reported instead of silently resetting it to "not determined", which asked the user at run time — the opposite of what the flow said ([#147](https://github.com/devicelab-dev/maestro-runner/issues/147)). `notifications` and `faceid` have no simctl service and say so rather than being sent to a tool that rejects them.
+- **A permission the app never declared failed the step** on Android; it is now skipped, as Maestro does.
+- **A nil-pointer panic in the WebView manager killed the whole run** — `browser.Timeout(...).Connect()` connected a clone of the browser object, leaving the original's event channel nil. One bad flow can no longer take down a parallel run either ([#149](https://github.com/devicelab-dev/maestro-runner/issues/149)).
+- **A step's `label:` is used in the HTML report** instead of being overridden by its selector ([#150](https://github.com/devicelab-dev/maestro-runner/issues/150)).
+- **Flow files with Windows line endings failed to parse** — every flow, not just some ([#159](https://github.com/devicelab-dev/maestro-runner/issues/159)).
+- **`${VAR}` is expanded in every step's `env:` block.**
+- **`checked:` reads the checked state on the native Android drivers too**, not just Appium ([#154](https://github.com/devicelab-dev/maestro-runner/issues/154)).
 - **Appium Android `checked:` selectors used the unrelated `selected` state** — the page-source parser now retains the XML `checked` attribute and state filtering reads it directly, so checked and unchecked switches match correctly even when `selected` differs ([#153](https://github.com/devicelab-dev/maestro-runner/issues/153)).
+- **Directional relative selectors pick the nearest element** rather than the deepest ([#16](https://github.com/devicelab-dev/maestro-runner/issues/16)).
+- **DeviceLab Android falls back to key events when send-keys is rejected.**
+- **The DeviceLab page-source parser read the wrong hint attribute** — the agent writes `hint-text`, the parser matched only `hint`, so `HintText` was always empty on that driver. Invisible on the common path, since the agent matches hints itself, but it cost hint matching on the host-side path used by `index:`, `width`/`height:`, regex `id:`, relative selectors and `count:`.
+
+### Changed
+- **Flutter widget trees are no longer re-serialised on every poll** ([#152](https://github.com/devicelab-dev/maestro-runner/issues/152)).
+- **Binaries are built with `-trimpath`**, so build-machine paths are not baked into them.
 
 ## [1.1.25] - 2026-08-25
 
