@@ -618,6 +618,43 @@ func (d *Driver) scroll(step *flow.ScrollStep) *core.CommandResult {
 	return successResult(fmt.Sprintf("Scrolled %s", direction), nil)
 }
 
+// atScrollContainerEdge reports whether the element occupying b ends exactly on
+// its nearest scrollable ancestor's leading edge — the shape of a rect the
+// hierarchy clipped rather than a whole element that happens to be visible
+// (#164).
+//
+// Costs one page-source fetch, and is only consulted once the geometry check
+// has already passed, so a scroll that stops on an unambiguous match pays
+// nothing. Any failure to establish the ancestry answers false: an
+// unverifiable tree must not block a match that the geometry accepted.
+func (d *Driver) atScrollContainerEdge(b core.Bounds, direction string) bool {
+	src, err := d.client.Source()
+	if err != nil {
+		return false
+	}
+	elems, err := ParsePageSource(src)
+	if err != nil {
+		return false
+	}
+	for _, e := range elems {
+		if e.Bounds != b {
+			continue
+		}
+		for p := e.Parent; p != nil; p = p.Parent {
+			if !p.Scrollable {
+				continue
+			}
+			return core.ClippedAtScrollEdge(b, p.Bounds, direction, scrollEdgeTolerancePx)
+		}
+	}
+	return false
+}
+
+// How far from the container edge still counts as flush. Rounding between the
+// hierarchy's integer bounds and the container's own edge leaves a pixel or
+// two; anything larger is a real gap.
+const scrollEdgeTolerancePx = 2
+
 func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.CommandResult {
 	direction := strings.ToLower(step.Direction)
 	if direction == "" {
@@ -653,6 +690,9 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 		container = &bounds
 	}
 
+	// Height of a flush candidate awaiting confirmation, or -1 for none.
+	pendingHeight := -1
+
 	for i := 0; i < maxScrolls && time.Now().Before(deadline); i++ {
 		// Try to find element (short timeout - includes page source fallback)
 		_, info, err := d.findElement(step.Element, true, 1000)
@@ -663,7 +703,18 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 			// Stop only when the element meets the flow's visibility
 			// requirement (default: fully inside the viewport).
 			if core.MeetsVisibility(info.Bounds, width, height, step.VisibilityPercentage) {
-				return successResult(fmt.Sprintf("Element found after %d scrolls", i), info)
+				// Computed from a rect the hierarchy may already have clipped
+				// to the scroll container, where a sliver at the fold scores
+				// 100% (#164). A rect flush with the container's leading edge
+				// gets one confirming scroll: a sliver grows, an element
+				// resting at the end of the list does not.
+				if pendingHeight >= 0 && info.Bounds.Height <= pendingHeight {
+					return successResult(fmt.Sprintf("Element found after %d scrolls", i), info)
+				}
+				if !d.atScrollContainerEdge(info.Bounds, direction) {
+					return successResult(fmt.Sprintf("Element found after %d scrolls", i), info)
+				}
+				pendingHeight = info.Bounds.Height
 			}
 		} else if err != nil && !isElementNotFoundError(err) {
 			// Real infrastructure failure — bail rather than silently looping.
