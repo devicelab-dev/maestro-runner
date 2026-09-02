@@ -157,17 +157,48 @@ func (a *Adapter) FindFirstOf(strategiesAndSelectors []string) (*uiautomator2.El
 
 // FindAndClick finds an element and clicks it in a single RPC call.
 func (a *Adapter) FindAndClick(strategy, selector string) (*uiautomator2.Element, error) {
-	resp, err := a.client.Call("Gesture.findAndClick", map[string]interface{}{
+	elem, _, err := a.FindAndClickGuarded(strategy, selector, 0, 0)
+	return elem, err
+}
+
+// FindAndClickGuarded is FindAndClick with the screen dimensions the agent
+// needs to reject an untappable rect BEFORE injecting the tap (#162).
+//
+// The second return reports whether the tap actually fired. An agent older
+// than the guard does not send the field and has already clicked, so a missing
+// value reads as true and behaviour is unchanged. Passing 0 for either
+// dimension disables the check agent-side.
+func (a *Adapter) FindAndClickGuarded(strategy, selector string, screenW, screenH int) (*uiautomator2.Element, bool, error) {
+	elem, clicked, _, err := a.FindAndClickChecked(strategy, selector, screenW, screenH, false)
+	return elem, clicked, err
+}
+
+// FindAndClickChecked additionally asks the agent to hit-test the tap point
+// when hitTest is set, and returns what blocked the tap when one did.
+//
+// Geometry cannot tell you a tap will reach its target: a keyboard, scrim or
+// dialog on top swallows it. An agent that predates the check ignores the flag
+// and behaves as before, so the reason is simply empty.
+func (a *Adapter) FindAndClickChecked(strategy, selector string, screenW, screenH int, hitTest bool) (*uiautomator2.Element, bool, string, error) {
+	params := map[string]interface{}{
 		"strategy": strategy,
 		"selector": selector,
-	})
+	}
+	if screenW > 0 && screenH > 0 {
+		params["screenWidth"] = screenW
+		params["screenHeight"] = screenH
+	}
+	if hitTest {
+		params["hitTest"] = true
+	}
+	resp, err := a.client.Call("Gesture.findAndClick", params)
 	if err != nil {
-		return nil, err
+		return nil, false, "", err
 	}
 
 	var result ElementResult
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		return nil, fmt.Errorf("parse findAndClick result: %w", err)
+		return nil, false, "", fmt.Errorf("parse findAndClick result: %w", err)
 	}
 
 	elem := uiautomator2.NewCachedElement(
@@ -181,7 +212,8 @@ func (a *Adapter) FindAndClick(strategy, selector string) (*uiautomator2.Element
 		},
 	)
 	a.wireElementActions(elem, result.ElementID)
-	return elem, nil
+	clicked := result.Clicked == nil || *result.Clicked
+	return elem, clicked, result.BlockedBy, nil
 }
 
 // --- Timeouts ---

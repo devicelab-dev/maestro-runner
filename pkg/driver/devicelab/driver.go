@@ -31,6 +31,13 @@ type DeviceLabClient interface {
 	// Element finding
 	FindElement(strategy, selector string) (*uiautomator2.Element, error)
 	FindAndClick(strategy, selector string) (*uiautomator2.Element, error)
+	// FindAndClickGuarded also passes the screen size so the agent can reject
+	// an untappable rect before injecting the tap. The bool reports whether
+	// the tap actually fired (#162).
+	FindAndClickGuarded(strategy, selector string, screenW, screenH int) (*uiautomator2.Element, bool, error)
+	// FindAndClickChecked additionally hit-tests the tap point when hitTest is
+	// set, returning what covered it when a tap is refused.
+	FindAndClickChecked(strategy, selector string, screenW, screenH int, hitTest bool) (*uiautomator2.Element, bool, string, error)
 	ActiveElement() (*uiautomator2.Element, error)
 
 	// Timeouts
@@ -316,12 +323,22 @@ func (d *Driver) maybeLazyRetryTap() bool {
 
 	// Re-issue the tap via FindAndClick. Reset the timer so further probes
 	// keep counting from this re-attempt, not the original.
+	// Guard the re-issued tap the same way tapOn does. This path had no rect
+	// check at all, and it fires exactly when a tap "had no effect" — which
+	// is when a clipped rect is most likely (#162).
+	sw, sh, _ := d.tappableScreenSize()
 	for _, s := range buildClickableOrAllStrategies(d.lastTapSelector) {
-		if _, err := d.client.FindAndClick(s.Strategy, s.Value); err == nil {
-			d.lastTapRetries++
-			d.lastTapTime = time.Now()
-			return true
+		_, clicked, err := d.client.FindAndClickGuarded(s.Strategy, s.Value, sw, sh)
+		if err != nil {
+			continue
 		}
+		if !clicked {
+			logger.Info("[devicelab] lazy retry: agent skipped the tap for %s (untappable rect) — not counting a retry", d.lastTapSelector.Describe())
+			continue
+		}
+		d.lastTapRetries++
+		d.lastTapTime = time.Now()
+		return true
 	}
 	return false
 }

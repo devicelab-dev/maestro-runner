@@ -62,6 +62,18 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		ctx, cancel := context.WithTimeout(d.parentContext(), timeout)
 		defer cancel()
 
+		// Read once: cached after the first call, and the agent needs it on
+		// every attempt. Zero on failure, which tells the agent to click
+		// unconditionally — the pre-#162 behaviour.
+		guardW, guardH, guardErr := d.tappableScreenSize()
+		if guardErr != nil {
+			guardW, guardH = 0, 0
+		}
+		// Hit-testing costs one tree walk per attempt and only ever turns a
+		// tap that would have been swallowed into a re-poll. Off switch for a
+		// tree pathological enough that the walk is not worth it.
+		hitTest := os.Getenv("MAESTRO_DISABLE_HIT_TEST") == ""
+
 		var lastErr error
 		for {
 			select {
@@ -83,7 +95,13 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 					// assertion can detect "tap had no effect" and retry.
 					d.recordTap(step.Selector)
 
-					elem, err := d.client.FindAndClick(s.Strategy, s.Value)
+					// Hand the agent the screen size so it can reject an
+					// untappable rect BEFORE injecting the tap. Previously the
+					// check below ran on a tap that had already landed: a
+					// clipped rect's centre sits outside the element, and with
+					// a bottom tab bar that centre is a tab, so the "rejected"
+					// tap navigated and desynced the flow (#162).
+					elem, clicked, blockedBy, err := d.client.FindAndClickChecked(s.Strategy, s.Value, guardW, guardH, hitTest)
 					if err == nil {
 						info := &core.ElementInfo{
 							Visible: true,
@@ -112,6 +130,29 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 						// injects the tap off-screen — a no-op that leaves the flow
 						// desynced. A settled frame a moment later taps the real
 						// target. (Mirrors the assert-side viewport check from #39.)
+						// The agent declined to tap. Nothing was injected,
+						// so just keep polling for a settled frame.
+						if !clicked {
+							// blockedBy is set when the hit test found something
+							// over the point; otherwise the rect itself was bad.
+							if blockedBy != "" {
+								logger.Info("[devicelab] tap skipped before injection for %s: point covered by %s — re-polling",
+									step.Selector.Describe(), blockedBy)
+								lastErr = fmt.Errorf("tap point is covered by %s", blockedBy)
+							} else {
+								logger.Info("[devicelab] tap skipped before injection (untappable rect) for %s: w=%d h=%d center=(%d,%d) screen=%dx%d — re-polling",
+									step.Selector.Describe(), info.Bounds.Width, info.Bounds.Height,
+									info.Bounds.X+info.Bounds.Width/2, info.Bounds.Y+info.Bounds.Height/2, guardW, guardH)
+								lastErr = fmt.Errorf("element rect not tappable (w=%d h=%d center=(%d,%d) screen=%dx%d)",
+									info.Bounds.Width, info.Bounds.Height,
+									info.Bounds.X+info.Bounds.Width/2, info.Bounds.Y+info.Bounds.Height/2, guardW, guardH)
+							}
+							time.Sleep(50 * time.Millisecond)
+							break
+						}
+
+						// Fallback for an agent predating the guard above: it
+						// has already clicked, so this only stops a second tap.
 						if rectOK {
 							// Validate against the FULL physical display (same coordinate
 							// space as info.Bounds, which come from the accessibility
@@ -174,6 +215,9 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		}
 		x += info.Bounds.X
 		y += info.Bounds.Y
+		if bad := d.guardTapInjection(step.Selector.Describe(), info.Bounds, x, y); bad != nil {
+			return bad
+		}
 		if err := d.client.Click(x, y); err != nil {
 			return errorResult(err, fmt.Sprintf("Failed to tap at relative point: %v", err))
 		}
@@ -181,6 +225,9 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 	}
 
 	x, y := info.Bounds.Center()
+	if bad := d.guardTapInjection(step.Selector.Describe(), info.Bounds, x, y); bad != nil {
+		return bad
+	}
 
 	// If duration is set (or longPress: true), hold the press for that long.
 	if step.DurationMs > 0 || step.LongPress {
@@ -202,6 +249,54 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 	}
 
 	return successResult("Tapped on element", info)
+}
+
+// tapPointInjectable reports whether a resolved tap point may be injected: the
+// element must be a real rectangle, and the point must land on the display.
+//
+// Both halves matter and catch different things. The centre of a clipped rect
+// (top > bottom, so a negative height) can still be on-screen — in #162 it was
+// (540,2109) on a 1080x2400 display — so the on-screen test alone would pass
+// it; only the malformed-rect test rejects it. Conversely a well-formed rect
+// scrolled off the bottom needs the on-screen test.
+func tapPointInjectable(b core.Bounds, x, y, screenW, screenH int) bool {
+	if b.Width <= 0 || b.Height <= 0 {
+		return false
+	}
+	return x >= 0 && x < screenW && y >= 0 && y < screenH
+}
+
+// guardTapInjection returns a failing result when a tap must not be injected,
+// or nil to proceed.
+//
+// The coordinate paths resolve (x, y) here and inject them directly, so the
+// agent-side guard in findAndClick never sees them — the check has to happen
+// here or nowhere. Injecting anyway is worse than failing: a clipped rect's
+// point lands outside the element, and on a screen with a bottom tab bar that
+// is a tab, so the tap navigates and every later step runs on the wrong
+// screen (#162).
+//
+// Unlike the findAndClick path this does not re-poll for a settled frame: the
+// element has already been resolved by a find that polls, and these paths
+// (point:, relative, index, duration) have no surrounding retry loop to hook
+// into. Failing with the rect in the message is the honest outcome — the flow
+// stops where the problem is instead of drifting.
+//
+// A screen size we cannot read disables the check rather than blocking a tap
+// that would otherwise have worked.
+func (d *Driver) guardTapInjection(desc string, b core.Bounds, x, y int) *core.CommandResult {
+	sw, sh, err := d.tappableScreenSize()
+	if err != nil || sw <= 0 || sh <= 0 {
+		return nil
+	}
+	if tapPointInjectable(b, x, y, sw, sh) {
+		return nil
+	}
+	logger.Info("[devicelab] tap skipped before injection for %s: bounds w=%d h=%d point=(%d,%d) screen=%dx%d",
+		desc, b.Width, b.Height, x, y, sw, sh)
+	e := fmt.Errorf("element rect not tappable (w=%d h=%d point=(%d,%d) screen=%dx%d)",
+		b.Width, b.Height, x, y, sw, sh)
+	return errorResult(e, fmt.Sprintf("Element not tappable: %v", e))
 }
 
 // boundsTappable reports whether b is a real on-screen rectangle whose centre
@@ -331,6 +426,9 @@ func (d *Driver) doubleTapOn(step *flow.DoubleTapOnStep) *core.CommandResult {
 	if perr != nil {
 		return errorResult(perr, fmt.Sprintf("Invalid point coordinates: %v", perr))
 	}
+	if bad := d.guardTapInjection(step.Selector.Describe(), info.Bounds, x, y); bad != nil {
+		return bad
+	}
 	if err := d.client.DoubleClick(x, y); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to double tap at coordinates: %v", err))
 	}
@@ -359,6 +457,9 @@ func (d *Driver) longPressOn(step *flow.LongPressOnStep) *core.CommandResult {
 	x, y, perr := core.PointInBounds(step.Selector.Point, info.Bounds)
 	if perr != nil {
 		return errorResult(perr, fmt.Sprintf("Invalid point coordinates: %v", perr))
+	}
+	if bad := d.guardTapInjection(step.Selector.Describe(), info.Bounds, x, y); bad != nil {
+		return bad
 	}
 	if err := d.client.LongClick(x, y, duration); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to long press at coordinates: %v", err))

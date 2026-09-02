@@ -48,16 +48,27 @@ type rawMessage struct {
 // ElementResult is the result returned by UI.findElement.
 // It bundles element ID with commonly needed attributes to avoid extra round-trips.
 type ElementResult struct {
-	ElementID   string      `json:"elementId"`
-	Text        string      `json:"text"`
-	ContentDesc string      `json:"contentDesc"`
-	ClassName   string      `json:"className"`
-	ResourceID  string      `json:"resourceId"`
+	ElementID   string       `json:"elementId"`
+	Text        string       `json:"text"`
+	ContentDesc string       `json:"contentDesc"`
+	ClassName   string       `json:"className"`
+	ResourceID  string       `json:"resourceId"`
 	Bounds      BoundsResult `json:"bounds"`
-	Displayed   bool        `json:"displayed"`
-	Enabled     bool        `json:"enabled"`
-	Clickable   bool        `json:"clickable"`
-	Selected    bool        `json:"selected"`
+	Displayed   bool         `json:"displayed"`
+	Enabled     bool         `json:"enabled"`
+	Clickable   bool         `json:"clickable"`
+	Selected    bool         `json:"selected"`
+
+	// Clicked reports whether findAndClick actually injected the tap. It is a
+	// pointer because absent and false mean different things: an agent built
+	// before the #162 guard never sends the field and always clicked, so nil
+	// must be read as "clicked", not as "skipped".
+	Clicked *bool `json:"clicked"`
+
+	// BlockedBy names what covered the tap point when the hit test refused the
+	// tap ("keyboard window", `android.widget.Button "OK"`). Empty when the tap
+	// was skipped on geometry alone, or not skipped at all.
+	BlockedBy string `json:"blockedBy"`
 }
 
 // BoundsResult represents element bounds.
@@ -70,7 +81,7 @@ type BoundsResult struct {
 
 // SessionResult is returned by Session.create.
 type SessionResult struct {
-	SessionID  string     `json:"sessionId"`
+	SessionID  string       `json:"sessionId"`
 	DeviceInfo DeviceResult `json:"deviceInfo"`
 }
 
@@ -87,7 +98,7 @@ type DeviceResult struct {
 
 // KeyboardInfo is returned by Device.getKeyboardInfo and pushed via Input.keyboardStateChanged.
 type KeyboardInfo struct {
-	Visible bool         `json:"visible"`
+	Visible bool          `json:"visible"`
 	Bounds  *BoundsResult `json:"bounds,omitempty"`
 }
 

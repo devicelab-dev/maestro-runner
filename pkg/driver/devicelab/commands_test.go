@@ -14,12 +14,16 @@ import (
 
 // mockDeviceLabClient is a minimal mock for scrollUntilVisible tests.
 type mockDeviceLabClient struct {
-	swipeCoordsCalls [][5]int
-	swipeCoordsErr   error
-	sourceFunc       func() (string, error)
-	scrollCalls      int
-	scrollErr        error
-	findClickCalls   int
+	findClickGuardW, findClickGuardH int
+	findClickHitTest                 bool
+	findClickBlockedBy               string
+	findClickSkip                    bool
+	swipeCoordsCalls                 [][5]int
+	swipeCoordsErr                   error
+	sourceFunc                       func() (string, error)
+	scrollCalls                      int
+	scrollErr                        error
+	findClickCalls                   int
 }
 
 func (m *mockDeviceLabClient) FindElement(strategy, selector string) (*uiautomator2.Element, error) {
@@ -28,6 +32,23 @@ func (m *mockDeviceLabClient) FindElement(strategy, selector string) (*uiautomat
 func (m *mockDeviceLabClient) FindAndClick(strategy, selector string) (*uiautomator2.Element, error) {
 	m.findClickCalls++
 	return nil, nil
+}
+
+// findClickGuardW/H record the screen size the driver passed, and
+// findClickClicked is what the fake agent reports back (#162).
+func (m *mockDeviceLabClient) FindAndClickChecked(strategy, selector string, screenW, screenH int, hitTest bool) (*uiautomator2.Element, bool, string, error) {
+	elem, clicked, err := m.FindAndClickGuarded(strategy, selector, screenW, screenH)
+	m.findClickHitTest = hitTest
+	return elem, clicked, m.findClickBlockedBy, err
+}
+func (m *mockDeviceLabClient) FindAndClickGuarded(strategy, selector string, screenW, screenH int) (*uiautomator2.Element, bool, error) {
+	m.findClickCalls++
+	m.findClickGuardW, m.findClickGuardH = screenW, screenH
+	elem, err := (*uiautomator2.Element)(nil), error(nil)
+	if m.findClickSkip {
+		return elem, false, err
+	}
+	return elem, true, err
 }
 func (m *mockDeviceLabClient) ActiveElement() (*uiautomator2.Element, error) { return nil, nil }
 func (m *mockDeviceLabClient) SetImplicitWait(timeout time.Duration) error   { return nil }
