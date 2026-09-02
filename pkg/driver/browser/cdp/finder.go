@@ -138,6 +138,55 @@ func (d *Driver) findElementOnce(sel flow.Selector) (*rod.Element, *core.Element
 	}
 }
 
+// cssScanLimit caps how many matches findCSSCandidate examines. A selector like
+// `a` can match thousands of nodes; visibility is one CDP round trip each, so
+// scanning them all would cost more than the miss it prevents.
+const cssScanLimit = 50
+
+// findCSSCandidate returns the first match that is visible, and separately the
+// first match of any kind.
+//
+// A CSS selector often matches a hidden node before the one the flow means —
+// a collapsed menu's copy of a button, a display:none template row. Taking
+// document.querySelector's first hit targets that hidden node, and the tap then
+// sits there until the deadline and fails with "context deadline exceeded",
+// which says nothing about what went wrong. The AX-tree path behind `text:`
+// never had this problem because hidden nodes are absent from the AX tree; this
+// brings `css:` in line with it.
+//
+// Polls until the deadline so an element that appears asynchronously is still
+// caught, matching the wait that page.Element() gave us before. `first` is
+// returned so callers can preserve the old behaviour when nothing is visible:
+// elementInfo reports Visible=false for it, so assertNotVisible still resolves
+// correctly rather than reporting the element as absent.
+func (d *Driver) findCSSCandidate(css string, sel flow.Selector, timeout time.Duration) (visible, first *rod.Element) {
+	deadline := time.Now().Add(timeout)
+	for {
+		elems, err := d.page.Sleeper(rod.NotFoundSleeper).Elements(css)
+		if err == nil && len(elems) > 0 {
+			if first == nil {
+				first = elems[0]
+			}
+			for i, elem := range elems {
+				if i >= cssScanLimit {
+					break
+				}
+				if ok, verr := elem.Visible(); verr != nil || !ok {
+					continue
+				}
+				if !d.matchesStateFilters(elem, sel) {
+					continue
+				}
+				return elem, first
+			}
+		}
+		if time.Now().After(deadline) {
+			return nil, first
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // findByCSS finds an element by CSS selector.
 // Falls back to a same-origin-iframe walk when the top-frame query misses.
 func (d *Driver) findByCSS(sel flow.Selector) (*rod.Element, *core.ElementInfo, error) {
@@ -158,14 +207,15 @@ func (d *Driver) findByCSS(sel flow.Selector) (*rod.Element, *core.ElementInfo, 
 		return elem, info, nil
 	}
 
-	p := d.page.Timeout(2 * time.Second)
-	elem, err := p.Element(sel.CSS)
-	if err == nil {
-		if !d.matchesStateFilters(elem, sel) {
+	visible, first := d.findCSSCandidate(sel.CSS, sel, 2*time.Second)
+	if visible != nil {
+		return visible, d.elementInfo(visible), nil
+	}
+	if first != nil {
+		if !d.matchesStateFilters(first, sel) {
 			return nil, nil, fmt.Errorf("CSS selector '%s' found but state filters don't match", sel.CSS)
 		}
-		info := d.elementInfo(elem)
-		return elem, info, nil
+		return first, d.elementInfo(first), nil
 	}
 
 	return d.findByCSSAcrossFrames(sel.CSS, sel, fmt.Sprintf("CSS selector '%s'", sel.CSS))
@@ -397,13 +447,15 @@ func (d *Driver) findByCSSWithNth(css string, sel flow.Selector, desc string) (*
 		return elem, info, nil
 	}
 
-	elem, err := p.Element(css)
-	if err == nil {
-		if !d.matchesStateFilters(elem, sel) {
+	visible, first := d.findCSSCandidate(css, sel, 2*time.Second)
+	if visible != nil {
+		return visible, d.elementInfo(visible), nil
+	}
+	if first != nil {
+		if !d.matchesStateFilters(first, sel) {
 			return nil, nil, fmt.Errorf("%s found but state filters don't match", desc)
 		}
-		info := d.elementInfo(elem)
-		return elem, info, nil
+		return first, d.elementInfo(first), nil
 	}
 
 	return d.findByCSSAcrossFrames(css, sel, desc)
