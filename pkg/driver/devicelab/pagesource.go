@@ -71,7 +71,14 @@ func ParsePageSource(xmlData string) ([]*ParsedElement, error) {
 						elem.ResourceID = attr.Value
 					case "content-desc":
 						elem.ContentDesc = attr.Value
-					case "hint":
+					// The on-device agent writes this as "hint-text"; the
+					// Appium UIA2 server the other Android drivers read from
+					// writes "hint". Accept both, so this parser stays correct
+					// whichever produced the XML. Matching only "hint" left
+					// HintText permanently empty here, which went unnoticed
+					// because an empty field reports its hint as `text` anyway
+					// — the gap only shows once the field has been typed into.
+					case "hint", "hint-text":
 						elem.HintText = attr.Value
 					case "class":
 						elem.ClassName = attr.Value // Override if class attr exists

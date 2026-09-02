@@ -587,3 +587,64 @@ func TestCountDisplayedMatches(t *testing.T) {
 		t.Errorf("CountDisplayedMatches(missing id) = %d, want 0", got)
 	}
 }
+
+// TestParsePageSourceHintAttributeSpellings pins that both attribute names
+// reach HintText. The on-device agent emits "hint-text"; the Appium UIA2
+// server emits "hint". Parsing only "hint" left HintText permanently empty on
+// this driver.
+func TestParsePageSourceHintAttributeSpellings(t *testing.T) {
+	tests := []struct {
+		name string
+		xml  string
+		want string
+	}{
+		{
+			name: "agent spelling hint-text",
+			xml:  `<hierarchy><node class="android.widget.EditText" hint-text="Username" text="typed" bounds="[0,0][100,50]"/></hierarchy>`,
+			want: "Username",
+		},
+		{
+			name: "uia2 server spelling hint",
+			xml:  `<hierarchy><node class="android.widget.EditText" hint="Username" text="typed" bounds="[0,0][100,50]"/></hierarchy>`,
+			want: "Username",
+		},
+		{
+			name: "absent leaves it empty",
+			xml:  `<hierarchy><node class="android.widget.EditText" text="typed" bounds="[0,0][100,50]"/></hierarchy>`,
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			elems, err := ParsePageSource(tt.xml)
+			if err != nil {
+				t.Fatalf("ParsePageSource: %v", err)
+			}
+			if len(elems) == 0 {
+				t.Fatal("no elements parsed")
+			}
+			var got string
+			for _, e := range elems {
+				if e.HintText != "" {
+					got = e.HintText
+					break
+				}
+			}
+			if got != tt.want {
+				t.Errorf("HintText = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestMatchesTextFindsHintOnceFieldHasText covers why the bug stayed hidden:
+// matching by hint only matters when `text` holds something else. An empty
+// field reports its hint as text, so every selector still resolved.
+func TestMatchesTextFindsHintOnceFieldHasText(t *testing.T) {
+	if !matchesText("Username", "typed-value", "", "Username") {
+		t.Error("expected hint to match when text differs")
+	}
+	if !matchesText("typed-value", "typed-value", "", "Username") {
+		t.Error("expected text to still match")
+	}
+}
