@@ -294,11 +294,69 @@ func (d *AndroidDevice) GetAppVersionAndBuild(packageName string) (version, buil
 
 // IsInstalled checks if a package is installed.
 func (d *AndroidDevice) IsInstalled(pkg string) bool {
-	out, err := d.Shell("pm list packages " + pkg)
-	if err != nil {
-		return false
+	installed, _ := d.CheckInstalled(pkg)
+	return installed
+}
+
+// CheckInstalled reports whether pkg is installed, and why the answer is
+// negative when it is.
+//
+// The error matters as much as the bool. Reporting an adb failure as "not
+// installed" points the user at the package when the fault is the connection:
+// one report had a server that was installed, running, and answering HTTP,
+// and still saw "not installed", because any Shell error became a false here
+// (#163).
+//
+// Three queries, because one is not enough:
+//
+//   - `pm list packages <filter>` matches substrings both ways. Asking for
+//     io.appium.uiautomator2.server also returns …server.test, so a device
+//     carrying only the test APK looked like it had the server. Whole-line
+//     comparison fixes that direction.
+//   - `--user 0` covers a device whose shell user does not see a package
+//     installed for user 0 — a work profile or a vendor container.
+//   - the unfiltered listing is the last resort for a `pm` whose filter
+//     argument behaves unexpectedly.
+func (d *AndroidDevice) CheckInstalled(pkg string) (bool, error) {
+	var lastErr error
+	for _, query := range []string{
+		"pm list packages " + pkg,
+		"pm list packages --user 0 " + pkg,
+		"pm list packages",
+	} {
+		out, err := d.Shell(query)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if packageListed(out, pkg) {
+			return true, nil
+		}
 	}
-	return strings.Contains(out, "package:"+pkg)
+	return false, lastErr
+}
+
+// packageListed reports whether pkg appears as a whole entry in `pm list
+// packages` output.
+//
+// Entries read "package:<name>", or "package:<apk path>=<name>" when pm is
+// given -f. Lines are trimmed because adb on Windows terminates them with
+// \r\n, and a stray \r would defeat the comparison.
+func packageListed(out, pkg string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "package:") {
+			continue
+		}
+		entry := strings.TrimPrefix(line, "package:")
+		if i := strings.LastIndex(entry, "="); i >= 0 {
+			entry = entry[i+1:]
+		}
+		if entry == pkg {
+			return true
+		}
+	}
+	return false
 }
 
 // Forward creates a port forward from local to device.
@@ -452,4 +510,14 @@ func findADB() (string, error) {
 	// Try ANDROID_HOME
 	// Note: We could add more fallback paths here if needed
 	return "", fmt.Errorf("adb not found in PATH; ensure Android SDK is installed")
+}
+
+// installCheckError turns a failed package check into a message that names the
+// real fault. An adb failure is not a missing package, and saying so sends
+// people to reinstall something that is already there (#163).
+func installCheckError(what, pkg string, err error) error {
+	if err != nil {
+		return fmt.Errorf("could not determine whether %s (%s) is installed — adb failed: %w", what, pkg, err)
+	}
+	return fmt.Errorf("%s not installed: %s", what, pkg)
 }

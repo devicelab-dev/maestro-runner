@@ -50,11 +50,11 @@ func (d *AndroidDevice) DeviceLabDriverSocketPath() string {
 // StartDeviceLabDriver starts the DeviceLab Android Driver on the device.
 func (d *AndroidDevice) StartDeviceLabDriver(cfg DeviceLabDriverConfig) error {
 	// Check if driver APKs are installed
-	if !d.IsInstalled(DeviceLabDriverServer) {
-		return fmt.Errorf("DeviceLab Android Driver not installed: %s", DeviceLabDriverServer)
+	if ok, err := d.CheckInstalled(DeviceLabDriverServer); !ok {
+		return installCheckError("DeviceLab Android Driver", DeviceLabDriverServer, err)
 	}
-	if !d.IsInstalled(DeviceLabDriverTest) {
-		return fmt.Errorf("DeviceLab Android Driver test APK not installed: %s", DeviceLabDriverTest)
+	if ok, err := d.CheckInstalled(DeviceLabDriverTest); !ok {
+		return installCheckError("DeviceLab Android Driver test APK", DeviceLabDriverTest, err)
 	}
 
 	// Pre-flight: check for conflicting UiAutomation holders (e.g. Appium)

@@ -1,6 +1,7 @@
 package device
 
 import (
+	"errors"
 	"os/exec"
 	"strings"
 	"testing"
@@ -218,3 +219,52 @@ func TestListAvailableAVDs_ExecError(t *testing.T) {
 		t.Errorf("expected empty AVD list on exec error, got %v", avds)
 	}
 }
+
+func TestPackageListed(t *testing.T) {
+	const server = "io.appium.uiautomator2.server"
+	tests := []struct {
+		name string
+		out  string
+		pkg  string
+		want bool
+	}{
+		{"present", "package:io.appium.uiautomator2.server\n", server, true},
+		{"present among others", "package:com.android.chrome\npackage:io.appium.uiautomator2.server\n", server, true},
+		// The bug this replaces: a substring test is satisfied by the test
+		// APK, so a device carrying only it reported the server as installed.
+		{"only the test apk", "package:io.appium.uiautomator2.server.test\n", server, false},
+		{"test apk asked for", "package:io.appium.uiautomator2.server.test\n", server + ".test", true},
+		// adb on Windows terminates lines with \r\n.
+		{"windows line endings", "package:io.appium.uiautomator2.server\r\n", server, true},
+		{"pm -f form", "package:/data/app/base.apk=io.appium.uiautomator2.server\n", server, true},
+		{"absent", "package:com.android.chrome\n", server, false},
+		{"empty output", "", server, false},
+		{"noise without prefix", "io.appium.uiautomator2.server\n", server, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := packageListed(tt.out, tt.pkg); got != tt.want {
+				t.Errorf("packageListed(%q, %q) = %v, want %v", tt.out, tt.pkg, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInstallCheckErrorNamesTheRealFault(t *testing.T) {
+	// A shell failure must not be reported as a missing package.
+	err := installCheckError("UIAutomator2 server", "io.appium.uiautomator2.server", errFakeShell)
+	if !strings.Contains(err.Error(), "adb failed") {
+		t.Errorf("expected the adb failure to be named, got %q", err)
+	}
+	if strings.Contains(err.Error(), "not installed") {
+		t.Errorf("expected no misleading 'not installed' claim, got %q", err)
+	}
+
+	// A genuine absence still reads plainly.
+	err = installCheckError("UIAutomator2 server", "io.appium.uiautomator2.server", nil)
+	if !strings.Contains(err.Error(), "not installed") {
+		t.Errorf("expected a plain not-installed message, got %q", err)
+	}
+}
+
+var errFakeShell = errors.New("device offline")

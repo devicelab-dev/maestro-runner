@@ -55,11 +55,11 @@ func DefaultUIAutomator2Config() UIAutomator2Config {
 // StartUIAutomator2 starts the UIAutomator2 server on the device.
 func (d *AndroidDevice) StartUIAutomator2(cfg UIAutomator2Config) error {
 	// Check if server APKs are installed
-	if !d.IsInstalled(UIAutomator2Server) {
-		return fmt.Errorf("UIAutomator2 server not installed: %s", UIAutomator2Server)
+	if ok, err := d.CheckInstalled(UIAutomator2Server); !ok {
+		return installCheckError("UIAutomator2 server", UIAutomator2Server, err)
 	}
-	if !d.IsInstalled(UIAutomator2Test) {
-		return fmt.Errorf("UIAutomator2 test APK not installed: %s", UIAutomator2Test)
+	if ok, err := d.CheckInstalled(UIAutomator2Test); !ok {
+		return installCheckError("UIAutomator2 test APK", UIAutomator2Test, err)
 	}
 
 	// Stop any existing instance
