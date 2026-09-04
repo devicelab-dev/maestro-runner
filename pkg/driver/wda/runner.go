@@ -16,14 +16,15 @@ import (
 
 	goios "github.com/danielpaulus/go-ios/ios"
 	"github.com/danielpaulus/go-ios/ios/forward"
+	"github.com/danielpaulus/go-ios/ios/instruments"
 	"github.com/devicelab-dev/maestro-runner/pkg/config"
 	"github.com/devicelab-dev/maestro-runner/pkg/logger"
 	"github.com/devicelab-dev/maestro-runner/pkg/simulator"
 )
 
 const (
-	wdaBasePort    = uint16(8100)
-	wdaPortRange   = uint16(1000)
+	wdaBasePort  = uint16(8100)
+	wdaPortRange = uint16(1000)
 	buildTimeout = 10 * time.Minute
 	// startupTimeout covers the full window from invoking
 	// `xcodebuild test-without-building` to WDA's FBWebServer printing
@@ -232,6 +233,12 @@ func (r *Runner) Start(ctx context.Context) error {
 				if rerr := resetSimulator(ctx, r.deviceUDID); rerr != nil {
 					fmt.Fprintf(os.Stderr, "  ⚠ simctl reset failed: %v (continuing anyway)\n", rerr)
 				}
+			} else {
+				// A device had no recovery step at all, on the assumption it
+				// could not get wedged. A WebDriverAgentRunner left running
+				// from the previous attempt still owns the device, so every
+				// retry raced the session it needed to replace.
+				terminateDeviceWDA(r.deviceUDID)
 			}
 		}
 
@@ -601,7 +608,80 @@ func (r *Runner) destination() string {
 	if isSim {
 		return fmt.Sprintf("platform=iOS Simulator,arch=%s,id=%s", simulator.XcodebuildArch(runtime.GOARCH), r.deviceUDID)
 	}
-	return fmt.Sprintf("platform=iOS,id=%s", r.deviceUDID)
+	// A physical device has the same ambiguity: the resolver lists both arm64
+	// and arm64e for one iPhone and warns "Using the first of multiple
+	// matching destinations". The pin above was simulator-only, so devices
+	// kept the coin flip — and a wrong pick stalls identically, which is what
+	// "xcodebuild stalled (no log output)" on a real device looks like.
+	//
+	// arm64 is the slice WDA is built as. MAESTRO_WDA_DEST_ARCH overrides it,
+	// and setting it to "any" drops the pin entirely, so a device whose
+	// resolver disagrees can be recovered without a new binary.
+	arch := os.Getenv("MAESTRO_WDA_DEST_ARCH")
+	if arch == "" {
+		arch = "arm64"
+	}
+	if strings.EqualFold(arch, "any") {
+		return fmt.Sprintf("platform=iOS,id=%s", r.deviceUDID)
+	}
+	return fmt.Sprintf("platform=iOS,arch=%s,id=%s", arch, r.deviceUDID)
+}
+
+// wdaRunnerBundleID is the XCTest runner installed on the device by the WDA
+// build. Its process is what survives a host-side `xcodebuild` kill.
+const wdaRunnerBundleID = "WebDriverAgentRunner-Runner"
+
+// terminateDeviceWDA kills a WebDriverAgentRunner left running on a physical
+// device.
+//
+// Killing xcodebuild on the host does not end the XCTest session on the phone:
+// the runner app stays resident holding the port, and the next
+// `test-without-building` attempts to start a second session while the first
+// still owns the device. That is the shape of "a few runs succeed, then every
+// run stalls" — nothing is cleaned up between them, so the failure is
+// cumulative rather than transient, and retrying without clearing it hits the
+// same wall every time.
+//
+// Best-effort by design: every failure here is logged and swallowed. This runs
+// on the recovery path, where the run is already failing, and a device that
+// will not answer the instruments channel must not turn a retryable stall into
+// a hard error.
+func terminateDeviceWDA(udid string) {
+	device, err := goios.GetDevice(udid)
+	if err != nil {
+		logger.Debug("device WDA cleanup: no device %s: %v", udid, err)
+		return
+	}
+	info, err := instruments.NewDeviceInfoService(device)
+	if err != nil {
+		logger.Debug("device WDA cleanup: device info service: %v", err)
+		return
+	}
+	defer info.Close()
+
+	procs, err := info.ProcessList()
+	if err != nil {
+		logger.Debug("device WDA cleanup: process list: %v", err)
+		return
+	}
+
+	pc, err := instruments.NewProcessControl(device)
+	if err != nil {
+		logger.Debug("device WDA cleanup: process control: %v", err)
+		return
+	}
+	defer func() { _ = pc.Close() }()
+
+	for _, proc := range procs {
+		if !strings.Contains(proc.Name, "WebDriverAgentRunner") {
+			continue
+		}
+		if err := pc.KillProcess(proc.Pid); err != nil {
+			logger.Debug("device WDA cleanup: kill %s (pid %d): %v", proc.Name, proc.Pid, err)
+			continue
+		}
+		logger.Info("[wda] terminated leftover %s (pid %d) on device", proc.Name, proc.Pid)
+	}
 }
 
 func (r *Runner) derivedDataPath() string {
