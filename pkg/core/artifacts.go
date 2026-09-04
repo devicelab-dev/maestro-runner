@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2025 DeviceLab and the Project Contributors
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 // Package core provides the execution model types for maestro-runner.
 package core
 

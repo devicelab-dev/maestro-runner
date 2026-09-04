@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 DeviceLab and the Project Contributors
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 // This file is a skeleton for adding a new cloud provider.
 // Copy this file, rename it, and implement the TODOs.
 //

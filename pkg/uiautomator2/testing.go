@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2025 DeviceLab and the Project Contributors
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 package uiautomator2
 
 // NewTestElement creates an Element for testing purposes.

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 DeviceLab and the Project Contributors
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 package core
 
 // Element is an abstraction over native (UIAutomator2) and web (Rod/CDP) elements.

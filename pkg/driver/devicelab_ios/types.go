@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 DeviceLab and the Project Contributors
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 // Package devicelab_ios provides the Go client for the devicelab-ios-runner
 // XCUITest-based iOS driver. This package is the translation layer: it converts
 // maestro-runner flow steps into the runner's wire commands and decodes the

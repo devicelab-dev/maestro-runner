@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2025–2026 DeviceLab and the Project Contributors
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 // Package config handles configuration for maestro-runner.
 package config
 

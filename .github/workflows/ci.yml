@@ -60,6 +60,9 @@ jobs:
           # Moving off action@v4 requires that migration: v7+ needs v2.
           version: v1.64.8
 
+      - name: REUSE Compliance Check
+        uses: fsfe/reuse-action@v6
+
   build:
     name: Build
     runs-on: ubuntu-latest

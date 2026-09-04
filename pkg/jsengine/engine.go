@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2025–2026 DeviceLab and the Project Contributors
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 // Package jsengine provides JavaScript expression evaluation for Maestro flows.
 package jsengine
 

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 DeviceLab and the Project Contributors
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 window.__maestro = {
   // Tracks how many cross-origin iframes _collectRoots skipped on the most
   // recent walk. Read by the Go side to surface a clear error when a query
