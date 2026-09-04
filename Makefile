@@ -1,4 +1,4 @@
-.PHONY: build clean test test-race test-coverage test-coverage-check test-fuzz bench install check ci fmt imports fumpt staticcheck revive vet errcheck nilaway gosec ineffassign deadcode govulncheck
+.PHONY: build clean test test-race test-coverage test-coverage-check cover-gaps test-fuzz bench install check ci fmt imports fumpt staticcheck revive vet errcheck nilaway gosec ineffassign deadcode govulncheck
 
 # Build variables
 BINARY_NAME=maestro-runner
@@ -66,6 +66,17 @@ test-coverage-check:
 	$(GOTEST) -v -race -coverprofile=coverage.out -covermode=atomic ./...
 	@go tool cover -func=coverage.out | grep total | awk '{print $$3}' | sed 's/%//' | \
 		awk '{if ($$1 < 80) {print "Coverage " $$1 "% is below 80% threshold"; exit 1} else {print "Coverage " $$1 "% meets 80% threshold"}}'
+
+## cover-gaps: the worst-covered packages — where bugs hide unnoticed.
+## Visibility, not a gate. test-coverage-check gates on the 80% TOTAL, which is
+## exactly the number that hides a package sitting at 0%.
+cover-gaps:
+	@$(GOTEST) -coverprofile=coverage.out ./... > /dev/null 2>&1 || true
+	@go tool cover -func=coverage.out \
+		| awk '$$1 ~ /\.go:/ {split($$1,a,":"); n=a[1]; sub(/\/[^\/]*$$/,"",n); \
+		       pct=$$NF; sub(/%/,"",pct); tot[n]+=pct; cnt[n]++} \
+		  END {for (p in tot) printf "%6.1f%%  %s\n", tot[p]/cnt[p], p}' \
+		| sort -n | head -15
 
 test-fuzz:
 	$(GOTEST) -v -fuzz=. -fuzztime=30s ./...
