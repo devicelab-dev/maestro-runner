@@ -2423,3 +2423,82 @@ func TestParseCRLFKeepsBlockScalarSeparatorsAsContent(t *testing.T) {
 		t.Errorf("got %d steps, want 2 — a --- inside a block scalar split the document", len(f.Steps))
 	}
 }
+
+// `text:` on inputText is the value to type, never a selector predicate.
+// InputTextStep.Text and the inlined Selector.Text share the yaml key, and
+// before #166 the map form left the typed value in Selector.Text, where it
+// became a hint constraint that no target field could satisfy.
+func TestParse_InputTextWithIDDoesNotLeakTextIntoSelector(t *testing.T) {
+	yaml := `
+- inputText:
+    text: "client@example.com"
+    id: "login.email-input"
+`
+	flow, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	step := flow.Steps[0].(*InputTextStep)
+	if step.Text != "client@example.com" {
+		t.Errorf("Text=%q, want client@example.com", step.Text)
+	}
+	if step.Selector.ID != "login.email-input" {
+		t.Errorf("Selector.ID=%q, want login.email-input", step.Selector.ID)
+	}
+	if step.Selector.Text != "" {
+		t.Errorf("Selector.Text=%q, want empty — typed value leaked into the selector", step.Selector.Text)
+	}
+}
+
+// Map form with only `text:` means "type into the focused element": the
+// selector must come out empty so every driver takes that path.
+func TestParse_InputTextMapWithoutSelectorIsEmptySelector(t *testing.T) {
+	yaml := `
+- inputText:
+    text: "hello"
+`
+	flow, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	step := flow.Steps[0].(*InputTextStep)
+	if step.Text != "hello" {
+		t.Errorf("Text=%q, want hello", step.Text)
+	}
+	if !step.Selector.IsEmpty() {
+		t.Errorf("Selector=%+v, want empty", step.Selector)
+	}
+}
+
+// Other fields on the step and the selector survive the custom unmarshal.
+func TestParse_InputTextMapKeepsSiblingFields(t *testing.T) {
+	yaml := `
+- inputText:
+    text: "1234"
+    keyPress: true
+    optional: true
+    label: "enter pin"
+    css: "#pin"
+    index: 1
+`
+	flow, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	step := flow.Steps[0].(*InputTextStep)
+	if !step.KeyPress {
+		t.Error("KeyPress=false, want true")
+	}
+	if !step.IsOptional() {
+		t.Error("optional=false, want true")
+	}
+	if step.Label() != "enter pin" {
+		t.Errorf("Label=%q, want 'enter pin'", step.Label())
+	}
+	if step.Selector.CSS != "#pin" {
+		t.Errorf("Selector.CSS=%q, want #pin", step.Selector.CSS)
+	}
+	if step.Selector.Text != "" {
+		t.Errorf("Selector.Text=%q, want empty", step.Selector.Text)
+	}
+}

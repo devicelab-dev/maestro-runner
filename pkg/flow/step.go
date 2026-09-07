@@ -343,11 +343,31 @@ type DismissAlertStep struct {
 // ============================================
 
 // InputTextStep inputs text.
+//
+// Text and Selector.Text both bind the `text:` key (Selector is inlined), so
+// the map form populates both from one value. For inputText, `text:` is the
+// value to type and never a predicate — upstream Maestro accepts no selector
+// on this step at all — so UnmarshalYAML clears the selector copy. Left in
+// place, the typed value became a hint/text constraint on the target field
+// and any `inputText` naming an `id:` could not match (#166).
 type InputTextStep struct {
 	BaseStep `yaml:",inline"`
 	Text     string   `yaml:"text"`
 	KeyPress bool     `yaml:"keyPress"` // If true, simulate real key presses (Android native only)
 	Selector Selector `yaml:",inline"`
+}
+
+// UnmarshalYAML decodes InputTextStep and drops the `text:` value that the
+// inlined Selector picked up alongside Text. See the type comment.
+func (s *InputTextStep) UnmarshalYAML(node *yaml.Node) error {
+	type inputTextAlias InputTextStep
+	var a inputTextAlias
+	if err := node.Decode(&a); err != nil {
+		return err
+	}
+	*s = InputTextStep(a)
+	s.Selector.Text = ""
+	return nil
 }
 
 // InputRandomStep generates random input.

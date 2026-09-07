@@ -806,19 +806,11 @@ func (d *Driver) focusedFieldBefore() (core.TextField, string) {
 }
 
 // inputTextBrowser handles inputText entirely via CDP for Chrome browser mode.
-// In browser mode, Selector.Text may be populated as a YAML parsing artifact
-// (InputTextStep.Text and Selector.Text share the yaml:"text" key via inline embedding).
-// We detect this and route to the focused-element path.
+// A non-empty selector means "find the element and type into it"; an empty
+// one means "type into the focused element". The parser has already stripped
+// the `text:` value from the selector (flow.InputTextStep.UnmarshalYAML).
 func (d *Driver) inputTextBrowser(step *flow.InputTextStep, text, unicodeWarning string) *core.CommandResult {
-	// Detect YAML parsing artifact: Selector.Text == Text with no other selector fields.
-	// This means "type into focused element", not "find element by text then type".
-	hasSelectorArtifact := step.Selector.Text == step.Text &&
-		step.Selector.ID == "" && step.Selector.CSS == "" &&
-		step.Selector.TestID == "" && step.Selector.Name == "" &&
-		step.Selector.Placeholder == ""
-	selectorIsReal := !step.Selector.IsEmpty() && !hasSelectorArtifact
-
-	if selectorIsReal {
+	if !step.Selector.IsEmpty() {
 		// Real selector: find element via CDP and type into it
 		timeout := d.calculateTimeout(step.IsOptional(), step.TimeoutMs)
 		deadline := time.Now().Add(timeout)

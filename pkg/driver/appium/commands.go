@@ -407,11 +407,9 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 
 	// Inline selector: find the element and type into it directly — parity
 	// with the uiautomator2/devicelab drivers, which already honour it.
-	// Guard against the YAML artifact where InputTextStep.Text and
-	// Selector.Text share the `text:` key (map form), which would otherwise
-	// send us hunting for an element whose text equals the input value.
-	selectorIsReal := !step.Selector.IsEmpty() && step.Selector.Text != text
-	if selectorIsReal {
+	// The parser has already stripped the `text:` value from the selector
+	// (flow.InputTextStep.UnmarshalYAML), so a non-empty selector is real.
+	if !step.Selector.IsEmpty() {
 		timeout := time.Duration(step.TimeoutMs) * time.Millisecond
 		if timeout <= 0 {
 			timeout = d.getFindTimeout()
