@@ -2551,6 +2551,58 @@ func TestSwipeWithSelectorAnchorsOnElement(t *testing.T) {
 	}
 }
 
+// An element-relative `point:` moves where the swipe starts (upstream #3470);
+// it was parsed into the selector and ignored on this driver.
+func TestSwipeWithSelectorPointStartsAtPoint(t *testing.T) {
+	var actionsBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		switch {
+		case strings.HasSuffix(path, "/actions") && r.Method == "POST":
+			body, _ := io.ReadAll(r.Body)
+			actionsBody = string(body)
+			writeJSON(w, map[string]interface{}{"value": nil})
+		case strings.HasSuffix(path, "/element") && r.Method == "POST":
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{
+					"element-6066-11e4-a52e-4f735466cecf": "elem-swipe",
+				},
+			})
+		case strings.Contains(path, "/rect"):
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{"x": 100.0, "y": 200.0, "width": 300.0, "height": 80.0},
+			})
+		case strings.Contains(path, "/text"):
+			writeJSON(w, map[string]interface{}{"value": "Slider"})
+		case strings.Contains(path, "/displayed"), strings.Contains(path, "/enabled"):
+			writeJSON(w, map[string]interface{}{"value": true})
+		default:
+			writeJSON(w, map[string]interface{}{"value": nil})
+		}
+	}))
+	defer server.Close()
+	driver := createTestAppiumDriver(server)
+
+	sel := flow.Selector{ID: "slider", Point: "50%, 85%"}
+	step := &flow.SwipeStep{Direction: "left", Selector: &sel, Duration: 800}
+	result := driver.swipe(step)
+
+	if !result.Success {
+		t.Fatalf("Expected success, got: %s", result.Message)
+	}
+	// Element bounds x=100,y=200,w=300,h=80: the point is (250, 268); the
+	// swipe starts there and still travels the element's own width leftwards.
+	for _, want := range []string{`"x":250`, `"y":268`, `"duration":800`} {
+		if !strings.Contains(actionsBody, want) {
+			t.Errorf("actions payload missing %s: %s", want, actionsBody)
+		}
+	}
+	if strings.Contains(actionsBody, `"x":370`) {
+		t.Errorf("swipe should not start at the element's 90%% edge when a point is given: %s", actionsBody)
+	}
+}
+
 // --- #122: Android inputText must reach WebView DOM inputs ---
 
 // TestInputText_AndroidTypesIntoActiveElement verifies the Android path

@@ -227,7 +227,12 @@ func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
 			return errorResult(err, fmt.Sprintf("Element not found for swipe: %s", step.Selector.Describe()))
 		}
 		if info != nil && info.Bounds.Width > 0 {
-			startX, startY, endX, endY, err := core.SwipeCoordsInBounds(direction, info.Bounds, w, h)
+			// `point:` re-aims where inside the element the swipe starts and
+			// `distance:` sets how far it travels; both were parsed and
+			// ignored on this driver while uiautomator2/devicelab honoured
+			// them. Neither set → the historic edge-to-edge swipe.
+			startX, startY, endX, endY, err := core.SwipeCoordsForElement(
+				direction, info.Bounds, w, h, step.Distance, step.Selector.Point)
 			if err != nil {
 				return errorResult(err, fmt.Sprintf("Invalid swipe direction: %s", step.Direction))
 			}

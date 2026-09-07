@@ -771,6 +771,24 @@ func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
 				return errorResult(err, fmt.Sprintf("Element not found for swipe: %s", step.Selector.Describe()))
 			}
 			if info != nil && info.Bounds.Width > 0 {
+				// An element-relative `point:` re-aims where the swipe
+				// starts (upstream #3470). It was parsed into the selector
+				// and ignored here while the Android drivers honoured it.
+				if step.Selector.Point != "" {
+					sx, sy, ex, ey, perr := core.SwipeCoordsForElement(
+						strings.ToLower(step.Direction), info.Bounds, width, height, step.Distance, step.Selector.Point)
+					if perr != nil {
+						return errorResult(perr, fmt.Sprintf("Invalid swipe: %v", perr))
+					}
+					duration := 0.1
+					if step.Duration > 0 {
+						duration = float64(step.Duration) / 1000.0
+					}
+					if err := d.client.Swipe(float64(sx), float64(sy), float64(ex), float64(ey), duration); err != nil {
+						return errorResult(err, "Swipe failed")
+					}
+					return successResult("Swipe completed", info)
+				}
 				areaX = float64(info.Bounds.X)
 				areaY = float64(info.Bounds.Y)
 				areaW = float64(info.Bounds.Width)
