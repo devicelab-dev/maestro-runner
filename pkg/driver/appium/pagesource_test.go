@@ -183,8 +183,12 @@ func TestFilterBySelector_Android(t *testing.T) {
 		selector flow.Selector
 		expected int
 	}{
-		{"by text exact", flow.Selector{Text: "Hello"}, 3}, // matches Hello, Hello World, Hello button
-		{"by text contains", flow.Selector{Text: "World"}, 2},
+		// Literal text is exact-first: "Hello" resolves only to the exact node
+		// when one exists, falling back to contains otherwise (matchesText keeps
+		// the contains fallback for genuine substring usage).
+		{"by text exact", flow.Selector{Text: "Hello"}, 1},
+		{"by text contains", flow.Selector{Text: "Hello World"}, 1},
+		{"by text contains fallback", flow.Selector{Text: "zzz"}, 0},
 		{"by ID", flow.Selector{ID: "id/hello"}, 1},
 		{"by ID partial", flow.Selector{ID: "id/"}, 4},
 		{"by enabled true", flow.Selector{Enabled: boolPtr(true)}, 3},
@@ -214,7 +218,8 @@ func TestFilterBySelector_iOS(t *testing.T) {
 		selector flow.Selector
 		expected int
 	}{
-		{"by text (label)", flow.Selector{Text: "Submit"}, 3},
+		// exact-first: only the exact "Submit" label, not "Submit Order".
+		{"by text (label)", flow.Selector{Text: "Submit"}, 1},
 		{"by ID (name)", flow.Selector{ID: "submitBtn"}, 1},
 		{"by ID partial", flow.Selector{ID: "Btn"}, 3},
 	}
@@ -681,5 +686,31 @@ func TestGetClickableElement(t *testing.T) {
 	result = GetClickableElement(nil)
 	if result != nil {
 		t.Errorf("Expected nil for nil input, got %v", result)
+	}
+}
+
+// TestFilterBySelector_LiteralTextPrefersExact is the TT-ticket regression: on
+// Sauce/Appium the TradingView order ticket exposes the entry price field text
+// ("7000.00"), so a plain `text: "0"` used for the take-profit SWITCH must not
+// resolve to the price field merely because it contains a 0.
+func TestFilterBySelector_LiteralTextPrefersExact(t *testing.T) {
+	elements := []*ParsedElement{
+		{Text: "7000.00", ResourceID: "absolute-limit-price-field", Enabled: true},
+		{Text: "0", ResourceID: "tp-switch", Enabled: true},
+		{Text: "Limit", ResourceID: "Limit", Enabled: true},
+	}
+
+	got := FilterBySelector(elements, flow.Selector{Text: "0"}, "android")
+	if len(got) != 1 {
+		t.Fatalf("exact-first: expected 1 switch, got %d", len(got))
+	}
+	if got[0].ResourceID != "tp-switch" {
+		t.Errorf("expected the exact '0' switch, got %s", got[0].ResourceID)
+	}
+
+	// No exact match -> contains fallback still applies.
+	got = FilterBySelector(elements, flow.Selector{Text: "70"}, "android")
+	if len(got) != 1 || got[0].ResourceID != "absolute-limit-price-field" {
+		t.Errorf("contains fallback expected the price field, got %d elements", len(got))
 	}
 }
