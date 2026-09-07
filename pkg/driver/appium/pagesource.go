@@ -22,9 +22,14 @@ type ParsedElement struct {
 	Checked   bool
 	Focused   bool
 	Clickable bool
-	Depth     int
-	Children  []*ParsedElement
-	Parent    *ParsedElement // parent element for clickable lookup
+	// Scrollable marks a scroll container. Android reports a child's bounds
+	// already clipped to it, so a sliver at the container's leading edge
+	// looks fully visible; scrollUntilVisible walks up to the nearest
+	// scrollable ancestor to notice (#164).
+	Scrollable bool
+	Depth      int
+	Children   []*ParsedElement
+	Parent     *ParsedElement // parent element for clickable lookup
 
 	// Android
 	Text        string
@@ -108,6 +113,8 @@ func parseAndroidPageSource(xmlData string) ([]*ParsedElement, error) {
 						elem.Displayed = attr.Value != "false"
 					case "clickable":
 						elem.Clickable = attr.Value == "true"
+					case "scrollable":
+						elem.Scrollable = attr.Value == "true"
 					}
 				}
 

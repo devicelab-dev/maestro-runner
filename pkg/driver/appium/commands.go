@@ -361,6 +361,8 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	}
 
 	partiallyVisible := false
+	// Height of a flush candidate awaiting confirmation, or -1 for none.
+	pendingHeight := -1
 	for i := 0; i < maxScrolls && time.Now().Before(deadline); i++ {
 		if err := d.parentContext().Err(); err != nil {
 			return errorResult(fmt.Errorf("scroll cancelled: %w", err), "")
@@ -375,10 +377,27 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 		if err == nil && info != nil {
 			w, h := d.client.ScreenSize()
 			boundsKnown := info.Bounds.Width > 0 && info.Bounds.Height > 0 && w > 0 && h > 0
-			if !boundsKnown || core.MeetsVisibility(info.Bounds, w, h, step.VisibilityPercentage) {
+			if !boundsKnown {
 				return successResult("Element found", info)
 			}
-			partiallyVisible = true
+			if core.MeetsVisibility(info.Bounds, w, h, step.VisibilityPercentage) {
+				// Computed from a rect the hierarchy may already have clipped
+				// to the scroll container, where a sliver at the fold scores
+				// 100% (#164). A rect flush with the container's leading edge
+				// gets one confirming scroll: a sliver grows, an element
+				// resting at the end of the list does not. Same rule as the
+				// uiautomator2 and devicelab drivers; this one reaches the
+				// hierarchy through the Appium server instead.
+				if pendingHeight >= 0 && info.Bounds.Height <= pendingHeight {
+					return successResult("Element found", info)
+				}
+				if !d.atScrollContainerEdge(info.Bounds, direction) {
+					return successResult("Element found", info)
+				}
+				pendingHeight = info.Bounds.Height
+			} else {
+				partiallyVisible = true
+			}
 		}
 
 		// Scroll
@@ -391,6 +410,39 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	}
 	return errorResult(fmt.Errorf("element not found after scrolling"), "")
 }
+
+// atScrollContainerEdge reports whether the element with bounds b sits flush
+// against its nearest scrollable ancestor's leading edge for direction. It
+// re-reads the page source to find the ancestor; a fetch or parse failure
+// answers false, which keeps the pre-#164 behaviour (stop on the sliver)
+// rather than scrolling forever.
+func (d *Driver) atScrollContainerEdge(b core.Bounds, direction string) bool {
+	src, err := d.client.Source()
+	if err != nil {
+		return false
+	}
+	elems, _, err := ParsePageSource(src)
+	if err != nil {
+		return false
+	}
+	for _, e := range elems {
+		if e.Bounds != b {
+			continue
+		}
+		for p := e.Parent; p != nil; p = p.Parent {
+			if !p.Scrollable {
+				continue
+			}
+			return core.ClippedAtScrollEdge(b, p.Bounds, direction, scrollEdgeTolerancePx)
+		}
+	}
+	return false
+}
+
+// How far from the container edge still counts as flush. Rounding between the
+// hierarchy's integer bounds and the container's own edge leaves a pixel or
+// two; anything larger is a real gap.
+const scrollEdgeTolerancePx = 2
 
 // Text input
 

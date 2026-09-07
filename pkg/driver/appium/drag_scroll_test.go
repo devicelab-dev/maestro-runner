@@ -192,3 +192,114 @@ func TestScrollUntilVisible_HonorsVisibilityPercentage(t *testing.T) {
 		t.Fatalf("50%% visible must satisfy visibilityPercentage: 50, got: %v - %s", result.Error, result.Message)
 	}
 }
+
+// Container-clipped sliver (#164). Android reports a child's bounds already
+// clipped to its scroll container, so a 9px sliver of a 126px row at the
+// container's bottom edge arrives as a 9px rect wholly on screen and scores
+// 100% visible. The first source below is that state; after one swipe the
+// server serves the second, where the row has scrolled fully into view.
+const clippedSliverPageSourceXML = `<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <android.widget.FrameLayout bounds="[0,0][1080,2340]" class="android.widget.FrameLayout" enabled="true" displayed="true">
+    <androidx.recyclerview.widget.RecyclerView scrollable="true" bounds="[0,600][1080,2274]" enabled="true" displayed="true">
+      <android.widget.TextView text="Target" bounds="[0,2265][1080,2274]" enabled="true" displayed="true" />
+    </androidx.recyclerview.widget.RecyclerView>
+  </android.widget.FrameLayout>
+</hierarchy>`
+
+const revealedRowPageSourceXML = `<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <android.widget.FrameLayout bounds="[0,0][1080,2340]" class="android.widget.FrameLayout" enabled="true" displayed="true">
+    <androidx.recyclerview.widget.RecyclerView scrollable="true" bounds="[0,600][1080,2274]" enabled="true" displayed="true">
+      <android.widget.TextView text="Target" bounds="[0,1900][1080,2026]" enabled="true" displayed="true" />
+    </androidx.recyclerview.widget.RecyclerView>
+  </android.widget.FrameLayout>
+</hierarchy>`
+
+// newFlushRowTestDriver serves `before` until the first swipe, then `after`,
+// and reports how many swipes were performed.
+func newFlushRowTestDriver(before, after string) (*Driver, *int, func()) {
+	swipes := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/source") {
+			src := before
+			if swipes > 0 {
+				src = after
+			}
+			writeJSON(w, map[string]interface{}{"value": src})
+			return
+		}
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/actions") {
+			swipes++
+		}
+		writeJSON(w, map[string]interface{}{"value": nil})
+	}))
+	return createTestAppiumDriver(server), &swipes, server.Close
+}
+
+func TestScrollUntilVisible_ContainerClippedSliverGetsOneMoreScroll(t *testing.T) {
+	d, swipes, closeFn := newFlushRowTestDriver(clippedSliverPageSourceXML, revealedRowPageSourceXML)
+	defer closeFn()
+
+	step := &flow.ScrollUntilVisibleStep{
+		Element:    flow.Selector{Text: "Target"},
+		MaxScrolls: 3,
+	}
+	step.TimeoutMs = 5000
+
+	result := d.scrollUntilVisible(step)
+	if !result.Success {
+		t.Fatalf("expected the revealed row to be accepted, got: %v - %s", result.Error, result.Message)
+	}
+	if *swipes != 1 {
+		t.Errorf("the flush sliver should have earned exactly one confirming scroll, got %d", *swipes)
+	}
+	if result.Element == nil || result.Element.Bounds.Height != 126 {
+		t.Errorf("result should carry the fully revealed row (height 126), got %+v", result.Element)
+	}
+}
+
+// A row resting at the end of a fully scrolled list is flush too. It gets its
+// one confirming scroll, does not grow, and is then accepted — the scroll must
+// not loop to the cap on a genuinely visible element.
+func TestScrollUntilVisible_FlushRowAtListEndIsAcceptedAfterOneScroll(t *testing.T) {
+	d, swipes, closeFn := newFlushRowTestDriver(clippedSliverPageSourceXML, clippedSliverPageSourceXML)
+	defer closeFn()
+
+	step := &flow.ScrollUntilVisibleStep{
+		Element:    flow.Selector{Text: "Target"},
+		MaxScrolls: 5,
+	}
+	step.TimeoutMs = 5000
+
+	result := d.scrollUntilVisible(step)
+	if !result.Success {
+		t.Fatalf("an unchanged flush row must be accepted, got: %v - %s", result.Error, result.Message)
+	}
+	if *swipes != 1 {
+		t.Errorf("expected exactly one confirming scroll, got %d", *swipes)
+	}
+}
+
+func TestParsePageSource_ReadsScrollable(t *testing.T) {
+	elements, _, err := ParsePageSource(clippedSliverPageSourceXML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list, target *ParsedElement
+	for _, e := range elements {
+		switch {
+		case e.Scrollable:
+			list = e
+		case e.Text == "Target":
+			target = e
+		}
+	}
+	if list == nil {
+		t.Fatal("scrollable=\"true\" was not parsed")
+	}
+	if target == nil || target.Parent != list {
+		t.Fatal("target's parent should be the scrollable list")
+	}
+}
