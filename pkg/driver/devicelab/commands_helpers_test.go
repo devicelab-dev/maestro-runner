@@ -495,8 +495,10 @@ func TestSetOrientation_ExtendedViaShell(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("LANDSCAPE_LEFT via shell failed: %v", res.Error)
 	}
-	if len(shell.commands) != 2 {
-		t.Errorf("expected 2 shell calls (accelerometer + rotation), got %d: %v", len(shell.commands), shell.commands)
+	// accelerometer + rotation + one look at the display (empty mock dumpsys
+	// is unobservable, so the settle wait stops after a single read)
+	if len(shell.commands) != 3 {
+		t.Errorf("expected 3 shell calls (accelerometer + rotation + dumpsys display), got %d: %v", len(shell.commands), shell.commands)
 	}
 	if !strings.Contains(shell.commands[1], "user_rotation 1") {
 		t.Errorf("expected user_rotation 1 (landscape_left), got %q", shell.commands[1])

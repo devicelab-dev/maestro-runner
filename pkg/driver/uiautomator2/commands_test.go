@@ -691,12 +691,17 @@ func TestSetOrientationLandscapeLeft(t *testing.T) {
 	if !result.Success {
 		t.Errorf("expected success, got error: %v", result.Error)
 	}
-	// Should have 2 shell commands: disable accelerometer, set rotation
-	if len(shell.commands) != 2 {
-		t.Errorf("expected 2 shell commands, got %d", len(shell.commands))
+	// Three shell commands: disable accelerometer, set rotation, then one
+	// look at the display (the mock's empty dumpsys is unobservable, so the
+	// settle wait stops after a single read).
+	if len(shell.commands) != 3 {
+		t.Fatalf("expected 3 shell commands, got %d: %v", len(shell.commands), shell.commands)
 	}
 	if shell.commands[1] != "settings put system user_rotation 1" {
 		t.Errorf("expected user_rotation 1, got %s", shell.commands[1])
+	}
+	if shell.commands[2] != "dumpsys display" {
+		t.Errorf("expected the display to be read after rotating, got %s", shell.commands[2])
 	}
 }
 

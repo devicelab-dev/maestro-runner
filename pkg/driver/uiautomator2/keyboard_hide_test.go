@@ -1,6 +1,7 @@
 package uiautomator2
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
@@ -105,5 +106,43 @@ func TestHideKeyboard_NotVisible_NoOp(t *testing.T) {
 	}
 	if len(client.pressKeyCalls) != 0 {
 		t.Errorf("expected no key events when keyboard already hidden, got %v", client.pressKeyCalls)
+	}
+}
+
+// Extended orientations write user_rotation and then wait for `dumpsys
+// display` to report the rotation, so the next hierarchy read is not taken
+// mid-turn. Here the display turns on the second look.
+func TestSetOrientation_WaitsForDisplayToReportRotation(t *testing.T) {
+	dumps := 0
+	shell := &closureShell{fn: func(cmd string) (string, error) {
+		if cmd == "dumpsys display" {
+			dumps++
+			if dumps == 1 {
+				return "mCurrentOrientation=0", nil
+			}
+			return "mCurrentOrientation=1", nil
+		}
+		return "", nil
+	}}
+	d := New(&MockUIA2Client{}, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, shell)
+
+	result := d.setOrientation(&flow.SetOrientationStep{Orientation: "LANDSCAPE_LEFT"})
+	if !result.Success {
+		t.Fatalf("expected success, got %v", result.Error)
+	}
+	if dumps != 2 {
+		t.Errorf("expected the display to be read until it reported rotation 1, read %d times", dumps)
+	}
+	var wroteRotation bool
+	for _, c := range shell.commands {
+		if c == "settings put system user_rotation 1" {
+			wroteRotation = true
+		}
+	}
+	if !wroteRotation {
+		t.Errorf("user_rotation 1 was not written; commands: %v", shell.commands)
+	}
+	if strings.Contains(result.Message, "still reports") {
+		t.Errorf("a display that turned should not be reported as stuck: %q", result.Message)
 	}
 }

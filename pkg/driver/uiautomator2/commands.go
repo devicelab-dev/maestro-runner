@@ -1647,8 +1647,25 @@ func (d *Driver) setOrientation(step *flow.SetOrientationStep) *core.CommandResu
 		return errorResult(err, fmt.Sprintf("Failed to set orientation: %v", err))
 	}
 
+	// The setting is written before the display has turned; the next step's
+	// hierarchy read would otherwise land mid-rotation. Wait for the display
+	// to report the rotation. Not reporting it is not a failure — a
+	// portrait-locked app ignores user_rotation and always has — but it is
+	// worth saying.
+	want, _ := strconv.Atoi(rotation)
+	if err := core.WaitForDisplayRotation(d.device.Shell, want, rotationSettleTimeout, rotationPollInterval); err != nil {
+		return successResult(fmt.Sprintf("Set orientation to %s (%v)", step.Orientation, err), nil)
+	}
+
 	return successResult(fmt.Sprintf("Set orientation to %s", step.Orientation), nil)
 }
+
+// How long setOrientation waits for the display to report the new rotation
+// before moving on, and how often it looks.
+const (
+	rotationSettleTimeout = 5 * time.Second
+	rotationPollInterval  = 250 * time.Millisecond
+)
 
 func (d *Driver) openLink(step *flow.OpenLinkStep) *core.CommandResult {
 	link := step.Link
