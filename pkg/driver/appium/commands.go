@@ -290,7 +290,8 @@ func (d *Driver) scroll(step *flow.ScrollStep) *core.CommandResult {
 		return errorResult(fmt.Errorf("invalid scroll direction: %s", direction), "")
 	}
 
-	if err := d.client.Swipe(centerX, startY, centerX, endY, 500); err != nil {
+	// Was hardcoded 500ms, so `speed:` was parsed and dropped (#165).
+	if err := d.client.Swipe(centerX, startY, centerX, endY, core.ScrollDurationOrDefault(step.Speed, 500)); err != nil {
 		return errorResult(err, "Failed to scroll")
 	}
 
@@ -381,7 +382,7 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 		}
 
 		// Scroll
-		d.scroll(&flow.ScrollStep{Direction: direction})
+		d.scroll(&flow.ScrollStep{Direction: direction, Speed: step.Speed})
 		time.Sleep(300 * time.Millisecond)
 	}
 

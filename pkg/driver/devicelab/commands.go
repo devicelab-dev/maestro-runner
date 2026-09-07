@@ -1007,7 +1007,7 @@ func (d *Driver) scroll(step *flow.ScrollStep) *core.CommandResult {
 		return errorResult(err, "Failed to get screen size")
 	}
 
-	if err := d.performScroll(direction, width, height, step.Engine, 0.5); err != nil {
+	if err := d.performScroll(direction, width, height, step.Engine, 0.5, core.ScrollDurationOrDefault(step.Speed, scrollDurationMs)); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to scroll: %v", err))
 	}
 	return successResult(fmt.Sprintf("Scrolled %s", direction), nil)
@@ -1073,6 +1073,11 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	}
 	deadline := time.Now().Add(timeout)
 
+	// `speed:` is a Maestro speed, not a duration — invert it once here.
+	// It used to be parsed and dropped, so a flow asking to scroll slowly
+	// scrolled at whatever the constant happened to be (#165).
+	scrollMs := core.ScrollDurationOrDefault(step.Speed, scrollDurationMs)
+
 	// Use the FULL physical display (same coordinate space as the hierarchy bounds). An element
 	// in the bottom system-bar band — e.g. the last nav-drawer item, centre y in
 	// (usableHeight, physicalHeight] — is genuinely on screen and tappable (see boundsTappable),
@@ -1116,7 +1121,7 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 			return errorResult(err, "Failed to find element")
 		}
 
-		if err := d.performScroll(direction, width, height, step.Engine, 0.3); err != nil {
+		if err := d.performScroll(direction, width, height, step.Engine, 0.3, scrollMs); err != nil {
 			return errorResult(err, fmt.Sprintf("Failed to scroll: %v", err))
 		}
 
@@ -1132,23 +1137,23 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 // on-device DeviceLab agent's MotionEvent injection. ADB falls back to the
 // agent (with a warning) when no shell executor is available.
 // percent controls the swipe distance as a fraction of screen dimension.
-func (d *Driver) performScroll(direction string, width, height int, engine string, percent float64) error {
+func (d *Driver) performScroll(direction string, width, height int, engine string, percent float64, durationMs int) error {
 	useAgent := strings.EqualFold(engine, "agent")
 	if !useAgent {
 		if d.device != nil {
-			return d.scrollByAdb(direction, width, height, percent)
+			return d.scrollByAdb(direction, width, height, percent, durationMs)
 		}
 		logger.Warn("scroll: ADB shell unavailable, falling back to agent gesture (may be unreliable on some Android skins)")
 	}
 	area := uiautomator2.NewRect(0, height/8, width, height*3/4)
-	return d.client.ScrollInArea(area, direction, percent, scrollDurationMs)
+	return d.client.ScrollInArea(area, direction, percent, durationMs)
 }
 
 // scrollByAdb issues `adb shell input swipe` over the local shell executor.
 // percent is the swipe distance as a fraction of the screen dimension along
 // the scroll axis. Direction uses Maestro scroll semantics (what becomes
 // visible — "down" reveals content below by swiping the finger UP).
-func (d *Driver) scrollByAdb(direction string, screenWidth, screenHeight int, percent float64) error {
+func (d *Driver) scrollByAdb(direction string, screenWidth, screenHeight int, percent float64, durationMs int) error {
 	centerX := screenWidth / 2
 	centerY := screenHeight / 2
 	halfV := int(float64(screenHeight) * percent / 2)
@@ -1171,7 +1176,7 @@ func (d *Driver) scrollByAdb(direction string, screenWidth, screenHeight int, pe
 		fromX, fromY = centerX, centerY+halfV
 		toX, toY = centerX, centerY-halfV
 	}
-	cmd := fmt.Sprintf("input swipe %d %d %d %d %d", fromX, fromY, toX, toY, scrollDurationMs)
+	cmd := fmt.Sprintf("input swipe %d %d %d %d %d", fromX, fromY, toX, toY, durationMs)
 	_, err := d.device.Shell(cmd)
 	return err
 }

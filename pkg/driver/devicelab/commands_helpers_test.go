@@ -329,7 +329,7 @@ func TestScrollByAdb_Coordinates(t *testing.T) {
 			if direction == "unknown_direction_defaults_to_down" {
 				direction = "diagonal"
 			}
-			if err := driver.scrollByAdb(direction, W, H, 0.3); err != nil {
+			if err := driver.scrollByAdb(direction, W, H, 0.3, scrollDurationMs); err != nil {
 				t.Fatalf("scrollByAdb: %v", err)
 			}
 			if len(shell.commands) != 1 || shell.commands[0] != c.wantCmd {
@@ -341,7 +341,7 @@ func TestScrollByAdb_Coordinates(t *testing.T) {
 
 func TestScrollByAdb_ShellError(t *testing.T) {
 	driver := &Driver{device: &mockShell{err: fmt.Errorf("permission denied")}}
-	if err := driver.scrollByAdb("down", 1080, 2400, 0.3); err == nil {
+	if err := driver.scrollByAdb("down", 1080, 2400, 0.3, scrollDurationMs); err == nil {
 		t.Error("expected error from shell")
 	}
 }

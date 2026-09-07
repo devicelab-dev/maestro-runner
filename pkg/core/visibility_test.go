@@ -102,3 +102,42 @@ func TestVisibleFractionCannotSeeContainerClipping(t *testing.T) {
 		t.Error("expected MeetsVisibility to accept it — this is the gap ClippedAtScrollEdge covers")
 	}
 }
+
+func TestScrollSpeedToDurationMs(t *testing.T) {
+	// Values taken from upstream's speedToDuration so a flow written against
+	// Maestro scrolls the same distance per swipe here.
+	tests := []struct{ speed, want int }{
+		{1, 991},  // the value in the bug report — a deliberate, slow drag
+		{40, 601}, // Maestro's default
+		{50, 501},
+		{95, 51},  // last speed above the floor
+		{96, 50},  // upstream says 41ms; floored — see MinSwipeDurationMs
+		{100, 50}, // upstream says 1ms, which Android reads as a tap
+		{0, 0},    // absent — caller keeps its own default, see ScrollDurationOrDefault
+		{-5, 601}, // out of range → default, never an error
+		{250, 601},
+	}
+	for _, tt := range tests {
+		if got := ScrollSpeedToDurationMs(tt.speed); got != tt.want {
+			t.Errorf("ScrollSpeedToDurationMs(%d) = %d, want %d", tt.speed, got, tt.want)
+		}
+	}
+}
+
+// A flow that never mentions speed must keep the driver's existing duration.
+// Adopting upstream's 601ms default would change fling velocity, and with it
+// how far every existing scroll travels.
+func TestScrollDurationOrDefault(t *testing.T) {
+	if got := ScrollDurationOrDefault(0, 300); got != 300 {
+		t.Errorf("absent speed should keep the driver default 300, got %d", got)
+	}
+	if got := ScrollDurationOrDefault(0, 500); got != 500 {
+		t.Errorf("absent speed should keep the driver default 500, got %d", got)
+	}
+	if got := ScrollDurationOrDefault(1, 300); got != 991 {
+		t.Errorf("explicit speed 1 should win over the default, got %d", got)
+	}
+	if got := ScrollDurationOrDefault(40, 300); got != 601 {
+		t.Errorf("explicit speed 40 should be upstream's 601, got %d", got)
+	}
+}

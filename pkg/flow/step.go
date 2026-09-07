@@ -292,6 +292,10 @@ type ScrollStep struct {
 	// /appium/gestures/scroll for the uiautomator2 driver, RPC MotionEvent
 	// injection for the devicelab driver). Ignored on iOS/web.
 	Engine string `yaml:"engine"`
+	// Speed is a Maestro speed (1-100, default 40), inverted into a swipe
+	// duration by core.ScrollSpeedToDurationMs. scrollUntilVisible accepted
+	// this field long before scroll did, and neither honoured it (#165).
+	Speed int `yaml:"speed"`
 }
 
 // ScrollUntilVisibleStep scrolls until element is visible.

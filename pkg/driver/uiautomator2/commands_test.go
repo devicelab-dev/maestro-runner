@@ -4322,7 +4322,7 @@ func TestScrollByAdbCoordinates(t *testing.T) {
 		t.Run(tt.direction, func(t *testing.T) {
 			shell := &MockShellExecutor{}
 			driver := &Driver{device: shell}
-			if err := driver.scrollByAdb(tt.direction, W, H, 0.3); err != nil {
+			if err := driver.scrollByAdb(tt.direction, W, H, 0.3, scrollDurationMs); err != nil {
 				t.Fatalf("scrollByAdb error: %v", err)
 			}
 			if len(shell.commands) != 1 || shell.commands[0] != tt.wantCmd {

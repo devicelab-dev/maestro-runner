@@ -612,7 +612,7 @@ func (d *Driver) scroll(step *flow.ScrollStep) *core.CommandResult {
 		return errorResult(err, "Failed to get screen size")
 	}
 
-	if err := d.performScroll(direction, width, height, step.Engine, 0.5); err != nil {
+	if err := d.performScroll(direction, width, height, step.Engine, 0.5, core.ScrollDurationOrDefault(step.Speed, scrollDurationMs)); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to scroll: %v", err))
 	}
 	return successResult(fmt.Sprintf("Scrolled %s", direction), nil)
@@ -671,6 +671,11 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	}
 	deadline := time.Now().Add(timeout)
 
+	// `speed:` is a Maestro speed, not a duration — invert it once here.
+	// It used to be parsed and dropped, so a flow asking to scroll slowly
+	// scrolled at whatever the constant happened to be (#165).
+	scrollMs := core.ScrollDurationOrDefault(step.Speed, scrollDurationMs)
+
 	width, height, err := d.screenSize()
 	if err != nil {
 		return errorResult(err, "Failed to get screen size")
@@ -723,9 +728,9 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 
 		scrollErr := error(nil)
 		if container != nil {
-			scrollErr = d.performScrollInRect(direction, *container, step.Engine, 0.3)
+			scrollErr = d.performScrollInRect(direction, *container, step.Engine, 0.3, scrollMs)
 		} else {
-			scrollErr = d.performScroll(direction, width, height, step.Engine, 0.3)
+			scrollErr = d.performScroll(direction, width, height, step.Engine, 0.3, scrollMs)
 		}
 		if scrollErr != nil {
 			return errorResult(scrollErr, fmt.Sprintf("Failed to scroll: %v", scrollErr))
@@ -748,22 +753,22 @@ const scrollDurationMs = 300
 // percent controls the swipe distance as a fraction of screen dimension —
 // callers use ~0.5 for plain scroll and ~0.3 for scrollUntilVisible (which
 // wants smaller steps to avoid overshooting the target).
-func (d *Driver) performScroll(direction string, width, height int, engine string, percent float64) error {
+func (d *Driver) performScroll(direction string, width, height int, engine string, percent float64, durationMs int) error {
 	useAgent := strings.EqualFold(engine, "agent")
 	if !useAgent {
 		if d.device != nil {
-			return d.scrollByAdb(direction, width, height, percent)
+			return d.scrollByAdb(direction, width, height, percent, durationMs)
 		}
 		logger.Warn("scroll: ADB shell unavailable, falling back to Appium gesture (may be unreliable on some Android skins)")
 	}
 	area := uiautomator2.NewRect(0, height/8, width, height*3/4)
-	return d.client.ScrollInArea(area, direction, percent, 0)
+	return d.client.ScrollInArea(area, direction, percent, durationMs)
 }
 
 // performScrollInRect scrolls inside one container rather than the screen. The
 // inset keeps the gesture off the container's own edges, where a swipe is as
 // likely to be read by the parent list as by the container itself.
-func (d *Driver) performScrollInRect(direction string, bounds core.Bounds, engine string, percent float64) error {
+func (d *Driver) performScrollInRect(direction string, bounds core.Bounds, engine string, percent float64, durationMs int) error {
 	inset := bounds.Height / 8
 	x, y := bounds.X, bounds.Y+inset
 	w, h := bounds.Width, bounds.Height-2*inset
@@ -773,25 +778,25 @@ func (d *Driver) performScrollInRect(direction string, bounds core.Bounds, engin
 
 	useAgent := strings.EqualFold(engine, "agent")
 	if !useAgent && d.device != nil {
-		return d.scrollByAdbInRect(direction, x, y, w, h, percent)
+		return d.scrollByAdbInRect(direction, x, y, w, h, percent, durationMs)
 	}
-	return d.client.ScrollInArea(uiautomator2.NewRect(x, y, w, h), direction, percent, 0)
+	return d.client.ScrollInArea(uiautomator2.NewRect(x, y, w, h), direction, percent, durationMs)
 }
 
 // scrollByAdb issues `adb shell input swipe` over the local shell executor.
 // percent is the swipe distance as a fraction of the screen dimension along
 // the scroll axis. Direction uses Maestro scroll semantics (what becomes
 // visible — "down" reveals content below by swiping the finger UP).
-func (d *Driver) scrollByAdb(direction string, screenWidth, screenHeight int, percent float64) error {
-	return d.scrollByAdbInRect(direction, 0, 0, screenWidth, screenHeight, percent)
+func (d *Driver) scrollByAdb(direction string, screenWidth, screenHeight int, percent float64, durationMs int) error {
+	return d.scrollByAdbInRect(direction, 0, 0, screenWidth, screenHeight, percent, durationMs)
 }
 
 // scrollByAdbInRect is scrollByAdb over an arbitrary rectangle, so a scroll can
 // be confined to one container rather than the whole screen. The gesture is
 // centred in the rectangle and spans `percent` of its height or width.
-func (d *Driver) scrollByAdbInRect(direction string, rectX, rectY, rectW, rectH int, percent float64) error {
+func (d *Driver) scrollByAdbInRect(direction string, rectX, rectY, rectW, rectH int, percent float64, durationMs int) error {
 	fromX, fromY, toX, toY := scrollPointsInRect(direction, rectX, rectY, rectW, rectH, percent)
-	cmd := fmt.Sprintf("input swipe %d %d %d %d %d", fromX, fromY, toX, toY, scrollDurationMs)
+	cmd := fmt.Sprintf("input swipe %d %d %d %d %d", fromX, fromY, toX, toY, durationMs)
 	_, err := d.device.Shell(cmd)
 	return err
 }

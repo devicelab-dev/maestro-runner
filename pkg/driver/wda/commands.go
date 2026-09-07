@@ -670,7 +670,10 @@ func (d *Driver) scroll(step *flow.ScrollStep) *core.CommandResult {
 		return errorResult(fmt.Errorf("invalid direction: %s", step.Direction), "Invalid scroll direction")
 	}
 
-	if err := d.client.Swipe(fromX, fromY, toX, toY, 0.3); err != nil {
+	// WDA's swipe duration is in seconds; the Maestro speed inverts to ms.
+	// Was hardcoded 0.3s, so `speed:` was silently dropped here too (#165).
+	durationSec := float64(core.ScrollDurationOrDefault(step.Speed, 300)) / 1000.0
+	if err := d.client.Swipe(fromX, fromY, toX, toY, durationSec); err != nil {
 		return errorResult(err, "Scroll failed")
 	}
 
@@ -714,7 +717,7 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 		}
 
 		// Scroll
-		scrollStep := &flow.ScrollStep{Direction: direction}
+		scrollStep := &flow.ScrollStep{Direction: direction, Speed: step.Speed}
 		result := d.scroll(scrollStep)
 		if !result.Success {
 			return result

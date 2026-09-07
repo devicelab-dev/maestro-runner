@@ -86,3 +86,72 @@ func ClippedAtScrollEdge(b, container Bounds, direction string, tolerance int) b
 		return false
 	}
 }
+
+// ScrollSpeedToDurationMs converts a Maestro `speed:` value into the swipe
+// duration one scroll gesture should take.
+//
+// Maestro's number is inverted — it is a speed, and the gesture is expressed as
+// a duration — so it computes (Commands.kt, speedToDuration):
+//
+//	duration = 1000 * (100 - speed) / 100 + 1
+//
+// speed 1 → 991ms (a slow, deliberate drag), the default 40 → 601ms, speed 100
+// → 1ms. The formula is reproduced rather than approximated because a flow
+// written against Maestro has to scroll the same distance per swipe here; an
+// "equivalent" curve would make the same flow behave differently, which is the
+// whole thing we promise not to do.
+//
+// Out-of-range values fall back to the default rather than failing: upstream
+// clamps a negative duration to its default, and a flow should not die over a
+// speed of 250.
+//
+// The result is floored at MinSwipeDurationMs. Upstream hands speed 100's 1ms
+// straight to `input swipe`, and Android emits no MOVE events for a swipe that
+// short — just a DOWN and an UP at different points. A React Native list read
+// that as a press on the row under the finger and opened it, on every run, on
+// both native drivers (Pixel 4a, TestHive). Nothing is lost by the floor:
+// Android caps fling velocity, and 20ms, 50ms and 100ms swipes over the same
+// 1000px all landed on the same row, while 300ms landed two rows short. So
+// speeds 96-100 behave like 95 here, and scroll instead of tapping.
+func ScrollSpeedToDurationMs(speed int) int {
+	const defaultDurationMs = 601 // upstream's DEFAULT_SCROLL_DURATION, speed 40
+	if speed < 0 || speed > 100 {
+		return defaultDurationMs
+	}
+	if speed == 0 {
+		// Unset. Callers must not substitute upstream's default here: each
+		// driver already had its own scroll duration (300ms, 500ms, 0.3s), and
+		// swipe duration sets fling velocity on Android — a longer swipe over
+		// the same distance flings less far. Silently moving every existing
+		// flow to 601ms would change how far every scroll travels, which is the
+		// complaint in #141. ScrollDurationOrDefault keeps the driver's value.
+		return 0
+	}
+	d := 1000*(100-speed)/100 + 1
+	if d < 0 {
+		return defaultDurationMs
+	}
+	if d < MinSwipeDurationMs {
+		return MinSwipeDurationMs
+	}
+	return d
+}
+
+// MinSwipeDurationMs is the shortest swipe a `speed:` can ask for. Below it
+// Android injects no intermediate MOVE events and a touch-handling framework
+// may take the gesture for a tap; see ScrollSpeedToDurationMs.
+const MinSwipeDurationMs = 50
+
+// ScrollDurationOrDefault returns the duration a `speed:` asks for, or
+// driverDefaultMs when the field is absent.
+//
+// Deliberately not upstream's 601ms default: adopting that would change the
+// swipe duration of every existing scroll, and on Android duration sets fling
+// velocity, so the distance each scroll travels would move too. A flow that
+// never mentions speed keeps behaving exactly as it did.
+func ScrollDurationOrDefault(speed, driverDefaultMs int) int {
+	if d := ScrollSpeedToDurationMs(speed); d > 0 {
+		return d
+	}
+	return driverDefaultMs
+}
