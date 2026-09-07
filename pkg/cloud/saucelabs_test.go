@@ -40,7 +40,7 @@ func TestNewSauceLabs_RejectsNonSauce(t *testing.T) {
 func TestExtractMeta_RealDevice(t *testing.T) {
 	p := &sauceLabs{}
 	caps := map[string]interface{}{
-		"appium:jobUuid":  "abc-123",
+		"appium:jobUuid":    "abc-123",
 		"appium:deviceName": "Samsung Galaxy S21",
 	}
 	meta := make(map[string]string)
@@ -326,7 +326,7 @@ func TestSauceJobRESTURL(t *testing.T) {
 		wantErr  bool
 	}{
 		{
-			name: "rdc",
+			name:     "rdc",
 			apiBase:  "https://api.us-west-1.saucelabs.com",
 			jobType:  "rdc",
 			jobID:    "job-abc",
@@ -334,7 +334,7 @@ func TestSauceJobRESTURL(t *testing.T) {
 			want:     "https://api.us-west-1.saucelabs.com/v1/rdc/jobs/job-abc",
 		},
 		{
-			name: "vms",
+			name:     "vms",
 			apiBase:  "https://api.eu-central-1.saucelabs.com",
 			jobType:  "vms",
 			jobID:    "session-123",
@@ -342,7 +342,7 @@ func TestSauceJobRESTURL(t *testing.T) {
 			want:     "https://api.eu-central-1.saucelabs.com/rest/v1/myuser/jobs/session-123",
 		},
 		{
-			name: "trims trailing slash on apiBase",
+			name:     "trims trailing slash on apiBase",
 			apiBase:  "https://api.us-west-1.saucelabs.com/",
 			jobType:  "rdc",
 			jobID:    "x",
@@ -350,7 +350,7 @@ func TestSauceJobRESTURL(t *testing.T) {
 			want:     "https://api.us-west-1.saucelabs.com/v1/rdc/jobs/x",
 		},
 		{
-			name: "escapes weird ids",
+			name:     "escapes weird ids",
 			apiBase:  "https://api.us-west-1.saucelabs.com",
 			jobType:  "vms",
 			jobID:    "id with space",

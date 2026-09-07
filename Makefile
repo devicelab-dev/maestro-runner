@@ -1,4 +1,4 @@
-.PHONY: build clean test test-race test-coverage test-coverage-check cover-gaps test-fuzz bench install check ci fmt imports fumpt staticcheck revive vet errcheck nilaway gosec ineffassign deadcode govulncheck
+.PHONY: build clean test test-race test-coverage test-coverage-check cover-gaps test-fuzz bench install check ci fmt fmt-check imports fumpt staticcheck revive vet errcheck nilaway gosec ineffassign deadcode govulncheck
 
 # Build variables
 BINARY_NAME=maestro-runner
@@ -88,6 +88,17 @@ bench:
 fmt:
 	gofmt -s -w .
 
+# Fails when any tracked Go file is not gofmt-clean. `fmt` rewrites and always
+# succeeds, so without this nothing in check/ci could ever fail on formatting,
+# and stray unformatted files turned every `gofmt -w` into unrelated diffs.
+fmt-check:
+	@unformatted=$$(gofmt -s -l $$(git ls-files '*.go')); \
+	if [ -n "$$unformatted" ]; then \
+		echo "gofmt: these files are not formatted (run 'make fmt'):"; \
+		echo "$$unformatted"; \
+		exit 1; \
+	fi
+
 imports:
 	goimports -w .
 
@@ -122,11 +133,11 @@ govulncheck:
 	govulncheck ./...
 
 # Quality check - run all checks (use test-race for race detection)
-check: fmt imports fumpt vet staticcheck revive errcheck nilaway gosec ineffassign deadcode govulncheck test-race
+check: fmt-check fmt imports fumpt vet staticcheck revive errcheck nilaway gosec ineffassign deadcode govulncheck test-race
 	@echo "All checks passed!"
 
 # Full CI check (includes coverage threshold)
-ci: fmt imports fumpt vet staticcheck revive errcheck nilaway gosec ineffassign deadcode govulncheck test-coverage-check
+ci: fmt-check fmt imports fumpt vet staticcheck revive errcheck nilaway gosec ineffassign deadcode govulncheck test-coverage-check
 	@echo "CI checks passed!"
 
 deps:

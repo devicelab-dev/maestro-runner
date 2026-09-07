@@ -238,8 +238,8 @@ func TestHasNonASCII(t *testing.T) {
 		{"Hello World 123!", false},
 		{"", false},
 		{"abc\t\n", false},
-		{"\x7f", false},  // DEL is ASCII (127)
-		{"\x80", true},   // first non-ASCII byte
+		{"\x7f", false},      // DEL is ASCII (127)
+		{"\x80", true},       // first non-ASCII byte
 		{"cafe\u0301", true}, // e with combining accent
 		{"hello world", false},
 	}

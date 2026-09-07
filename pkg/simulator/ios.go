@@ -247,9 +247,9 @@ type simctlRuntimesOutput struct {
 }
 
 type simctlRuntime struct {
-	Identifier          string                   `json:"identifier"`
-	Version             string                   `json:"version"`
-	IsAvailable         bool                     `json:"isAvailable"`
+	Identifier           string                  `json:"identifier"`
+	Version              string                  `json:"version"`
+	IsAvailable          bool                    `json:"isAvailable"`
 	SupportedDeviceTypes []simctlDeviceTypeEntry `json:"supportedDeviceTypes"`
 }
 

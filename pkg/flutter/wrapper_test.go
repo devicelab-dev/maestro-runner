@@ -23,13 +23,13 @@ func (m *mockDriver) Execute(step flow.Step) *core.CommandResult {
 	return core.SuccessResult("ok", nil)
 }
 
-func (m *mockDriver) Screenshot() ([]byte, error)           { return nil, nil }
-func (m *mockDriver) Hierarchy() ([]byte, error)             { return nil, nil }
-func (m *mockDriver) GetState() *core.StateSnapshot          { return &core.StateSnapshot{} }
-func (m *mockDriver) GetPlatformInfo() *core.PlatformInfo    { return &core.PlatformInfo{} }
-func (m *mockDriver) SetFindTimeout(ms int)                  {}
-func (m *mockDriver) SetWaitForIdleTimeout(ms int) error     { return nil }
-func (m *mockDriver) SetContext(context.Context)              {}
+func (m *mockDriver) Screenshot() ([]byte, error)         { return nil, nil }
+func (m *mockDriver) Hierarchy() ([]byte, error)          { return nil, nil }
+func (m *mockDriver) GetState() *core.StateSnapshot       { return &core.StateSnapshot{} }
+func (m *mockDriver) GetPlatformInfo() *core.PlatformInfo { return &core.PlatformInfo{} }
+func (m *mockDriver) SetFindTimeout(ms int)               {}
+func (m *mockDriver) SetWaitForIdleTimeout(ms int) error  { return nil }
+func (m *mockDriver) SetContext(context.Context)          {}
 
 func TestFlutterDriver_PassThrough_Success(t *testing.T) {
 	inner := &mockDriver{
@@ -633,7 +633,7 @@ func TestShouldRejectAsOffscreen(t *testing.T) {
 		want   bool
 	}{
 		{"center of screen", info, 540, 1170, false},
-		{"top of usable area", info, 540, 80, false},     // just past 3% top inset (70)
+		{"top of usable area", info, 540, 80, false},      // just past 3% top inset (70)
 		{"bottom of usable area", info, 540, 2200, false}, // before 5% bottom inset (2223)
 		{"in status bar zone", info, 540, 50, true},
 		{"in nav bar zone (bug repro)", info, 540, 2271, true},

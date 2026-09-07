@@ -22,7 +22,7 @@ const (
 type VMServiceClient struct {
 	conn      *websocket.Conn
 	isolateID string
-	ctx context.Context
+	ctx       context.Context
 	cancel    context.CancelFunc
 	mu        sync.Mutex
 	nextID    int

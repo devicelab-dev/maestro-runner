@@ -57,6 +57,7 @@ const (
 // settleAfterAction waits for the UI to settle after a UI-mutating action.
 // Matches Maestro's behavior of calling waitForAppToSettle() after every action.
 // Uses DeviceLab's native event-based settle when available, falls back to hierarchy comparison.
+//
 //nolint:unused
 func (fr *FlowRunner) settleAfterAction() {
 	// Check if driver supports native settle (DeviceLab)
@@ -77,6 +78,7 @@ func (fr *FlowRunner) settleAfterAction() {
 }
 
 // isTapAction returns true if the step is a tap that may trigger a screen transition.
+//
 //nolint:unused
 func isTapAction(step flow.Step) bool {
 	switch step.(type) {
@@ -90,6 +92,7 @@ func isTapAction(step flow.Step) bool {
 // needsPreSettle returns true if the step needs the UI to be settled before executing.
 // These steps don't call findElement (which has implicit idle wait), so they need
 // explicit settle to avoid timing issues after screen transitions.
+//
 //nolint:unused
 func needsPreSettle(step flow.Step) bool {
 	switch step.(type) {

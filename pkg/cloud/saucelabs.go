@@ -410,7 +410,6 @@ func callSauceExecuteScriptContext(appiumURL, sessionID string, flowIdx, totalFl
 	return nil
 }
 
-
 func logSauceMeta(hook string, meta map[string]string) {
 	if len(meta) == 0 {
 		logger.Info("Sauce Labs %s meta: <empty>", hook)

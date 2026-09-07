@@ -1,7 +1,6 @@
 // Package flow handles parsing and representation of Maestro YAML flow files.
 package flow
 
-
 // Flow represents a parsed Maestro flow file.
 type Flow struct {
 	SourcePath string // Path to the source file

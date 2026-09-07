@@ -6,12 +6,12 @@ import (
 )
 
 type mockDevice struct {
-	shellOutput          string
-	shellErr             error
-	forwardSocketCalled  bool
-	forwardSocketPath    string
-	forwardSocketRemote  int
-	forwardSocketErr     error
+	shellOutput         string
+	shellErr            error
+	forwardSocketCalled bool
+	forwardSocketPath   string
+	forwardSocketRemote int
+	forwardSocketErr    error
 }
 
 func (m *mockDevice) Shell(cmd string) (string, error) {
