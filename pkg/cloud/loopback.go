@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 DeviceLab and the Project Contributors
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 // Package cloud — loopback provider.
 //
 // The loopback provider is a debug-only stand-in that mimics a cloud provider

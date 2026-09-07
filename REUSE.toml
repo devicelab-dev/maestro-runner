@@ -1,0 +1,67 @@
+version = 1
+
+[[annotations]]
+path = [
+  ".github/**",
+  ".gitignore",
+  ".goreleaser.yml",
+  "CHANGELOG.md",
+  "CODE_OF_CONDUCT.md",
+  "CONTRIBUTING.md",
+  "CONTRIBUTORS.md",
+  "DESIGN.md",
+  "DEVELOPER.md",
+  "LICENSE",
+  "Makefile",
+  "README.md",
+  "codecov.yml",
+  "docs/**",
+  "go.mod",
+  "go.sum",
+  "llms.txt",
+  "drivers/ios/DevicelabIOSRunner/DevicelabIOSRunner.xcodeproj/**",
+  "drivers/ios/DevicelabIOSRunner/PROTOCOL.md",
+  "drivers/ios/DevicelabIOSRunner/README.md",
+  "drivers/ios/DevicelabIOSRunner/project.yml",
+  "drivers/ios/DevicelabIOSRunner/DevicelabIOSRunnerUITests/ATTRIBUTION.md",
+  # "drivers/android/devicelab-android-driver.apk",
+  # "drivers/android/devicelab-android-driver-test.apk",
+  # "drivers/android/settings_apk-debug.apk",
+]
+SPDX-FileCopyrightText = "2024 DeviceLab"
+SPDX-License-Identifier = "LicenseRef-maestro-runner"
+
+[[annotations]]
+path = [
+  "drivers/android/appium-uiautomator2-server-debug-androidTest.apk",
+  "drivers/android/appium-uiautomator2-server-v9.11.1.apk",
+]
+SPDX-FileCopyrightText = "JS Foundation and other contributors, https://js.foundation"
+SPDX-License-Identifier = "LicenseRef-appium-uiautomator2-server"
+
+[[annotations]]
+path = [
+  "drivers/ios/DevicelabIOSRunner/DevicelabIOSRunnerUITests/RunnerTests*.swift",
+  "drivers/ios/DevicelabIOSRunner/DevicelabIOSRunnerUITests/RunnerObjCExceptionCatcher.h",
+  "drivers/ios/DevicelabIOSRunner/DevicelabIOSRunnerUITests/RunnerObjCExceptionCatcher.m",
+]
+SPDX-FileCopyrightText = "2026 Callstack"
+SPDX-License-Identifier = "LicenseRef-agent-device"
+
+[[annotations]]
+path = [
+  "drivers/ios/WebDriverAgent/**",
+  "drivers/ios/DevicelabIOSRunner/DevicelabIOSRunnerUITests/PrivateHeaders/**",
+]
+SPDX-FileCopyrightText = "2015-present, Facebook, Inc."
+SPDX-License-Identifier = "LicenseRef-appium-WebDriverAgent"
+
+[[annotations]]
+path = "drivers/ios/WebDriverAgent/WebDriverAgentLib/Vendor/CocoaHTTPServer/**"
+SPDX-FileCopyrightText = "2011, Deusty, LLC"
+SPDX-License-Identifier = "LicenseRef-CocoaHTTPServer"
+
+[[annotations]]
+path = "drivers/ios/WebDriverAgent/WebDriverAgentLib/Vendor/RoutingHTTPServer/**"
+SPDX-FileCopyrightText = "2011 Matt Stevens"
+SPDX-License-Identifier = "LicenseRef-RoutingHTTPServer"

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2025 DeviceLab and the Project Contributors
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 // Package validator validates Maestro flow files before execution.
 // It parses all files upfront, resolves runFlow references, and detects errors.
 package validator

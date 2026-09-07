@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2025–2026 DeviceLab and the Project Contributors
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 // Package uiautomator2 provides Android automation driver using UIAutomator2 server.
 package uiautomator2
 

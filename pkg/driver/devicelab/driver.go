@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 DeviceLab and the Project Contributors
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 // Package devicelab provides Android automation driver using the DeviceLab Android Driver.
 // This is a WebSocket-based driver with on-device RPC for app lifecycle operations.
 // Unlike the UIAutomator2 HTTP driver, element taps are always coordinate-based
