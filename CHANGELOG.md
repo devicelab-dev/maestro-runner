@@ -7,10 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### ⚠️ Behaviour change
-
-**A literal `text:` that matches one element exactly no longer also matches the elements that merely contain it.** Every page-source matcher matched literal text by contains alone, so `text: "0"` resolved to a price field reading "7000.00" ahead of the switch whose text is exactly "0". Maestro's matcher is a full match, so that never happened there. When a literal text selector matches several elements and at least one carries the text exactly, only the exact ones survive; when none does, the substring behaviour is unchanged, and regex selectors are untouched. A flow that relied on `text: "Add"` reaching "Add to cart" while a plain "Add" button was also on screen now gets the button. Reported and first patched by [@nt-ben-leblond](https://github.com/nt-ben-leblond) ([#161](https://github.com/devicelab-dev/maestro-runner/pull/161)).
-
 ### Added
 - **`addMedia` accepts documents** — PDF, Word, Excel and PowerPoint files, plus txt, csv, rtf, json and zip, alongside the photos and videos it already took. Documents go where the system document picker looks rather than where the photo picker does: on Android that is `Download/`, which the picker lists straight from disk, so the file shows under Recent files immediately on both native drivers; on the iOS simulator it is the "On My iPhone" storage that every app's document picker browses, which `simctl addmedia` cannot reach. A physical iPhone refuses with a plain explanation: Apple exposes no path into Files storage from outside the app, and PhotoKit covers photos and videos only. Requested by [@georgetarazi-swipejobs](https://github.com/georgetarazi-swipejobs) ([#167](https://github.com/devicelab-dev/maestro-runner/issues/167)); upstream Maestro has had the same request open since 2025.
   ```yaml
