@@ -4486,3 +4486,32 @@ func TestAddMediaQuotesRemotePath(t *testing.T) {
 		t.Errorf("media path reached the device as %q, want it intact as one argument", argv)
 	}
 }
+
+// A document is pushed to Downloads, where the system file picker lists it;
+// the photo-picker directories would hide it (#167).
+func TestAddMediaDocumentGoesToDownloads(t *testing.T) {
+	dir := t.TempDir()
+	pdf := filepath.Join(dir, "report.pdf")
+	jpg := filepath.Join(dir, "photo.jpg")
+	for _, f := range []string{pdf, jpg} {
+		if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mock := &MockShellExecutor{response: "Success"}
+	driver := &Driver{device: mock}
+
+	result := driver.addMedia(&flow.AddMediaStep{Files: []string{pdf, jpg}})
+	if !result.Success {
+		t.Fatalf("expected success, got %v", result.Error)
+	}
+	if len(mock.pushes) != 2 {
+		t.Fatalf("expected 2 pushes, got %d", len(mock.pushes))
+	}
+	if mock.pushes[0][1] != "/sdcard/Download/report.pdf" {
+		t.Errorf("document pushed to %q, want /sdcard/Download/report.pdf", mock.pushes[0][1])
+	}
+	if !strings.HasPrefix(mock.pushes[1][1], "/sdcard/Pictures/MaestroRunner/") {
+		t.Errorf("photo pushed to %q, want the images dir", mock.pushes[1][1])
+	}
+}

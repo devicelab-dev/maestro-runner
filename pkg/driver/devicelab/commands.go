@@ -2111,6 +2111,22 @@ func (d *Driver) addMedia(step *flow.AddMediaStep) *core.CommandResult {
 	// old MEDIA_SCANNER_SCAN_FILE broadcast is deprecated and doesn't register
 	// media for the modern photo picker.
 	for _, file := range step.Files {
+		// Documents are not MediaStore photos or videos — the agent's insert
+		// targets those collections — so they go over adb to Downloads, where
+		// the system file picker lists them from disk (#167).
+		if core.IsDocumentMedia(file) {
+			pusher, ok := d.device.(core.AndroidFilePusher)
+			if !ok {
+				return errorResult(fmt.Errorf("device does not support file push"), "addMedia with documents requires adb push support")
+			}
+			if _, err := os.Stat(file); err != nil {
+				return errorResult(err, fmt.Sprintf("Media file not found: %s", file))
+			}
+			if _, err := core.PushAndroidDocument(pusher, file); err != nil {
+				return errorResult(err, fmt.Sprintf("Failed to add document %s: %v", filepath.Base(file), err))
+			}
+			continue
+		}
 		data, err := os.ReadFile(file)
 		if err != nil {
 			return errorResult(err, fmt.Sprintf("Failed to read media file %s: %v", file, err))

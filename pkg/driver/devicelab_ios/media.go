@@ -10,6 +10,7 @@ import (
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
+	"github.com/devicelab-dev/maestro-runner/pkg/simulator"
 )
 
 // handleAddMedia adds photos/videos to the device's Photos library.
@@ -29,14 +30,34 @@ func (d *Driver) handleAddMedia(s *flow.AddMediaStep) *core.CommandResult {
 		}
 	}
 
+	media, documents := core.SplitMediaDocuments(s.Files)
+
 	if d.info != nil && d.info.IsSimulator {
-		args := append([]string{"simctl", "addmedia", d.udid}, s.Files...)
-		out, err := exec.Command("xcrun", args...).CombinedOutput()
-		if err != nil {
-			return core.ErrorResult(fmt.Errorf("simctl addmedia failed: %w", err),
-				fmt.Sprintf("Failed to add media: %v: %s", err, strings.TrimSpace(string(out))))
+		if len(media) > 0 {
+			args := append([]string{"simctl", "addmedia", d.udid}, media...)
+			out, err := exec.Command("xcrun", args...).CombinedOutput()
+			if err != nil {
+				return core.ErrorResult(fmt.Errorf("simctl addmedia failed: %w", err),
+					fmt.Sprintf("Failed to add media: %v: %s", err, strings.TrimSpace(string(out))))
+			}
+		}
+		// Documents go to the simulator's "On My iPhone" storage, which every
+		// app's document picker browses (#167).
+		if len(documents) > 0 {
+			if err := simulator.AddDocuments(d.udid, documents); err != nil {
+				return core.ErrorResult(err, fmt.Sprintf("Failed to add documents: %v", err))
+			}
 		}
 		return core.SuccessResult(fmt.Sprintf("Added %d media file(s) to the simulator", len(s.Files)), nil)
+	}
+
+	// Real device — PhotoKit reaches the Photos library and nothing else.
+	// There is no host-side or on-device path into Files storage for a
+	// document, so say so rather than fail inside the runner.
+	if len(documents) > 0 {
+		err := fmt.Errorf("documents cannot be added to a physical iPhone: PhotoKit covers photos and videos only, " +
+			"and Apple exposes no path into Files storage; addMedia supports documents on the iOS simulator only")
+		return core.ErrorResult(err, err.Error())
 	}
 
 	// Real device — add via the on-device runner's PhotoKit path.

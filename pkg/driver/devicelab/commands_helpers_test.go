@@ -3326,3 +3326,47 @@ func TestTapOn_BlockedByOverlay_ReportsCause(t *testing.T) {
 		t.Error("expected the hit test to be requested by default")
 	}
 }
+
+// pushShell is a mockShell that also accepts adb pushes.
+type pushShell struct {
+	mockShell
+	pushes [][2]string
+}
+
+func (p *pushShell) Push(local, remote string) error {
+	p.pushes = append(p.pushes, [2]string{local, remote})
+	return nil
+}
+
+// A document bypasses the agent's MediaStore insert — that targets the photo
+// and video collections — and goes over adb to Downloads instead (#167).
+func TestAddMediaDocumentPushesToDownloads(t *testing.T) {
+	dir := t.TempDir()
+	pdf := filepath.Join(dir, "report.pdf")
+	jpg := filepath.Join(dir, "photo.jpg")
+	for _, f := range []string{pdf, jpg} {
+		if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	client := newTrackingClient()
+	shell := &pushShell{}
+	driver := New(client, &core.PlatformInfo{}, shell)
+
+	res := driver.addMedia(&flow.AddMediaStep{Files: []string{pdf, jpg}})
+	if !res.Success {
+		t.Fatalf("addMedia failed: %v", res.Error)
+	}
+	if len(shell.pushes) != 1 || shell.pushes[0][1] != "/sdcard/Download/report.pdf" {
+		t.Errorf("document push = %v, want /sdcard/Download/report.pdf", shell.pushes)
+	}
+	if got := client.addMediaNames; len(got) != 1 || got[0] != "photo.jpg" {
+		t.Errorf("only the photo should reach the agent, got %v", got)
+	}
+
+	// A shell without push support says so rather than silently skipping.
+	res = New(newTrackingClient(), &core.PlatformInfo{}, &mockShell{}).addMedia(&flow.AddMediaStep{Files: []string{pdf}})
+	if res.Success {
+		t.Error("a device without adb push cannot add a document and should fail")
+	}
+}

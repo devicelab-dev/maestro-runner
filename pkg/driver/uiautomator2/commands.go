@@ -1762,9 +1762,7 @@ func (d *Driver) addMedia(step *flow.AddMediaStep) *core.CommandResult {
 	if d.device == nil {
 		return errorResult(fmt.Errorf("device not configured"), "addMedia requires device access")
 	}
-	pusher, ok := d.device.(interface {
-		Push(local, remote string) error
-	})
+	pusher, ok := d.device.(core.AndroidFilePusher)
 	if !ok {
 		return errorResult(fmt.Errorf("device does not support file push"), "addMedia requires adb push support")
 	}
@@ -1772,6 +1770,14 @@ func (d *Driver) addMedia(step *flow.AddMediaStep) *core.CommandResult {
 	for _, file := range step.Files {
 		if _, err := os.Stat(file); err != nil {
 			return errorResult(err, fmt.Sprintf("Media file not found: %s", file))
+		}
+		// Documents go to Downloads, where the system file picker looks;
+		// the photo-picker directories below would hide them (#167).
+		if core.IsDocumentMedia(file) {
+			if _, err := core.PushAndroidDocument(pusher, file); err != nil {
+				return errorResult(err, fmt.Sprintf("Failed to add document %s: %v", filepath.Base(file), err))
+			}
+			continue
 		}
 		destDir := "/sdcard/Pictures/MaestroRunner"
 		if core.IsVideoMedia(file) {
