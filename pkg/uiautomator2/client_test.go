@@ -1,9 +1,12 @@
 package uiautomator2
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -459,5 +462,32 @@ func TestRequestInvalidURL(t *testing.T) {
 	_, err := client.request("GET", "/test", nil)
 	if err == nil {
 		t.Error("expected error for invalid URL")
+	}
+}
+
+// The per-request log lands in the run's output directory. What the flow typed
+// must not be readable there: the send-keys body is logged redacted, and an
+// ordinary request body still is logged.
+func TestRequestLogRedactsTypedText(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"value":null}`))
+	}))
+	defer server.Close()
+	var buf bytes.Buffer
+	c := &Client{baseURL: server.URL, http: server.Client(), sessionID: "s1", logger: log.New(&buf, "", 0)}
+
+	if _, err := c.request("POST", "/session/s1/element/e1/value", map[string]string{"text": "hunter2"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.request("POST", "/session/s1/element", map[string]string{"using": "id", "value": "login"}); err != nil {
+		t.Fatal(err)
+	}
+	logged := buf.String()
+	if strings.Contains(logged, "hunter2") {
+		t.Errorf("typed text leaked into the client log: %s", logged)
+	}
+	if !strings.Contains(logged, `"using":"id"`) {
+		t.Errorf("non-typing request bodies should still be logged: %s", logged)
 	}
 }

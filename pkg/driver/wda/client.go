@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devicelab-dev/maestro-runner/pkg/core"
+
 	"github.com/devicelab-dev/maestro-runner/pkg/logger"
 )
 
@@ -587,7 +589,7 @@ func (c *Client) post(path string, body interface{}) (map[string]interface{}, er
 		}
 	}
 
-	logger.Debug("WDA POST %s body=%s", path, bodyStr)
+	logger.Debug("WDA POST %s body=%s", path, core.RedactTypedText(path, bodyStr))
 
 	resp, err := c.httpClient.Post(c.baseURL+path, "application/json", reqBody)
 	duration := time.Since(start).Milliseconds()

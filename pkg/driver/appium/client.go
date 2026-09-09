@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devicelab-dev/maestro-runner/pkg/core"
+
 	"github.com/devicelab-dev/maestro-runner/pkg/logger"
 )
 
@@ -870,7 +872,7 @@ func (c *Client) request(method, path string, body interface{}) (map[string]inte
 		}
 	}
 
-	logger.Debug("Appium %s %s body=%s", method, path, bodyStr)
+	logger.Debug("Appium %s %s body=%s", method, path, core.RedactTypedText(path, bodyStr))
 
 	req, err := http.NewRequest(method, url, bodyReader)
 	if err != nil {

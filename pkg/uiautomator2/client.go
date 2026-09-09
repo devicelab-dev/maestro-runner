@@ -129,7 +129,7 @@ func (c *Client) request(method, path string, body interface{}) ([]byte, error) 
 	if resp.StatusCode >= 400 {
 		status = fmt.Sprintf("ERR:%d", resp.StatusCode)
 	}
-	c.logger.Printf("%s %s [%v] %s body=%s", method, path, elapsed, status, bodyStr)
+	c.logger.Printf("%s %s [%v] %s body=%s", method, path, elapsed, status, core.RedactTypedText(path, bodyStr))
 
 	if resp.StatusCode >= 400 {
 		var errResp Response
