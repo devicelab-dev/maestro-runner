@@ -380,6 +380,7 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 		var s InputTextStep
 		if valueNode.Kind == yaml.ScalarNode {
 			s.Text = valueNode.Value
+			s.RawText = valueNode.Value
 		} else if err := valueNode.Decode(&s); err != nil {
 			return nil, wrapParseError(sourcePath, valueNode.Line, err)
 		}

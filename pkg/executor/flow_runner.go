@@ -256,12 +256,16 @@ func (fr *FlowRunner) Run() FlowResult {
 			break
 		}
 
+		// Describe before executing: expansion rewrites the step in place, and
+		// the description is what the console shows.
+		desc := step.Describe()
+
 		// Execute step
 		stepStatus, stepError, stepDuration := fr.executeStep(i, step)
 
 		// Notify step complete
 		if fr.config.OnStepComplete != nil {
-			fr.config.OnStepComplete(i, step.Describe(), stepStatus == report.StatusPassed, stepDuration, stepError)
+			fr.config.OnStepComplete(i, desc, stepStatus == report.StatusPassed, stepDuration, stepError)
 		}
 
 		// Track step counts (compound steps like runFlow/repeat/retry don't count themselves,
@@ -1353,6 +1357,11 @@ func (fr *FlowRunner) enrichTimeoutError(result *core.CommandResult) *core.Comma
 func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 	start := time.Now()
 	var result *core.CommandResult
+	// Describe before expansion. Top-level commands are described when the
+	// report is built, so they showed `${PASSWORD}`; a sub-flow's steps were
+	// described here after ExpandStep had rewritten them, so the same step
+	// inside a runFlow showed the password itself.
+	desc := step.Describe()
 
 	// For nested compound steps, we need to track their sub-commands separately
 	var nestedSubCommands []report.Command
@@ -1526,7 +1535,7 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 		if !result.Success && result.Error != nil {
 			errMsg = result.Error.Error()
 		}
-		fr.config.OnNestedStep(fr.depth, step.Describe(), result.Success, duration, errMsg)
+		fr.config.OnNestedStep(fr.depth, desc, result.Success, duration, errMsg)
 	}
 
 	// Add to parent's sub-commands for report
@@ -1541,7 +1550,7 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 		Index:     len(fr.subCommands),
 		Type:      string(step.Type()),
 		Label:     step.Label(),
-		YAML:      step.Describe(),
+		YAML:      desc,
 		Status:    status,
 		StartTime: &start,
 		EndTime:   &now,

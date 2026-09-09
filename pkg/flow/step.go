@@ -359,6 +359,11 @@ type InputTextStep struct {
 	Text     string   `yaml:"text"`
 	KeyPress bool     `yaml:"keyPress"` // If true, simulate real key presses (Android native only)
 	Selector Selector `yaml:",inline"`
+	// RawText is `text:` exactly as written in the flow, before variable
+	// expansion overwrites Text. Describe prints this form when it carried a
+	// variable, so a password passed through `${PASSWORD}` reaches the report,
+	// the console and the log as `${PASSWORD}` and not as its value.
+	RawText string `yaml:"-"`
 }
 
 // UnmarshalYAML decodes InputTextStep and drops the `text:` value that the
@@ -371,6 +376,7 @@ func (s *InputTextStep) UnmarshalYAML(node *yaml.Node) error {
 	}
 	*s = InputTextStep(a)
 	s.Selector.Text = ""
+	s.RawText = s.Text
 	return nil
 }
 
@@ -1042,6 +1048,13 @@ func (s *AssertNotVisibleStep) Describe() string {
 
 // Describe returns a human-readable description of the input text step.
 func (s *InputTextStep) Describe() string {
+	// A value that arrived through a variable is described by the variable.
+	// Expansion mutates Text in place, and a sub-flow's steps are described
+	// after that, so without this the expanded secret is what the report and
+	// console would show.
+	if strings.Contains(s.RawText, "${") {
+		return "inputText: \"" + s.RawText + "\""
+	}
 	return "inputText: \"" + s.Text + "\""
 }
 

@@ -879,3 +879,28 @@ func TestStepTypeConstants(t *testing.T) {
 		}
 	}
 }
+
+// A value that came through a variable is described by the variable, even
+// after expansion has overwritten Text — a password must not reach the
+// report, console or log as its value (upstream users hit this as #2512).
+func TestInputTextDescribe_KeepsVariableAfterExpansion(t *testing.T) {
+	f, err := Parse([]byte("- inputText: ${PASSWORD}\n- inputText:\n    text: ${USER}\n    id: user\n- inputText: plain\n"), "t.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scalar := f.Steps[0].(*InputTextStep)
+	mapped := f.Steps[1].(*InputTextStep)
+	plain := f.Steps[2].(*InputTextStep)
+	// Simulate the expand pass.
+	scalar.Text, mapped.Text = "hunter2", "alice"
+
+	if got := scalar.Describe(); got != `inputText: "${PASSWORD}"` {
+		t.Errorf("scalar: %s", got)
+	}
+	if got := mapped.Describe(); got != `inputText: "${USER}"` {
+		t.Errorf("map form: %s", got)
+	}
+	if got := plain.Describe(); got != `inputText: "plain"` {
+		t.Errorf("a literal is still shown as written: %s", got)
+	}
+}
