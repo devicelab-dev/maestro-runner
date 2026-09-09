@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -73,6 +74,16 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		// tap that would have been swallowed into a re-poll. Off switch for a
 		// tree pathological enough that the walk is not worth it.
 		hitTest := os.Getenv("MAESTRO_DISABLE_HIT_TEST") == ""
+
+		// The system file picker ignores the agent's injected tap: DocumentsUI
+		// acknowledges the DOWN/UP and never opens the row, while the same tap
+		// through `input tap` does (#87, and again on the #167 picker flow —
+		// uiautomator2 selects the file, devicelab does not). The foreground
+		// check costs ~120ms, so it only runs when the selector reads like a
+		// file name, which is what a picker flow taps.
+		if d.device != nil && looksLikeFileName(step.Selector.Text) && d.isDocumentsUIForeground() {
+			return d.tapViaInputTap(ctx, step, strategies)
+		}
 
 		var lastErr error
 		for {
@@ -2593,4 +2604,74 @@ func (d *Driver) applyDarkMode(enabled bool) *core.CommandResult {
 		return errorResult(err, fmt.Sprintf("Failed to set dark mode: %v", err))
 	}
 	return successResult(fmt.Sprintf("Set %s mode", core.DarkModeStateName(enabled)), nil)
+}
+
+// documentsUIPackages are the system file picker's package names: AOSP's and
+// the Google-signed build that ships on Pixels.
+var documentsUIPackages = []string{"com.android.documentsui", "com.google.android.documentsui"}
+
+// fileNameLike matches a selector that ends in a short extension, the shape
+// of a row in the file picker ("contract.pdf", "config.yaml").
+var fileNameLike = regexp.MustCompile(`\.[A-Za-z0-9]{0,4}[A-Za-z][A-Za-z0-9]{0,4}$`)
+
+func looksLikeFileName(text string) bool {
+	return text != "" && !strings.ContainsAny(text, " /") && fileNameLike.MatchString(text)
+}
+
+// isDocumentsUIForeground reports whether the system file picker owns the
+// resumed activity. One dumpsys call, ~120ms; callers gate it.
+func (d *Driver) isDocumentsUIForeground() bool {
+	if d.device == nil {
+		return false
+	}
+	out, err := d.device.Shell("dumpsys activity activities | grep topResumedActivity")
+	if err != nil || out == "" {
+		return false
+	}
+	for _, pkg := range documentsUIPackages {
+		if strings.Contains(out, pkg) {
+			return true
+		}
+	}
+	return false
+}
+
+// tapViaInputTap finds the element through the agent without clicking it and
+// taps its centre with `input tap`, the path the file picker accepts.
+func (d *Driver) tapViaInputTap(ctx context.Context, step *flow.TapOnStep, strategies []LocatorStrategy) *core.CommandResult {
+	var lastErr error
+	for {
+		select {
+		case <-ctx.Done():
+			if lastErr != nil {
+				return errorResult(fmt.Errorf("%s: %w", ctx.Err(), lastErr), fmt.Sprintf("Element not found: %v", lastErr))
+			}
+			return errorResult(ctx.Err(), fmt.Sprintf("Element not found: %v", ctx.Err()))
+		default:
+		}
+		for _, s := range strategies {
+			elem, err := d.client.FindElement(s.Strategy, s.Value)
+			if err != nil || elem == nil {
+				lastErr = err
+				continue
+			}
+			rect, err := elem.Rect()
+			if err != nil || rect.Width <= 0 || rect.Height <= 0 {
+				lastErr = fmt.Errorf("element rect unavailable")
+				continue
+			}
+			cx, cy := rect.X+rect.Width/2, rect.Y+rect.Height/2
+			d.recordTap(step.Selector)
+			if _, err := d.device.Shell(fmt.Sprintf("input tap %d %d", cx, cy)); err != nil {
+				return errorResult(err, fmt.Sprintf("input tap failed: %v", err))
+			}
+			info := &core.ElementInfo{Visible: true, Enabled: true,
+				Bounds: core.Bounds{X: rect.X, Y: rect.Y, Width: rect.Width, Height: rect.Height}}
+			if t, err := elem.Text(); err == nil {
+				info.Text = t
+			}
+			return successResult(fmt.Sprintf("Tapped %s via input tap (system file picker)", step.Selector.Describe()), info)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }

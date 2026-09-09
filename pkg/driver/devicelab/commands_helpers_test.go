@@ -3370,3 +3370,82 @@ func TestAddMediaDocumentPushesToDownloads(t *testing.T) {
 		t.Error("a device without adb push cannot add a document and should fail")
 	}
 }
+
+// routeShell answers dumpsys with a DocumentsUI foreground and records the rest.
+type routeShell struct {
+	commands []string
+}
+
+func (r *routeShell) Shell(cmd string) (string, error) {
+	r.commands = append(r.commands, cmd)
+	if strings.Contains(cmd, "topResumedActivity") {
+		return "  topResumedActivity=ActivityRecord{abc u0 com.google.android.documentsui/com.android.documentsui.picker.PickActivity t42}", nil
+	}
+	return "", nil
+}
+
+// The system file picker ignores the agent's injected tap (#87, #167). When a
+// file-name-like selector is tapped with DocumentsUI in the foreground, the
+// element is found without clicking and tapped through `input tap`.
+func TestTapOn_FilePickerRowGoesThroughInputTap(t *testing.T) {
+	client := &scriptedClient{}
+	client.findElementReturn = uiautomator2.NewCachedElement(
+		"row", "contract.pdf", uiautomator2.ElementRect{X: 0, Y: 1000, Width: 1080, Height: 200},
+	)
+	shell := &routeShell{}
+	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, shell)
+
+	res := driver.tapOn(&flow.TapOnStep{Selector: flow.Selector{Text: "contract.pdf"}})
+	if !res.Success {
+		t.Fatalf("expected success, got %v", res.Error)
+	}
+	if client.findAndClickCalls != 0 {
+		t.Errorf("the agent's click must not be used in the picker, got %d FindAndClick calls", client.findAndClickCalls)
+	}
+	var tapped bool
+	for _, c := range shell.commands {
+		if c == "input tap 540 1100" {
+			tapped = true
+		}
+	}
+	if !tapped {
+		t.Errorf("expected `input tap 540 1100`, got %v", shell.commands)
+	}
+}
+
+// A selector that does not read like a file name never pays for the
+// foreground check, and a non-picker foreground keeps the agent path.
+func TestTapOn_NonFileNameSkipsPickerCheck(t *testing.T) {
+	client := &scriptedClient{}
+	client.findAndClickReturn = uiautomator2.NewCachedElement(
+		"btn", "Save", uiautomator2.ElementRect{X: 0, Y: 1000, Width: 200, Height: 100},
+	)
+	shell := &routeShell{}
+	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, shell)
+
+	res := driver.tapOn(&flow.TapOnStep{Selector: flow.Selector{Text: "Save"}})
+	if !res.Success {
+		t.Fatalf("expected success, got %v", res.Error)
+	}
+	for _, c := range shell.commands {
+		if strings.Contains(c, "topResumedActivity") {
+			t.Errorf("foreground check must not run for %q", "Save")
+		}
+	}
+	if client.findAndClickCalls == 0 {
+		t.Error("expected the normal agent click path")
+	}
+}
+
+func TestLooksLikeFileName(t *testing.T) {
+	for _, yes := range []string{"contract.pdf", "config.yaml", "IMG_0001.JPG", "notes.txt"} {
+		if !looksLikeFileName(yes) {
+			t.Errorf("%q should look like a file name", yes)
+		}
+	}
+	for _, no := range []string{"Save", "Add to cart", "v1.2.3.4.5.6", "", "Downloads", "path/to.pdf", "Mr. Smith"} {
+		if looksLikeFileName(no) {
+			t.Errorf("%q should not look like a file name", no)
+		}
+	}
+}
