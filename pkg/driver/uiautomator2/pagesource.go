@@ -17,18 +17,23 @@ type ParsedElement struct {
 	ResourceID  string
 	ContentDesc string
 	HintText    string // hint attribute for EditText fields
-	ClassName   string
-	Bounds      core.Bounds
-	Enabled     bool
-	Selected    bool
-	Checked     bool
-	Focused     bool
-	Displayed   bool
-	Clickable   bool
-	Scrollable  bool
-	Children    []*ParsedElement
-	Parent      *ParsedElement // parent element for clickable lookup
-	Depth       int            // depth in hierarchy (for deepestMatchingElement)
+	// ErrorText is the field's validation error (AccessibilityNodeInfo.getError),
+	// the `error` attribute the uiautomator2 server writes for every node —
+	// empty for most. A Compose field whose only content is its error
+	// semantics is found by that text, as in Maestro since 2.9.
+	ErrorText  string
+	ClassName  string
+	Bounds     core.Bounds
+	Enabled    bool
+	Selected   bool
+	Checked    bool
+	Focused    bool
+	Displayed  bool
+	Clickable  bool
+	Scrollable bool
+	Children   []*ParsedElement
+	Parent     *ParsedElement // parent element for clickable lookup
+	Depth      int            // depth in hierarchy (for deepestMatchingElement)
 }
 
 // ParsePageSource parses Android UI hierarchy XML into elements.
@@ -73,6 +78,8 @@ func ParsePageSource(xmlData string) ([]*ParsedElement, error) {
 						elem.ContentDesc = attr.Value
 					case "hint":
 						elem.HintText = attr.Value
+					case "error":
+						elem.ErrorText = attr.Value
 					case "class":
 						elem.ClassName = attr.Value // Override if class attr exists
 					case "bounds":
@@ -219,7 +226,7 @@ func matchesSelector(elem *ParsedElement, sel flow.Selector) bool {
 	// Text matching - supports regex patterns and literal contains
 	// Checks text, content-desc (accessibility text), and hint text
 	if sel.Text != "" {
-		if !matchesText(sel.Text, elem.Text, elem.ContentDesc, elem.HintText) {
+		if !matchesText(sel.Text, elem.Text, elem.ContentDesc, elem.HintText) && !matchesErrorText(sel.Text, elem.ErrorText) {
 			return false
 		}
 	}
@@ -658,4 +665,14 @@ func GetClickableElement(elem *ParsedElement) *ParsedElement {
 
 	// No clickable parent found - return original element
 	return elem
+}
+
+// matchesErrorText matches a text selector against a field's validation
+// error. The attribute is written for every node and is usually empty, and
+// an empty string must never satisfy a selector — `.*` would.
+func matchesErrorText(pattern, errorText string) bool {
+	if errorText == "" {
+		return false
+	}
+	return matchesText(pattern, errorText, "", "")
 }
