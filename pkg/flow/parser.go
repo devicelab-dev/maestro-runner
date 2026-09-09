@@ -650,6 +650,22 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 		if b, ok := s.EnabledRaw.(bool); ok {
 			s.Enabled = b
 		}
+		// Upstream's `value:` spelling of the map form.
+		if s.EnabledRaw == nil && s.ValueRaw != "" {
+			if strings.Contains(s.ValueRaw, "${") {
+				s.EnabledRaw = s.ValueRaw // resolved by the expand pass
+			} else {
+				switch s.ValueRaw {
+				case "enabled":
+					s.Enabled = true
+				case "disabled":
+					s.Enabled = false
+				default:
+					return nil, wrapParseError(sourcePath, valueNode.Line,
+						fmt.Errorf("setAirplaneMode value: expects 'enabled' or 'disabled', got %q", s.ValueRaw))
+				}
+			}
+		}
 		s.StepType = stepType
 		return &s, nil
 
@@ -673,6 +689,22 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 		}
 		if b, ok := s.EnabledRaw.(bool); ok {
 			s.Enabled = b
+		}
+		// Upstream's `value:` spelling of the map form.
+		if s.EnabledRaw == nil && s.ValueRaw != "" {
+			if strings.Contains(s.ValueRaw, "${") {
+				s.EnabledRaw = s.ValueRaw // resolved by the expand pass
+			} else {
+				switch s.ValueRaw {
+				case "enabled", "dark", "true":
+					s.Enabled = true
+				case "disabled", "light", "false":
+					s.Enabled = false
+				default:
+					return nil, wrapParseError(sourcePath, valueNode.Line,
+						fmt.Errorf("setDarkMode value: expects 'enabled'/'dark' or 'disabled'/'light', got %q", s.ValueRaw))
+				}
+			}
 		}
 		s.StepType = stepType
 		return &s, nil

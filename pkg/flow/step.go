@@ -587,6 +587,11 @@ type SetAirplaneModeStep struct {
 	BaseStep   `yaml:",inline"`
 	Enabled    bool `yaml:"-"`
 	EnabledRaw any  `yaml:"enabled"`
+	// ValueRaw is upstream Maestro's spelling of the map form:
+	// `{value: enabled, label: …, optional: …}`. It was ignored, so a flow
+	// written for Maestro decoded to Enabled=false without a word. The parser
+	// folds it into Enabled (or EnabledRaw when it carries a variable).
+	ValueRaw string `yaml:"value"`
 }
 
 // ToggleAirplaneModeStep toggles airplane mode.
@@ -603,6 +608,11 @@ type SetDarkModeStep struct {
 	BaseStep   `yaml:",inline"`
 	Enabled    bool `yaml:"-"`
 	EnabledRaw any  `yaml:"enabled"`
+	// ValueRaw is upstream Maestro's spelling of the map form:
+	// `{value: enabled, label: …, optional: …}`. It was ignored, so a flow
+	// written for Maestro decoded to Enabled=false without a word. The parser
+	// folds it into Enabled (or EnabledRaw when it carries a variable).
+	ValueRaw string `yaml:"value"`
 }
 
 // ToggleDarkModeStep flips the current appearance.

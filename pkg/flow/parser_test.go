@@ -2502,3 +2502,61 @@ func TestParse_InputTextMapKeepsSiblingFields(t *testing.T) {
 		t.Errorf("Selector.Text=%q, want empty", step.Selector.Text)
 	}
 }
+
+// Upstream Maestro's map form is `{value: enabled|disabled, label:, optional:}`.
+// Ours only knew `enabled:`, so `value: enabled` decoded to Enabled=false and
+// a flow written for Maestro switched the setting the wrong way, silently.
+func TestParse_SetAirplaneModeValueKey(t *testing.T) {
+	cases := []struct {
+		yaml string
+		want bool
+	}{
+		{`- setAirplaneMode: {value: enabled}`, true},
+		{`- setAirplaneMode: {value: disabled, label: "offline"}`, false},
+		{`- setAirplaneMode: {enabled: true}`, true}, // our spelling still works
+	}
+	for _, c := range cases {
+		f, err := Parse([]byte(c.yaml), "t.yaml")
+		if err != nil {
+			t.Fatalf("%s: %v", c.yaml, err)
+		}
+		if got := f.Steps[0].(*SetAirplaneModeStep).Enabled; got != c.want {
+			t.Errorf("%s: Enabled=%v, want %v", c.yaml, got, c.want)
+		}
+	}
+	if _, err := Parse([]byte(`- setAirplaneMode: {value: sideways}`), "t.yaml"); err == nil {
+		t.Error("an unknown value: should be a parse error, not a silent disable")
+	}
+	// A variable is left for the expand pass, as `enabled: "${X}"` is.
+	f, err := Parse([]byte(`- setAirplaneMode: {value: "${OFFLINE}"}`), "t.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := f.Steps[0].(*SetAirplaneModeStep).EnabledRaw.(string); raw != "${OFFLINE}" {
+		t.Errorf("variable value should be deferred to expansion, got EnabledRaw=%v", f.Steps[0].(*SetAirplaneModeStep).EnabledRaw)
+	}
+}
+
+func TestParse_SetDarkModeValueKey(t *testing.T) {
+	cases := []struct {
+		yaml string
+		want bool
+	}{
+		{`- setDarkMode: {value: enabled}`, true},
+		{`- setDarkMode: {value: dark, optional: true}`, true},
+		{`- setDarkMode: {value: light}`, false},
+		{`- setDarkMode: {value: disabled}`, false},
+	}
+	for _, c := range cases {
+		f, err := Parse([]byte(c.yaml), "t.yaml")
+		if err != nil {
+			t.Fatalf("%s: %v", c.yaml, err)
+		}
+		if got := f.Steps[0].(*SetDarkModeStep).Enabled; got != c.want {
+			t.Errorf("%s: Enabled=%v, want %v", c.yaml, got, c.want)
+		}
+	}
+	if _, err := Parse([]byte(`- setDarkMode: {value: dim}`), "t.yaml"); err == nil {
+		t.Error("an unknown value: should be a parse error")
+	}
+}

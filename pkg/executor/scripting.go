@@ -639,7 +639,7 @@ func (se *ScriptEngine) withEnvVars(env map[string]string) func() {
 // "yes"/"no", "1"/"0" (case-insensitive); anything else is treated as false.
 func parseBoolExpr(s string) bool {
 	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "true", "enabled", "on", "yes", "1":
+	case "true", "enabled", "on", "yes", "1", "dark":
 		return true
 	}
 	return false
