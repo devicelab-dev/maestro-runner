@@ -2195,7 +2195,11 @@ func (d *Driver) stopRecording(_ *flow.StopRecordingStep) *core.CommandResult {
 		logger.Warn("failed to stop screenrecord process: %v", err)
 	}
 
-	time.Sleep(500 * time.Millisecond)
+	// screenrecord writes the MP4 index as it exits. A fixed sleep was long
+	// enough on short clips and not on long ones, and a file read before the
+	// index lands is unplayable — the same race --record already guards
+	// against by waiting for the process, so do that here too.
+	core.WaitForProcessExit(d.device.Shell, "screenrecord", 5*time.Second, 200*time.Millisecond)
 
 	return successResult("Stopped recording", nil)
 }

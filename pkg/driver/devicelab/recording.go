@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devicelab-dev/maestro-runner/pkg/core"
+
 	"github.com/devicelab-dev/maestro-runner/pkg/logger"
 )
 
@@ -49,14 +51,7 @@ func (d *Driver) StopScreenRecording(hostPath string) error {
 	}
 	// The MP4 index is written as the process exits; pulling earlier yields an
 	// unplayable file.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		out, _ := d.device.Shell("pgrep screenrecord")
-		if strings.TrimSpace(out) == "" {
-			break
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
+	core.WaitForProcessExit(d.device.Shell, "screenrecord", 5*time.Second, 200*time.Millisecond)
 
 	puller, ok := d.device.(interface {
 		Pull(remotePath, localPath string) error
