@@ -1,6 +1,6 @@
 {
   "name": "maestro-runner",
-  "version": "1.1.25",
+  "version": "1.1.27",
   "description": "Fast mobile UI test automation for Android, iOS, React Native, Flutter and Expo. Runs Maestro YAML flows from a single binary — no JVM.",
   "keywords": [
     "maestro",
@@ -36,9 +36,9 @@
     "node": ">=18"
   },
   "optionalDependencies": {
-    "@devicelab/maestro-runner-darwin-arm64": "1.1.25",
-    "@devicelab/maestro-runner-darwin-x64": "1.1.25",
-    "@devicelab/maestro-runner-linux-arm64": "1.1.25",
-    "@devicelab/maestro-runner-linux-x64": "1.1.25"
+    "@devicelab/maestro-runner-darwin-arm64": "1.1.27",
+    "@devicelab/maestro-runner-darwin-x64": "1.1.27",
+    "@devicelab/maestro-runner-linux-arm64": "1.1.27",
+    "@devicelab/maestro-runner-linux-x64": "1.1.27"
   }
 }
