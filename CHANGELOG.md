@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.27] - 2026-09-11
+
+Mostly about **flows that already work on Maestro working the same way here**. One of 1.1.26's selector fixes woke up a parsing bug that had been dormant for months: any `inputText` that named an `id:` stopped finding its field, and because that step usually lives in a shared login sub-flow, whole suites went red on their first command. That is fixed, and so are three places where a Maestro flow was read differently here without a word — `speed:` on scrolls, the `value:` spelling of airplane and dark mode, and an element-relative `point:` on swipes. `addMedia` now takes documents, so a flow can seed a PDF and pick it in the system file picker, and a password passed through a variable no longer ends up in the report. There are no behaviour changes: nothing that passes on 1.1.26 should start failing.
+
 ### Added
 - **`addMedia` accepts documents** — PDF, Word, Excel and PowerPoint files, plus txt, csv, rtf, json and zip, alongside the photos and videos it already took. Documents go where the system document picker looks rather than where the photo picker does: on Android that is `Download/`, which the picker lists straight from disk, so the file shows under Recent files immediately on both native drivers; on the iOS simulator it is the "On My iPhone" storage that every app's document picker browses, which `simctl addmedia` cannot reach. A physical iPhone refuses with a plain explanation: Apple exposes no path into Files storage from outside the app, and PhotoKit covers photos and videos only. Requested by [@georgetarazi-swipejobs](https://github.com/georgetarazi-swipejobs) ([#167](https://github.com/devicelab-dev/maestro-runner/issues/167)); upstream Maestro has had the same request open since 2025.
   ```yaml
