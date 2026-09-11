@@ -36,6 +36,15 @@
 
 ## Install
 
+**Shell** — macOS and Linux:
+
+```bash
+curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash
+
+# A specific version
+curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash -s -- --version 1.1.27
+```
+
 **npm** — for React Native, Expo, or any project that already has a `package.json`:
 
 ```bash
@@ -44,15 +53,6 @@ npm install --save-dev maestro-runner   # or pin it in the project
 ```
 
 Pinning it means every machine and every CI job runs the same version with no separate bootstrap. There is no postinstall and nothing is downloaded at install time: the binary for your platform arrives as an ordinary optional dependency npm selects by `os` and `cpu`, so installs work offline, behind a proxy, and in CI that blocks postinstall network access.
-
-**Shell** — everywhere else:
-
-```bash
-curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash
-
-# A specific version
-curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash -s -- --version 1.1.25
-```
 
 Both give you the same binary. macOS and Linux, arm64 and x64; on Windows, use WSL.
 
