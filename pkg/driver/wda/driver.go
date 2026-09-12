@@ -909,11 +909,16 @@ func (d *Driver) getElementInfo(elemID string) (*core.ElementInfo, error) {
 	}()
 	wg.Wait()
 
+	if rectErr != nil {
+		return nil, fmt.Errorf("element bounds unavailable: %w", rectErr)
+	}
+	if w <= 0 || h <= 0 {
+		return nil, fmt.Errorf("element has invalid bounds: %dx%d", w, h)
+	}
+	info.Bounds = core.Bounds{X: x, Y: y, Width: w, Height: h}
+
 	if textErr == nil {
 		info.Text = text
-	}
-	if rectErr == nil {
-		info.Bounds = core.Bounds{X: x, Y: y, Width: w, Height: h}
 	}
 	if nameErr == nil {
 		info.Class = elemName
@@ -924,9 +929,6 @@ func (d *Driver) getElementInfo(elemID string) (*core.ElementInfo, error) {
 		// XCUITest says off-screen. Check bounds geometrically — if they're
 		// inside the viewport, override XCUITest and accept the element with
 		// a MatchNote so the report records the override.
-		if rectErr != nil {
-			return nil, fmt.Errorf("element exists but is not visible on screen (no bounds)")
-		}
 		screenW, screenH, sErr := d.screenSize()
 		if sErr != nil {
 			return nil, fmt.Errorf("element exists but is not visible on screen (screen size unavailable)")
