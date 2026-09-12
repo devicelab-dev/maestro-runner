@@ -3,6 +3,7 @@ package devicelab_ios
 import (
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
@@ -38,7 +39,18 @@ func (d *Driver) handleSetPermissions(step *flow.SetPermissionsStep) *core.Comma
 
 	var applied int
 	var failures []string
-	for name, value := range step.Permissions {
+	names := make([]string, 0, len(step.Permissions))
+	for name := range step.Permissions {
+		if name != "all" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	if _, ok := step.Permissions["all"]; ok {
+		names = append([]string{"all"}, names...)
+	}
+	for _, name := range names {
+		value := step.Permissions[name]
 		services := core.IOSPrivacyServices(name)
 		if len(services) == 0 {
 			// iOS exposes no host-side control over this one. Saying so is

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- The native iOS driver applies `launchApp` permissions after clearing app state, with specific permissions overriding `all` and failed permission updates stopping launch.
+
 ## [1.1.27] - 2026-09-11
 
 Mostly about **flows that already work on Maestro working the same way here**. One of 1.1.26's selector fixes woke up a parsing bug that had been dormant for months: any `inputText` that named an `id:` stopped finding its field, and because that step usually lives in a shared login sub-flow, whole suites went red on their first command. That is fixed, and so are three places where a Maestro flow was read differently here without a word — `speed:` on scrolls, the `value:` spelling of airplane and dark mode, and an element-relative `point:` on swipes. `addMedia` now takes documents, so a flow can seed a PDF and pick it in the system file picker, and a password passed through a variable no longer ends up in the report. There are no behaviour changes: nothing that passes on 1.1.26 should start failing.
