@@ -123,6 +123,18 @@ func (d *Driver) handleLaunchApp(s *flow.LaunchAppStep) *core.CommandResult {
 		}
 	}
 
+	if d.info != nil && d.info.IsSimulator {
+		permissions := s.Permissions
+		if len(permissions) == 0 {
+			permissions = map[string]string{"all": "allow"}
+		}
+		if res := d.handleSetPermissions(&flow.SetPermissionsStep{
+			AppID: bid, Permissions: permissions,
+		}); !res.Success {
+			return res
+		}
+	}
+
 	if s.StopApp != nil && *s.StopApp {
 		_ = exec.Command("xcrun", "simctl", "terminate", d.udid, bid).Run()
 	}
