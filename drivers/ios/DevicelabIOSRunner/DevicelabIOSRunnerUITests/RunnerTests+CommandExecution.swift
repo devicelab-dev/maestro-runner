@@ -447,8 +447,8 @@ extension RunnerTests {
       var outcome = RunnerInteractionOutcome.performed
       // A no-op recovery guard: capture the screen just before the tap so we
       // can tell, after, whether the tap actually did anything. Only when the
-      // activation-retry path is enabled (default on) — otherwise we pay
-      // nothing.
+      // activation-retry path is enabled (default off; opt in with
+      // DEVICELAB_ENABLE_TAP_ACTIVATION_RETRY=1) — otherwise we pay nothing.
       let beforeTap: RunnerImage? = tapActivationRetryEnabled
         ? XCUIScreen.main.screenshot().image : nil
       let timing = measureGesture {
