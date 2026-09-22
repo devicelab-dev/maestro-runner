@@ -797,14 +797,16 @@ extension RunnerTests {
         compact: command.compact ?? false,
         depth: command.depth,
         scope: command.scope,
-        raw: command.raw ?? false
+        raw: command.raw ?? false,
+        followsScreen: (command.appBundleId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
       )
-      if options.raw {
-        needsPostSnapshotInteractionDelay = true
-        return Response(ok: true, data: snapshotRaw(app: activeApp, options: options))
-      }
       needsPostSnapshotInteractionDelay = true
-      return Response(ok: true, data: snapshotFast(app: activeApp, options: options))
+      let target = activeApp
+      return Response(ok: true, data: withSnapshotRequestTimeout {
+        options.raw
+          ? snapshotRaw(app: target, options: options)
+          : snapshotFast(app: target, options: options)
+      })
     case .screenshot:
       let screenshot: XCUIScreenshot
 #if os(macOS)

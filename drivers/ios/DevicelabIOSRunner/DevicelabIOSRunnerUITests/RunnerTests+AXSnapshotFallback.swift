@@ -23,13 +23,19 @@ extension RunnerTests {
   /// React Native tree. Returns nil when the bridge is unavailable or the
   /// capture failed, so the caller keeps its existing (empty) result.
   func privateAXFallbackPayload(app: XCUIApplication, options: SnapshotOptions) -> DataPayload? {
-    let response = RunnerAXSnapshotBridge.snapshotTree(
-      for: app,
-      maxDepth: RunnerTests.privateAXMaxDepth,
-      maxNodes: RunnerTests.privateAXMaxNodes,
-      deepExtensionCallLimit: RunnerTests.privateAXDeepExtensionCallLimit,
-      timeout: RunnerTests.privateAXTimeout
-    )
+    // The bridge's timeout only stops it starting new requests. Each request
+    // also gets a bound here, or one sent to an app that leaves the screen
+    // mid-capture waits out XCTest's 60s AX timeout.
+    var response: [String: Any] = [:]
+    RunnerXCTestTimeouts.withAXTimeout(RunnerTests.privateAXTimeout) {
+      response = RunnerAXSnapshotBridge.snapshotTree(
+        for: app,
+        maxDepth: RunnerTests.privateAXMaxDepth,
+        maxNodes: RunnerTests.privateAXMaxNodes,
+        deepExtensionCallLimit: RunnerTests.privateAXDeepExtensionCallLimit,
+        timeout: RunnerTests.privateAXTimeout
+      )
+    }
     guard (response["ok"] as? Bool) == true,
           let rootDict = response["root"] as? [String: Any] else {
       if let error = response["error"] as? String {

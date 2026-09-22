@@ -136,6 +136,24 @@ extension RunnerTests {
     currentBundleId = nil
   }
 
+  /// The app to snapshot when the caller named none: `target` while it is
+  /// still in front, otherwise whatever is in front now. The target was
+  /// chosen when the command arrived; an app that has since left the screen
+  /// (Home, the app switcher, a crash) stops answering accessibility
+  /// queries, and XCTest then waits 30s to find it, and retries twice,
+  /// holding every later command behind it.
+  func foregroundTarget(_ target: XCUIApplication) -> XCUIApplication {
+    if target.state == .runningForeground {
+      return target
+    }
+    guard let front = frontmostApplication() else {
+      return target
+    }
+    NSLog("AGENT_DEVICE_RUNNER_RETARGET from_state=%d", target.state.rawValue)
+    currentApp = front
+    return front
+  }
+
   func targetNeedsActivation(_ target: XCUIApplication) -> Bool {
     let state = target.state
 #if os(macOS)

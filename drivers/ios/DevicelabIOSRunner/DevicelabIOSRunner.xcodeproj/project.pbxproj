@@ -10,6 +10,7 @@
 		185FD4F00E4669AEA940FBE7 /* SyntheticTyping.m in Sources */ = {isa = PBXBuildFile; fileRef = 2DDAC8B41684AB39CF12AB26 /* SyntheticTyping.m */; };
 		5AA0000000000000000000A0 /* SnapshotParams.m in Sources */ = {isa = PBXBuildFile; fileRef = 5AA0000000000000000000B0 /* SnapshotParams.m */; };
 		5AB1000000000000000000A1 /* RunnerAXSnapshotBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = 5AB1000000000000000000B1 /* RunnerAXSnapshotBridge.m */; };
+		5AC2000000000000000000A2 /* RunnerXCTestTimeouts.m in Sources */ = {isa = PBXBuildFile; fileRef = 5AC2000000000000000000B2 /* RunnerXCTestTimeouts.m */; };
 		5AB1000000000000000000A2 /* RunnerTests+AXSnapshotFallback.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AB1000000000000000000B2 /* RunnerTests+AXSnapshotFallback.swift */; };
 		1934AC9AF1E68AFB58165881 /* RunnerTests+Transport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F2F4CA6FCF47D767563E5B /* RunnerTests+Transport.swift */; };
 		1EBCEDDEE576BAC031B5F650 /* RunnerTests+TvRemote.swift in Sources */ = {isa = PBXBuildFile; fileRef = 052AE177317DC11EE9E6FA7E /* RunnerTests+TvRemote.swift */; };
@@ -56,6 +57,8 @@
 		5AA0000000000000000000C0 /* SnapshotParams.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SnapshotParams.h; sourceTree = "<group>"; };
 		5AB1000000000000000000B1 /* RunnerAXSnapshotBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = RunnerAXSnapshotBridge.m; sourceTree = "<group>"; };
 		5AB1000000000000000000C1 /* RunnerAXSnapshotBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = RunnerAXSnapshotBridge.h; sourceTree = "<group>"; };
+		5AC2000000000000000000B2 /* RunnerXCTestTimeouts.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = RunnerXCTestTimeouts.m; sourceTree = "<group>"; };
+		5AC2000000000000000000C2 /* RunnerXCTestTimeouts.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = RunnerXCTestTimeouts.h; sourceTree = "<group>"; };
 		5AB1000000000000000000B2 /* RunnerTests+AXSnapshotFallback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RunnerTests+AXSnapshotFallback.swift"; sourceTree = "<group>"; };
 		58840AA09B61534F808615A5 /* RunnerTests+Alert.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RunnerTests+Alert.swift"; sourceTree = "<group>"; };
 		65C8657B8B10860BC0657028 /* DevicelabIOSRunnerUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = DevicelabIOSRunnerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -120,6 +123,8 @@
 				5AA0000000000000000000C0 /* SnapshotParams.h */,
 				5AB1000000000000000000B1 /* RunnerAXSnapshotBridge.m */,
 				5AB1000000000000000000C1 /* RunnerAXSnapshotBridge.h */,
+				5AC2000000000000000000B2 /* RunnerXCTestTimeouts.m */,
+				5AC2000000000000000000C2 /* RunnerXCTestTimeouts.h */,
 				5AB1000000000000000000B2 /* RunnerTests+AXSnapshotFallback.swift */,
 			);
 			path = DevicelabIOSRunnerUITests;
@@ -271,6 +276,7 @@
 				185FD4F00E4669AEA940FBE7 /* SyntheticTyping.m in Sources */,
 				5AA0000000000000000000A0 /* SnapshotParams.m in Sources */,
 				5AB1000000000000000000A1 /* RunnerAXSnapshotBridge.m in Sources */,
+				5AC2000000000000000000A2 /* RunnerXCTestTimeouts.m in Sources */,
 				5AB1000000000000000000A2 /* RunnerTests+AXSnapshotFallback.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

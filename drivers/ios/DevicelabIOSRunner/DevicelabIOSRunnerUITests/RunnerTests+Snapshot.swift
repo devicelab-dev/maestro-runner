@@ -13,8 +13,18 @@ extension RunnerTests {
     .scrollView,
     .table
   ]
+  // Per-request XPC timeout for a snapshot command's queries, in seconds.
+  // A responsive app answers in well under a second, even on a deep React
+  // Native screen. A suspended app never answers. 3s leaves wide margin for
+  // a busy app and still bounds the stall when the app leaves the screen.
+  // captureRootSnapshot retries a slow root snapshot at XCTest's full
+  // timeout, so this bound cannot cut a large tree short.
+  private static let snapshotRequestTimeout: TimeInterval = 3.0
 
   private struct SnapshotTraversalContext {
+    // The app actually read. A no-bundle snapshot can move to the app in
+    // front when the one it started on leaves the screen.
+    let app: XCUIApplication
     let queryRoot: XCUIElement
     let rootSnapshot: XCUIElementSnapshot
     let viewport: CGRect
@@ -89,21 +99,26 @@ extension RunnerTests {
     }
   }
 
-  func snapshotFast(app: XCUIApplication, options: SnapshotOptions) -> DataPayload {
+  func snapshotFast(app requested: XCUIApplication, options: SnapshotOptions) -> DataPayload {
     if let blocking = blockingSystemAlertSnapshot() {
       return blocking
     }
 
-    guard let context = makeSnapshotTraversalContext(app: app, options: options) else {
+    let target = snapshotTarget(requested, options: options)
+    guard let context = makeSnapshotTraversalContext(app: target, options: options) else {
       // The public snapshot threw (a deep React Native tree makes the AX server
       // answer kAXErrorIllegalArgument), which would otherwise hand back an
       // empty tree — the devicelab-vs-WDA RN gap. Recover the tree through the
-      // private AX client instead of returning nothing.
-      if let fallback = privateAXFallbackPayload(app: app, options: options) {
+      // private AX client instead of returning nothing. Only for an app in
+      // front: one that has left the screen is suspended and cannot answer,
+      // and its empty tree plus appState is the honest reply.
+      if target.state == .runningForeground,
+         let fallback = privateAXFallbackPayload(app: target, options: options) {
         return fallback
       }
-      return DataPayload(nodes: [], truncated: false, appState: appStateString(app))
+      return DataPayload(nodes: [], truncated: false, appState: appStateString(target))
     }
+    let app = context.app
 
     var cachedDescendantElements: [XCUIElement]?
     func collapsedTabDescendants() -> [XCUIElement] {
@@ -217,14 +232,16 @@ extension RunnerTests {
     return DataPayload(nodes: nodes, truncated: truncated, appState: appStateString(app))
   }
 
-  func snapshotRaw(app: XCUIApplication, options: SnapshotOptions) -> DataPayload {
+  func snapshotRaw(app requested: XCUIApplication, options: SnapshotOptions) -> DataPayload {
     if let blocking = blockingSystemAlertSnapshot() {
       return blocking
     }
 
-    guard let context = makeSnapshotTraversalContext(app: app, options: options) else {
-      return DataPayload(nodes: [], truncated: false, appState: appStateString(app))
+    let target = snapshotTarget(requested, options: options)
+    guard let context = makeSnapshotTraversalContext(app: target, options: options) else {
+      return DataPayload(nodes: [], truncated: false, appState: appStateString(target))
     }
+    let app = context.app
 
     var nodes: [SnapshotNode] = []
     var truncated = false
@@ -332,22 +349,52 @@ extension RunnerTests {
     return true
   }
 
+  /// Runs a snapshot command's queries with a short XPC request timeout, so a
+  /// query against an app that leaves the screen mid-command gives up after
+  /// `snapshotRequestTimeout` instead of XCTest's 30s. That 30s wait would
+  /// also hold every command queued behind this one on the main thread.
+  /// `captureRootSnapshot` retries a slow snapshot of an app that is still
+  /// in front with XCTest's full timeout, so a large tree still completes.
+  func withSnapshotRequestTimeout(_ body: () -> DataPayload) -> DataPayload {
+    var payload: DataPayload?
+    RunnerXCTestTimeouts.withXPCRequestTimeout(Self.snapshotRequestTimeout) {
+      payload = body()
+    }
+    // The helper runs the block exactly once on every path that returns.
+    return payload!
+  }
+
+  /// The app a snapshot should read. A no-bundle snapshot follows the
+  /// screen. This is checked again here, just before the queries, because
+  /// the alert check that comes first takes long enough for Home to land.
+  private func snapshotTarget(_ requested: XCUIApplication, options: SnapshotOptions) -> XCUIApplication {
+    options.followsScreen ? foregroundTarget(requested) : requested
+  }
+
   private func makeSnapshotTraversalContext(
-    app: XCUIApplication,
+    app requested: XCUIApplication,
     options: SnapshotOptions
   ) -> SnapshotTraversalContext? {
-    let viewport = snapshotViewport(app: app)
-    let queryRoot = options.scope.flatMap { findScopeElement(app: app, scope: $0) } ?? app
-
-    let rootSnapshot: XCUIElementSnapshot
-    do {
-      rootSnapshot = try queryRoot.snapshot()
-    } catch {
+    var app = requested
+    var captured = captureRootSnapshot(app: app, options: options)
+    if captured == nil, options.followsScreen, app.state != .runningForeground {
+      // The app left the screen while its snapshot was in flight. A
+      // no-bundle snapshot reads whatever is in front, so read the app that
+      // is in front now. The next command would do the same.
+      let front = foregroundTarget(app)
+      if front !== app {
+        app = front
+        captured = captureRootSnapshot(app: app, options: options)
+      }
+    }
+    guard let (queryRoot, rootSnapshot) = captured else {
       return nil
     }
 
+    let viewport = snapshotViewport(app: app, rootSnapshot: queryRoot === app ? rootSnapshot : nil)
     let (flatSnapshots, snapshotRanges) = flattenedSnapshots(rootSnapshot)
     return SnapshotTraversalContext(
+      app: app,
       queryRoot: queryRoot,
       rootSnapshot: rootSnapshot,
       viewport: viewport,
@@ -355,6 +402,40 @@ extension RunnerTests {
       snapshotRanges: snapshotRanges,
       maxDepth: options.depth ?? Int.max
     )
+  }
+
+  /// Snapshots `app`, or the element `options.scope` names in it. Returns nil
+  /// when the snapshot fails.
+  ///
+  /// A failure that took the whole request timeout means XCTest stopped
+  /// waiting for the app to answer. If the app is still in front, the tree
+  /// may simply be slow to serialize, so the snapshot is tried once more with
+  /// XCTest's own timeout, the behavior before the short timeout existed.
+  /// If the app has left the screen, it gets no second wait: a suspended app
+  /// does not answer.
+  private func captureRootSnapshot(
+    app: XCUIApplication,
+    options: SnapshotOptions
+  ) -> (XCUIElement, XCUIElementSnapshot)? {
+    let queryRoot = options.scope.flatMap { findScopeElement(app: app, scope: $0) } ?? app
+    let started = ProcessInfo.processInfo.systemUptime
+    if let root = try? queryRoot.snapshot() {
+      return (queryRoot, root)
+    }
+    let elapsed = ProcessInfo.processInfo.systemUptime - started
+    guard elapsed >= Self.snapshotRequestTimeout * 0.9 else {
+      return nil
+    }
+    let state = app.state
+    NSLog("DL_SNAPSHOT_REQUEST_TIMEOUT elapsed=%.1f state=%d", elapsed, state.rawValue)
+    guard state == .runningForeground else {
+      return nil
+    }
+    var root: XCUIElementSnapshot?
+    RunnerXCTestTimeouts.withXPCRequestTimeout(RunnerXCTestTimeouts.defaultXPCRequestTimeout()) {
+      root = try? queryRoot.snapshot()
+    }
+    return root.map { (queryRoot, $0) }
   }
 
   private func evaluateSnapshot(
@@ -474,7 +555,22 @@ extension RunnerTests {
     return text.isEmpty ? nil : text
   }
 
-  private func snapshotViewport(app: XCUIApplication) -> CGRect {
+  /// The on-screen rect the hittable and visibility checks measure against.
+  /// When the app's own snapshot is at hand, its windows are read from it
+  /// rather than queried again: each query is another round trip, and another
+  /// full request timeout if the app leaves the screen meanwhile.
+  private func snapshotViewport(app: XCUIApplication, rootSnapshot: XCUIElementSnapshot?) -> CGRect {
+    if let rootSnapshot {
+      let window = rootSnapshot.children.first {
+        $0.elementType == .window && !$0.frame.isNull && !$0.frame.isEmpty
+      }
+      if let window {
+        return window.frame
+      }
+      if !rootSnapshot.frame.isNull && !rootSnapshot.frame.isEmpty {
+        return rootSnapshot.frame
+      }
+    }
     let windows = app.windows.allElementsBoundByIndex
     if let window = windows.first(where: { $0.exists && !$0.frame.isNull && !$0.frame.isEmpty }) {
       return window.frame

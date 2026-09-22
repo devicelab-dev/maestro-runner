@@ -255,4 +255,7 @@ struct SnapshotOptions {
   let depth: Int?
   let scope: String?
   let raw: Bool
+  /// The caller named no app: the snapshot is of whatever is on screen, so
+  /// it may move to the app in front if the one chosen earlier has left it.
+  var followsScreen = false
 }
