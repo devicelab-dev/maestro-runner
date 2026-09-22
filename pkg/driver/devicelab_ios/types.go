@@ -167,6 +167,17 @@ type ResponseData struct {
 	// oscillates while a screen animates into the background — so a caller
 	// that needs to know the app is frontmost reads this, not the tree.
 	AppState string `json:"appState,omitempty"`
+	// Verified — type only: the runner's read-back of the field. true means
+	// the value read back as typed, false means it did not (the call then
+	// also fails with TEXT_ENTRY_MISMATCH, and this data still comes back
+	// with the error). nil means the value could not be read (a secure
+	// field, an element that no longer resolves), so the text was typed but
+	// never checked — callers must not treat nil as success-verified.
+	Verified *bool `json:"verified,omitempty"`
+	// Repaired — type only: true when the first attempt read back wrong and
+	// the runner cleared the field and typed again. A runner that predates
+	// the field omits it (nil) on every response.
+	Repaired *bool `json:"repaired,omitempty"`
 }
 
 // SnapshotNode mirrors the Swift wire model. Tree is reconstructed by

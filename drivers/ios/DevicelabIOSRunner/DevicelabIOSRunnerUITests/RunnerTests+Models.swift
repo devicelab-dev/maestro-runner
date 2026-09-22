@@ -156,6 +156,15 @@ struct DataPayload: Codable {
   // this is the app's true state, which no signal in the node tree
   // reports reliably (hittable oscillates while a screen backgrounds).
   let appState: String?
+  // Local extension (DeviceDeck): the outcome of a type command's read-back.
+  // `verified` is true when the field's value read back as expected, false
+  // on a mismatch, and absent (null) when the value could not be read (a
+  // secure field, or an element that no longer resolves) — typing that was
+  // never checked is not reported as checked. `repaired` is true when the
+  // first attempt read back wrong and the runner cleared and retyped the
+  // field; the text on screen then came from the second attempt.
+  let verified: Bool?
+  let repaired: Bool?
 
   init(
     message: String? = nil,
@@ -181,7 +190,9 @@ struct DataPayload: Codable {
     diffFraction: Double? = nil,
     identifier: String? = nil,
     appearance: String? = nil,
-    appState: String? = nil
+    appState: String? = nil,
+    verified: Bool? = nil,
+    repaired: Bool? = nil
   ) {
     self.message = message
     self.text = text
@@ -207,6 +218,8 @@ struct DataPayload: Codable {
     self.identifier = identifier
     self.appearance = appearance
     self.appState = appState
+    self.verified = verified
+    self.repaired = repaired
   }
 }
 

@@ -186,6 +186,8 @@ All gestures accept `appBundleId` so the runner can target the right `XCUIApplic
 
 `type` sends keys to the currently focused element (caller is responsible for tapping to focus first — same as WDA today).
 
+`type` reports its read-back: `verified` is `true` when the field read back as typed, `false` on a mismatch (the response is then `ok: false` with `TEXT_ENTRY_MISMATCH`, and `data` still carries `verified`/`repaired`), and absent when the value could not be read (secure fields) — unchecked typing is never reported as verified. `repaired: true` means the first attempt read back wrong and the runner cleared the field and typed again.
+
 ### Alerts
 
 | Command | Inputs | Returns |

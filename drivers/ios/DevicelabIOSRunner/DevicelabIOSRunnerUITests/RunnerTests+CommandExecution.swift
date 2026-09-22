@@ -972,17 +972,23 @@ extension RunnerTests {
       delaySeconds: delaySeconds,
       repairMode: textEntryMode
     )
+    let outcome = DataPayload(
+      message: textResult.repaired ? "typed after repair" : "typed",
+      verified: textResult.verified,
+      repaired: textResult.repaired
+    )
     if textResult.verified == false {
       let expected = textResult.expectedText ?? ""
       let observed = textResult.observedText ?? ""
       return Response(
         ok: false,
+        data: outcome,
         error: ErrorPayload(
           code: "TEXT_ENTRY_MISMATCH",
           message: "text entry verification failed: expected \"\(expected)\", observed \"\(observed)\""
         )
       )
     }
-    return Response(ok: true, data: DataPayload(message: textResult.repaired ? "typed after repair" : "typed"))
+    return Response(ok: true, data: outcome)
   }
 }
