@@ -120,31 +120,53 @@ func (h *RunnerHandle) beginStop() {
 }
 
 // stopProcess terminates this handle's own xcodebuild subprocess (SIGTERM,
-// then force-kill after 5s). The supervisor calls it directly to avoid the
-// Stop -> sup.stop -> Stop delegation loop.
+// then force-kill after stopGrace). The supervisor calls it directly to avoid
+// the Stop -> sup.stop -> Stop delegation loop. It returns an error only when
+// the process could not be killed — it may still be running and holding the
+// simulator's runner — so callers can report it instead of assuming it died.
 func (h *RunnerHandle) stopProcess() error {
 	if h == nil || h.cmd == nil || h.cmd.Process == nil {
 		return nil
 	}
 	h.stopping.Store(true)
-	// Send SIGTERM first; force-kill after 5s.
-	_ = h.cmd.Process.Signal(syscall.SIGTERM)
-	done := h.waitDone
-	if done == nil {
-		// No watch goroutine (handle built outside startOnce) — own the
-		// Wait here.
-		ch := make(chan struct{})
-		go func() { _ = h.cmd.Wait(); close(ch) }()
-		done = ch
+	done := h.exitChan()
+	// A failed SIGTERM (other than "already exited") skips the grace wait:
+	// nothing will make the process exit on its own, go straight to kill.
+	if err := signalProcess(h.cmd.Process, syscall.SIGTERM); err == nil || errors.Is(err, os.ErrProcessDone) {
+		select {
+		case <-done:
+			return nil
+		case <-time.After(stopGrace):
+		}
 	}
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		_ = h.cmd.Process.Kill()
-		<-done
+	if err := killProcess(h.cmd.Process); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return fmt.Errorf("kill devicelab runner (pid %d): %w", h.cmd.Process.Pid, err)
 	}
+	<-done
 	return nil
 }
+
+// exitChan returns a channel closed when the subprocess exits. The watch
+// goroutine in startOnce owns cmd.Wait; a handle built without it owns the
+// Wait here.
+func (h *RunnerHandle) exitChan() <-chan struct{} {
+	if h.waitDone != nil {
+		return h.waitDone
+	}
+	ch := make(chan struct{})
+	go func() { _ = h.cmd.Wait(); close(ch) }()
+	return ch
+}
+
+// stopGrace is how long stopProcess waits after SIGTERM before killing.
+var stopGrace = 5 * time.Second
+
+// signalProcess and killProcess are the os.Process calls stopProcess makes;
+// variables so tests can simulate a process that cannot be signalled.
+var (
+	signalProcess = func(p *os.Process, sig os.Signal) error { return p.Signal(sig) }
+	killProcess   = func(p *os.Process) error { return p.Kill() }
+)
 
 // maxStartupAttempts caps the retry loop in Setup. On CI macos-latest
 // xcodebuild test-without-building intermittently hangs after launch —

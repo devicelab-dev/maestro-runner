@@ -3,6 +3,7 @@ package devicelab_ios
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -44,6 +45,8 @@ type Supervisor struct {
 	stopping     atomic.Bool
 	relaunches   int
 	lastRelaunch time.Time
+	// warn receives relaunch diagnostics; nil means os.Stderr.
+	warn io.Writer
 }
 
 // newSupervisor builds the supervisor for a freshly started runner, points
@@ -83,10 +86,14 @@ func (s *Supervisor) revive(ctx context.Context, failedPort int) (int, error) {
 	}
 
 	if cur := s.handle.Load(); cur != nil {
-		_ = cur.stopProcess()
+		if err := cur.stopProcess(); err != nil {
+			// Relaunch anyway: the new runner gets a fresh port, and the
+			// warning is the only trace of a leaked xcodebuild.
+			_, _ = fmt.Fprintf(s.warnOut(), "  ⚠ could not stop the dead devicelab runner: %v\n", err)
+		}
 	}
 
-	fmt.Fprintf(os.Stderr, "  ↻ devicelab runner died mid-session — relaunching (%d/%d)\n",
+	_, _ = fmt.Fprintf(s.warnOut(), "  ↻ devicelab runner died mid-session — relaunching (%d/%d)\n",
 		s.relaunches, maxRelaunchesPerWindow)
 
 	relaunchCtx, cancel := context.WithTimeout(ctx, s.relaunchTimeout())
@@ -133,4 +140,12 @@ func (s *Supervisor) takeRelaunchBudget(now time.Time) error {
 	s.relaunches++
 	s.lastRelaunch = now
 	return nil
+}
+
+// warnOut is where relaunch diagnostics go (s.warn, default os.Stderr).
+func (s *Supervisor) warnOut() io.Writer {
+	if s.warn != nil {
+		return s.warn
+	}
+	return os.Stderr
 }
