@@ -126,3 +126,74 @@ func TestGracefulShutdownNilArgs(t *testing.T) {
 		})
 	}
 }
+
+// TestTakeRelaunchBudget: the budget refills only after the runner stayed up
+// for relaunchWindow since the LAST relaunch.
+func TestTakeRelaunchBudget(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name         string
+		relaunches   int
+		lastRelaunch time.Time
+		wantErr      bool
+		wantCount    int
+	}{
+		{name: "first relaunch", wantCount: 1},
+		{name: "under budget", relaunches: 2, lastRelaunch: now.Add(-time.Second), wantCount: 3},
+		{name: "exhausted in a burst", relaunches: maxRelaunchesPerWindow, lastRelaunch: now.Add(-time.Second), wantErr: true, wantCount: maxRelaunchesPerWindow},
+		{name: "exhausted but healthy since", relaunches: maxRelaunchesPerWindow, lastRelaunch: now.Add(-relaunchWindow - time.Second), wantCount: 1},
+		{name: "exhausted, just under healthy window", relaunches: maxRelaunchesPerWindow, lastRelaunch: now.Add(-relaunchWindow + time.Second), wantErr: true, wantCount: maxRelaunchesPerWindow},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Supervisor{relaunches: tt.relaunches, lastRelaunch: tt.lastRelaunch}
+			err := s.takeRelaunchBudget(now)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if s.relaunches != tt.wantCount {
+				t.Errorf("relaunches = %d, want %d", s.relaunches, tt.wantCount)
+			}
+			if !tt.wantErr && !s.lastRelaunch.Equal(now) {
+				t.Errorf("lastRelaunch not updated")
+			}
+		})
+	}
+}
+
+// TestReviveRefusesOverBudgetAndWhenStopping: revive gives up without
+// launching when stopping or when the budget is spent, and re-points without
+// launching when another call already relaunched.
+func TestReviveRefusesOverBudgetAndWhenStopping(t *testing.T) {
+	tests := []struct {
+		name       string
+		stopping   bool
+		relaunches int
+		failedPort int
+		wantPort   int
+		wantErr    bool
+	}{
+		{name: "stopping", stopping: true, failedPort: 1000, wantErr: true},
+		{name: "over budget", relaunches: maxRelaunchesPerWindow, failedPort: 1000, wantErr: true},
+		{name: "already relaunched", failedPort: 999, wantPort: 1000},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var starts int
+			s := testSupervisor(SetupOptions{}, 1000, func(context.Context, SetupOptions, string, string) (*Client, *RunnerHandle, error) {
+				starts++
+				return nil, &RunnerHandle{port: 2000}, nil
+			})
+			s.stopping.Store(tt.stopping)
+			s.relaunches = tt.relaunches
+			s.lastRelaunch = time.Now()
+			port, err := s.revive(context.Background(), tt.failedPort)
+			if (err != nil) != tt.wantErr || port != tt.wantPort {
+				t.Fatalf("revive = (%d, %v), want (%d, err=%v)", port, err, tt.wantPort, tt.wantErr)
+			}
+			if starts != 0 {
+				t.Errorf("start called %d times, want 0", starts)
+			}
+		})
+	}
+}

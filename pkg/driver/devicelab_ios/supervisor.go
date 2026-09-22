@@ -10,7 +10,8 @@ import (
 )
 
 // maxRelaunchesPerWindow bounds how many times the supervisor relaunches a
-// dead runner before giving up, per relaunchWindow. The bound exists for the
+// dead runner before giving up, counting relaunches until the runner has
+// stayed up for relaunchWindow. The bound exists for the
 // deterministic-crash case: a command that kills the runner every time (the
 // keyboard-query XCTest abort we hit on TestHive) would otherwise relaunch
 // forever. read-only commands are replayed after a relaunch and could re-crash;
@@ -19,8 +20,10 @@ import (
 const maxRelaunchesPerWindow = 5
 
 // relaunchWindow resets the relaunch counter once the runner has been healthy
-// for this long, so an occasional crash over a long suite does not exhaust the
-// budget that a burst of deterministic crashes is meant to cap.
+// for this long — measured from the last relaunch, not from a fixed window
+// start — so an occasional crash over a long suite does not exhaust the
+// budget that a burst of deterministic crashes is meant to cap, while a crash
+// loop spread just over a fixed window boundary cannot dodge it.
 const relaunchWindow = 2 * time.Minute
 
 // Supervisor keeps a devicelab runner alive across mid-session crashes. It
@@ -36,12 +39,11 @@ type Supervisor struct {
 	// in tests.
 	start func(ctx context.Context, opts SetupOptions, xctestrun, logPath string) (*Client, *RunnerHandle, error)
 
-	mu            sync.Mutex
-	handle        atomic.Pointer[RunnerHandle]
-	stopping      atomic.Bool
-	relaunches    int
-	lastRelaunch  time.Time
-	windowStarted time.Time
+	mu           sync.Mutex
+	handle       atomic.Pointer[RunnerHandle]
+	stopping     atomic.Bool
+	relaunches   int
+	lastRelaunch time.Time
 }
 
 // newSupervisor builds the supervisor for a freshly started runner, points
@@ -50,7 +52,6 @@ type Supervisor struct {
 func newSupervisor(opts SetupOptions, xctestrun, logPath string, client *Client, handle *RunnerHandle) *Supervisor {
 	s := &Supervisor{opts: opts, xctestrun: xctestrun, logPath: logPath, start: startOnce}
 	s.handle.Store(handle)
-	s.windowStarted = time.Now()
 	handle.sup = s
 	client.SetReviver(s.revive)
 	return s
@@ -77,19 +78,9 @@ func (s *Supervisor) revive(ctx context.Context, failedPort int) (int, error) {
 		return cur.port, nil
 	}
 
-	now := time.Now()
-	if now.Sub(s.windowStarted) > relaunchWindow {
-		s.relaunches = 0
-		s.windowStarted = now
+	if err := s.takeRelaunchBudget(time.Now()); err != nil {
+		return 0, err
 	}
-	if s.relaunches >= maxRelaunchesPerWindow {
-		return 0, fmt.Errorf(
-			"devicelab runner relaunch limit (%d in %s) reached — the runner keeps dying, likely a deterministic crash",
-			maxRelaunchesPerWindow, relaunchWindow,
-		)
-	}
-	s.relaunches++
-	s.lastRelaunch = now
 
 	if cur := s.handle.Load(); cur != nil {
 		_ = cur.stopProcess()
@@ -124,4 +115,22 @@ func (s *Supervisor) relaunchTimeout() time.Duration {
 		return s.opts.RelaunchTimeout
 	}
 	return DefaultRelaunchTimeout
+}
+
+// takeRelaunchBudget charges one relaunch against the budget, or refuses when
+// maxRelaunchesPerWindow relaunches happened without the runner then staying
+// up for relaunchWindow. Caller holds s.mu.
+func (s *Supervisor) takeRelaunchBudget(now time.Time) error {
+	if !s.lastRelaunch.IsZero() && now.Sub(s.lastRelaunch) > relaunchWindow {
+		s.relaunches = 0 // healthy since the last relaunch: fresh budget
+	}
+	if s.relaunches >= maxRelaunchesPerWindow {
+		return fmt.Errorf(
+			"devicelab runner relaunch limit reached (%d relaunches without %s of uptime) — the runner keeps dying, likely a deterministic crash",
+			maxRelaunchesPerWindow, relaunchWindow,
+		)
+	}
+	s.relaunches++
+	s.lastRelaunch = now
+	return nil
 }
