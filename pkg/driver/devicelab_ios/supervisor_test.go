@@ -80,3 +80,49 @@ func TestRelaunchTimeoutDefault(t *testing.T) {
 		})
 	}
 }
+
+// TestGracefulShutdownDoesNotRelaunchDeadRunner: shutting down a runner that
+// already died must not relaunch it just to send `shutdown`.
+func TestGracefulShutdownDoesNotRelaunchDeadRunner(t *testing.T) {
+	dead, deadPort := okServer(t, nil)
+	dead.Close()
+
+	var starts int
+	s := testSupervisor(SetupOptions{}, deadPort, func(context.Context, SetupOptions, string, string) (*Client, *RunnerHandle, error) {
+		starts++
+		return nil, &RunnerHandle{port: deadPort + 1}, nil
+	})
+	h := s.handle.Load()
+	h.sup = s
+	c := NewClient("127.0.0.1", deadPort)
+	c.SetReviver(s.revive)
+
+	if err := GracefulShutdown(context.Background(), c, h); err != nil {
+		t.Fatalf("GracefulShutdown: %v", err)
+	}
+	if starts != 0 {
+		t.Errorf("dead runner was relaunched %d times during shutdown, want 0", starts)
+	}
+	if !s.stopping.Load() {
+		t.Error("supervisor should be marked stopping")
+	}
+}
+
+// TestGracefulShutdownNilArgs: no client, no supervisor, or no handle at all
+// are all tolerated.
+func TestGracefulShutdownNilArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		h    *RunnerHandle
+	}{
+		{"nil handle", nil},
+		{"handle without supervisor", &RunnerHandle{port: 1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := GracefulShutdown(context.Background(), nil, tt.h); err != nil {
+				t.Errorf("GracefulShutdown: %v", err)
+			}
+		})
+	}
+}

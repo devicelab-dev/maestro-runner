@@ -111,6 +111,14 @@ func (h *RunnerHandle) Stop() error {
 	return h.stopProcess()
 }
 
+// beginStop tells the supervisor (if any) that shutdown has begun, so a
+// failing call from here on gives up instead of relaunching the runner.
+func (h *RunnerHandle) beginStop() {
+	if h != nil && h.sup != nil {
+		h.sup.stopping.Store(true)
+	}
+}
+
 // stopProcess terminates this handle's own xcodebuild subprocess (SIGTERM,
 // then force-kill after 5s). The supervisor calls it directly to avoid the
 // Stop -> sup.stop -> Stop delegation loop.
@@ -594,8 +602,11 @@ func pickEphemeralPort() (int, error) {
 }
 
 // GracefulShutdown sends a `shutdown` command to the runner, then waits for
-// the subprocess to exit. Falls back to SIGTERM after 5s.
+// the subprocess to exit. Falls back to SIGTERM after 5s. The supervisor is
+// marked stopping first: if the runner is already dead, the shutdown call's
+// transport error must not relaunch it just to stop it again.
 func GracefulShutdown(ctx context.Context, c *Client, h *RunnerHandle) error {
+	h.beginStop()
 	if c != nil {
 		_, _ = c.Call(ctx, Command{Command: CmdShutdown})
 	}
