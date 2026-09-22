@@ -866,6 +866,13 @@ extension RunnerTests {
     repairMode: TextTypingRepairMode = .none
   ) -> TextEntryResult {
     guard !text.isEmpty else {
+      // Replacing a field WITH "" is the clear-field primitive (eraseText,
+      // Playwright fill("")/clear()): the typing is vacuous but the clear is
+      // not. Append and unrepaired entry stay no-ops, which is what an empty
+      // payload means for them.
+      if repairMode == .replacement {
+        return clearTextEntry(app: app, target: target)
+      }
       return TextEntryResult(verified: true, repaired: false, expectedText: "", observedText: "")
     }
     var activeTarget = target
@@ -991,6 +998,61 @@ extension RunnerTests {
       expectedText: expectedText,
       repaired: repairResult.repaired
     )
+  }
+
+  /// Clears the resolved text input and verifies it reads back empty (a
+  /// visible placeholder counts as empty), clearing once more if the first
+  /// pass left text behind — the same single repair the non-empty
+  /// replacement path gets. Local edit, adapted from upstream agent-device
+  /// #2066, which fixed the same early return but without the repair pass.
+  /// `verified` stays nil when the value is unreadable (secure fields) or
+  /// the input cannot be resolved, matching the non-empty replacement path.
+  private func clearTextEntry(app: XCUIApplication, target: TextEntryTarget) -> TextEntryResult {
+    guard let clearTarget = resolveTextEntryElement(app: app, target: target) else {
+      return TextEntryResult(verified: nil, repaired: false, expectedText: "", observedText: nil)
+    }
+    let activeTarget = target.withElement(clearTarget)
+    clearTextInput(clearTarget)
+    let firstObserved = awaitClearedTextValue(app: app, target: activeTarget)
+    guard let leftover = firstObserved, !leftover.isEmpty else {
+      return TextEntryResult(
+        verified: firstObserved.map { $0.isEmpty },
+        repaired: false,
+        expectedText: "",
+        observedText: firstObserved
+      )
+    }
+    NSLog("DEVICELAB_RUNNER_REPAIR_CLEAR_TEXT observedLength=%d", leftover.count)
+    if let repairTarget = resolveTextEntryElement(app: app, target: activeTarget) {
+      clearTextInput(repairTarget)
+    }
+    let observed = awaitClearedTextValue(app: app, target: activeTarget)
+    return TextEntryResult(
+      verified: observed.map { $0.isEmpty },
+      repaired: true,
+      expectedText: "",
+      observedText: observed
+    )
+  }
+
+  /// Polls the input's value (placeholder read as empty) until it is empty
+  /// or the verification window elapses, so a value still committing the
+  /// deletes is not mistaken for a failed clear. Returns the last reading;
+  /// nil when the value is unreadable.
+  private func awaitClearedTextValue(app: XCUIApplication, target: TextEntryTarget) -> String? {
+    let deadline = Date().addingTimeInterval(TextEntryTiming.verificationStabilityWindow)
+    var observed = editableTextValue(
+      for: resolveTextEntryElement(app: app, target: target),
+      treatingPlaceholderAsEmpty: true
+    )
+    while observed?.isEmpty == false && Date() < deadline {
+      sleepFor(TextEntryTiming.pollInterval)
+      observed = editableTextValue(
+        for: resolveTextEntryElement(app: app, target: target),
+        treatingPlaceholderAsEmpty: true
+      )
+    }
+    return observed
   }
 
   private func repairTextEntryIfNeeded(

@@ -526,11 +526,15 @@ func (d *Driver) handleWaitForAnimation(s *flow.WaitForAnimationToEndStep) *core
 }
 
 // handleEraseText emits a `type` request with textEntryMode="replace"
-// and an empty text payload — the runner sees replace mode, calls
-// clearTextInput on the focused element (which uses element.typeText
-// with backspaces and is much faster than app.typeText), then
-// typeTextReliably's empty-text short-circuit returns before typing
-// anything. We build the JSON manually here because the Command struct's
+// and an empty text payload, which the runner treats as "clear the field":
+// it resolves the input (last-tapped coords / id), deletes its contents via
+// clearTextInput (element.typeText with backspaces, much faster than
+// app.typeText), then verifies the field reads back empty — a placeholder
+// counts as empty — clearing once more if text is left. A field that still
+// holds text comes back as a TEXT_ENTRY_MISMATCH error, and no resolvable
+// input as a "no ... text input ... to clear" error; both fail the step.
+// The whole field is cleared: CharactersToErase is not honoured.
+// We build the JSON manually here because the Command struct's
 // `text` field is JSON `omitempty` (any other handler sending an empty
 // string would mis-trigger text-based element matching on the runner).
 func (d *Driver) handleEraseText(s *flow.EraseTextStep) *core.CommandResult {
