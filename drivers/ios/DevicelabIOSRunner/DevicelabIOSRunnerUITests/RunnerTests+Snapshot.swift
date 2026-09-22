@@ -333,9 +333,12 @@ extension RunnerTests {
   }
 
   private func makeSnapshotTraversalContext(
-    app: XCUIApplication,
+    app requested: XCUIApplication,
     options: SnapshotOptions
   ) -> SnapshotTraversalContext? {
+    // Checked again here, just before the queries: the alert check before
+    // this takes long enough for Home to land in between.
+    let app = options.followsScreen ? foregroundTarget(requested) : requested
     let viewport = snapshotViewport(app: app)
     let queryRoot = options.scope.flatMap { findScopeElement(app: app, scope: $0) } ?? app
 
