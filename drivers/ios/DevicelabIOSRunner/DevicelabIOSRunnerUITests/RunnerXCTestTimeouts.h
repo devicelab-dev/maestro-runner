@@ -5,6 +5,19 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+@class XCUIApplication;
+
+/// The outcome of +waitForQuiescenceOfApplication:timeout:.
+typedef NS_ENUM(NSInteger, RunnerQuiescence) {
+  /// XCTest saw the app's event loop go idle and its animations finish.
+  RunnerQuiescenceIdle = 0,
+  /// The wait ended (the cap passed) without both signals.
+  RunnerQuiescenceBusy = 1,
+  /// A private symbol is missing, so nothing was waited for and nothing is
+  /// known. Never to be read as idle.
+  RunnerQuiescenceUnavailable = 2,
+};
+
 /**
  * Scoped overrides of XCTest's process-wide request timeouts.
  *
@@ -45,6 +58,27 @@ NS_ASSUME_NONNULL_BEGIN
 /// AX snapshot) set to @c timeout seconds. Returns YES if the timeout was
 /// applied, NO if the block ran with the existing value.
 + (BOOL)withAXTimeout:(NSTimeInterval)timeout do:(NS_NOESCAPE void (^)(void))block;
+
+/// Waits up to @c timeout seconds for @c app to go quiescent, animations
+/// included: the wait XCTest runs before and after each synthesized event,
+/// run on demand. Follows WebDriverAgent's -fb_waitUntilStableWithTimeout:,
+/// which bounds XCUIApplicationProcess
+/// -waitForQuiescenceIncludingAnimationsIdle:(isPreEvent:) by setting
+/// XCTest's application-state timeout for the duration of the call.
+///
+/// The answer comes from the process's own eventLoopHasIdled and
+/// animationsHaveFinished flags after the wait, not from how long it took.
+/// XCTest skips the whole check for an app that is not in the foreground
+/// and leaves the flags stale, so callers must only ask about a foreground
+/// app. Must be called on the main thread (XCTest asserts it). Does not
+/// activate the app.
+///
+/// When the event loop fails to idle within the cap, XCTest may take a
+/// spindump of the app before returning, so the call can outlast
+/// @c timeout; callers report the time they actually waited.
++ (RunnerQuiescence)waitForQuiescenceOfApplication:(XCUIApplication *)app
+                                           timeout:(NSTimeInterval)timeout
+    NS_SWIFT_NAME(waitForQuiescence(of:timeout:));
 
 @end
 

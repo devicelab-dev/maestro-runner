@@ -57,6 +57,11 @@ enum CommandType: String, Codable {
   // Local extension: set the device's light/dark appearance. Takes
   // `appearance` as "dark" or "light".
   case setAppearance
+  // Local extension (DeviceDeck): wait, capped by `timeoutMs`, for the
+  // target app to go quiescent including animations — the check XCTest runs
+  // around every synthesized event, on demand. Read-only: it never
+  // activates the app. Returns `idle` and `waitedMs`.
+  case idle
 }
 
 struct Command: Codable {
@@ -102,6 +107,7 @@ struct Command: Codable {
   let mimeType: String?
   let mediaData: String?  // base64-encoded file bytes (addMedia)
   let appearance: String?  // "dark" or "light" (setAppearance)
+  let timeoutMs: Double?  // idle: the cap on the wait; absent = 1000, 0 = do not wait
 }
 
 struct Response: Codable {
@@ -172,6 +178,14 @@ struct DataPayload: Codable {
   // Native tree). The two differ in coverage and in how hittable is
   // computed, so a caller comparing trees across snapshots needs to know.
   let source: String?
+  // Local extension (DeviceDeck): the idle command's answer. `idle` is true
+  // only when XCTest reported the event loop idle and animations finished
+  // within the cap; false when the cap passed first, when the app is not in
+  // the foreground, when no wait was asked for, or when the quiescence API
+  // is missing — an unknown is never reported as idle. `waitedMs` is the
+  // time actually spent.
+  let idle: Bool?
+  let waitedMs: Double?
 
   init(
     message: String? = nil,
@@ -200,7 +214,9 @@ struct DataPayload: Codable {
     appState: String? = nil,
     verified: Bool? = nil,
     repaired: Bool? = nil,
-    source: String? = nil
+    source: String? = nil,
+    idle: Bool? = nil,
+    waitedMs: Double? = nil
   ) {
     self.message = message
     self.text = text
@@ -229,6 +245,8 @@ struct DataPayload: Codable {
     self.verified = verified
     self.repaired = repaired
     self.source = source
+    self.idle = idle
+    self.waitedMs = waitedMs
   }
 }
 

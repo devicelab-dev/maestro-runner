@@ -325,7 +325,7 @@ extension RunnerTests {
 
   func isReadOnlyCommand(_ command: Command) -> Bool {
     switch command.command {
-    case .interactionFrame, .findText, .readText, .snapshot, .screenshot:
+    case .interactionFrame, .findText, .readText, .snapshot, .screenshot, .idle:
       return true
     case .alert:
       let action = (command.action ?? "get").lowercased()
@@ -346,7 +346,7 @@ extension RunnerTests {
   /// second while a screen settles, and an observation that moves the app
   /// changes the thing it observes.
   func isPassiveReadCommand(_ command: CommandType) -> Bool {
-    command == .snapshot
+    command == .snapshot || command == .idle
   }
 
   func isInteractionCommand(_ command: CommandType) -> Bool {
@@ -378,6 +378,39 @@ extension RunnerTests {
     default:
       return false
     }
+  }
+
+  // MARK: - Idle
+
+  /// Runs the idle command against `app` (already resolved without
+  /// activation). The wait happens only for a foreground app: XCTest skips
+  /// its quiescence check for any other and leaves the flags stale, so there
+  /// is nothing honest to report but idle: false.
+  func executeIdle(app: XCUIApplication, command: Command) -> Response {
+    let capMs = min(max(command.timeoutMs ?? Self.idleDefaultTimeoutMs, 0), Self.idleMaxTimeoutMs)
+    let state = app.state
+    if capMs == 0 || state != .runningForeground {
+      let reason = capMs == 0 ? "not waited: timeoutMs is 0" : "not waited: app is not in the foreground"
+      return idleResponse(idle: false, waitedMs: 0, app: app, message: reason)
+    }
+    let started = ProcessInfo.processInfo.systemUptime
+    let outcome = RunnerXCTestTimeouts.waitForQuiescence(of: app, timeout: capMs / 1000)
+    let waitedMs = (ProcessInfo.processInfo.systemUptime - started) * 1000
+    switch outcome {
+    case .idle:
+      return idleResponse(idle: true, waitedMs: waitedMs, app: app, message: "quiescent")
+    case .busy:
+      return idleResponse(idle: false, waitedMs: waitedMs, app: app, message: "not quiescent within timeoutMs")
+    default:
+      return idleResponse(idle: false, waitedMs: waitedMs, app: app, message: "quiescence API unavailable")
+    }
+  }
+
+  private func idleResponse(idle: Bool, waitedMs: Double, app: XCUIApplication, message: String) -> Response {
+    Response(
+      ok: true,
+      data: DataPayload(message: message, appState: appStateString(app), idle: idle, waitedMs: waitedMs)
+    )
   }
 
   // MARK: - Interaction Stabilization

@@ -69,6 +69,11 @@ const (
 	// so these are what make dark mode work on physical devices.
 	CmdAppearance    CommandType = "appearance"
 	CmdSetAppearance CommandType = "setAppearance"
+	// CmdIdle — local extension: wait, capped by Command.TimeoutMs, for the
+	// target app to go quiescent including animations (XCTest's own
+	// pre/post-event check, run on demand). Read-only: the runner never
+	// activates the app for it. Answers ResponseData.Idle and WaitedMs.
+	CmdIdle CommandType = "idle"
 )
 
 // Command is the wire request envelope. Mirrors the Swift Command struct
@@ -116,6 +121,10 @@ type Command struct {
 	Raw             *bool    `json:"raw,omitempty"`
 	Fullscreen      *bool    `json:"fullscreen,omitempty"`
 	Appearance      string   `json:"appearance,omitempty"` // "dark" or "light" (setAppearance)
+	// TimeoutMs — idle only: the cap on the wait. A pointer so an explicit 0
+	// ("answer now, do not wait") reaches the runner; nil means its default
+	// of 1000ms. The runner clamps it to 10000ms.
+	TimeoutMs *float64 `json:"timeoutMs,omitempty"`
 }
 
 // Response is the wire response envelope. The runner returns one of these
@@ -185,6 +194,15 @@ type ResponseData struct {
 	// alone, so two snapshots from different sources are not comparable node
 	// for node. Empty from a runner that predates the field.
 	Source string `json:"source,omitempty"`
+	// Idle — idle only: true only when XCTest saw the app's event loop idle
+	// and its animations finish within the cap. false when the cap passed
+	// first, the app is not in the foreground, TimeoutMs was 0, or the
+	// runner's quiescence API is missing (Message says which). An unknown is
+	// never reported as idle.
+	Idle *bool `json:"idle,omitempty"`
+	// WaitedMs — idle only: how long the runner actually waited. It can
+	// exceed the cap when XCTest spindumps an app that failed to go idle.
+	WaitedMs *float64 `json:"waitedMs,omitempty"`
 }
 
 // Values of ResponseData.Source.

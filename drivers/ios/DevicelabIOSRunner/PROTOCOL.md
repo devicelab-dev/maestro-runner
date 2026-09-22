@@ -115,8 +115,11 @@ Unknown fields are ignored. Missing required fields produce `INVALID_ARGUMENT`.
 |---|---|---|
 | `snapshot` | `appBundleId?` | `{ nodes: [SnapshotNode] }` |
 | `screenSize` | `appBundleId?` | `{ width, height, scale }` |
+| `idle` | `appBundleId?`, `timeoutMs?` (default 1000, max 10000, `0` = do not wait) | `{ idle, waitedMs, appState, message }` |
 
 `snapshot` always returns the full tree. If `appBundleId` is omitted, snapshots the frontmost app; if that cannot be resolved the call fails with `NO_TARGET_APP` rather than launching the runner's host app. **No filtering, no caps, no occlusion computation.**
+
+`idle` waits, capped by `timeoutMs`, for the app to go quiescent including animations — XCTest's `waitForQuiescenceIncludingAnimationsIdle:isPreEvent:`, bounded by setting XCTest's application-state timeout for the call (WebDriverAgent's approach). `idle` is `true` only when the app's `eventLoopHasIdled` and `animationsHaveFinished` flags are both set afterwards; it is `false` when the cap passed first, the app is not in the foreground (XCTest skips the check for it), `timeoutMs` was 0, or the private API is missing. `waitedMs` is the real time spent and can exceed the cap if XCTest spindumps an app that never idled. Like `snapshot`, it never activates the app.
 
 `snapshot` is read-only: it never activates, launches or waits for the app. A named app that is backgrounded is read as it is; one that is suspended or not running is not queried at all (`SNAPSHOT_FAILED` with its `appState`), since it cannot answer.
 

@@ -796,6 +796,8 @@ extension RunnerTests {
         return Response(ok: false, error: ErrorPayload(message: "readText did not resolve text"))
       }
       return Response(ok: true, data: DataPayload(text: text))
+    case .idle:
+      return executeIdle(app: activeApp, command: command)
     case .snapshot:
       if let refused = unreadableSnapshotTarget(activeApp) {
         return refused

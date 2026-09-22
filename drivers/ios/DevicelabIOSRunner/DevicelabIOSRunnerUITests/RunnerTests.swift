@@ -52,6 +52,11 @@ final class RunnerTests: XCTestCase {
   // a caller polling snapshots during settle paid it on each following
   // interaction.
   let firstInteractionAfterActivateDelay: TimeInterval = 0.1
+  // The idle command's cap when the caller gives none, and the most it may
+  // ask for: well under mainThreadExecutionTimeout, so a wait can never be
+  // mistaken for a hung main thread.
+  static let idleDefaultTimeoutMs: Double = 1000
+  static let idleMaxTimeoutMs: Double = 10000
   let scrollInteractionIdleTimeoutDefault: TimeInterval = 1.0
   let tvRemoteDoublePressDelayDefault: TimeInterval = 0.0
   let minRecordingFps = 1

@@ -125,6 +125,41 @@ var readOnlyCommands = map[CommandType]bool{
 	CmdInteractionFrame: true,
 	CmdIdleCheck:        true,
 	CmdAppearance:       true,
+	CmdIdle:             true,
+}
+
+// IdleResult is the idle command's answer.
+type IdleResult struct {
+	// Idle is true only when the runner saw the app go quiescent within the
+	// cap; see ResponseData.Idle.
+	Idle bool
+	// WaitedMs is the time the runner actually spent waiting.
+	WaitedMs float64
+	// AppState is the app's lifecycle state; the wait only runs for
+	// "runningForeground".
+	AppState string
+	// Reason is the runner's one-line account of the outcome.
+	Reason string
+}
+
+// Idle waits up to timeoutMs for appBundleID ("" = the frontmost app) to go
+// quiescent, animations included, without activating it. timeoutMs 0 asks
+// for an immediate answer, which is always Idle false: there was no wait to
+// observe quiescence with. A runner that predates the command fails with a
+// decode or runner error rather than answering idle.
+func (c *Client) Idle(ctx context.Context, appBundleID string, timeoutMs float64) (IdleResult, error) {
+	data, err := c.Call(ctx, Command{Command: CmdIdle, AppBundleID: appBundleID, TimeoutMs: &timeoutMs})
+	if err != nil {
+		return IdleResult{}, err
+	}
+	if data == nil || data.Idle == nil {
+		return IdleResult{}, fmt.Errorf("runner idle: response has no idle field")
+	}
+	res := IdleResult{Idle: *data.Idle, AppState: data.AppState, Reason: data.Message}
+	if data.WaitedMs != nil {
+		res.WaitedMs = *data.WaitedMs
+	}
+	return res, nil
 }
 
 // Call sends a command and decodes the response envelope. Errors from the
