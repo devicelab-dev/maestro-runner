@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -20,6 +21,11 @@ import (
 type Client struct {
 	host       string
 	httpClient *http.Client
+
+	// callTimeout bounds a call whose context carries no deadline (see
+	// SetCallTimeout). Read atomically: an embedder may tune it while a
+	// snapshot poll is in flight.
+	callTimeout atomic.Int64
 
 	// endpointMu guards port/baseURL: a relaunch re-points the client while
 	// other calls (e.g. a snapshot poll alongside an action) may be reading.
@@ -41,12 +47,13 @@ type Client struct {
 // NewClient builds a Client targeting `host:port`. host is typically
 // 127.0.0.1 for simulator and tunneled-device flows.
 func NewClient(host string, port int) *Client {
-	return &Client{
+	c := &Client{
 		baseURL: fmt.Sprintf("http://%s:%d", host, port),
 		host:    host,
 		port:    port,
+		// No http.Client.Timeout: the per-call bound lives in sendOnce so a
+		// client-side timeout can be told apart from a dead runner.
 		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
 			Transport: &http.Transport{
 				MaxIdleConns:        4,
 				MaxIdleConnsPerHost: 4,
@@ -55,6 +62,46 @@ func NewClient(host string, port int) *Client {
 			},
 		},
 	}
+	c.callTimeout.Store(int64(DefaultCallTimeout))
+	return c
+}
+
+// DefaultCallTimeout bounds a runner call whose context has no deadline. The
+// runner gives up on a main-thread command after 30s and answers with a
+// structured error; the extra 5s lets that answer arrive before the client
+// abandons the request, so a slow-but-alive runner reports its own error.
+const DefaultCallTimeout = 35 * time.Second
+
+// ErrCallTimeout is returned (wrapped, alongside context.DeadlineExceeded)
+// when the client's own per-call timeout fires. It means the runner is
+// connected but slow — NOT dead — so it never triggers a relaunch; a caller
+// that wants to recover a wedged runner must decide that itself.
+var ErrCallTimeout = errors.New("devicelab runner call timed out")
+
+// SetCallTimeout changes the bound applied to calls whose context carries no
+// deadline (e.g. an embedder wrapping calls in context.WithoutCancel). A
+// context deadline, when present, always wins — the driver passes its own
+// per-command deadlines, some longer than the default. d <= 0 restores
+// DefaultCallTimeout.
+func (c *Client) SetCallTimeout(d time.Duration) {
+	if d <= 0 {
+		d = DefaultCallTimeout
+	}
+	c.callTimeout.Store(int64(d))
+}
+
+// CallTimeout reports the bound applied to deadline-less calls.
+func (c *Client) CallTimeout() time.Duration {
+	return time.Duration(c.callTimeout.Load())
+}
+
+// requestContext derives the context one HTTP request runs under: the
+// caller's own deadline if it has one, else the client's call timeout.
+func (c *Client) requestContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, c.CallTimeout())
 }
 
 // SetReviver installs the callback that relaunches a dead runner. The
@@ -182,7 +229,8 @@ func (c *Client) Call(ctx context.Context, cmd Command) (*ResponseData, error) {
 // A request aborted by its own context (caller cancelled, or its deadline
 // passed) is NOT a transport failure: sendOnce returns the context error and
 // no relaunch happens. Relaunching there would kill a healthy runner and
-// whatever command it was executing for another caller.
+// whatever command it was executing for another caller. The same holds for
+// the client's own call timeout (ErrCallTimeout): a slow runner is alive.
 func (c *Client) doRequest(ctx context.Context, body []byte, retryOnRevive bool) (*ResponseData, error) {
 	port, baseURL := c.endpoint()
 	data, err := c.sendOnce(ctx, baseURL, body)
@@ -238,13 +286,13 @@ type transportError struct{ err error }
 func (e transportError) Error() string { return "runner request failed: " + e.err.Error() }
 func (e transportError) Unwrap() error { return e.err }
 
-// sendOnce posts body to the runner at baseURL. A Do failure is classified
-// as a transportError (runner unreachable → revive) only while the request's
-// context is still live; if ctx is cancelled or past its deadline, the failure
-// is the caller's doing and is returned wrapping ctx.Err() so
-// errors.Is(err, context.Canceled/DeadlineExceeded) holds.
+// sendOnce posts body to the runner at baseURL, bounded by requestContext.
+// A failure is classified by classifyRequestError: caller abort, client-side
+// timeout (ErrCallTimeout), or transportError (runner unreachable → revive).
 func (c *Client) sendOnce(ctx context.Context, baseURL string, body []byte) (*ResponseData, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/command", bytes.NewReader(body))
+	reqCtx, cancel := c.requestContext(ctx)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, baseURL+"/command", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -252,17 +300,35 @@ func (c *Client) sendOnce(ctx context.Context, baseURL string, body []byte) (*Re
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, fmt.Errorf("runner request aborted: %w (%v)", ctxErr, err)
-		}
-		return nil, transportError{err}
+		return nil, classifyRequestError(ctx, reqCtx, err, transportError{err})
 	}
 	defer resp.Body.Close()
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read runner response: %w", err)
+		return nil, classifyRequestError(ctx, reqCtx, err, fmt.Errorf("read runner response: %w", err))
 	}
+	return decodeEnvelope(raw)
+}
+
+// classifyRequestError attributes a failed request. If the caller's ctx
+// ended, it is the caller's doing: wrap ctx.Err() so errors.Is(err,
+// context.Canceled/DeadlineExceeded) holds, and never revive. If only the
+// client's own call timeout (reqCtx) ended, the runner is slow, not gone:
+// ErrCallTimeout, no revive. Otherwise fallback describes the failure.
+func classifyRequestError(ctx, reqCtx context.Context, err, fallback error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("runner request aborted: %w (%v)", ctxErr, err)
+	}
+	if errors.Is(reqCtx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("%w: %w (%v)", ErrCallTimeout, context.DeadlineExceeded, err)
+	}
+	return fallback
+}
+
+// decodeEnvelope parses the runner's response envelope, returning a
+// RunnerError when the runner answered `ok: false`.
+func decodeEnvelope(raw []byte) (*ResponseData, error) {
 
 	var envelope Response
 	if err := json.Unmarshal(raw, &envelope); err != nil {

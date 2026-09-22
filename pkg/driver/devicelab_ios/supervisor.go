@@ -3,6 +3,7 @@ package devicelab_ios
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -10,7 +11,8 @@ import (
 )
 
 // maxRelaunchesPerWindow bounds how many times the supervisor relaunches a
-// dead runner before giving up, per relaunchWindow. The bound exists for the
+// dead runner before giving up, counting relaunches until the runner has
+// stayed up for relaunchWindow. The bound exists for the
 // deterministic-crash case: a command that kills the runner every time (the
 // keyboard-query XCTest abort we hit on TestHive) would otherwise relaunch
 // forever. read-only commands are replayed after a relaunch and could re-crash;
@@ -19,8 +21,10 @@ import (
 const maxRelaunchesPerWindow = 5
 
 // relaunchWindow resets the relaunch counter once the runner has been healthy
-// for this long, so an occasional crash over a long suite does not exhaust the
-// budget that a burst of deterministic crashes is meant to cap.
+// for this long — measured from the last relaunch, not from a fixed window
+// start — so an occasional crash over a long suite does not exhaust the
+// budget that a burst of deterministic crashes is meant to cap, while a crash
+// loop spread just over a fixed window boundary cannot dodge it.
 const relaunchWindow = 2 * time.Minute
 
 // Supervisor keeps a devicelab runner alive across mid-session crashes. It
@@ -32,22 +36,25 @@ type Supervisor struct {
 	opts      SetupOptions
 	xctestrun string
 	logPath   string
+	// start launches one runner process; startOnce in production, a fake
+	// in tests.
+	start func(ctx context.Context, opts SetupOptions, xctestrun, logPath string) (*Client, *RunnerHandle, error)
 
-	mu            sync.Mutex
-	handle        atomic.Pointer[RunnerHandle]
-	stopping      atomic.Bool
-	relaunches    int
-	lastRelaunch  time.Time
-	windowStarted time.Time
+	mu           sync.Mutex
+	handle       atomic.Pointer[RunnerHandle]
+	stopping     atomic.Bool
+	relaunches   int
+	lastRelaunch time.Time
+	// warn receives relaunch diagnostics; nil means os.Stderr.
+	warn io.Writer
 }
 
 // newSupervisor builds the supervisor for a freshly started runner, points
 // the handle's Stop() at it, and installs the reviver on the client. It is
 // wired inside Setup; nothing else needs to call it.
 func newSupervisor(opts SetupOptions, xctestrun, logPath string, client *Client, handle *RunnerHandle) *Supervisor {
-	s := &Supervisor{opts: opts, xctestrun: xctestrun, logPath: logPath}
+	s := &Supervisor{opts: opts, xctestrun: xctestrun, logPath: logPath, start: startOnce}
 	s.handle.Store(handle)
-	s.windowStarted = time.Now()
 	handle.sup = s
 	client.SetReviver(s.revive)
 	return s
@@ -57,6 +64,11 @@ func newSupervisor(opts SetupOptions, xctestrun, logPath string, client *Client,
 // the new process listens on. failedPort is the port the failing call used:
 // if the live handle is already on a different port, another failed call has
 // relaunched and this one simply re-points, so we do not relaunch twice.
+//
+// The relaunch runs under its own RelaunchTimeout derived from ctx: callers
+// may pass a deadline-less context (context.WithoutCancel), and without a
+// bound a wedged xcodebuild would hold s.mu — and every queued caller — for
+// the full ReadyTimeout.
 func (s *Supervisor) revive(ctx context.Context, failedPort int) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -69,28 +81,24 @@ func (s *Supervisor) revive(ctx context.Context, failedPort int) (int, error) {
 		return cur.port, nil
 	}
 
-	now := time.Now()
-	if now.Sub(s.windowStarted) > relaunchWindow {
-		s.relaunches = 0
-		s.windowStarted = now
+	if err := s.takeRelaunchBudget(time.Now()); err != nil {
+		return 0, err
 	}
-	if s.relaunches >= maxRelaunchesPerWindow {
-		return 0, fmt.Errorf(
-			"devicelab runner relaunch limit (%d in %s) reached — the runner keeps dying, likely a deterministic crash",
-			maxRelaunchesPerWindow, relaunchWindow,
-		)
-	}
-	s.relaunches++
-	s.lastRelaunch = now
 
 	if cur := s.handle.Load(); cur != nil {
-		_ = cur.stopProcess()
+		if err := cur.stopProcess(); err != nil {
+			// Relaunch anyway: the new runner gets a fresh port, and the
+			// warning is the only trace of a leaked xcodebuild.
+			_, _ = fmt.Fprintf(s.warnOut(), "  ⚠ could not stop the dead devicelab runner: %v\n", err)
+		}
 	}
 
-	fmt.Fprintf(os.Stderr, "  ↻ devicelab runner died mid-session — relaunching (%d/%d)\n",
+	_, _ = fmt.Fprintf(s.warnOut(), "  ↻ devicelab runner died mid-session — relaunching (%d/%d)\n",
 		s.relaunches, maxRelaunchesPerWindow)
 
-	_, handle, err := startOnce(ctx, s.opts, s.xctestrun, s.logPath)
+	relaunchCtx, cancel := context.WithTimeout(ctx, s.relaunchTimeout())
+	defer cancel()
+	_, handle, err := s.start(relaunchCtx, s.opts, s.xctestrun, s.logPath)
 	if err != nil {
 		return 0, fmt.Errorf("devicelab runner relaunch failed: %w", err)
 	}
@@ -106,4 +114,38 @@ func (s *Supervisor) stop() error {
 		return cur.stopProcess()
 	}
 	return nil
+}
+
+// relaunchTimeout is opts.RelaunchTimeout, or DefaultRelaunchTimeout when unset.
+func (s *Supervisor) relaunchTimeout() time.Duration {
+	if s.opts.RelaunchTimeout > 0 {
+		return s.opts.RelaunchTimeout
+	}
+	return DefaultRelaunchTimeout
+}
+
+// takeRelaunchBudget charges one relaunch against the budget, or refuses when
+// maxRelaunchesPerWindow relaunches happened without the runner then staying
+// up for relaunchWindow. Caller holds s.mu.
+func (s *Supervisor) takeRelaunchBudget(now time.Time) error {
+	if !s.lastRelaunch.IsZero() && now.Sub(s.lastRelaunch) > relaunchWindow {
+		s.relaunches = 0 // healthy since the last relaunch: fresh budget
+	}
+	if s.relaunches >= maxRelaunchesPerWindow {
+		return fmt.Errorf(
+			"devicelab runner relaunch limit reached (%d relaunches without %s of uptime) — the runner keeps dying, likely a deterministic crash",
+			maxRelaunchesPerWindow, relaunchWindow,
+		)
+	}
+	s.relaunches++
+	s.lastRelaunch = now
+	return nil
+}
+
+// warnOut is where relaunch diagnostics go (s.warn, default os.Stderr).
+func (s *Supervisor) warnOut() io.Writer {
+	if s.warn != nil {
+		return s.warn
+	}
+	return os.Stderr
 }

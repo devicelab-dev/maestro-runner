@@ -47,7 +47,27 @@ type SetupOptions struct {
 	// Default 60s — XCUITest cold-starts the AccessibilityFramework which
 	// can take 10-20s on slow machines.
 	ReadyTimeout time.Duration
+
+	// RelaunchTimeout bounds one mid-session relaunch of a dead runner
+	// (stop + start + ready). It applies even when the failing call's
+	// context has no deadline, because the relaunch holds the supervisor
+	// and client revive locks: every other call queues behind it.
+	// Default DefaultRelaunchTimeout.
+	RelaunchTimeout time.Duration
+
+	// NoSimulatorReset disables the simctl shutdown+boot Setup performs
+	// between failed startup attempts. That reset unwedges CoreSimulator on
+	// CI, but it reboots the simulator out from under anyone watching or
+	// driving it — an embedder that shares the simulator with a user sets
+	// this. Retries still happen; only the reset is skipped.
+	NoSimulatorReset bool
 }
+
+// DefaultRelaunchTimeout is the RelaunchTimeout used when none is set. A warm
+// relaunch (sim already booted, runner already installed) is ~10-20s; 90s
+// allows a slow machine without letting one wedged xcodebuild hold every
+// caller hostage for the 600s ReadyTimeout.
+const DefaultRelaunchTimeout = 90 * time.Second
 
 // RunnerHandle owns the running xcodebuild subprocess and the chosen port.
 type RunnerHandle struct {
@@ -91,32 +111,62 @@ func (h *RunnerHandle) Stop() error {
 	return h.stopProcess()
 }
 
+// beginStop tells the supervisor (if any) that shutdown has begun, so a
+// failing call from here on gives up instead of relaunching the runner.
+func (h *RunnerHandle) beginStop() {
+	if h != nil && h.sup != nil {
+		h.sup.stopping.Store(true)
+	}
+}
+
 // stopProcess terminates this handle's own xcodebuild subprocess (SIGTERM,
-// then force-kill after 5s). The supervisor calls it directly to avoid the
-// Stop -> sup.stop -> Stop delegation loop.
+// then force-kill after stopGrace). The supervisor calls it directly to avoid
+// the Stop -> sup.stop -> Stop delegation loop. It returns an error only when
+// the process could not be killed — it may still be running and holding the
+// simulator's runner — so callers can report it instead of assuming it died.
 func (h *RunnerHandle) stopProcess() error {
 	if h == nil || h.cmd == nil || h.cmd.Process == nil {
 		return nil
 	}
 	h.stopping.Store(true)
-	// Send SIGTERM first; force-kill after 5s.
-	_ = h.cmd.Process.Signal(syscall.SIGTERM)
-	done := h.waitDone
-	if done == nil {
-		// No watch goroutine (handle built outside startOnce) — own the
-		// Wait here.
-		ch := make(chan struct{})
-		go func() { _ = h.cmd.Wait(); close(ch) }()
-		done = ch
+	done := h.exitChan()
+	// A failed SIGTERM (other than "already exited") skips the grace wait:
+	// nothing will make the process exit on its own, go straight to kill.
+	if err := signalProcess(h.cmd.Process, syscall.SIGTERM); err == nil || errors.Is(err, os.ErrProcessDone) {
+		select {
+		case <-done:
+			return nil
+		case <-time.After(stopGrace):
+		}
 	}
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		_ = h.cmd.Process.Kill()
-		<-done
+	if err := killProcess(h.cmd.Process); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return fmt.Errorf("kill devicelab runner (pid %d): %w", h.cmd.Process.Pid, err)
 	}
+	<-done
 	return nil
 }
+
+// exitChan returns a channel closed when the subprocess exits. The watch
+// goroutine in startOnce owns cmd.Wait; a handle built without it owns the
+// Wait here.
+func (h *RunnerHandle) exitChan() <-chan struct{} {
+	if h.waitDone != nil {
+		return h.waitDone
+	}
+	ch := make(chan struct{})
+	go func() { _ = h.cmd.Wait(); close(ch) }()
+	return ch
+}
+
+// stopGrace is how long stopProcess waits after SIGTERM before killing.
+var stopGrace = 5 * time.Second
+
+// signalProcess and killProcess are the os.Process calls stopProcess makes;
+// variables so tests can simulate a process that cannot be signalled.
+var (
+	signalProcess = func(p *os.Process, sig os.Signal) error { return p.Signal(sig) }
+	killProcess   = func(p *os.Process) error { return p.Kill() }
+)
 
 // maxStartupAttempts caps the retry loop in Setup. On CI macos-latest
 // xcodebuild test-without-building intermittently hangs after launch —
@@ -207,32 +257,7 @@ func Setup(ctx context.Context, opts SetupOptions) (*Client, *RunnerHandle, erro
 	var lastErr error
 	for attempt := 1; attempt <= maxStartupAttempts; attempt++ {
 		if attempt > 1 {
-			// User-visible + log retry banner.
-			banner := fmt.Sprintf(
-				"  ⚠ devicelab runner startup failed on attempt %d/%d: %v",
-				attempt-1, maxStartupAttempts, lastErr,
-			)
-			fmt.Fprintln(os.Stderr, banner)
-			fmt.Fprintf(os.Stderr, "  ↻ Retrying (attempt %d/%d)...\n", attempt, maxStartupAttempts)
-			// Mirror into the runner log so the artifact captures the full
-			// retry history (logFile may be closed if we hit the fallback
-			// branch above; guard before writing).
-			if opts.Stdout != os.Stderr {
-				fmt.Fprintln(opts.Stdout, banner)
-				fmt.Fprintf(opts.Stdout, "=== attempt %d/%d ===\n", attempt, maxStartupAttempts)
-			}
-			// Reset the simulator before retrying. Killing xcodebuild
-			// alone doesn't unwedge a stuck CoreSimulator daemon — if
-			// the sim itself is in a bad state, every xcodebuild retry
-			// hits the same wall. A shutdown+boot cycle on the same
-			// UDID clears CoreSimulator process state without losing
-			// installed apps (those live in the sim's data container).
-			if rerr := resetSimulator(ctx, opts.SimulatorUDID, opts.Stdout); rerr != nil {
-				// Best-effort: log and continue. If reset fails the
-				// retry attempt will reveal whether the sim is still
-				// usable.
-				fmt.Fprintf(os.Stderr, "  ⚠ simctl reset failed: %v (continuing anyway)\n", rerr)
-			}
+			announceRetry(ctx, opts, attempt, lastErr)
 		}
 
 		client, handle, err := startOnce(ctx, opts, xctestrun, logPath)
@@ -258,6 +283,38 @@ func Setup(ctx context.Context, opts SetupOptions) (*Client, *RunnerHandle, erro
 		"runner not ready after %d attempts: %w",
 		maxStartupAttempts, lastErr,
 	)
+}
+
+// resetSim is resetSimulator; a variable so tests can observe resets
+// without touching a real simulator.
+var resetSim = resetSimulator
+
+// announceRetry reports the failed attempt (console + runner log) and, unless
+// opts.NoSimulatorReset, resets the simulator before the next attempt.
+func announceRetry(ctx context.Context, opts SetupOptions, attempt int, lastErr error) {
+	banner := fmt.Sprintf(
+		"  ⚠ devicelab runner startup failed on attempt %d/%d: %v",
+		attempt-1, maxStartupAttempts, lastErr,
+	)
+	fmt.Fprintln(os.Stderr, banner)
+	fmt.Fprintf(os.Stderr, "  ↻ Retrying (attempt %d/%d)...\n", attempt, maxStartupAttempts)
+	// Mirror into the runner log so the artifact captures the full retry
+	// history (skipped when output already goes to stderr).
+	if opts.Stdout != os.Stderr {
+		fmt.Fprintln(opts.Stdout, banner)
+		fmt.Fprintf(opts.Stdout, "=== attempt %d/%d ===\n", attempt, maxStartupAttempts)
+	}
+	if opts.NoSimulatorReset {
+		return
+	}
+	// Killing xcodebuild alone doesn't unwedge a stuck CoreSimulator
+	// daemon — if the sim itself is in a bad state, every retry hits the
+	// same wall. A shutdown+boot cycle on the same UDID clears
+	// CoreSimulator process state without losing installed apps.
+	// Best-effort: the next attempt reveals whether the sim is usable.
+	if rerr := resetSim(ctx, opts.SimulatorUDID, opts.Stdout); rerr != nil {
+		fmt.Fprintf(os.Stderr, "  ⚠ simctl reset failed: %v (continuing anyway)\n", rerr)
+	}
 }
 
 // startOnce performs one attempt at launching xcodebuild + waiting for
@@ -567,8 +624,11 @@ func pickEphemeralPort() (int, error) {
 }
 
 // GracefulShutdown sends a `shutdown` command to the runner, then waits for
-// the subprocess to exit. Falls back to SIGTERM after 5s.
+// the subprocess to exit. Falls back to SIGTERM after 5s. The supervisor is
+// marked stopping first: if the runner is already dead, the shutdown call's
+// transport error must not relaunch it just to stop it again.
 func GracefulShutdown(ctx context.Context, c *Client, h *RunnerHandle) error {
+	h.beginStop()
 	if c != nil {
 		_, _ = c.Call(ctx, Command{Command: CmdShutdown})
 	}
