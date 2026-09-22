@@ -54,6 +54,13 @@ type SetupOptions struct {
 	// and client revive locks: every other call queues behind it.
 	// Default DefaultRelaunchTimeout.
 	RelaunchTimeout time.Duration
+
+	// NoSimulatorReset disables the simctl shutdown+boot Setup performs
+	// between failed startup attempts. That reset unwedges CoreSimulator on
+	// CI, but it reboots the simulator out from under anyone watching or
+	// driving it — an embedder that shares the simulator with a user sets
+	// this. Retries still happen; only the reset is skipped.
+	NoSimulatorReset bool
 }
 
 // DefaultRelaunchTimeout is the RelaunchTimeout used when none is set. A warm
@@ -220,32 +227,7 @@ func Setup(ctx context.Context, opts SetupOptions) (*Client, *RunnerHandle, erro
 	var lastErr error
 	for attempt := 1; attempt <= maxStartupAttempts; attempt++ {
 		if attempt > 1 {
-			// User-visible + log retry banner.
-			banner := fmt.Sprintf(
-				"  ⚠ devicelab runner startup failed on attempt %d/%d: %v",
-				attempt-1, maxStartupAttempts, lastErr,
-			)
-			fmt.Fprintln(os.Stderr, banner)
-			fmt.Fprintf(os.Stderr, "  ↻ Retrying (attempt %d/%d)...\n", attempt, maxStartupAttempts)
-			// Mirror into the runner log so the artifact captures the full
-			// retry history (logFile may be closed if we hit the fallback
-			// branch above; guard before writing).
-			if opts.Stdout != os.Stderr {
-				fmt.Fprintln(opts.Stdout, banner)
-				fmt.Fprintf(opts.Stdout, "=== attempt %d/%d ===\n", attempt, maxStartupAttempts)
-			}
-			// Reset the simulator before retrying. Killing xcodebuild
-			// alone doesn't unwedge a stuck CoreSimulator daemon — if
-			// the sim itself is in a bad state, every xcodebuild retry
-			// hits the same wall. A shutdown+boot cycle on the same
-			// UDID clears CoreSimulator process state without losing
-			// installed apps (those live in the sim's data container).
-			if rerr := resetSimulator(ctx, opts.SimulatorUDID, opts.Stdout); rerr != nil {
-				// Best-effort: log and continue. If reset fails the
-				// retry attempt will reveal whether the sim is still
-				// usable.
-				fmt.Fprintf(os.Stderr, "  ⚠ simctl reset failed: %v (continuing anyway)\n", rerr)
-			}
+			announceRetry(ctx, opts, attempt, lastErr)
 		}
 
 		client, handle, err := startOnce(ctx, opts, xctestrun, logPath)
@@ -271,6 +253,38 @@ func Setup(ctx context.Context, opts SetupOptions) (*Client, *RunnerHandle, erro
 		"runner not ready after %d attempts: %w",
 		maxStartupAttempts, lastErr,
 	)
+}
+
+// resetSim is resetSimulator; a variable so tests can observe resets
+// without touching a real simulator.
+var resetSim = resetSimulator
+
+// announceRetry reports the failed attempt (console + runner log) and, unless
+// opts.NoSimulatorReset, resets the simulator before the next attempt.
+func announceRetry(ctx context.Context, opts SetupOptions, attempt int, lastErr error) {
+	banner := fmt.Sprintf(
+		"  ⚠ devicelab runner startup failed on attempt %d/%d: %v",
+		attempt-1, maxStartupAttempts, lastErr,
+	)
+	fmt.Fprintln(os.Stderr, banner)
+	fmt.Fprintf(os.Stderr, "  ↻ Retrying (attempt %d/%d)...\n", attempt, maxStartupAttempts)
+	// Mirror into the runner log so the artifact captures the full retry
+	// history (skipped when output already goes to stderr).
+	if opts.Stdout != os.Stderr {
+		fmt.Fprintln(opts.Stdout, banner)
+		fmt.Fprintf(opts.Stdout, "=== attempt %d/%d ===\n", attempt, maxStartupAttempts)
+	}
+	if opts.NoSimulatorReset {
+		return
+	}
+	// Killing xcodebuild alone doesn't unwedge a stuck CoreSimulator
+	// daemon — if the sim itself is in a bad state, every retry hits the
+	// same wall. A shutdown+boot cycle on the same UDID clears
+	// CoreSimulator process state without losing installed apps.
+	// Best-effort: the next attempt reveals whether the sim is usable.
+	if rerr := resetSim(ctx, opts.SimulatorUDID, opts.Stdout); rerr != nil {
+		fmt.Fprintf(os.Stderr, "  ⚠ simctl reset failed: %v (continuing anyway)\n", rerr)
+	}
 }
 
 // startOnce performs one attempt at launching xcodebuild + waiting for
