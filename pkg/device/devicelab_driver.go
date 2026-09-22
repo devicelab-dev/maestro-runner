@@ -1,14 +1,19 @@
 package device
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/logger"
 )
 
@@ -415,6 +420,13 @@ func checkDeviceLabHandshake(network, address string) bool {
 }
 
 // InstallDeviceLabDriver installs DeviceLab Android Driver APKs from the given directory.
+//
+// An APK already on the device is kept only when it is byte-for-byte the
+// bundled one (see installedAPKMatches). Version metadata cannot decide this:
+// the bundled files carry no version in their names, and every driver build
+// ships versionName 1.0.0 / versionCode 1, so a rebuilt driver looks identical
+// to the one it replaces. Comparing content skips the uninstall+install on
+// every session start while still replacing any genuinely different build.
 func (d *AndroidDevice) InstallDeviceLabDriver(apksDir string) error {
 	apks := []struct {
 		pkg     string
@@ -431,19 +443,15 @@ func (d *AndroidDevice) InstallDeviceLabDriver(apksDir string) error {
 		}
 
 		if d.IsInstalled(apk.pkg) {
-			// Check version
-			if apk.pkg == DeviceLabDriverServer {
-				installedVersion := d.GetAppVersion(apk.pkg)
-				bundledVersion := extractVersionFromFilename(apkPath)
-				if installedVersion != "" && bundledVersion != "" && installedVersion == bundledVersion {
-					continue
-				}
-				logger.Info("DeviceLab Android Driver version mismatch: installed=%s, bundled=%s — upgrading",
-					installedVersion, bundledVersion)
-			} else {
+			if d.installedAPKMatches(apk.pkg, apkPath) {
 				continue
 			}
+			logger.Info("DeviceLab Android Driver %s differs from bundled %s — reinstalling",
+				apk.pkg, filepath.Base(apkPath))
 
+			// Uninstall first to handle signing key conflicts. The server and
+			// test APKs must share a signature, so replacing the server also
+			// drops the test APK; the next iteration then installs it fresh.
 			_ = d.Uninstall(apk.pkg)
 			if apk.pkg == DeviceLabDriverServer {
 				_ = d.Uninstall(DeviceLabDriverTest)
@@ -456,6 +464,94 @@ func (d *AndroidDevice) InstallDeviceLabDriver(apksDir string) error {
 	}
 
 	return nil
+}
+
+// installedAPKMatches reports whether pkg is installed from exactly the bytes
+// of the local apkPath.
+//
+// `adb install` stores the APK unmodified as the package's base.apk, so the
+// SHA-256 of that file on the device equals the local file's hash when — and
+// only when — the same build is installed. Any failure to read either side
+// (no sha256sum on an old device, unexpected pm output) reports false, which
+// falls back to reinstalling: slower, never wrong.
+func (d *AndroidDevice) installedAPKMatches(pkg, apkPath string) bool {
+	want, err := fileSHA256(apkPath)
+	if err != nil {
+		return false
+	}
+	got := d.installedAPKSHA256(pkg)
+	return got != "" && got == want
+}
+
+// installedAPKSHA256 returns the hex SHA-256 of pkg's installed base APK, or
+// "" when it cannot be determined.
+func (d *AndroidDevice) installedAPKSHA256(pkg string) string {
+	out, err := d.Shell("pm path " + core.ShellQuote(pkg))
+	if err != nil {
+		return ""
+	}
+	path := baseAPKPath(out)
+	if path == "" {
+		return ""
+	}
+	out, err = d.Shell("sha256sum " + core.ShellQuote(path))
+	if err != nil {
+		return ""
+	}
+	return parseSHA256Sum(out)
+}
+
+// baseAPKPath picks the base APK from `pm path` output ("package:<path>" per
+// line). Split installs list several files; the base is the one named
+// base.apk, and a single-line answer is taken as the base whatever its name.
+func baseAPKPath(pmOut string) string {
+	var paths []string
+	for _, line := range strings.Split(pmOut, "\n") {
+		line = strings.TrimSpace(line)
+		if p, ok := strings.CutPrefix(line, "package:"); ok && p != "" {
+			paths = append(paths, p)
+		}
+	}
+	for _, p := range paths {
+		if filepath.Base(p) == "base.apk" {
+			return p
+		}
+	}
+	if len(paths) == 1 {
+		return paths[0]
+	}
+	return ""
+}
+
+// parseSHA256Sum extracts the digest from `sha256sum` output
+// ("<hex>  <path>"), returning "" unless it is a well-formed SHA-256 hex digest.
+func parseSHA256Sum(out string) string {
+	fields := strings.Fields(out)
+	if len(fields) == 0 {
+		return ""
+	}
+	digest := strings.ToLower(fields[0])
+	if len(digest) != sha256.Size*2 {
+		return ""
+	}
+	if _, err := hex.DecodeString(digest); err != nil {
+		return ""
+	}
+	return digest
+}
+
+// fileSHA256 returns the lowercase hex SHA-256 of a local file.
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // UninstallDeviceLabDriver removes DeviceLab Android Driver packages from the device.
