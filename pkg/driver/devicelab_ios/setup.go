@@ -47,7 +47,20 @@ type SetupOptions struct {
 	// Default 60s — XCUITest cold-starts the AccessibilityFramework which
 	// can take 10-20s on slow machines.
 	ReadyTimeout time.Duration
+
+	// RelaunchTimeout bounds one mid-session relaunch of a dead runner
+	// (stop + start + ready). It applies even when the failing call's
+	// context has no deadline, because the relaunch holds the supervisor
+	// and client revive locks: every other call queues behind it.
+	// Default DefaultRelaunchTimeout.
+	RelaunchTimeout time.Duration
 }
+
+// DefaultRelaunchTimeout is the RelaunchTimeout used when none is set. A warm
+// relaunch (sim already booted, runner already installed) is ~10-20s; 90s
+// allows a slow machine without letting one wedged xcodebuild hold every
+// caller hostage for the 600s ReadyTimeout.
+const DefaultRelaunchTimeout = 90 * time.Second
 
 // RunnerHandle owns the running xcodebuild subprocess and the chosen port.
 type RunnerHandle struct {

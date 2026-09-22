@@ -32,6 +32,9 @@ type Supervisor struct {
 	opts      SetupOptions
 	xctestrun string
 	logPath   string
+	// start launches one runner process; startOnce in production, a fake
+	// in tests.
+	start func(ctx context.Context, opts SetupOptions, xctestrun, logPath string) (*Client, *RunnerHandle, error)
 
 	mu            sync.Mutex
 	handle        atomic.Pointer[RunnerHandle]
@@ -45,7 +48,7 @@ type Supervisor struct {
 // the handle's Stop() at it, and installs the reviver on the client. It is
 // wired inside Setup; nothing else needs to call it.
 func newSupervisor(opts SetupOptions, xctestrun, logPath string, client *Client, handle *RunnerHandle) *Supervisor {
-	s := &Supervisor{opts: opts, xctestrun: xctestrun, logPath: logPath}
+	s := &Supervisor{opts: opts, xctestrun: xctestrun, logPath: logPath, start: startOnce}
 	s.handle.Store(handle)
 	s.windowStarted = time.Now()
 	handle.sup = s
@@ -57,6 +60,11 @@ func newSupervisor(opts SetupOptions, xctestrun, logPath string, client *Client,
 // the new process listens on. failedPort is the port the failing call used:
 // if the live handle is already on a different port, another failed call has
 // relaunched and this one simply re-points, so we do not relaunch twice.
+//
+// The relaunch runs under its own RelaunchTimeout derived from ctx: callers
+// may pass a deadline-less context (context.WithoutCancel), and without a
+// bound a wedged xcodebuild would hold s.mu — and every queued caller — for
+// the full ReadyTimeout.
 func (s *Supervisor) revive(ctx context.Context, failedPort int) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -90,7 +98,9 @@ func (s *Supervisor) revive(ctx context.Context, failedPort int) (int, error) {
 	fmt.Fprintf(os.Stderr, "  ↻ devicelab runner died mid-session — relaunching (%d/%d)\n",
 		s.relaunches, maxRelaunchesPerWindow)
 
-	_, handle, err := startOnce(ctx, s.opts, s.xctestrun, s.logPath)
+	relaunchCtx, cancel := context.WithTimeout(ctx, s.relaunchTimeout())
+	defer cancel()
+	_, handle, err := s.start(relaunchCtx, s.opts, s.xctestrun, s.logPath)
 	if err != nil {
 		return 0, fmt.Errorf("devicelab runner relaunch failed: %w", err)
 	}
@@ -106,4 +116,12 @@ func (s *Supervisor) stop() error {
 		return cur.stopProcess()
 	}
 	return nil
+}
+
+// relaunchTimeout is opts.RelaunchTimeout, or DefaultRelaunchTimeout when unset.
+func (s *Supervisor) relaunchTimeout() time.Duration {
+	if s.opts.RelaunchTimeout > 0 {
+		return s.opts.RelaunchTimeout
+	}
+	return DefaultRelaunchTimeout
 }
