@@ -84,6 +84,7 @@ Unknown fields are ignored. Missing required fields produce `INVALID_ARGUMENT`.
 | `ALERT_PRESENT` | A system alert blocked the operation |
 | `TIMEOUT` | Server-side 30s ceiling exceeded |
 | `XCUI_EXCEPTION` | Underlying XCUITest threw an ObjC exception (retried once before this) |
+| `SNAPSHOT_FAILED` | No accessibility tree could be read (query failed or timed out); `data.appState` says why, usually a suspended app |
 | `RUNNER_INTERNAL` | Bug in the runner |
 
 ## Versioning
@@ -115,6 +116,8 @@ Unknown fields are ignored. Missing required fields produce `INVALID_ARGUMENT`.
 | `screenSize` | `appBundleId?` | `{ width, height, scale }` |
 
 `snapshot` always returns the full tree. If `appBundleId` is omitted, snapshots the currently foregrounded app via `XCUIApplication()`. **No filtering, no caps, no occlusion computation.**
+
+`snapshot` data also carries `appState` (the target's `XCUIApplication.state`) and `source`: `"xctest"` for XCTest's public snapshot, `"privateAX"` when the tree came from the private accessibility fallback (the public path failed or returned only the root). When no tree can be read at all the response is `ok: false` with `SNAPSHOT_FAILED`, and `data.appState` is still set — an unreadable screen is never reported as an empty one.
 
 #### SnapshotNode
 

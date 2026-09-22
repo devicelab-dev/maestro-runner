@@ -42,7 +42,7 @@ extension RunnerTests {
       nodes.append(actionNode)
     }
 
-    return DataPayload(nodes: nodes, truncated: false)
+    return DataPayload(nodes: nodes, truncated: false, source: SnapshotSource.xctest)
     #endif
   }
 

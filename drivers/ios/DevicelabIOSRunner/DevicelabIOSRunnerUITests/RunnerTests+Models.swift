@@ -165,6 +165,13 @@ struct DataPayload: Codable {
   // field; the text on screen then came from the second attempt.
   let verified: Bool?
   let repaired: Bool?
+  // Local extension (DeviceDeck): which reader produced a snapshot's nodes —
+  // SnapshotSource.xctest (XCTest's public snapshot) or
+  // SnapshotSource.privateAX (the private accessibility client, used when
+  // the public path failed or came back with only the root on a deep React
+  // Native tree). The two differ in coverage and in how hittable is
+  // computed, so a caller comparing trees across snapshots needs to know.
+  let source: String?
 
   init(
     message: String? = nil,
@@ -192,7 +199,8 @@ struct DataPayload: Codable {
     appearance: String? = nil,
     appState: String? = nil,
     verified: Bool? = nil,
-    repaired: Bool? = nil
+    repaired: Bool? = nil,
+    source: String? = nil
   ) {
     self.message = message
     self.text = text
@@ -220,7 +228,14 @@ struct DataPayload: Codable {
     self.appState = appState
     self.verified = verified
     self.repaired = repaired
+    self.source = source
   }
+}
+
+/// Values of DataPayload.source.
+enum SnapshotSource {
+  static let xctest = "xctest"
+  static let privateAX = "privateAX"
 }
 
 struct ErrorPayload: Codable {

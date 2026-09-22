@@ -801,11 +801,11 @@ extension RunnerTests {
         followsScreen: (command.appBundleId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
       )
       let target = activeApp
-      return Response(ok: true, data: withSnapshotRequestTimeout {
+      return withSnapshotRequestTimeout {
         options.raw
           ? snapshotRaw(app: target, options: options)
           : snapshotFast(app: target, options: options)
-      })
+      }
     case .screenshot:
       let screenshot: XCUIScreenshot
 #if os(macOS)

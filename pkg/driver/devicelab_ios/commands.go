@@ -388,8 +388,10 @@ func (d *Driver) assertVisibleCount(s *flow.AssertVisibleStep, want int) *core.C
 		}
 		firstPass = false
 
+		// An unreadable snapshot keeps polling like a wrong count, and is
+		// reported as the cause if it is still failing at the deadline.
 		nodes, err := d.snapshotMatching(s.Selector)
-		if err != nil {
+		if err != nil && !isSnapshotFailure(err) {
 			return core.ErrorResult(err, "assertVisible: "+err.Error())
 		}
 		got = countDisplayed(nodes)
@@ -397,6 +399,9 @@ func (d *Driver) assertVisibleCount(s *flow.AssertVisibleStep, want int) *core.C
 			return core.SuccessResult(fmt.Sprintf("%d visible", got), nil)
 		}
 		if !time.Now().Before(deadline) {
+			if err != nil {
+				return core.ErrorResult(err, "assertVisible: "+err.Error())
+			}
 			err := fmt.Errorf("expected %d visible matches of %s, found %d",
 				want, describeSelector(s.Selector), got)
 			return core.ErrorResult(err, err.Error())
@@ -1081,18 +1086,13 @@ func (d *Driver) handleWaitUntil(s *flow.WaitUntilStep) *core.CommandResult {
 			}
 		}
 		if s.NotVisible != nil {
+			// A snapshot that could not be read proves nothing is gone;
+			// keep polling.
 			nodes, err := d.snapshotMatching(*s.NotVisible)
-			if err != nil {
+			if err != nil && !isSnapshotFailure(err) {
 				return core.ErrorResult(err, "snapshot failed")
 			}
-			anyVisible := false
-			for i := range nodes {
-				if isDisplayed(&nodes[i]) {
-					anyVisible = true
-					break
-				}
-			}
-			if !anyVisible {
+			if err == nil && countDisplayed(nodes) == 0 {
 				return core.SuccessResult("not visible", nil)
 			}
 		}
@@ -1231,9 +1231,10 @@ func (d *Driver) findElement(sel flow.Selector, optional bool, stepTimeoutMs int
 		}
 		firstPass = false
 
-		// Strategy 1: snapshot dump + local filter.
+		// Strategy 1: snapshot dump + local filter. A snapshot the runner
+		// could not read is retried like a miss, not returned at once.
 		nodes, err := d.snapshotMatching(sel)
-		if err != nil {
+		if err != nil && !isSnapshotFailure(err) {
 			return nil, err
 		}
 		if len(nodes) > 0 {
@@ -1254,11 +1255,21 @@ func (d *Driver) findElement(sel flow.Selector, optional bool, stepTimeoutMs int
 			if optional {
 				return nil, nil
 			}
-			return nil, fmt.Errorf("element not found: %s", describeSelector(sel))
+			return nil, elementNotFound(sel, err)
 		}
 		// No explicit sleep — strategies 1 and 2 each do real HTTP round-trips
 		// (~100-200ms snapshot + ~50ms query) which paces the loop naturally.
 	}
+}
+
+// elementNotFound is findElement's timeout error. When the last snapshot could
+// not be read at all, it says so: "not found" alone would claim the screen was
+// read and the element was absent.
+func elementNotFound(sel flow.Selector, snapErr error) error {
+	if snapErr != nil {
+		return fmt.Errorf("element not found: %s (last snapshot failed: %w)", describeSelector(sel), snapErr)
+	}
+	return fmt.Errorf("element not found: %s", describeSelector(sel))
 }
 
 // resolveFindTimeoutMs picks the poll budget for element resolution: an

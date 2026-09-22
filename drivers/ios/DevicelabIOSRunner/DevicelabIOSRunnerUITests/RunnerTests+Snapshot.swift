@@ -99,9 +99,9 @@ extension RunnerTests {
     }
   }
 
-  func snapshotFast(app requested: XCUIApplication, options: SnapshotOptions) -> DataPayload {
+  func snapshotFast(app requested: XCUIApplication, options: SnapshotOptions) -> Response {
     if let blocking = blockingSystemAlertSnapshot() {
-      return blocking
+      return Response(ok: true, data: blocking)
     }
 
     let target = snapshotTarget(requested, options: options)
@@ -110,13 +110,12 @@ extension RunnerTests {
       // answer kAXErrorIllegalArgument), which would otherwise hand back an
       // empty tree — the devicelab-vs-WDA RN gap. Recover the tree through the
       // private AX client instead of returning nothing. Only for an app in
-      // front: one that has left the screen is suspended and cannot answer,
-      // and its empty tree plus appState is the honest reply.
+      // front: one that has left the screen is suspended and cannot answer.
       if target.state == .runningForeground,
          let fallback = privateAXFallbackPayload(app: target, options: options) {
-        return fallback
+        return Response(ok: true, data: fallback)
       }
-      return DataPayload(nodes: [], truncated: false, appState: appStateString(target))
+      return snapshotFailure(target)
     }
     let app = context.app
 
@@ -226,20 +225,20 @@ extension RunnerTests {
     if nodes.count <= 1, app.state == .runningForeground,
        let fallback = privateAXFallbackPayload(app: app, options: options),
        (fallback.nodes?.count ?? 0) > nodes.count {
-      return fallback
+      return Response(ok: true, data: fallback)
     }
 
-    return DataPayload(nodes: nodes, truncated: truncated, appState: appStateString(app))
+    return snapshotSuccess(nodes: nodes, truncated: truncated, app: app)
   }
 
-  func snapshotRaw(app requested: XCUIApplication, options: SnapshotOptions) -> DataPayload {
+  func snapshotRaw(app requested: XCUIApplication, options: SnapshotOptions) -> Response {
     if let blocking = blockingSystemAlertSnapshot() {
-      return blocking
+      return Response(ok: true, data: blocking)
     }
 
     let target = snapshotTarget(requested, options: options)
     guard let context = makeSnapshotTraversalContext(app: target, options: options) else {
-      return DataPayload(nodes: [], truncated: false, appState: appStateString(target))
+      return snapshotFailure(target)
     }
     let app = context.app
 
@@ -284,7 +283,36 @@ extension RunnerTests {
     }
 
     walk(context.rootSnapshot, depth: 0, parentIndex: nil)
-    return DataPayload(nodes: nodes, truncated: truncated, appState: appStateString(app))
+    return snapshotSuccess(nodes: nodes, truncated: truncated, app: app)
+  }
+
+  /// A tree read through XCTest's public snapshot API.
+  private func snapshotSuccess(nodes: [SnapshotNode], truncated: Bool, app: XCUIApplication) -> Response {
+    Response(
+      ok: true,
+      data: DataPayload(
+        nodes: nodes,
+        truncated: truncated,
+        appState: appStateString(app),
+        source: SnapshotSource.xctest
+      )
+    )
+  }
+
+  /// The reply when no tree could be read at all. It used to be ok with an
+  /// empty node list, which a caller cannot tell apart from a screen that is
+  /// really empty, so a timed-out read looked like "nothing on screen". The
+  /// app's state stays in the payload: a suspended app is the usual cause.
+  func snapshotFailure(_ app: XCUIApplication) -> Response {
+    let state = appStateString(app)
+    return Response(
+      ok: false,
+      data: DataPayload(appState: state),
+      error: ErrorPayload(
+        code: "SNAPSHOT_FAILED",
+        message: "accessibility snapshot failed or timed out (appState=\(state))"
+      )
+    )
   }
 
   func snapshotRect(from frame: CGRect) -> SnapshotRect {
@@ -355,8 +383,8 @@ extension RunnerTests {
   /// also hold every command queued behind this one on the main thread.
   /// `captureRootSnapshot` retries a slow snapshot of an app that is still
   /// in front with XCTest's full timeout, so a large tree still completes.
-  func withSnapshotRequestTimeout(_ body: () -> DataPayload) -> DataPayload {
-    var payload: DataPayload?
+  func withSnapshotRequestTimeout(_ body: () -> Response) -> Response {
+    var payload: Response?
     RunnerXCTestTimeouts.withXPCRequestTimeout(Self.snapshotRequestTimeout) {
       payload = body()
     }

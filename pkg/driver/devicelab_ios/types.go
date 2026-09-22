@@ -178,7 +178,20 @@ type ResponseData struct {
 	// the runner cleared the field and typed again. A runner that predates
 	// the field omits it (nil) on every response.
 	Repaired *bool `json:"repaired,omitempty"`
+	// Source — snapshot only: which reader produced Nodes, SnapshotSourceXCTest
+	// or SnapshotSourcePrivateAX. The private accessibility reader is the
+	// fallback for trees the public API cannot serialize (deep React Native
+	// screens); it covers more of the tree and computes hittable from geometry
+	// alone, so two snapshots from different sources are not comparable node
+	// for node. Empty from a runner that predates the field.
+	Source string `json:"source,omitempty"`
 }
+
+// Values of ResponseData.Source.
+const (
+	SnapshotSourceXCTest    = "xctest"
+	SnapshotSourcePrivateAX = "privateAX"
+)
 
 // SnapshotNode mirrors the Swift wire model. Tree is reconstructed by
 // reading ParentIndex back-references; the runner sends a flat slice.
@@ -223,4 +236,17 @@ const (
 	ErrElementNotFound      = "ELEMENT_NOT_FOUND"
 	ErrAmbiguousMatch       = "AMBIGUOUS_MATCH"
 	ErrTextEntryMismatch    = "TEXT_ENTRY_MISMATCH"
+	// ErrSnapshotFailed — no tree could be read (the query failed or timed
+	// out, usually because the app is suspended or busy). The response data
+	// still carries AppState. Older runners answered this case with ok and
+	// an empty node list, indistinguishable from an empty screen.
+	ErrSnapshotFailed = "SNAPSHOT_FAILED"
 )
+
+// isSnapshotFailure reports whether err is the runner saying it could not
+// read a tree this time. Polling callers treat it like "not there yet" and
+// keep polling; it only becomes the answer once their deadline passes.
+func isSnapshotFailure(err error) bool {
+	re, ok := IsRunnerError(err)
+	return ok && re.Code == ErrSnapshotFailed
+}

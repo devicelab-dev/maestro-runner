@@ -53,7 +53,12 @@ extension RunnerTests {
     NSLog("DL_PRIVATE_AX_FALLBACK: recovered %ld nodes (truncated=%d)",
           nodes.count, truncated ? 1 : 0)
     guard !nodes.isEmpty else { return nil }
-    return DataPayload(nodes: nodes, truncated: truncated, appState: appStateString(app))
+    return DataPayload(
+      nodes: nodes,
+      truncated: truncated,
+      appState: appStateString(app),
+      source: SnapshotSource.privateAX
+    )
   }
 
   /// Flattens the bridge's nested node dict into the flat, parent-indexed
