@@ -833,6 +833,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		if err := d.client.SendKeyActions(text); err != nil {
 			return errorResult(err, "Failed to input text via key press")
 		}
+		invalidateText(target)
 		// Per-character key events are the path that loses characters when the
 		// app janks — the reason this verification exists at all.
 		note := core.ConfirmTypedText(target, text, before, logger.Warn)
@@ -921,6 +922,17 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 
 	note := core.ConfirmTypedText(typedInto, text, beforeText, logger.Warn)
 	return successResult(fmt.Sprintf("Entered text: %s%s%s", text, unicodeWarning, note), nil)
+}
+
+// textInvalidator is a field whose cached text can be marked stale.
+type textInvalidator interface{ InvalidateText() }
+
+// invalidateText tells field its cached text is out of date after it was typed
+// into by a route it did not see. Fields that always read live need nothing.
+func invalidateText(field core.TextField) {
+	if f, ok := field.(textInvalidator); ok {
+		f.InvalidateText()
+	}
 }
 
 // focusedFieldBefore resolves the element that key events will reach and reads
