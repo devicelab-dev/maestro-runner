@@ -800,7 +800,6 @@ extension RunnerTests {
         raw: command.raw ?? false,
         followsScreen: (command.appBundleId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
       )
-      needsPostSnapshotInteractionDelay = true
       let target = activeApp
       return Response(ok: true, data: withSnapshotRequestTimeout {
         options.raw

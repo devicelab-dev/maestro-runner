@@ -45,14 +45,12 @@ final class RunnerTests: XCTestCase {
   let mainThreadExecutionTimeout: TimeInterval = 30
   let appExistenceTimeout: TimeInterval = 30
   let retryCooldown: TimeInterval = 0.2
-  // Local edit (not in upstream agent-device): post-snapshot/post-activate
-  // stabilization windows shortened from 0.2 / 0.25 s. Upstream value gives
-  // an AI-driven runner time for layout to settle between a read and the
-  // next interaction; maestro-runner's snapshot is part of selector
-  // resolution that's immediately followed by an interaction at a known
-  // coordinate, so a 50ms window is enough to absorb any in-flight UIKit
-  // layout pass without paying for hypothetical agent latency.
-  let postSnapshotInteractionDelay: TimeInterval = 0.05
+  // Local edit (not in upstream agent-device): the post-activate
+  // stabilization window, shortened from 0.25 s, absorbs the activation
+  // transition before the first interaction. Upstream also slept after every
+  // snapshot; that sleep is gone: a snapshot does not change the screen, and
+  // a caller polling snapshots during settle paid it on each following
+  // interaction.
   let firstInteractionAfterActivateDelay: TimeInterval = 0.1
   let scrollInteractionIdleTimeoutDefault: TimeInterval = 1.0
   let tvRemoteDoublePressDelayDefault: TimeInterval = 0.0
@@ -60,7 +58,6 @@ final class RunnerTests: XCTestCase {
   let maxRecordingFps = 120
   let minRecordingQuality = 5
   let maxRecordingQuality = 10
-  var needsPostSnapshotInteractionDelay = false
   var needsFirstInteractionDelay = false
   // Local extension: cache the most recent idleCheck screenshot so
   // subsequent calls in the same wait loop only need ONE fresh capture.

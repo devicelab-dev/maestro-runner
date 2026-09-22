@@ -334,10 +334,6 @@ extension RunnerTests {
   // MARK: - Interaction Stabilization
 
   func applyInteractionStabilizationIfNeeded() {
-    if needsPostSnapshotInteractionDelay {
-      sleepFor(postSnapshotInteractionDelay)
-      needsPostSnapshotInteractionDelay = false
-    }
     if needsFirstInteractionDelay {
       sleepFor(firstInteractionAfterActivateDelay)
       needsFirstInteractionDelay = false
