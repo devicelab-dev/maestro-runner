@@ -241,6 +241,10 @@ const (
 	// still carries AppState. Older runners answered this case with ok and
 	// an empty node list, indistinguishable from an empty screen.
 	ErrSnapshotFailed = "SNAPSHOT_FAILED"
+	// ErrNoTargetApp — a read-only command (snapshot, idle) named no app and
+	// the runner could not resolve the frontmost one. Older runners launched
+	// their own host app here, covering whatever was on screen.
+	ErrNoTargetApp = "NO_TARGET_APP"
 )
 
 // isSnapshotFailure reports whether err is the runner saying it could not

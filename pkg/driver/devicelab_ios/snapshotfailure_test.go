@@ -240,3 +240,14 @@ func checkErrContains(t *testing.T, err error, want string) {
 		t.Fatalf("error = %v, want it to contain %q", err, want)
 	}
 }
+
+// TestNoTargetAppIsNotASnapshotFailure: an unresolvable frontmost app is its
+// own error, not a transient unreadable tree to poll through.
+func TestNoTargetAppIsNotASnapshotFailure(t *testing.T) {
+	c := replyServer(t, `{"ok":false,"error":{"code":"NO_TARGET_APP","message":"no app"}}`)
+	_, err := c.Call(context.Background(), Command{Command: CmdSnapshot})
+	checkRunnerErrCode(t, err, ErrNoTargetApp)
+	if isSnapshotFailure(err) {
+		t.Error("NO_TARGET_APP must not be treated as a snapshot failure")
+	}
+}

@@ -299,18 +299,32 @@ extension RunnerTests {
     )
   }
 
+  /// A SNAPSHOT_FAILED reply for an app whose tree cannot be read in its
+  /// current state, or nil when a read is worth trying. A suspended app never
+  /// answers — querying it only burns the request timeout — and an app that
+  /// is not running has no tree. A snapshot does not launch or activate the
+  /// app, so this is the honest answer rather than something to fix first.
+  func unreadableSnapshotTarget(_ app: XCUIApplication) -> Response? {
+    switch app.state {
+    case .notRunning, .unknown, .runningBackgroundSuspended:
+      return snapshotFailure(app, reason: "not attempted: the app cannot answer in this state")
+    default:
+      return nil
+    }
+  }
+
   /// The reply when no tree could be read at all. It used to be ok with an
   /// empty node list, which a caller cannot tell apart from a screen that is
   /// really empty, so a timed-out read looked like "nothing on screen". The
   /// app's state stays in the payload: a suspended app is the usual cause.
-  func snapshotFailure(_ app: XCUIApplication) -> Response {
+  func snapshotFailure(_ app: XCUIApplication, reason: String = "failed or timed out") -> Response {
     let state = appStateString(app)
     return Response(
       ok: false,
       data: DataPayload(appState: state),
       error: ErrorPayload(
         code: "SNAPSHOT_FAILED",
-        message: "accessibility snapshot failed or timed out (appState=\(state))"
+        message: "accessibility snapshot \(reason) (appState=\(state))"
       )
     )
   }

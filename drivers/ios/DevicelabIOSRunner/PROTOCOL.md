@@ -85,6 +85,7 @@ Unknown fields are ignored. Missing required fields produce `INVALID_ARGUMENT`.
 | `TIMEOUT` | Server-side 30s ceiling exceeded |
 | `XCUI_EXCEPTION` | Underlying XCUITest threw an ObjC exception (retried once before this) |
 | `SNAPSHOT_FAILED` | No accessibility tree could be read (query failed or timed out); `data.appState` says why, usually a suspended app |
+| `NO_TARGET_APP` | A read-only command named no app and the frontmost app could not be resolved |
 | `RUNNER_INTERNAL` | Bug in the runner |
 
 ## Versioning
@@ -115,7 +116,9 @@ Unknown fields are ignored. Missing required fields produce `INVALID_ARGUMENT`.
 | `snapshot` | `appBundleId?` | `{ nodes: [SnapshotNode] }` |
 | `screenSize` | `appBundleId?` | `{ width, height, scale }` |
 
-`snapshot` always returns the full tree. If `appBundleId` is omitted, snapshots the currently foregrounded app via `XCUIApplication()`. **No filtering, no caps, no occlusion computation.**
+`snapshot` always returns the full tree. If `appBundleId` is omitted, snapshots the frontmost app; if that cannot be resolved the call fails with `NO_TARGET_APP` rather than launching the runner's host app. **No filtering, no caps, no occlusion computation.**
+
+`snapshot` is read-only: it never activates, launches or waits for the app. A named app that is backgrounded is read as it is; one that is suspended or not running is not queried at all (`SNAPSHOT_FAILED` with its `appState`), since it cannot answer.
 
 `snapshot` data also carries `appState` (the target's `XCUIApplication.state`) and `source`: `"xctest"` for XCTest's public snapshot, `"privateAX"` when the tree came from the private accessibility fallback (the public path failed or returned only the root). When no tree can be read at all the response is `ok: false` with `SNAPSHOT_FAILED`, and `data.appState` is still set — an unreadable screen is never reported as an empty one.
 

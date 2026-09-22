@@ -154,6 +154,47 @@ extension RunnerTests {
     return front
   }
 
+  /// The command's appBundleId, trimmed; nil when absent or blank.
+  func normalizedBundleId(_ command: Command) -> String? {
+    let trimmed = command.appBundleId?.trimmingCharacters(in: .whitespacesAndNewlines)
+    return (trimmed?.isEmpty ?? true) ? nil : trimmed
+  }
+
+  /// Where a read-only command (see isPassiveReadCommand) reads from.
+  enum PassiveReadTarget {
+    case app(XCUIApplication)
+    /// No app could be named without launching one; this is the reply.
+    case refused(Response)
+  }
+
+  /// Resolves the app a read-only command reads without activating,
+  /// launching or waiting for anything. A named app is read in whatever
+  /// state it is in — the command reports that state rather than changing
+  /// it; bringing it forward would make every settle poll yank a
+  /// backgrounded app back on screen. With no name, the frontmost app is
+  /// read. If that cannot be resolved the command fails: the old fallback,
+  /// launching the placeholder host app, would cover the real screen.
+  func passiveReadTarget(requestedBundleId: String?) -> PassiveReadTarget {
+    if let bundleId = requestedBundleId {
+      if currentBundleId == bundleId, let current = currentApp {
+        return .app(current)
+      }
+      return .app(XCUIApplication(bundleIdentifier: bundleId))
+    }
+    if let front = frontmostApplication() {
+      return .app(front)
+    }
+    return .refused(
+      Response(
+        ok: false,
+        error: ErrorPayload(
+          code: "NO_TARGET_APP",
+          message: "no appBundleId given and the frontmost app could not be resolved"
+        )
+      )
+    )
+  }
+
   func targetNeedsActivation(_ target: XCUIApplication) -> Bool {
     let state = target.state
 #if os(macOS)
@@ -298,6 +339,14 @@ extension RunnerTests {
     guard response.ok == false else { return false }
     guard let message = response.error?.message.lowercased() else { return false }
     return message.contains("is not available")
+  }
+
+  /// Commands that only observe the target app. They never activate or
+  /// launch it (see passiveReadTarget): a caller polls them many times a
+  /// second while a screen settles, and an observation that moves the app
+  /// changes the thing it observes.
+  func isPassiveReadCommand(_ command: CommandType) -> Bool {
+    command == .snapshot
   }
 
   func isInteractionCommand(_ command: CommandType) -> Bool {

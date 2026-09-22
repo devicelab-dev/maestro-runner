@@ -122,10 +122,15 @@ extension RunnerTests {
 
   private func executeOnMain(command: Command) throws -> Response {
     var activeApp = currentApp ?? app
-    if !isRunnerLifecycleCommand(command.command) {
-      let normalizedBundleId = command.appBundleId?
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-      let requestedBundleId = (normalizedBundleId?.isEmpty == true) ? nil : normalizedBundleId
+    if isPassiveReadCommand(command.command) {
+      switch passiveReadTarget(requestedBundleId: normalizedBundleId(command)) {
+      case .app(let target):
+        activeApp = target
+      case .refused(let response):
+        return response
+      }
+    } else if !isRunnerLifecycleCommand(command.command) {
+      let requestedBundleId = normalizedBundleId(command)
       if let bundleId = requestedBundleId {
         if currentBundleId != bundleId || currentApp == nil {
           _ = activateTarget(bundleId: bundleId, reason: "bundle_changed")
@@ -792,6 +797,9 @@ extension RunnerTests {
       }
       return Response(ok: true, data: DataPayload(text: text))
     case .snapshot:
+      if let refused = unreadableSnapshotTarget(activeApp) {
+        return refused
+      }
       let options = SnapshotOptions(
         interactiveOnly: command.interactiveOnly ?? false,
         compact: command.compact ?? false,
