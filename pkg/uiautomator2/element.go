@@ -21,6 +21,14 @@ type Element struct {
 	clickFunc    func() error
 	clearFunc    func() error
 	sendKeysFunc func(text string) error
+
+	// textFunc reads the element's current text from the device. The cached
+	// text is only true until something writes to the field, so a Clear or
+	// SendKeys through the callbacks above marks it stale and the next Text()
+	// asks the device instead. Without it a caller that types and then reads
+	// back — the dropped-character check — sees the value from before typing.
+	textFunc  func() (string, error)
+	textStale bool
 }
 
 // NewCachedElement creates an element with pre-populated text and bounds.
@@ -42,6 +50,22 @@ func (e *Element) SetClearFunc(f func() error) { e.clearFunc = f }
 
 // SetSendKeysFunc sets the callback for SendKeys().
 func (e *Element) SetSendKeysFunc(f func(text string) error) { e.sendKeysFunc = f }
+
+// SetTextFunc sets how a cached element re-reads its text once a write has
+// made the cached value stale. The first read after find still comes from the
+// cache, so an element that is never written to costs no extra round trip.
+func (e *Element) SetTextFunc(f func() (string, error)) { e.textFunc = f }
+
+// InvalidateText marks the cached text stale so the next Text() re-reads it
+// through the text func. Callers use it when they changed the field by a route
+// the element did not see, such as raw key events to whatever holds focus. It
+// is a no-op without a text func: dropping the cache would send Text() to the
+// HTTP client, which a cached element does not have.
+func (e *Element) InvalidateText() {
+	if e.textFunc != nil {
+		e.textStale = true
+	}
+}
 
 // ID returns the element ID.
 func (e *Element) ID() string {
@@ -169,6 +193,8 @@ func (e *Element) Click() error {
 // Clear clears the element's text.
 func (e *Element) Clear() error {
 	if e.clearFunc != nil {
+		// Stale even on error: a failed write may still have changed the field.
+		defer e.InvalidateText()
 		return e.clearFunc()
 	}
 	_, err := e.client.request("POST", e.client.sessionPath("/element/"+e.id+"/clear"), nil)
@@ -178,6 +204,9 @@ func (e *Element) Clear() error {
 // SendKeys types text into the element.
 func (e *Element) SendKeys(text string) error {
 	if e.sendKeysFunc != nil {
+		// Stale even on error: a failed write may still have changed the
+		// field, and callers fall back to key events that certainly do.
+		defer e.InvalidateText()
 		return e.sendKeysFunc(text)
 	}
 	req := InputTextRequest{Text: text}
@@ -187,6 +216,9 @@ func (e *Element) SendKeys(text string) error {
 
 // Text returns the element's text content.
 func (e *Element) Text() (string, error) {
+	if e.textStale {
+		return e.refreshText()
+	}
 	if e.cachedText != nil {
 		return *e.cachedText, nil
 	}
@@ -202,6 +234,20 @@ func (e *Element) Text() (string, error) {
 	}
 
 	text, _ := resp.Value.(string)
+	return text, nil
+}
+
+// refreshText re-reads a stale cached text through the text func. A failed
+// read is returned as an error rather than falling back to the stale cache —
+// reporting the pre-write value as current is exactly the bug this avoids —
+// and the element stays stale so the next read tries again.
+func (e *Element) refreshText() (string, error) {
+	text, err := e.textFunc()
+	if err != nil {
+		return "", err
+	}
+	e.cachedText = &text
+	e.textStale = false
 	return text, nil
 }
 

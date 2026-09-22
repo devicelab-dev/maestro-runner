@@ -19,3 +19,8 @@ func (n *NativeElement) Text() (string, error) { return n.elem.Text() }
 func (n *NativeElement) Input(text string) error { return n.elem.SendKeys(text) }
 
 func (n *NativeElement) Clear() error { return n.elem.Clear() }
+
+// InvalidateText makes the next Text() re-read the field from the device. Key
+// events typed into the focused field bypass the element, so its cached text
+// would otherwise still be the reading from before typing.
+func (n *NativeElement) InvalidateText() { n.elem.InvalidateText() }
