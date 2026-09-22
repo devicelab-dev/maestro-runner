@@ -79,15 +79,10 @@ func (d *AndroidDevice) StartDeviceLabDriver(cfg DeviceLabDriverConfig) error {
 		}
 	}
 
-	// Start instrumentation to a temp file so we can read crash output
-	instrumentCmd := fmt.Sprintf(
-		"nohup am instrument -w "+
-			"%s/%s "+
-			"> /data/local/tmp/devicelab-driver.log 2>&1 &",
-		DeviceLabDriverTest,
-		DeviceLabDriverServer+".DeviceLabDriverRunner",
-	)
-	if _, err := d.Shell(instrumentCmd); err != nil {
+	// Start instrumentation to a fresh log file so we can read crash
+	// output — and only this start's output (see deviceLabStartCommand).
+	marker := newDriverLogMarker()
+	if _, err := d.Shell(deviceLabStartCommand(marker)); err != nil {
 		return fmt.Errorf("failed to start DeviceLab Android Driver instrumentation: %w", err)
 	}
 
@@ -97,9 +92,9 @@ func (d *AndroidDevice) StartDeviceLabDriver(cfg DeviceLabDriverConfig) error {
 	// on a cold start (dexopt) or a loaded device, and a timed check
 	// against a variable startup kills drivers that were about to come
 	// up — measured at roughly one start in ten on an emulator.
-	if err := d.waitForDeviceLabDriverReady(cfg.Timeout); err != nil {
+	if err := d.waitForDeviceLabDriverReady(cfg.Timeout, marker); err != nil {
 		// Read crash log for diagnostics
-		if reason := d.driverLogTail(); reason != "" {
+		if reason := d.driverLogTail(marker); reason != "" {
 			err = fmt.Errorf("%w\nDriver output: %s", err, reason)
 		}
 		// Slow-infra diagnostics: surface the runtime state that's most
@@ -164,61 +159,134 @@ func (d *AndroidDevice) checkUiAutomationConflict() error {
 	return nil
 }
 
-// checkDriverCrashed checks if the driver process exited and returns the reason.
+// deviceLabDriverLog is where `am instrument` output for the driver goes.
+// It lives on the device across runs and reboots, which is why every
+// read of it is scoped to the current start by a marker.
+const deviceLabDriverLog = "/data/local/tmp/devicelab-driver.log"
+
+// driverLogTailLen bounds how much crash output is quoted in an error.
+const driverLogTailLen = 500
+
+// newDriverLogMarker returns a line unique to one driver start.
+func newDriverLogMarker() string {
+	return fmt.Sprintf("devicelab-driver-start %d", time.Now().UnixNano())
+}
+
+// deviceLabStartCommand builds the shell command that launches the driver
+// with its output captured in deviceLabDriverLog.
+//
+// The log must hold only this start's output, or a still-starting driver
+// gets declared crashed on the strength of somebody else's words. Two
+// writers other than this start can put text in the file:
+//
+//   - The previous run. Every run ends with a force-stop, whose `am
+//     instrument -w` prints "INSTRUMENTATION_RESULT: shortMsg=Process
+//     crashed." into the log, and that file survives reboots. A plain
+//     `> log &` truncates it only once the backgrounded child gets
+//     round to its redirect, which the host's first poll can beat.
+//   - The previous run's `am` itself, if it is still alive. It prints
+//     that same result asynchronously after the force-stop, through a
+//     descriptor on the same inode at offset 0 — so a late write lands
+//     in the new log after any truncation.
+//
+// Either way the host then sees "no driver process + crash text" and,
+// for as long as a cold start keeps the new process out of `ps`
+// (seconds of dexopt), calls it a crash. Removing the file first gives
+// this start a new inode that no old descriptor points at, and the
+// marker, written synchronously before the launch, lets the reader
+// reject anything that is not this start's output (see driverOutput).
+func deviceLabStartCommand(marker string) string {
+	return fmt.Sprintf(
+		"rm -f %[1]s; echo '%[2]s' > %[1]s; "+
+			"nohup am instrument -w %[3]s/%[4]s >> %[1]s 2>&1 &",
+		deviceLabDriverLog,
+		marker,
+		DeviceLabDriverTest,
+		DeviceLabDriverServer+".DeviceLabDriverRunner",
+	)
+}
+
+// driverOutput returns what this start's `am instrument` wrote to the log,
+// i.e. everything after the marker line. ours is false when the log does
+// not begin with this start's marker: that content is not evidence about
+// this driver, whatever it says.
+func driverOutput(logOutput, marker string) (output string, ours bool) {
+	first, rest, _ := strings.Cut(logOutput, "\n")
+	if strings.TrimSpace(first) != marker {
+		return "", false
+	}
+	return strings.TrimSpace(rest), true
+}
+
+// driverLogTailOf trims crash output to its tail, where the error is.
+func driverLogTailOf(output string) string {
+	if len(output) > driverLogTailLen {
+		output = output[len(output)-driverLogTailLen:]
+	}
+	return strings.TrimSpace(output)
+}
+
 // driverState is what the device can tell us about the driver process.
 type driverState int
 
 const (
 	// driverRunning: the process is in the process table.
 	driverRunning driverState = iota
-	// driverStarting: no process yet, and nothing in the log — which is
-	// not evidence of anything. `am instrument` writes nothing until it
-	// has something to say, so an absent process with an empty log is
-	// indistinguishable from one that simply has not started yet.
+	// driverStarting: no process yet, and nothing in the log from this
+	// start — which is not evidence of anything. `am instrument -w`
+	// writes nothing until it finishes, so an absent process with no
+	// output of its own is indistinguishable from one that has simply
+	// not started yet.
 	driverStarting
-	// driverFailed: no process, and the log explains why.
+	// driverFailed: no process, and this start's log explains why.
 	driverFailed
 )
 
 // classifyDriverState decides what the device's process table and driver
-// log mean. Kept pure so the decision is testable without a device.
+// log mean for the start identified by marker. Kept pure so the decision
+// is testable without a device.
 //
-// The distinction that matters is between failed and starting: treating
-// "no process, no log" as a crash is what made driver startup flaky,
-// because it is exactly what a slow-but-healthy start looks like two
-// seconds in.
-func classifyDriverState(psOutput, logOutput string, logErr error) (driverState, string) {
+// The distinction that matters is between failed and starting: calling a
+// slow-but-healthy start a crash is what made driver startup flaky. Only
+// output this start wrote counts as a failure; an empty, unreadable or
+// foreign (stale) log means the driver is still starting.
+func classifyDriverState(psOutput, logOutput, marker string, logErr error) (driverState, string) {
 	if strings.Contains(psOutput, DeviceLabDriverServer) {
 		return driverRunning, ""
 	}
-	if logErr != nil || strings.TrimSpace(logOutput) == "" {
+	if logErr != nil {
 		return driverStarting, ""
 	}
-	// Trim to last 500 chars for readability
-	if len(logOutput) > 500 {
-		logOutput = logOutput[len(logOutput)-500:]
+	output, ours := driverOutput(logOutput, marker)
+	if !ours || output == "" {
+		return driverStarting, ""
 	}
-	return driverFailed, strings.TrimSpace(logOutput)
+	return driverFailed, driverLogTailOf(output)
+}
+
+// readDriverLog reads the driver log. stderr is discarded so an adb
+// without exit-status propagation cannot pass "No such file" off as
+// driver output.
+func (d *AndroidDevice) readDriverLog() (string, error) {
+	return d.Shell("cat " + deviceLabDriverLog + " 2>/dev/null")
 }
 
 // checkDriverState reads the device and classifies the driver process.
-func (d *AndroidDevice) checkDriverState() (driverState, string) {
+func (d *AndroidDevice) checkDriverState(marker string) (driverState, string) {
 	psOutput, _ := d.Shell("ps -A")
-	logOutput, logErr := d.Shell("cat /data/local/tmp/devicelab-driver.log")
-	return classifyDriverState(psOutput, logOutput, logErr)
+	logOutput, logErr := d.readDriverLog()
+	return classifyDriverState(psOutput, logOutput, marker, logErr)
 }
 
-// driverLogTail returns whatever the driver log holds, for diagnostics
-// on a startup timeout. Empty when there is nothing to report.
-func (d *AndroidDevice) driverLogTail() string {
-	logOutput, err := d.Shell("cat /data/local/tmp/devicelab-driver.log")
+// driverLogTail returns what this start wrote to the driver log, for
+// diagnostics on a startup timeout. Empty when there is nothing to report.
+func (d *AndroidDevice) driverLogTail(marker string) string {
+	logOutput, err := d.readDriverLog()
 	if err != nil {
 		return ""
 	}
-	if len(logOutput) > 500 {
-		logOutput = logOutput[len(logOutput)-500:]
-	}
-	return strings.TrimSpace(logOutput)
+	output, _ := driverOutput(logOutput, marker)
+	return driverLogTailOf(output)
 }
 
 // setupDeviceLabSocketForward sets up Unix socket forwarding for the DeviceLab Android Driver.
@@ -339,8 +407,9 @@ func (d *AndroidDevice) DeviceLabDriverLocalPort() int {
 	return d.driverLocalPort
 }
 
-// waitForDeviceLabDriverReady waits for the driver to be ready.
-func (d *AndroidDevice) waitForDeviceLabDriverReady(timeout time.Duration) error {
+// waitForDeviceLabDriverReady waits for the driver started with marker to
+// be ready, returning early only when that start has reported a failure.
+func (d *AndroidDevice) waitForDeviceLabDriverReady(timeout time.Duration, marker string) error {
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
@@ -349,7 +418,7 @@ func (d *AndroidDevice) waitForDeviceLabDriverReady(timeout time.Duration) error
 		}
 		// A driver that has actually failed says so in its log; stop
 		// waiting for it rather than burning the whole timeout.
-		if state, reason := d.checkDriverState(); state == driverFailed {
+		if state, reason := d.checkDriverState(marker); state == driverFailed {
 			return fmt.Errorf("DeviceLab driver crashed on startup: %s", reason)
 		}
 		time.Sleep(500 * time.Millisecond)
