@@ -18,10 +18,14 @@ import (
 // no separate /health endpoint — readiness is probed by sending an
 // `uptime` command, which is the runner's built-in lightweight ping.
 type Client struct {
-	baseURL    string
 	host       string
-	port       int
 	httpClient *http.Client
+
+	// endpointMu guards port/baseURL: a relaunch re-points the client while
+	// other calls (e.g. a snapshot poll alongside an action) may be reading.
+	endpointMu sync.RWMutex
+	baseURL    string
+	port       int
 
 	// reviveMu serialises revive attempts so a burst of failed calls
 	// relaunches the runner at most once between successes.
@@ -62,10 +66,24 @@ func (c *Client) SetReviver(fn func(ctx context.Context, failedPort int) (int, e
 
 // Port reports the port the client is currently targeting (it changes when
 // the runner is relaunched onto a fresh port).
-func (c *Client) Port() int { return c.port }
+func (c *Client) Port() int {
+	port, _ := c.endpoint()
+	return port
+}
+
+// endpoint snapshots the port and base URL a request is about to use, so a
+// failure can be attributed to the runner it actually hit even if another
+// call relaunches and re-points the client meanwhile.
+func (c *Client) endpoint() (int, string) {
+	c.endpointMu.RLock()
+	defer c.endpointMu.RUnlock()
+	return c.port, c.baseURL
+}
 
 // setPort re-points the client at a relaunched runner.
 func (c *Client) setPort(port int) {
+	c.endpointMu.Lock()
+	defer c.endpointMu.Unlock()
 	c.port = port
 	c.baseURL = fmt.Sprintf("http://%s:%d", c.host, port)
 }
@@ -125,12 +143,18 @@ func (c *Client) Call(ctx context.Context, cmd Command) (*ResponseData, error) {
 // runner, re-points at the new port, and then re-sends the command once, but
 // only when retryOnRevive is set (a read-only command). An action is not
 // re-sent; the relaunch alone keeps the next command working.
+//
+// A request aborted by its own context (caller cancelled, or its deadline
+// passed) is NOT a transport failure: sendOnce returns the context error and
+// no relaunch happens. Relaunching there would kill a healthy runner and
+// whatever command it was executing for another caller.
 func (c *Client) doRequest(ctx context.Context, body []byte, retryOnRevive bool) (*ResponseData, error) {
-	data, err := c.sendOnce(ctx, body)
+	port, baseURL := c.endpoint()
+	data, err := c.sendOnce(ctx, baseURL, body)
 	if err == nil || !isTransportError(err) || c.reviver == nil {
 		return data, err
 	}
-	if !c.revive(ctx) {
+	if !c.revive(ctx, port) {
 		return data, err
 	}
 	if !retryOnRevive {
@@ -138,16 +162,19 @@ func (c *Client) doRequest(ctx context.Context, body []byte, retryOnRevive bool)
 		// replay. Surface the original failure for this step.
 		return data, err
 	}
-	return c.sendOnce(ctx, body)
+	_, baseURL = c.endpoint()
+	return c.sendOnce(ctx, baseURL, body)
 }
 
-// revive relaunches the runner at most once per burst of failures. When two
-// calls fail against the same dead runner, the first relaunches and the
-// second sees the port has already moved and simply re-points.
-func (c *Client) revive(ctx context.Context) bool {
+// revive relaunches the runner at most once per burst of failures. failedPort
+// is the port the failing request was actually sent to (not the client's
+// current port): when two calls fail against the same dead runner, the first
+// relaunches and the second passes the old port, so the supervisor sees the
+// live runner has already moved and simply re-points instead of killing the
+// fresh runner.
+func (c *Client) revive(ctx context.Context, failedPort int) bool {
 	c.reviveMu.Lock()
 	defer c.reviveMu.Unlock()
-	failedPort := c.port
 	newPort, err := c.reviver(ctx, failedPort)
 	if err != nil || newPort <= 0 {
 		return false
@@ -176,8 +203,13 @@ type transportError struct{ err error }
 func (e transportError) Error() string { return "runner request failed: " + e.err.Error() }
 func (e transportError) Unwrap() error { return e.err }
 
-func (c *Client) sendOnce(ctx context.Context, body []byte) (*ResponseData, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/command", bytes.NewReader(body))
+// sendOnce posts body to the runner at baseURL. A Do failure is classified
+// as a transportError (runner unreachable → revive) only while the request's
+// context is still live; if ctx is cancelled or past its deadline, the failure
+// is the caller's doing and is returned wrapping ctx.Err() so
+// errors.Is(err, context.Canceled/DeadlineExceeded) holds.
+func (c *Client) sendOnce(ctx context.Context, baseURL string, body []byte) (*ResponseData, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/command", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -185,6 +217,9 @@ func (c *Client) sendOnce(ctx context.Context, body []byte) (*ResponseData, erro
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("runner request aborted: %w (%v)", ctxErr, err)
+		}
 		return nil, transportError{err}
 	}
 	defer resp.Body.Close()
