@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 DeviceLab and the Project Contributors
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 // Package wda provides WebDriverAgent client for iOS automation.
 package wda
 

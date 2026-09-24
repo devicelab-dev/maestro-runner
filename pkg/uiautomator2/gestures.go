@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2025 DeviceLab and the Project Contributors
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 package uiautomator2
 
 // Click performs a tap at coordinates or on an element.

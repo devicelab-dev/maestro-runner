@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2025–2026 DeviceLab and the Project Contributors
+//
+// SPDX-License-Identifier: LicenseRef-maestro-runner
+
 // Package mock provides a mock driver for testing without a real device.
 package mock
 

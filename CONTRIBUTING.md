@@ -78,6 +78,10 @@ Add support for swipe gestures
 - Add godoc comments for exported APIs
 - Update CHANGELOG.md for notable changes
 
+### License Headers
+
+This project adheres to the REUSE specification. When creating new files, please include the appropriate copyright and SPDX license headers, or define their licensing in `REUSE.toml`. Our CI pipeline will check for REUSE compliance automatically.
+
 ## Project Structure
 
 See [DEVELOPER.md](DEVELOPER.md) for architecture details and extension guides.
