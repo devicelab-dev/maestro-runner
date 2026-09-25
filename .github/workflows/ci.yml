@@ -10,9 +10,28 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
-    name: Test
+  test-go:
+    name: Test Go (shard ${{ matrix.shard.id }})
     runs-on: ubuntu-latest
+    env:
+      CDP_PARALLEL: "4"
+    strategy:
+      fail-fast: false
+      # Static sharding avoids a timing/preparation run. The slow CDP browser
+      # package runs alone in its own shard; the remaining packages are split
+      # across three shards. Keep node_modules out of these lists — they are
+      # not repository test packages. Update the lists when packages are added
+      # or renamed.
+      matrix:
+        shard:
+          - id: cdp
+            packages: "github.com/devicelab-dev/maestro-runner/pkg/driver/browser/cdp"
+          - id: s1
+            packages: "github.com/devicelab-dev/maestro-runner/pkg/cli github.com/devicelab-dev/maestro-runner/pkg/core github.com/devicelab-dev/maestro-runner/pkg/driver/devicelab github.com/devicelab-dev/maestro-runner/pkg/driver/uiautomator2 github.com/devicelab-dev/maestro-runner/pkg/executor github.com/devicelab-dev/maestro-runner/pkg/jsengine github.com/devicelab-dev/maestro-runner/pkg/report github.com/devicelab-dev/maestro-runner/pkg/uiautomator2"
+          - id: s2
+            packages: "github.com/devicelab-dev/maestro-runner github.com/devicelab-dev/maestro-runner/pkg/cloud github.com/devicelab-dev/maestro-runner/pkg/device github.com/devicelab-dev/maestro-runner/pkg/driver/devicelab_ios github.com/devicelab-dev/maestro-runner/pkg/driver/wda github.com/devicelab-dev/maestro-runner/pkg/flow github.com/devicelab-dev/maestro-runner/pkg/logger github.com/devicelab-dev/maestro-runner/pkg/validator"
+          - id: s3
+            packages: "github.com/devicelab-dev/maestro-runner/drivers github.com/devicelab-dev/maestro-runner/pkg/config github.com/devicelab-dev/maestro-runner/pkg/driver/appium github.com/devicelab-dev/maestro-runner/pkg/driver/mock github.com/devicelab-dev/maestro-runner/pkg/emulator github.com/devicelab-dev/maestro-runner/pkg/flutter github.com/devicelab-dev/maestro-runner/pkg/maestro github.com/devicelab-dev/maestro-runner/pkg/simulator"
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -26,13 +45,27 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Run tests
-        run: go test -race -timeout 25m -coverprofile=coverage.out -covermode=atomic ./...
+      - name: Run tests (shard ${{ matrix.shard.id }})
+        env:
+          # Race detection makes the browser-backed CDP tests substantially
+          # slower. The other shards retain -race; CDP is bounded separately.
+          RACE_FLAG: ${{ matrix.shard.id != 'cdp' && '-race' || '' }}
+        run: |
+          PKGS="${{ matrix.shard.packages }}"
+          echo "Testing shard ${{ matrix.shard.id }} (race='$RACE_FLAG'):"
+          echo "$PKGS"
+          # shellcheck disable=SC2086
+          go test $RACE_FLAG -parallel "$CDP_PARALLEL" -timeout 25m -v -coverprofile=coverage-${{ matrix.shard.id }}.out -covermode=atomic $PKGS
 
       - name: Upload coverage
+        if: ${{ hashFiles(format('coverage-{0}.out', matrix.shard.id)) != '' }}
         uses: codecov/codecov-action@v5
+        # The shared flag and name let Codecov combine each shard's partial
+        # upload into one coverage report for the commit.
         with:
-          files: ./coverage.out
+          files: ./coverage-${{ matrix.shard.id }}.out
+          flags: unittests
+          name: coverage-report
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
@@ -65,7 +98,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [test, lint]
+    needs: [test-go, lint]
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
