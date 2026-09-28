@@ -501,11 +501,30 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 			" — the text would have been typed with nothing focused; check that the preceding tap focused a text field")
 	}
 
+	// Read the focused field first, as the element-scoped path above does, so
+	// what typing did to it can be checked afterwards. The element is taken
+	// before typing, so a field that moves focus as it fills (a one-digit code
+	// box) is still the one read back.
+	focusedID, _ := d.client.GetActiveElement()
+	before := ""
+	if focusedID != "" {
+		before, _ = d.client.ElementText(focusedID)
+	}
+
 	if err := d.client.SendKeys(text, d.typingFrequency); err != nil {
 		return errorResult(err, "Input text failed")
 	}
 
-	return successResult(fmt.Sprintf("Entered text: %s%s", text, unicodeWarning), nil)
+	note := ""
+	if focusedID != "" {
+		field := core.TextFieldFuncs(
+			func() (string, error) { return d.client.ElementText(focusedID) },
+			func(s string) error { return d.client.ElementSendKeys(focusedID, s, d.typingFrequency) },
+			func() error { return d.client.ElementClear(focusedID) },
+		)
+		note = core.ConfirmTypedText(field, text, before, logger.Warn)
+	}
+	return successResult(fmt.Sprintf("Entered text: %s%s%s", text, unicodeWarning, note), nil)
 }
 
 // waitForTypingTarget polls up to about a second for evidence that typed keys
