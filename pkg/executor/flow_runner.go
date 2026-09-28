@@ -178,8 +178,8 @@ func (fr *FlowRunner) Run() FlowResult {
 	// starts, whether it will be wanted.
 	flowStatus := report.StatusPassed
 
-	// --record: capture the whole flow, onFlowComplete hooks included — this
-	// defer is registered before theirs, so it runs after them. Best-effort
+	// --record: capture the whole flow, onFlowComplete hooks included. This
+	// defer runs when Run returns, after the hooks. Best-effort
 	// throughout: a driver that can't record must not fail the flow.
 	if fr.config.Record {
 		if recorder, ok := innerDriver.(core.ScreenRecorder); ok {
@@ -220,12 +220,13 @@ func (fr *FlowRunner) Run() FlowResult {
 	// Execute all steps
 	var flowError string
 
-	// Execute onFlowComplete in defer (runs even on failure)
+	// onFlowComplete runs before the result is final, below. When a panic
+	// skips that, it still runs here, as Maestro runs it in a finally
+	// (Orchestra.kt:236-272).
+	flowCompleteRan := false
 	defer func() {
-		if len(fr.flow.Config.OnFlowComplete) > 0 {
-			for _, step := range fr.flow.Config.OnFlowComplete {
-				fr.executeNestedStep(step) // Ignore failures in cleanup
-			}
+		if !flowCompleteRan {
+			fr.runFlowCompleteHooks()
 		}
 	}()
 
@@ -236,6 +237,11 @@ func (fr *FlowRunner) Run() FlowResult {
 			if !result.Success && !step.IsOptional() {
 				// onFlowStart failed - fail the flow
 				errMsg := fmt.Sprintf("onFlowStart failed: %v", result.Error)
+				flowStatus = report.StatusFailed
+				// onFlowComplete still runs, as in Maestro, and the flow
+				// keeps this error whatever the hook does.
+				flowCompleteRan = true
+				fr.runFlowCompleteHooks()
 				fr.flowWriter.End(report.StatusFailed, errMsg)
 				if fr.config.OnFlowEnd != nil {
 					fr.config.OnFlowEnd(flowName, false, time.Since(flowStart).Milliseconds(), errMsg)
@@ -327,6 +333,15 @@ func (fr *FlowRunner) Run() FlowResult {
 		}
 	}
 
+	// onFlowComplete runs before the result is final. As in Maestro
+	// (Orchestra.kt:236-272), a failing hook fails a flow that had passed,
+	// and a flow that had failed keeps its own error.
+	flowCompleteRan = true
+	if hookErr := fr.runFlowCompleteHooks(); hookErr != "" && flowStatus == report.StatusPassed {
+		flowStatus = report.StatusFailed
+		flowError = hookErr
+	}
+
 	// Pull console / page error entries from the driver (web only).
 	// Any driver that exposes ConsoleLogReport() — the CDP browser driver
 	// does today, others return nothing — surfaces its captured entries
@@ -379,6 +394,22 @@ func (fr *FlowRunner) Run() FlowResult {
 		StepsFailed:  fr.stepsFailed,
 		StepsSkipped: fr.stepsSkipped,
 	}
+}
+
+// runFlowCompleteHooks runs the flow's onFlowComplete steps and returns why
+// they failed, or "" when they passed. Maestro runs the hook through
+// executeCommands (Orchestra.kt:237-256), which stops at the first failing
+// step that is not optional, and so does this.
+func (fr *FlowRunner) runFlowCompleteHooks() string {
+	for _, step := range fr.flow.Config.OnFlowComplete {
+		result := fr.executeNestedStep(step)
+		if !result.Success && !step.IsOptional() {
+			errMsg := fmt.Sprintf("onFlowComplete failed: %v", result.Error)
+			logger.Warn("%s", errMsg)
+			return errMsg
+		}
+	}
+	return ""
 }
 
 // executeStep executes a single step and updates the report.
