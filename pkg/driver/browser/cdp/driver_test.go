@@ -146,6 +146,10 @@ func newTestServer() *httptest.Server {
 // newTestDriver creates a Driver connected to the test server.
 func newTestDriver(t *testing.T, serverURL string) *Driver {
 	t.Helper()
+	// Each test creates its own server and headless Chromium instance, so the
+	// browser-backed tests are independent and can run concurrently. The
+	// workflow's -parallel flag bounds the number of active browser instances.
+	t.Parallel()
 	d, err := New(Config{
 		Headless:  true,
 		URL:       serverURL,
