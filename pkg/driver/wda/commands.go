@@ -1521,12 +1521,42 @@ func (d *Driver) copyTextFrom(step *flow.CopyTextFromStep) *core.CommandResult {
 		return errorResult(err, fmt.Sprintf("Element not found: %s", selectorDesc(step.Selector)))
 	}
 
+	// An element found through WDA had its text read alongside its bounds,
+	// and a read that failed there left the text empty. Read it again, then
+	// take it from the page source, before copying an empty string.
+	if info.ID != "" && info.Text == "" {
+		text, err := d.client.ElementText(info.ID)
+		if err != nil {
+			text, err = d.pageSourceText(step.Selector)
+		}
+		if err != nil {
+			return errorResult(err, fmt.Sprintf("Could not read the text of %s: %v", selectorDesc(step.Selector), err))
+		}
+		info.Text = text
+	}
+
 	return &core.CommandResult{
 		Success: true,
 		Message: fmt.Sprintf("Copied text: %s", info.Text),
 		Data:    info.Text,
 		Element: info,
 	}
+}
+
+// pageSourceText finds sel in the page source and returns the element's text
+// in Maestro's order: value, placeholder, label (see elementText).
+func (d *Driver) pageSourceText(sel flow.Selector) (string, error) {
+	var info *core.ElementInfo
+	var err error
+	if sel.HasRelativeSelector() {
+		info, err = d.findElementRelativeOnce(sel)
+	} else {
+		info, err = d.findElementByPageSourceOnce(sel)
+	}
+	if err != nil {
+		return "", err
+	}
+	return info.Text, nil
 }
 
 func (d *Driver) pasteText(step *flow.PasteTextStep) *core.CommandResult {

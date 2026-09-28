@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **WDA: `clearState` works on a physical iPhone from a host without Xcode.** It uninstalled and reinstalled the app with `xcrun devicectl`, so on Linux every `launchApp` with `clearState: true` failed. Without devicectl, go-ios does both over usbmuxd. A Mac with Xcode is unchanged.
 - **WDA: a long press with no duration holds 3 s, as Maestro's does on iOS** (`longPressOn`, and `tapOn` or `tapOnPoint` with `longPress`). It held 1 s.
 - **WDA: `inputText` into the focused field reads the field back and retypes dropped characters**, as `inputText` with a selector already did. Tapping a field and then typing is how most flows type, and a dropped character went unnoticed.
+- **WDA: `copyTextFrom` no longer copies an empty string when reading the text fails.** It reads the text again, then takes it from the page source, and fails the step if neither works. A page-source match copies the value, else the placeholder, else the label, as Maestro does; it copied only the label.
 
 ## [1.1.29] - 2026-10-15
 
