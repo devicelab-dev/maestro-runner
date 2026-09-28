@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **A `launchApp` inside `retry`, `repeat` or a `runFlow` `else` branch now sets up the iOS session's permission alerts.** Before the session starts, the runner looks for the flow's first `launchApp`, and it looked only inside `runFlow`, so a flow whose only `launchApp` sat in a `retry` got no alert handling. A flow file named inside a subflow file is also found next to that file, as it is when the flow runs.
+- **WDA: a long press with no duration holds 3 s, as Maestro's does on iOS** (`longPressOn`, and `tapOn` or `tapOnPoint` with `longPress`). It held 1 s.
 
 ## [1.1.29] - 2026-10-15
 
