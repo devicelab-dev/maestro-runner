@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **A `launchApp` inside `retry`, `repeat` or a `runFlow` `else` branch now sets up the iOS session's permission alerts.** Before the session starts, the runner looks for the flow's first `launchApp`, and it looked only inside `runFlow`, so a flow whose only `launchApp` sat in a `retry` got no alert handling. A flow file named inside a subflow file is also found next to that file, as it is when the flow runs.
 - **WDA: a long press with no duration holds 3 s, as Maestro's does on iOS** (`longPressOn`, and `tapOn` or `tapOnPoint` with `longPress`). It held 1 s.
+- **WDA: `copyTextFrom` no longer copies an empty string when reading the text fails.** It reads the text again, then takes it from the page source when an element there has the bounds WDA reported, and fails the step otherwise. A page-source match copies the value, else the placeholder, else the label, as Maestro does; it copied only the label. That text is also what `report.json` and the HTML report show for an element found through the page source, so a text field there now shows its value instead of its label.
 
 ## [1.1.29] - 2026-10-15
 

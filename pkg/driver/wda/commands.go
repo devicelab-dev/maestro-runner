@@ -1492,12 +1492,51 @@ func (d *Driver) copyTextFrom(step *flow.CopyTextFromStep) *core.CommandResult {
 		return errorResult(err, fmt.Sprintf("Element not found: %s", selectorDesc(step.Selector)))
 	}
 
+	// An element found through WDA had its text read alongside its bounds,
+	// and a read that failed there left the text empty. Read it again, then
+	// take it from the page source, before copying an empty string.
+	if info.ID != "" && info.Text == "" {
+		text, err := d.client.ElementText(info.ID)
+		if err != nil {
+			text, err = d.pageSourceText(step.Selector, info.Bounds)
+		}
+		if err != nil {
+			return errorResult(err, fmt.Sprintf("Could not read the text of %s: %v", selectorDesc(step.Selector), err))
+		}
+		info.Text = text
+	}
+
 	return &core.CommandResult{
 		Success: true,
 		Message: fmt.Sprintf("Copied text: %s", info.Text),
 		Data:    info.Text,
 		Element: info,
 	}
+}
+
+// pageSourceText finds the element a WDA lookup found in the page source and
+// returns its text in Maestro's order: value, placeholder, label (see
+// elementText). The page source can rank a selector's matches differently
+// from WDA's own lookup, so only a match with the bounds WDA reported counts;
+// with none, it fails rather than copy another element's text. Only a WDA
+// lookup returns an element id, and those are plain text and id selectors, so
+// there is no relative selector to resolve here.
+func (d *Driver) pageSourceText(sel flow.Selector, want core.Bounds) (string, error) {
+	pageSource, err := d.client.Source()
+	if err != nil {
+		return "", err
+	}
+	allElements, err := ParsePageSource(pageSource)
+	if err != nil {
+		return "", err
+	}
+	for _, e := range FilterBySelector(allElements, sel) {
+		if e.Bounds == want {
+			return elementText(e), nil
+		}
+	}
+	return "", fmt.Errorf("the page source has no element matching %s at the bounds WDA reported (%d,%d %dx%d)",
+		selectorDesc(sel), want.X, want.Y, want.Width, want.Height)
 }
 
 func (d *Driver) pasteText(step *flow.PasteTextStep) *core.CommandResult {

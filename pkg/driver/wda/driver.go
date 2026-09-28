@@ -1259,7 +1259,7 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector, allElements []*Parse
 	}
 
 	info := &core.ElementInfo{
-		Text:    selected.Label,
+		Text:    elementText(selected),
 		Bounds:  selected.Bounds,
 		Enabled: selected.Enabled,
 		Visible: selected.Displayed,
@@ -1318,7 +1318,7 @@ func (d *Driver) findElementByPageSourceOnce(sel flow.Selector) (*core.ElementIn
 	clickableElem := GetClickableElement(selected)
 
 	info := &core.ElementInfo{
-		Text:    selected.Label,
+		Text:    elementText(selected),
 		Bounds:  clickableElem.Bounds,
 		Enabled: selected.Enabled,
 		Visible: selected.Displayed,
