@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **A `launchApp` inside `retry`, `repeat` or a `runFlow` `else` branch now sets up the iOS session's permission alerts.** Before the session starts, the runner looks for the flow's first `launchApp`, and it looked only inside `runFlow`, so a flow whose only `launchApp` sat in a `retry` got no alert handling. A flow file named inside a subflow file is also found next to that file, as it is when the flow runs.
+- **WDA: `clearState` works on a physical iPhone from a host without Xcode.** It uninstalled and reinstalled the app with `xcrun devicectl`, so on Linux every `launchApp` with `clearState: true` failed. Without devicectl, go-ios does both over usbmuxd. A Mac with Xcode is unchanged.
 
 ## [1.1.29] - 2026-10-15
 
