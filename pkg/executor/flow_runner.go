@@ -275,7 +275,7 @@ func (fr *FlowRunner) Run() FlowResult {
 
 		// Describe before executing: expansion rewrites the step in place, and
 		// the description is what the console shows.
-		desc := step.Describe()
+		desc := stepTitle(step)
 
 		// Execute step
 		stepStatus, stepError, stepDuration := fr.executeStep(i, step)
@@ -1417,7 +1417,7 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 	// report is built, so they showed `${PASSWORD}`; a sub-flow's steps were
 	// described here after ExpandStep had rewritten them, so the same step
 	// inside a runFlow showed the password itself.
-	desc := step.Describe()
+	desc := stepTitle(step)
 
 	// For nested compound steps, we need to track their sub-commands separately
 	var nestedSubCommands []report.Command
@@ -1909,4 +1909,13 @@ func (fr *FlowRunner) deviceID() string {
 		return info.DeviceID
 	}
 	return ""
+}
+
+// stepTitle is the step's console line: its label when the flow gives one,
+// as the report and the summary show it, else its description.
+func stepTitle(step flow.Step) string {
+	if label := step.Label(); label != "" {
+		return label
+	}
+	return step.Describe()
 }
