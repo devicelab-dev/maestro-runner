@@ -1420,18 +1420,14 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 	desc := stepTitle(step)
 
 	// For nested compound steps, we need to track their sub-commands separately
-	var nestedSubCommands []report.Command
+	var nestedSubCommands, parentSubCommands []report.Command
 	isCompoundStep := false
 	switch step.(type) {
 	case *flow.RepeatStep, *flow.RetryStep, *flow.RunFlowStep:
 		isCompoundStep = true
 		// Save parent's subCommands and start fresh for this nested compound step
-		parentSubCommands := fr.subCommands
+		parentSubCommands = fr.subCommands
 		fr.subCommands = nil
-		defer func() {
-			nestedSubCommands = fr.subCommands
-			fr.subCommands = parentSubCommands
-		}()
 	}
 
 	switch s := step.(type) {
@@ -1605,6 +1601,15 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 			errMsg = result.Error.Error()
 		}
 		fr.config.OnNestedStep(fr.depth, desc, result.Success, duration, errMsg)
+	}
+
+	// Back to the parent's list before recording this step in it. This was a
+	// defer, which ran after the append below: a runFlow, repeat or retry
+	// nested in another one was appended to its own list and then dropped,
+	// with its steps, from the report.
+	if isCompoundStep {
+		nestedSubCommands = fr.subCommands
+		fr.subCommands = parentSubCommands
 	}
 
 	// Add to parent's sub-commands for report
