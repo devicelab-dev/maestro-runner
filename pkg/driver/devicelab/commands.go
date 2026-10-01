@@ -1784,8 +1784,46 @@ func (d *Driver) settlePage(maxMs int, what string) {
 	d.settleFor(maxMs, pageSettleQuietMs, what)
 }
 
+// settlingOn reports whether steps wait for the screen to settle; a
+// waitForIdleTimeout of 0 turns it off.
+func (d *Driver) settlingOn() bool {
+	return !(d.idleTimeoutSet && d.idleTimeoutMs == 0)
+}
+
+// tapChangeWait bounds how long a tap waits for the screen to start
+// changing. MAESTRO_DEVICELAB_TAP_CHANGE_WAIT_MS overrides it.
+var tapChangeWait = durationFromEnvMs("MAESTRO_DEVICELAB_TAP_CHANGE_WAIT_MS", 300*time.Millisecond)
+
+// tapChangePoll spaces the tree reads while a tap waits for its change.
+const tapChangePoll = 25 * time.Millisecond
+
+// waitForTapChange returns as soon as the screen differs from before, the
+// tree read before the tap, or after tapChangeWait when the tap changed
+// nothing. The settle before the next step then waits for the change to
+// finish.
+func (d *Driver) waitForTapChange(before uint64) {
+	start := time.Now()
+	deadline := start.Add(tapChangeWait)
+	for time.Now().Before(deadline) {
+		if h, err := d.client.TreeHash(); err != nil || h != before {
+			return
+		}
+		time.Sleep(tapChangePoll)
+	}
+	logger.Debug("[devicelab] tap: screen unchanged after %v", time.Since(start).Round(time.Millisecond))
+}
+
+func durationFromEnvMs(name string, def time.Duration) time.Duration {
+	if v := os.Getenv(name); v != "" {
+		if ms, err := strconv.Atoi(v); err == nil && ms >= 0 {
+			return time.Duration(ms) * time.Millisecond
+		}
+	}
+	return def
+}
+
 func (d *Driver) settleFor(maxMs, quietMs int, what string) {
-	if d.idleTimeoutSet && d.idleTimeoutMs == 0 {
+	if !d.settlingOn() {
 		return
 	}
 	if settled, err := d.client.WaitForSettle(maxMs, quietMs); err != nil {

@@ -536,6 +536,21 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 		d.settle(settleAfterTapTimeoutMs, "tap")
 	}
 
+	// A tap returns only once the screen has started to react, or after
+	// tapChangeWait. An app can react a moment after the tap (React Native
+	// scrolls a list from JS), and a 200ms quiet window that starts before
+	// the change counted the old screen as settled: RNTester read
+	// "offset:0" right after "ScrollToOffset 100".
+	var beforeTap uint64
+	watchTap := isTap(step) && d.settlingOn()
+	if watchTap {
+		if h, err := d.client.TreeHash(); err == nil {
+			beforeTap = h
+		} else {
+			watchTap = false
+		}
+	}
+
 	var result *core.CommandResult
 	switch s := step.(type) {
 	// Tap commands
@@ -670,9 +685,16 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	default:
 		d.lastStepWasInput = false
 	}
+	if watchTap && result.Success {
+		d.waitForTapChange(beforeTap)
+	}
 	switch step.(type) {
 	case *flow.TapOnStep, *flow.DoubleTapOnStep, *flow.LongPressOnStep, *flow.TapOnPointStep:
 		d.lastStepWasTap = result.Success
+	case *flow.WaitForAnimationToEndStep:
+		// A wait between a tap and the next step keeps the tap's settle: a
+		// tap, waitForAnimationToEnd, copyTextFrom read the text before the
+		// tap's change had finished.
 	default:
 		d.lastStepWasTap = false
 	}
@@ -2030,6 +2052,15 @@ func (d *Driver) SetAnimationsDisabled(disabled bool) error {
 
 // actsOnScreen reports whether a step acts on what is on screen, so it must
 // not run while the previous tap's UI is still changing.
+// isTap reports whether a step is a tap of some kind.
+func isTap(step flow.Step) bool {
+	switch step.(type) {
+	case *flow.TapOnStep, *flow.DoubleTapOnStep, *flow.LongPressOnStep, *flow.TapOnPointStep:
+		return true
+	}
+	return false
+}
+
 func actsOnScreen(step flow.Step) bool {
 	switch step.(type) {
 	case *flow.TapOnStep, *flow.DoubleTapOnStep, *flow.LongPressOnStep, *flow.TapOnPointStep,
