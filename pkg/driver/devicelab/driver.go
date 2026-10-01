@@ -2065,7 +2065,11 @@ func actsOnScreen(step flow.Step) bool {
 	switch step.(type) {
 	case *flow.TapOnStep, *flow.DoubleTapOnStep, *flow.LongPressOnStep, *flow.TapOnPointStep,
 		*flow.DragAndDropStep, *flow.ScrollStep, *flow.SwipeStep,
-		*flow.BackStep, *flow.PressKeyStep, *flow.CopyTextFromStep:
+		*flow.BackStep, *flow.PressKeyStep, *flow.CopyTextFromStep,
+		// openLink sees the link take effect by the screen changing from how
+		// it was before: a tap's change still under way passed for that, and
+		// the next step read the old page (DuckDuckGo deeplink_to_serp).
+		*flow.OpenLinkStep:
 		return true
 	}
 	return false

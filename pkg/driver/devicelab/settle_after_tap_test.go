@@ -233,3 +233,21 @@ func TestWaitForAnimationKeepsTapSettle(t *testing.T) {
 		t.Errorf("copyTextFrom after tap + wait settled %d times, want 1", client.settles)
 	}
 }
+
+// openLink right after a tap settles the tap's change first: otherwise that
+// change passes for the link taking effect.
+func TestOpenLinkSettlesTapFirst(t *testing.T) {
+	client := &settleCountingClient{richClient: &richClient{trackingClient: newTrackingClient()}}
+	d := New(client, &core.PlatformInfo{}, &mockShell{})
+	link := &flow.OpenLinkStep{BaseStep: flow.BaseStep{StepType: flow.StepOpenLink}, Link: "duck://https://duckduckgo.com?q=x"}
+
+	d.Execute(link)
+	alone := client.settles
+	client.settles = 0
+
+	d.lastStepWasTap = true
+	d.Execute(link)
+	if client.settles != alone+1 {
+		t.Errorf("openLink after a tap settled %d times, want %d (the tap's, then its own)", client.settles, alone+1)
+	}
+}
