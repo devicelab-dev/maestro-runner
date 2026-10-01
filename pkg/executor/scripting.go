@@ -311,8 +311,10 @@ func expandDollarVar(text, name, value string) string {
 // outlive a single runScript call still goes through the global `output`
 // bag, exactly as documented.
 func (se *ScriptEngine) RunScript(script string, env map[string]string) error {
-	// Expand variables in script
-	script = se.ExpandVariables(script)
+	// The script runs as written. Flow variables reach it as plain names
+	// (testID, platform); ${...} in a script is JavaScript, a template
+	// literal, as in Maestro. Expanding it as a flow variable turned Expo's
+	// `${SERVER_URL}/process` into "/process" before the script ran.
 
 	// Apply env variables for the duration of THIS script only, expanded so
 	// values like "mockoon-cli start --port ${output.port}" resolve before the
