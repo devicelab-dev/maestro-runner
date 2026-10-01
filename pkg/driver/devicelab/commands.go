@@ -1397,16 +1397,30 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	// list should not cost every scroll the step allows.
 	var progress core.ScrollProgress
 
+	// centerElement: a visible element keeps the scroll going until it is
+	// near the middle. shown is the last match that was already visible
+	// enough, accepted if the list ends or the scrolls run out first.
+	var centering core.Centering
+	var shown *core.ElementInfo
+
 	for i := 0; i < maxScrolls && time.Now().Before(deadline); i++ {
 		_, info, err := d.findElement(step.Element, true, 1000)
 		if err == nil && info != nil {
-			// The DeviceLab agent returns matches from the full view hierarchy,
-			// including items below the fold in a ScrollView — and a match
-			// half-hidden at the screen edge is no better, because the tap that
-			// follows lands wrong. Stop only when the element meets the flow's
-			// visibility requirement (default: fully inside the viewport, which
-			// here is the full physical display — see tappableScreenSize above).
-			if core.MeetsVisibility(info.Bounds, width, height, step.VisibilityPercentage) {
+			if decided, done := centering.Check(step.CenterElement, info.Bounds, direction, width, height); decided {
+				if done {
+					return successResult(fmt.Sprintf("Element centred after %d scrolls", i), info)
+				}
+				if core.MeetsVisibility(info.Bounds, width, height, step.VisibilityPercentage) {
+					shown = info
+				}
+			} else if core.MeetsVisibility(info.Bounds, width, height, step.VisibilityPercentage) {
+				// The DeviceLab agent returns matches from the full view hierarchy,
+				// including items below the fold in a ScrollView — and a match
+				// half-hidden at the screen edge is no better, because the tap that
+				// follows lands wrong. Stop only when the element meets the flow's
+				// visibility requirement (default: fully inside the viewport, which
+				// here is the full physical display — see tappableScreenSize above).
+				//
 				// The geometry says fully visible, but it is computed from a
 				// rect the hierarchy may already have clipped to the scroll
 				// container — a sliver at the fold scores 100% (#164). A rect
@@ -1428,6 +1442,9 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 		}
 
 		if sig, ok := d.scrollSurfaceSignature(); ok && progress.Observe(sig) {
+			if shown != nil {
+				return successResult(fmt.Sprintf("Element visible after %d scrolls (end of content before centring)", i), shown)
+			}
 			return errorResult(fmt.Errorf("element not found"), fmt.Sprintf("Element not found: scrolling %s made no progress after %d scrolls (end of content?)", direction, i))
 		}
 
@@ -1438,6 +1455,9 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 		time.Sleep(300 * time.Millisecond)
 	}
 
+	if shown != nil {
+		return successResult("Element visible (scrolls ran out before centring)", shown)
+	}
 	return errorResult(fmt.Errorf("element not found"), fmt.Sprintf("Element not found after %d scrolls", maxScrolls))
 }
 

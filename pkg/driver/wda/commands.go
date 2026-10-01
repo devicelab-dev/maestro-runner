@@ -772,6 +772,11 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	// Stop early when the surface stops moving — a target that is not in the
 	// list should not cost every scroll the step allows.
 	var progress core.ScrollProgress
+	// centerElement: a visible element keeps the scroll going until it is
+	// near the middle. shown is the last match that was already visible
+	// enough, accepted if the list ends or the scrolls run out first.
+	var centering core.Centering
+	var shown *core.ElementInfo
 
 	for i := 0; i < maxScrolls && time.Now().Before(deadline); i++ {
 		info, err := d.findElement(step.Element, true, 1000)
@@ -781,7 +786,19 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 			// wrong. Keep scrolling until enough of it is actually on screen.
 			// With no screen size to compare against, accept the find as before.
 			w, h, sizeErr := d.screenSize()
-			if sizeErr != nil || core.MeetsVisibility(info.Bounds, w, h, step.VisibilityPercentage) {
+			centred := false
+			if sizeErr == nil {
+				if decided, done := centering.Check(step.CenterElement, info.Bounds, direction, w, h); decided {
+					if done {
+						return successResult("Element centred after scrolling", info)
+					}
+					if core.MeetsVisibility(info.Bounds, w, h, step.VisibilityPercentage) {
+						shown = info
+					}
+					centred = true // still centring: scroll again below
+				}
+			}
+			if !centred && (sizeErr != nil || core.MeetsVisibility(info.Bounds, w, h, step.VisibilityPercentage)) {
 				return successResult("Element found after scrolling", info)
 			}
 			// The WDA query returns the first match in tree order, which can
@@ -789,7 +806,7 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 			// hidden "Terms of Service" off the right edge, ahead of the
 			// footer link). The page source drops out-of-bounds elements
 			// first, as Maestro does, so ask it for a match on screen.
-			if sizeErr == nil {
+			if sizeErr == nil && !centred {
 				if onScreen, psErr := d.findElementByPageSourceOnce(step.Element); psErr == nil && onScreen != nil &&
 					core.MeetsVisibility(onScreen.Bounds, w, h, step.VisibilityPercentage) {
 					return successResult("Element found after scrolling", onScreen)
@@ -808,10 +825,16 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 			return result
 		}
 		if sig := d.settleScreen(); sig != "" && progress.Observe(sig) {
+			if shown != nil {
+				return successResult("Element visible after scrolling (end of content before centring)", shown)
+			}
 			return errorResult(fmt.Errorf("element not found after scrolling"), fmt.Sprintf("Element not found: %s — scrolling %s made no progress after %d scrolls (end of content?)", selectorDesc(step.Element), direction, i+1))
 		}
 	}
 
+	if shown != nil {
+		return successResult("Element visible after scrolling (scrolls ran out before centring)", shown)
+	}
 	return errorResult(fmt.Errorf("element not found after scrolling"), fmt.Sprintf("Element not found: %s", selectorDesc(step.Element)))
 }
 
