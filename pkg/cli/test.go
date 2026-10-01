@@ -867,6 +867,12 @@ func runTest(c *cli.Context) error {
 		RecordMode:         videoMode,
 	}
 
+	// A --device without --platform: Maestro takes the platform from the
+	// device, so `maestro --device <simulator> test …` (Expo's e2e harness)
+	// runs on iOS. Here it ran on Android and timed out waiting for a device
+	// with that id.
+	inferPlatformFromDevice(cfg)
+
 	// disableAnimations: the CLI flag, or Maestro's workspace platform option.
 	if !cfg.DisableAnimations && workspaceConfig != nil {
 		platform := cfg.Platform
@@ -896,6 +902,15 @@ func runTest(c *cli.Context) error {
 	}
 
 	return executeTest(cfg)
+}
+
+// inferPlatformFromDevice sets the platform to ios when none was given and
+// the first --device is an iOS simulator or iPhone.
+func inferPlatformFromDevice(cfg *RunConfig) {
+	if cfg.Platform == "" && len(cfg.Devices) > 0 && isIOSDeviceID(cfg.Devices[0]) {
+		cfg.Platform = "ios"
+		logger.Info("--device %s is an iOS device; running on iOS", cfg.Devices[0])
+	}
 }
 
 // resolveMaestroOutput maps Maestro's report options onto ours. Without

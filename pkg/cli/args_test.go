@@ -89,3 +89,32 @@ func TestResolveMaestroOutput(t *testing.T) {
 		}
 	}
 }
+
+// Maestro takes the platform from --device; Expo's harness relies on it.
+func TestInferPlatformFromDevice(t *testing.T) {
+	isIOS := isIOSDeviceID
+	t.Cleanup(func() { isIOSDeviceID = isIOS })
+	isIOSDeviceID = func(id string) bool { return id == "4E3A6BB3-F417-4829-8DF5-0EA652541F40" }
+
+	tests := []struct {
+		platform, device, want string
+	}{
+		{"", "4E3A6BB3-F417-4829-8DF5-0EA652541F40", "ios"},
+		{"", "emulator-5554", ""},
+		{"android", "4E3A6BB3-F417-4829-8DF5-0EA652541F40", "android"},
+		{"", "", ""},
+	}
+	for _, tt := range tests {
+		cfg := &RunConfig{Platform: tt.platform}
+		if tt.device != "" {
+			cfg.Devices = []string{tt.device}
+		}
+		inferPlatformFromDevice(cfg)
+		if cfg.Platform != tt.want {
+			t.Errorf("platform %q, device %q: got %q, want %q", tt.platform, tt.device, cfg.Platform, tt.want)
+		}
+	}
+	if isIOS("emulator-5554") {
+		t.Error("an Android emulator id is not an iOS device")
+	}
+}
