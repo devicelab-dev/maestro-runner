@@ -279,6 +279,9 @@ func (a *Agent) launchSimctl(ctx context.Context, c *Client) error {
 	_, _ = simctl(ctx, 15*time.Second, "terminate", a.opts.UDID, runnerBundleID)
 	cmd := exec.CommandContext(ctx, "xcrun", "simctl", "launch", a.opts.UDID, runnerBundleID)
 	cmd.Env = append(os.Environ(), fmt.Sprintf("SIMCTL_CHILD_DL_AGENT_PORT=%d", a.port))
+	if os.Getenv("SIMCTL_CHILD_"+snapshotDepthVar) == "" {
+		cmd.Env = append(cmd.Env, "SIMCTL_CHILD_"+snapshotDepthVar+"="+agentSnapshotMaxDepth())
+	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -339,6 +342,10 @@ func (a *Agent) xctestrunFor(port int) (string, error) {
 		if out, err := exec.Command("plutil", "-replace", path, "-string", strconv.Itoa(port), dst).CombinedOutput(); err != nil {
 			return "", fmt.Errorf("set port in %s: %v: %s", dst, err, strings.TrimSpace(string(out)))
 		}
+		path = fmt.Sprintf("%s.%s.%s", testTargetName, key, snapshotDepthVar)
+		if out, err := exec.Command("plutil", "-replace", path, "-string", agentSnapshotMaxDepth(), dst).CombinedOutput(); err != nil {
+			return "", fmt.Errorf("set snapshot depth in %s: %v: %s", dst, err, strings.TrimSpace(string(out)))
+		}
 	}
 	return dst, nil
 }
@@ -368,6 +375,26 @@ func (a *Agent) revive(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	return a.port, nil
+}
+
+// snapshotDepthVar is the agent's accessibility-snapshot depth setting.
+const snapshotDepthVar = "DL_AGENT_SNAPSHOT_MAX_DEPTH"
+
+// agentSnapshotMaxDepth is the snapshot depth the agent is started with. With
+// a cap above 62, XCTest returns no elements at all for a screen nested deeper
+// than 62 levels, so a deep screen came back blank at the agent's own default
+// of 100 (#171, measured on iOS 27). 62 is the deepest cap that still returns
+// it, and is the same as 100 for any screen 100 worked on. Set
+// DL_AGENT_SNAPSHOT_MAX_DEPTH (or its SIMCTL_CHILD_ form) to override.
+func agentSnapshotMaxDepth() string {
+	for _, name := range []string{snapshotDepthVar, "SIMCTL_CHILD_" + snapshotDepthVar} {
+		if v := os.Getenv(name); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				return strconv.Itoa(n)
+			}
+		}
+	}
+	return "62"
 }
 
 // Release ends the run's hold on the agent. One started by simctl stays up

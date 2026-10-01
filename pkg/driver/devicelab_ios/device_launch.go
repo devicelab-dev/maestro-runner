@@ -286,6 +286,7 @@ func renderDeviceXctestrun(raw []byte, port int, ids bundleIDs) ([]byte, error) 
 				target[envKey] = env
 			}
 			env["DL_AGENT_PORT"] = strconv.Itoa(port)
+			env[snapshotDepthVar] = agentSnapshotMaxDepth()
 		}
 		if ids.custom() {
 			target["TestHostBundleIdentifier"] = ids.runner

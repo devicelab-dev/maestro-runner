@@ -89,12 +89,13 @@ func (c *Client) CreateSession(bundleID string, alertAction string) error {
 }
 
 // wdaSnapshotMaxDepth is the WebDriverAgent accessibility-snapshot depth cap.
-// The default of 100 clears the deep native wrapper nesting a React Native
-// screen produces while staying well under XCAXClient's INT_MAX (which
-// WebDriverAgent avoids because it can hang on pathological trees). Override
-// with MAESTRO_WDA_SNAPSHOT_MAX_DEPTH for an unusually deep app.
+// With a cap above 62, XCTest returns no elements at all for a screen nested
+// deeper than 62 levels, so a deep screen came back blank at the old default
+// of 100 (#171, measured on iOS 27). 62 is the deepest cap that still returns
+// it, and is the same as 100 for any screen 100 worked on. Override with
+// MAESTRO_WDA_SNAPSHOT_MAX_DEPTH.
 func wdaSnapshotMaxDepth() int {
-	const defaultDepth = 100
+	const defaultDepth = 62
 	if v := os.Getenv("MAESTRO_WDA_SNAPSHOT_MAX_DEPTH"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
