@@ -104,6 +104,18 @@ func relSourceFile(sourceFile string) string {
 	return filepath.ToSlash(rel)
 }
 
+// junitStatus maps a flow status to Maestro's testcase status value.
+func junitStatus(s Status) string {
+	switch s {
+	case StatusPassed:
+		return "SUCCESS"
+	case StatusFailed:
+		return "ERROR"
+	default:
+		return strings.ToUpper(string(s))
+	}
+}
+
 // buildTestCase builds a single <testcase> element.
 func buildTestCase(entry *FlowEntry, detail *FlowDetail, index *Index) string {
 	var tcTime float64
@@ -111,11 +123,20 @@ func buildTestCase(entry *FlowEntry, detail *FlowDetail, index *Index) string {
 		tcTime = float64(*entry.Duration) / 1000.0
 	}
 
+	// id, timestamp and status as Maestro writes them: parsers written
+	// against Maestro's report (Expo's reads status="SUCCESS") need them.
+	var timestamp string
+	if entry.StartTime != nil {
+		timestamp = fmt.Sprintf(` timestamp="%s"`, entry.StartTime.Format(time.RFC3339))
+	} else if detail != nil && !detail.StartTime.IsZero() {
+		timestamp = fmt.Sprintf(` timestamp="%s"`, detail.StartTime.Format(time.RFC3339))
+	}
+
 	var b strings.Builder
 	name := xmlEscape(entry.Name)
 	b.WriteString(fmt.Sprintf(
-		`    <testcase name="%s" classname="%s" time="%.3f">`+"\n",
-		name, name, tcTime,
+		`    <testcase id="%s" name="%s" classname="%s" time="%.3f"%s status="%s">`+"\n",
+		name, name, name, tcTime, timestamp, junitStatus(entry.Status),
 	))
 
 	// Properties: file, device info

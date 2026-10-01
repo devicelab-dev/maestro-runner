@@ -109,8 +109,8 @@ func TestGenerateJUnit(t *testing.T) {
 		`<?xml version="1.0" encoding="UTF-8"?>`,
 		`<testsuites tests="2" failures="0" skipped="0" errors="0"`,
 		`<testsuite name="maestro-runner" tests="2" failures="0" skipped="0"`,
-		`<testcase name="Login Test" classname="Login Test" time="5.000"`,
-		`<testcase name="Signup Test" classname="Signup Test" time="3.000"`,
+		`<testcase id="Login Test" name="Login Test" classname="Login Test" time="5.000"`,
+		`<testcase id="Signup Test" name="Signup Test" classname="Signup Test" time="3.000"`,
 		`<property name="file" value="flows/login.yaml"/>`,
 		`<property name="file" value="flows/signup.yaml"/>`,
 		`<property name="device.name" value="Pixel 6"/>`,
@@ -480,9 +480,13 @@ func TestGenerateJUnitMixedResults(t *testing.T) {
 
 	checks := []string{
 		`tests="3" failures="1" skipped="1"`,
-		`<testcase name="Login"`,
-		`<testcase name="Checkout"`,
-		`<testcase name="Settings"`,
+		// status as Maestro writes it; Expo's parser keys on SUCCESS.
+		`<testcase id="Login" name="Login" classname="Login" time="5.000"`,
+		`<testcase id="Checkout" name="Checkout"`,
+		`<testcase id="Settings" name="Settings" classname="Settings" time="0.000"`,
+		`status="SUCCESS">`,
+		`status="ERROR">`,
+		`status="SKIPPED">`,
 		`<failure message="Tap failed" type="ElementInteractionError">Tap failed</failure>`,
 		`<skipped/>`,
 	}
