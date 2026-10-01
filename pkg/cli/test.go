@@ -144,6 +144,7 @@ Examples:
 		},
 		&cli.StringFlag{
 			Name:    "window-size",
+			Aliases: []string{"screen-size"},
 			Usage:   "Browser viewport as WxH, e.g. 390x844 (web only, default 1280x800). Lets one suite run against phone, tablet and desktop breakpoints.",
 			EnvVars: []string{"MAESTRO_WINDOW_SIZE"},
 		},
@@ -213,6 +214,41 @@ Examples:
 		// Emulator management flags (start-emulator, auto-start-emulator,
 		// shutdown-after, boot-timeout) are global flags defined in cli.go.
 
+		// Maestro's `test` options, so a command written for Maestro runs as
+		// it is.
+		&cli.StringFlag{
+			Name:  "format",
+			Usage: "As Maestro: junit or html also writes that report to --output <file> (default report.xml / report.html); the full reports then go to --test-output-dir (default ./reports)",
+		},
+		&cli.StringFlag{
+			Name:  "test-output-dir",
+			Usage: "As Maestro: directory for the reports and artifacts (the same as --output when --format is not given)",
+		},
+		&cli.StringFlag{
+			Name:  "debug-output",
+			Usage: "As Maestro: directory for the logs and artifacts; used for the reports when --test-output-dir is not given",
+		},
+		&cli.BoolFlag{
+			Name:  "flatten-debug-output",
+			Usage: "As Maestro: no timestamp subfolder (the same as --flatten)",
+		},
+		&cli.IntFlag{
+			Name:    "shard-split",
+			Aliases: []string{"shards", "s"},
+			Usage:   "As Maestro: split the flows across N devices (the same as --parallel)",
+		},
+		&cli.IntFlag{
+			Name:   "shard-all",
+			Usage:  "Maestro's run-every-flow-on-each-device mode; not supported (use --parallel to split flows)",
+			Hidden: true,
+		},
+		&cli.StringFlag{Name: "test-suite-name", Hidden: true},
+		&cli.BoolFlag{Name: "reinstall-driver", Hidden: true},
+		&cli.BoolFlag{Name: "no-reinstall-driver", Hidden: true},
+		&cli.BoolFlag{Name: "headless", Hidden: true},
+		&cli.BoolFlag{Name: "analyze", Hidden: true},
+		&cli.StringFlag{Name: "api-key", Hidden: true},
+		&cli.StringFlag{Name: "api-url", Hidden: true},
 	},
 	Action: runTest,
 }
@@ -515,7 +551,10 @@ type RunConfig struct {
 	// ReportBaseDir is the root the runner writes runs under (--output, or
 	// ./reports) — where --retry-failed looks for the previous run's report.
 	ReportBaseDir string
-	RetryFailed   bool // Narrow the selection to flows that failed in the previous run
+	// ReportFile is where Maestro's --format/--output asked for the report;
+	// the JUnit (.xml) or HTML report is copied there. Empty means none.
+	ReportFile  string
+	RetryFailed bool // Narrow the selection to flows that failed in the previous run
 
 	// Parallelization
 	Parallel int // Number of devices to use (0 = single device mode)
@@ -682,15 +721,36 @@ func runTest(c *cli.Context) error {
 	// Parse environment variables
 	env := parseEnvVars(takeEnvValues(c))
 
+	if getInt("shard-all") > 0 {
+		return fmt.Errorf("--shard-all (every flow on each device) is not supported; use --parallel N to split the flows across N devices")
+	}
+
+	// Maestro's --format makes --output the report file; the reports
+	// directory then comes from --test-output-dir or --debug-output.
+	base, reportFile, err := resolveMaestroOutput(getString("format"), getString("output"),
+		getString("test-output-dir"), getString("debug-output"))
+	if err != nil {
+		return err
+	}
+	flatten := getBool("flatten") || getBool("flatten-debug-output")
+	if flatten && base == "" && !c.IsSet("flatten") {
+		flatten = false // Maestro allows --flatten-debug-output alone
+	}
+
 	// Resolve output directory
-	outputDir, err := resolveOutputDir(getString("output"), getBool("flatten"))
+	outputDir, err := resolveOutputDir(base, flatten)
 	if err != nil {
 		return err
 	}
 
+	parallel := getInt("parallel")
+	if parallel == 0 {
+		parallel = getInt("shard-split")
+	}
+
 	// The base directory (before any timestamp subfolder) is where
 	// --retry-failed looks for the previous run's report.
-	reportBaseDir := getString("output")
+	reportBaseDir := base
 	if reportBaseDir == "" {
 		reportBaseDir = "./reports"
 	}
@@ -763,8 +823,9 @@ func runTest(c *cli.Context) error {
 		ExcludeTags:        getStringSlice("exclude-tags"),
 		OutputDir:          outputDir,
 		ReportBaseDir:      reportBaseDir,
+		ReportFile:         reportFile,
 		RetryFailed:        getBool("retry-failed"),
-		Parallel:           getInt("parallel"),
+		Parallel:           parallel,
 		Continuous:         getBool("continuous"),
 		Headed:             getBool("headed"),
 		Browser:            getString("browser"),
@@ -835,6 +896,57 @@ func runTest(c *cli.Context) error {
 	}
 
 	return executeTest(cfg)
+}
+
+// resolveMaestroOutput maps Maestro's report options onto ours. Without
+// --format, --output is our reports directory, as before. With --format junit
+// or html, --output is the report file (default report.xml or report.html,
+// as Maestro writes), and the reports directory is --test-output-dir, else
+// --debug-output, else the default. It returns the reports directory ("" for
+// the default) and the report file ("" for none).
+func resolveMaestroOutput(format, output, testOutputDir, debugOutput string) (string, string, error) {
+	dir := testOutputDir
+	if dir == "" {
+		dir = debugOutput
+	}
+	switch strings.ToLower(format) {
+	case "", "noop":
+		if output != "" {
+			dir = output
+		}
+		return dir, "", nil
+	case "junit":
+		if output == "" {
+			output = "report.xml"
+		}
+		return dir, output, nil
+	case "html", "html-detailed":
+		if output == "" {
+			output = "report.html"
+		}
+		return dir, output, nil
+	default:
+		return "", "", fmt.Errorf("--format %q: use junit, html or noop", format)
+	}
+}
+
+// writeReportFile copies the generated report Maestro's --format asked for
+// to the --output file.
+func writeReportFile(cfg *RunConfig) error {
+	src := filepath.Join(cfg.OutputDir, "junit-report.xml")
+	if strings.HasSuffix(strings.ToLower(cfg.ReportFile), ".html") {
+		src = filepath.Join(cfg.OutputDir, "report.html")
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	if dir := filepath.Dir(cfg.ReportFile); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(cfg.ReportFile, data, 0o644)
 }
 
 // resolveOutputDir determines the output directory based on flags.
@@ -1089,6 +1201,14 @@ func executeTest(cfg *RunConfig) error {
 	if err := report.GenerateAllure(cfg.OutputDir); err != nil {
 		allureGenerated = false
 		fmt.Printf("  %s⚠%s Warning: failed to generate Allure report: %v\n", color(colorYellow), color(colorReset), err)
+	}
+
+	if cfg.ReportFile != "" {
+		if err := writeReportFile(cfg); err != nil {
+			fmt.Printf("  %s⚠%s Warning: failed to write %s: %v\n", color(colorYellow), color(colorReset), cfg.ReportFile, err)
+		} else {
+			fmt.Printf("  Report: %s\n", cfg.ReportFile)
+		}
 	}
 
 	// Report result to cloud provider (if detected)
