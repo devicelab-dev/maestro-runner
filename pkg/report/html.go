@@ -924,6 +924,18 @@ const htmlTemplate = `<!DOCTYPE html>
             margin-left: 24px;
         }
 
+        .command-logs {
+            font-family: 'SF Mono', Monaco, Consolas, monospace;
+            font-size: 12px;
+            color: var(--text-primary);
+            white-space: pre-wrap;
+            word-break: break-all;
+            background: var(--bg-tertiary);
+            border-left: 3px solid var(--border-color);
+            padding: 8px;
+            border-radius: 4px;
+        }
+
         .command-yaml {
             font-family: 'SF Mono', Monaco, Consolas, monospace;
             font-size: 12px;
@@ -1753,7 +1765,8 @@ const htmlTemplate = `<!DOCTYPE html>
             const keyValue = extractKeyValue(cmd);
             const hasSubCommands = cmd.subCommands && cmd.subCommands.length > 0;
             const hasScreenshots = cmd.artifacts && (cmd.artifacts.screenshotBefore || cmd.artifacts.screenshotAfter);
-            const hasDetails = cmd.yaml || cmd.error || hasScreenshots;
+            const hasLogs = cmd.logs && cmd.logs.length > 0;
+            const hasDetails = cmd.yaml || cmd.error || hasScreenshots || hasLogs;
             const isExpandable = hasDetails || hasSubCommands;
 
             let html = '<div class="command-item ' + status + (hasSubCommands ? ' has-subcommands' : '') + '" id="flow-' + flowIndex + '-cmd-' + index + '-d' + depth + '" onclick="toggleCommand(this, event)">';
@@ -1778,6 +1791,10 @@ const htmlTemplate = `<!DOCTYPE html>
 
                 if (cmd.yaml && !hasSubCommands) {
                     html += '<div class="command-yaml">' + escapeHtml(cmd.yaml) + '</div>';
+                }
+
+                if (hasLogs) {
+                    html += '<div class="command-logs">' + escapeHtml(cmd.logs.join('\n')) + '</div>';
                 }
 
                 if (cmd.error) {

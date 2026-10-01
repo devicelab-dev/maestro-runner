@@ -523,6 +523,15 @@ func (se *ScriptEngine) ExecuteAssertTrue(step *flow.AssertTrueStep) *core.Comma
 	}
 }
 
+// TakeConsoleLogs returns the console.log/warn/error lines scripts printed
+// since the last call, for the step that ran them.
+func (se *ScriptEngine) TakeConsoleLogs() []string {
+	if se == nil || se.js == nil {
+		return nil
+	}
+	return se.js.TakeLogs()
+}
+
 // ExecuteAssertCondition handles assertCondition step.
 func (se *ScriptEngine) ExecuteAssertCondition(ctx context.Context, step *flow.AssertConditionStep, driver core.Driver) *core.CommandResult {
 	cond := step.Condition

@@ -15,6 +15,12 @@ import (
 
 // Engine wraps goja runtime with Maestro-compatible features
 type Engine struct {
+	// logs keeps what console.log/warn/error printed since the last
+	// TakeLogs, for the report. The console functions run while Eval holds
+	// mu, so it has its own lock.
+	logsMu sync.Mutex
+	logs   []string
+
 	runtime      *goja.Runtime
 	variables    map[string]interface{}
 	output       map[string]interface{}
@@ -100,6 +106,16 @@ func (e *Engine) setupBuiltins() {
 	}
 }
 
+// TakeLogs returns the console lines printed since the last call and
+// clears them.
+func (e *Engine) TakeLogs() []string {
+	e.logsMu.Lock()
+	defer e.logsMu.Unlock()
+	logs := e.logs
+	e.logs = nil
+	return logs
+}
+
 // setupConsole adds console.log, console.error, etc.
 func (e *Engine) setupConsole() {
 	// Helper to create console methods
@@ -109,11 +125,16 @@ func (e *Engine) setupConsole() {
 			for i, arg := range call.Arguments {
 				args[i] = arg.Export()
 			}
+			var line string
 			if prefix != "" {
-				fmt.Println(prefix, args)
+				line = fmt.Sprintln(append([]interface{}{prefix}, args...)...)
 			} else {
-				fmt.Println(args...)
+				line = fmt.Sprintln(args...)
 			}
+			fmt.Print(line)
+			e.logsMu.Lock()
+			e.logs = append(e.logs, strings.TrimSuffix(line, "\n"))
+			e.logsMu.Unlock()
 			return goja.Undefined()
 		}
 	}

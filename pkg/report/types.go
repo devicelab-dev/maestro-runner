@@ -213,6 +213,7 @@ type Command struct {
 	Error       *Error           `json:"error,omitempty"`
 	Artifacts   CommandArtifacts `json:"artifacts"`
 	SubCommands []Command        `json:"subCommands,omitempty"` // For runFlow, repeat, retry
+	Logs        []string         `json:"logs,omitempty"`        // console.log/warn/error output of the step's scripts
 }
 
 // CommandParams contains command-specific parameters.

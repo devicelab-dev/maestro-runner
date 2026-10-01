@@ -649,6 +649,8 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 		element = commandResultToElement(result)
 	}
 
+	fr.flowWriter.CommandLogs(idx, fr.script.TakeConsoleLogs())
+
 	// Update report - use CommandEndWithSubs for compound steps
 	switch step.(type) {
 	case *flow.RepeatStep, *flow.RetryStep, *flow.RunFlowStep:
@@ -1643,6 +1645,7 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 	if isCompoundStep {
 		cmd.SubCommands = nestedSubCommands
 	}
+	cmd.Logs = fr.script.TakeConsoleLogs()
 
 	// A failed nested step (inside runFlow / repeat / retry) now gets its own
 	// screenshot + hierarchy, the same post-mortem a failed top-level step has.
