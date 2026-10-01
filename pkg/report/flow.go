@@ -91,6 +91,16 @@ func (w *FlowWriter) CommandEndWithSubs(cmdIndex int, status Status, element *El
 	w.updateIndexProgress()
 }
 
+// CommandYAML replaces the command's description, written when the report
+// was built, with the one known once it ran.
+func (w *FlowWriter) CommandYAML(cmdIndex int, yaml string) {
+	if cmdIndex < 0 || cmdIndex >= len(w.flow.Commands) {
+		return
+	}
+	w.flow.Commands[cmdIndex].YAML = yaml
+	w.flush()
+}
+
 // CommandLogs attaches what the command's scripts printed with console.log,
 // warn or error.
 func (w *FlowWriter) CommandLogs(cmdIndex int, logs []string) {

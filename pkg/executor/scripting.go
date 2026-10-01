@@ -39,6 +39,10 @@ type ScriptEngine struct {
 	flowDir            string // Directory of current flow (for resolving relative paths)
 	conditionTimeoutMs int    // fixed timeout for when/while condition checks; 0 = Maestro's budget
 	lastInteraction    time.Time
+	// external names the variables that came from outside the flow files
+	// (-e, --env-file, workspace config, the shell). Step names never show
+	// their values, which may be secrets.
+	external map[string]bool
 }
 
 // NewScriptEngine creates a new script engine.
@@ -120,6 +124,61 @@ func (se *ScriptEngine) SetVariables(vars map[string]string) {
 	}
 }
 
+// SetExternalVariables sets variables that came from outside the flow files
+// (-e, --env-file, workspace config). Step names never show their values.
+func (se *ScriptEngine) SetExternalVariables(vars map[string]string) {
+	for k, v := range vars {
+		se.SetVariable(k, v)
+		se.markExternal(k)
+	}
+}
+
+func (se *ScriptEngine) markExternal(name string) {
+	if se.external == nil {
+		se.external = map[string]bool{}
+	}
+	se.external[name] = true
+}
+
+// displayVarRef is a plain ${NAME} reference, the only kind step names expand.
+var displayVarRef = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// DisplayText expands the plain ${NAME} references in a step's name whose
+// values were defined in the flow files: a flow's env:, a runFlow's env:,
+// defineVariables, a command's output. A variable from outside the flow
+// (-e, --env-file, workspace config, the shell) stays ${NAME}, and so does a
+// flow value that contains one of their values (env: {PASS: ${PASSWORD}}),
+// since either may be a secret. Expressions other than a plain name are left
+// as written.
+func (se *ScriptEngine) DisplayText(text string) string {
+	if se == nil || !strings.Contains(text, "${") {
+		return text
+	}
+	return displayVarRef.ReplaceAllStringFunc(text, func(ref string) string {
+		name := ref[2 : len(ref)-1]
+		value, ok := se.variables[name]
+		if !ok || se.external[name] || se.carriesExternal(value) {
+			return ref
+		}
+		return value
+	})
+}
+
+// carriesExternal reports whether value holds the value of an external
+// variable: all of it, or (for values long enough to be a secret) part of it.
+func (se *ScriptEngine) carriesExternal(value string) bool {
+	for name := range se.external {
+		ext := se.variables[name]
+		if ext == "" {
+			continue
+		}
+		if value == ext || (len(ext) >= 6 && strings.Contains(value, ext)) {
+			return true
+		}
+	}
+	return false
+}
+
 // UnsetVariable removes a variable from both the Go map and the JS engine.
 func (se *ScriptEngine) UnsetVariable(name string) {
 	delete(se.variables, name)
@@ -137,6 +196,7 @@ func (se *ScriptEngine) ImportSystemEnv() {
 			// Import if it matches env var pattern (uppercase like THING, MY_VAR)
 			if envVarPattern.MatchString(name) {
 				se.SetVariable(name, value)
+				se.markExternal(name)
 			}
 		}
 	}

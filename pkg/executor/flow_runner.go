@@ -74,7 +74,7 @@ func (fr *FlowRunner) Run() FlowResult {
 
 	// Apply CLI environment variables (from -e flags)
 	// These take precedence over system env, but flow-level env takes precedence over these
-	fr.script.SetVariables(fr.config.Env)
+	fr.script.SetExternalVariables(fr.config.Env)
 
 	// DEVICE_UDID: the device this flow runs on. The flow's own env: can
 	// still override it.
@@ -275,10 +275,16 @@ func (fr *FlowRunner) Run() FlowResult {
 
 		// Describe before executing: expansion rewrites the step in place, and
 		// the description is what the console shows.
-		desc := stepTitle(step)
+		describe, desc := fr.stepNames(step)
 
 		// Execute step
 		stepStatus, stepError, stepDuration := fr.executeStep(i, step)
+
+		// The report described the step before the run, with every ${NAME}
+		// as written; give it the flow values that are known now.
+		if describe != step.Describe() {
+			fr.flowWriter.CommandYAML(i, describe)
+		}
 
 		// Notify step complete
 		if fr.config.OnStepComplete != nil {
@@ -1419,7 +1425,7 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 	// report is built, so they showed `${PASSWORD}`; a sub-flow's steps were
 	// described here after ExpandStep had rewritten them, so the same step
 	// inside a runFlow showed the password itself.
-	desc := stepTitle(step)
+	describe, desc := fr.stepNames(step)
 
 	// For nested compound steps, we need to track their sub-commands separately
 	var nestedSubCommands, parentSubCommands []report.Command
@@ -1626,7 +1632,7 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 		Index:     len(fr.subCommands),
 		Type:      string(step.Type()),
 		Label:     step.Label(),
-		YAML:      desc,
+		YAML:      describe,
 		Status:    status,
 		StartTime: &start,
 		EndTime:   &now,
@@ -1919,11 +1925,14 @@ func (fr *FlowRunner) deviceID() string {
 	return ""
 }
 
-// stepTitle is the step's console line: its label when the flow gives one,
-// as the report and the summary show it, else its description.
-func stepTitle(step flow.Step) string {
+// stepNames returns the step's description and its console line: its label
+// when the flow gives one, as the report and the summary show it, else its
+// description. Both fill in the ${NAME}s defined in the flow files, never
+// the ones given from outside (see ScriptEngine.DisplayText).
+func (fr *FlowRunner) stepNames(step flow.Step) (describe, title string) {
+	describe = fr.script.DisplayText(step.Describe())
 	if label := step.Label(); label != "" {
-		return label
+		return describe, fr.script.DisplayText(label)
 	}
-	return step.Describe()
+	return describe, describe
 }
