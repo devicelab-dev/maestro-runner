@@ -151,7 +151,12 @@ func printCommand(cmd report.Command, depth int) {
 	isSlow := duration >= slowThresholdMs && !isCompoundCommand(description)
 	passed := cmd.Status == report.StatusPassed
 
-	if passed {
+	if cmd.Status == report.StatusSkipped {
+		// Never ran (after a failure, or cancelled): not a failure.
+		fmt.Printf("%s%s–%s %s %s(skipped)%s\n",
+			indent, color(colorGray), color(colorReset),
+			description, color(colorGray), color(colorReset))
+	} else if passed {
 		symbol := "✓"
 		symbolColor := color(colorGreen)
 		durColor := ""
