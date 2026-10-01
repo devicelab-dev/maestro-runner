@@ -246,6 +246,13 @@ func (a *Agent) launch(ctx context.Context) (*Client, error) {
 	// to xcodebuild, instead of paying the simctl wait on every run.
 	noSimctl := filepath.Join(stateDir(a.opts.UDID), "simctl-failed-"+a.version)
 	skipSimctl := a.opts.Mode == ModeAuto && pathExists(noSimctl)
+	if skipSimctl {
+		// On the console too: in CI the log file is often not kept, and this
+		// is why every run then pays a full agent start.
+		reason, _ := os.ReadFile(noSimctl)
+		fmt.Fprintf(os.Stderr, "  ⚠ simctl launch failed on this simulator before (%s); starting the agent with xcodebuild\n",
+			strings.TrimSpace(oneLine(string(reason))))
+	}
 	if (a.opts.Mode == ModeAuto && !skipSimctl) || a.opts.Mode == ModeSimctl {
 		if err := a.launchSimctl(ctx, c); err == nil {
 			a.mode = ModeSimctl
@@ -254,6 +261,7 @@ func (a *Agent) launch(ctx context.Context) (*Client, error) {
 		} else {
 			errs = append(errs, "simctl launch: "+err.Error())
 			logger.Info("[devicelab-ios] simctl launch did not bring the agent up (%v)", err)
+			fmt.Fprintf(os.Stderr, "  ⚠ simctl launch did not bring the agent up (%s); trying xcodebuild\n", oneLine(err.Error()))
 			if a.opts.Mode == ModeAuto {
 				_ = os.MkdirAll(filepath.Dir(noSimctl), 0o755)
 				_ = os.WriteFile(noSimctl, []byte(err.Error()), 0o644)
@@ -397,17 +405,46 @@ func agentSnapshotMaxDepth() string {
 	return "62"
 }
 
-// Release ends the run's hold on the agent. One started by simctl stays up
-// as a daemon for the next run to re-attach to; one this process runs under
-// xcodebuild cannot outlive it, so it is stopped. DEVICELAB_IOS_AGENT_KEEP=0
-// stops it either way.
+// Release ends the run's hold on the agent, which stays up for the next run
+// to re-attach to, however it was started: xcodebuild runs in its own
+// process group, so it outlives this process as a simctl-launched agent
+// does. Stopping it here made a harness that runs one process per flow
+// (React Native's iOS E2E) restart the agent for every flow when simctl
+// launch did not work on the machine. DEVICELAB_IOS_AGENT_KEEP=0 stops it.
 func (a *Agent) Release(ctx context.Context, c *Client) {
-	a.mu.Lock()
-	owned := a.xcodeCmd != nil
-	a.mu.Unlock()
-	if owned || os.Getenv("DEVICELAB_IOS_AGENT_KEEP") == "0" {
+	if os.Getenv("DEVICELAB_IOS_AGENT_KEEP") == "0" {
 		a.Stop(ctx, c)
+		return
 	}
+	a.mu.Lock()
+	cmd, logFile := a.xcodeCmd, a.logFile
+	a.xcodeCmd, a.logFile = nil, nil
+	a.mu.Unlock()
+	if logFile != nil {
+		_ = logFile.Close() // xcodebuild keeps its own descriptor
+	}
+	if cmd != nil && cmd.Process != nil {
+		watchKeptAgent(a.opts.UDID, cmd.Process.Pid)
+	}
+}
+
+// watchKeptAgent is watchXcodebuild; tests replace it.
+var watchKeptAgent = watchXcodebuild
+
+// watchXcodebuild starts a detached watcher that stops the xcodebuild
+// process group pid leads once the simulator is no longer booted: xcodebuild
+// does not exit when its simulator shuts down, and a kept agent must not
+// outlive it. The watcher ends by itself when xcodebuild does.
+func watchXcodebuild(udid string, pid int) {
+	script := fmt.Sprintf(`while kill -0 %[1]d 2>/dev/null && xcrun simctl list devices booted | grep -q %[2]q; do sleep 20; done
+kill -TERM -%[1]d 2>/dev/null; sleep 5; kill -KILL -%[1]d 2>/dev/null; exit 0`, pid, udid)
+	w := exec.Command("/bin/sh", "-c", script)
+	setProcessGroup(w)
+	if err := w.Start(); err != nil {
+		logger.Warn("[devicelab-ios] could not watch the kept agent (pid %d): %v", pid, err)
+		return
+	}
+	go func() { _ = w.Wait() }()
 }
 
 // Stop asks the agent to exit and ends an xcodebuild it was started by.
@@ -441,4 +478,12 @@ func simctl(ctx context.Context, timeout time.Duration, args ...string) (string,
 	defer cancel()
 	out, err := exec.CommandContext(c, "xcrun", append([]string{"simctl"}, args...)...).CombinedOutput()
 	return string(out), err
+}
+
+// oneLine is s up to its first line break, for a one-line console note.
+func oneLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
