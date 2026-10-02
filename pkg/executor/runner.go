@@ -107,6 +107,8 @@ type FlowResult struct {
 	StepsPassed  int
 	StepsFailed  int
 	StepsSkipped int
+	// Attempts is how many times the flow ran (more than 1 with --retries).
+	Attempts int
 	// SessionID identifies the worker (Appium session) that ran this flow.
 	// Empty for sequential single-device runs; set by ParallelRunner so cloud
 	// providers can filter results to the worker that produced them.
@@ -164,8 +166,17 @@ func (r *Runner) Run(ctx context.Context, flows []flow.Flow) (*RunResult, error)
 		defer setAnimationsDisabled(r.driver, false)
 	}
 
+	retries := newFlowRetries(r.config, flowDetails)
+
 	// Execute flows
 	results := r.executeFlows(ctx, expandedFlows, flowDetails, indexWriter)
+	if retries != nil {
+		retries.run(ctx, results, indexWriter, func(indexes []int) {
+			for _, i := range indexes {
+				results[i] = r.executeFlow(ctx, expandedFlows[i], &flowDetails[i], indexWriter, i, len(expandedFlows))
+			}
+		})
+	}
 
 	// Mark run as complete
 	indexWriter.End()

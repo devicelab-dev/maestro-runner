@@ -114,14 +114,21 @@ func printDetailedFlowResults(outputDir string, reportIndex *report.Index) error
 			duration = *flowEntry.Duration
 		}
 
+		attempts := ""
+		if flowEntry.Attempts > 1 {
+			attempts = fmt.Sprintf(" (failed all %d attempts)", flowEntry.Attempts)
+			if flowEntry.Status == report.StatusPassed {
+				attempts = fmt.Sprintf(" (passed on attempt %d)", flowEntry.Attempts)
+			}
+		}
 		if flowEntry.Status == report.StatusPassed {
-			fmt.Printf("%s✓ %s%s %s%s%s\n",
+			fmt.Printf("%s✓ %s%s %s%s%s%s\n",
 				color(colorGreen), color(colorReset), flowEntry.Name,
-				color(colorGray), formatDuration(duration), color(colorReset))
+				color(colorGray), formatDuration(duration), attempts, color(colorReset))
 		} else if flowEntry.Status == report.StatusFailed {
-			fmt.Printf("%s✗ %s%s %s%s%s\n",
+			fmt.Printf("%s✗ %s%s %s%s%s%s\n",
 				color(colorRed), color(colorReset), flowEntry.Name,
-				color(colorGray), formatDuration(duration), color(colorReset))
+				color(colorGray), formatDuration(duration), attempts, color(colorReset))
 		}
 	}
 

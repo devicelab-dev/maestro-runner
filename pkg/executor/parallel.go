@@ -129,123 +129,133 @@ func (pr *ParallelRunner) Run(ctx context.Context, flows []flow.Flow) (*RunResul
 	indexWriter.Start()
 	startTime := time.Now()
 
-	// Create work queue with flow indices, longest known flow first so the
-	// slowest work is not picked up last (see longestFirst).
-	workQueue := make(chan workItem, len(flows))
-	for _, i := range longestFirst(flows, priorDurations) {
-		workQueue <- workItem{flow: flows[i], index: i}
-	}
-	close(workQueue)
+	retries := newFlowRetries(pr.config, flowDetails)
 
 	// Results collection
 	results := make([]FlowResult, len(flows))
 	var resultsMu sync.Mutex
-	var wg sync.WaitGroup
 
 	totalFlows := len(flows)
 
-	// Start workers
-	for i := range pr.workers {
-		wg.Add(1)
-		worker := pr.workers[i]
+	// runRound runs the given flows across the workers and waits for them.
+	runRound := func(order []int) {
+		workQueue := make(chan workItem, len(order))
+		for _, i := range order {
+			workQueue <- workItem{flow: flows[i], index: i}
+		}
+		close(workQueue)
+		var wg sync.WaitGroup
 
-		go func(w DeviceWorker) {
-			defer wg.Done()
+		// Start workers
+		for i := range pr.workers {
+			wg.Add(1)
+			worker := pr.workers[i]
 
-			// Capture device info for this worker
-			platformInfo := w.Driver.GetPlatformInfo()
-			deviceInfo := &report.Device{
-				ID:          platformInfo.DeviceID,
-				Name:        platformInfo.DeviceName,
-				Platform:    platformInfo.Platform,
-				OSVersion:   platformInfo.OSVersion,
-				SessionID:   w.SessionID,
-				IsSimulator: platformInfo.IsSimulator,
-			}
+			go func(w DeviceWorker) {
+				defer wg.Done()
 
-			// Create device-specific config with device info set
-			workerConfig := pr.config
-			workerConfig.DeviceInfo = deviceInfo
-
-			// Create device-specific callbacks that include device info in output
-			deviceLabel := formatDeviceLabel(deviceInfo)
-
-			// Store flow info for OnFlowEnd callback
-			var currentFlowIdx int
-			var currentTotalFlows int
-			var currentFlowFile string
-
-			workerConfig.OnFlowStart = func(flowIdx, totalFlows int, name, file string) {
-				// Store for OnFlowEnd
-				currentFlowIdx = flowIdx
-				currentTotalFlows = totalFlows
-				currentFlowFile = file
-
-				pr.outputMutex.Lock()
-				fmt.Printf("[%d/%d] %s (%s) - %s⚡ Started%s on %s\n",
-					flowIdx+1, totalFlows, name, file, color(colorCyan), color(colorReset), deviceLabel)
-				pr.outputMutex.Unlock()
-
-				if w.OnFlowStart != nil {
-					w.OnFlowStart(flowIdx, totalFlows, name, file)
-				}
-			}
-
-			workerConfig.OnFlowEnd = func(name string, passed bool, durationMs int64, errMsg string) {
-				pr.outputMutex.Lock()
-				status := "✓ Passed"
-				statusColor := color(colorGreen)
-				if !passed {
-					status = "✗ Failed"
-					statusColor = color(colorRed)
+				// Capture device info for this worker
+				platformInfo := w.Driver.GetPlatformInfo()
+				deviceInfo := &report.Device{
+					ID:          platformInfo.DeviceID,
+					Name:        platformInfo.DeviceName,
+					Platform:    platformInfo.Platform,
+					OSVersion:   platformInfo.OSVersion,
+					SessionID:   w.SessionID,
+					IsSimulator: platformInfo.IsSimulator,
 				}
 
-				fmt.Printf("[%d/%d] %s (%s) - %s%s%s on %s (%s)\n",
-					currentFlowIdx+1, currentTotalFlows, name, currentFlowFile,
-					statusColor, status, color(colorReset), deviceLabel, formatDuration(durationMs))
+				// Create device-specific config with device info set
+				workerConfig := pr.config
+				workerConfig.DeviceInfo = deviceInfo
 
-				if !passed && errMsg != "" {
-					fmt.Printf("  Error: %s\n", errMsg)
+				// Create device-specific callbacks that include device info in output
+				deviceLabel := formatDeviceLabel(deviceInfo)
+
+				// Store flow info for OnFlowEnd callback
+				var currentFlowIdx int
+				var currentTotalFlows int
+				var currentFlowFile string
+
+				workerConfig.OnFlowStart = func(flowIdx, totalFlows int, name, file string) {
+					// Store for OnFlowEnd
+					currentFlowIdx = flowIdx
+					currentTotalFlows = totalFlows
+					currentFlowFile = file
+
+					pr.outputMutex.Lock()
+					fmt.Printf("[%d/%d] %s (%s) - %s⚡ Started%s on %s\n",
+						flowIdx+1, totalFlows, name, file, color(colorCyan), color(colorReset), deviceLabel)
+					pr.outputMutex.Unlock()
+
+					if w.OnFlowStart != nil {
+						w.OnFlowStart(flowIdx, totalFlows, name, file)
+					}
 				}
-				pr.outputMutex.Unlock()
 
-				if w.OnFlowEnd != nil {
-					w.OnFlowEnd(name, passed, durationMs, errMsg)
+				workerConfig.OnFlowEnd = func(name string, passed bool, durationMs int64, errMsg string) {
+					pr.outputMutex.Lock()
+					status := "✓ Passed"
+					statusColor := color(colorGreen)
+					if !passed {
+						status = "✗ Failed"
+						statusColor = color(colorRed)
+					}
+
+					fmt.Printf("[%d/%d] %s (%s) - %s%s%s on %s (%s)\n",
+						currentFlowIdx+1, currentTotalFlows, name, currentFlowFile,
+						statusColor, status, color(colorReset), deviceLabel, formatDuration(durationMs))
+
+					if !passed && errMsg != "" {
+						fmt.Printf("  Error: %s\n", errMsg)
+					}
+					pr.outputMutex.Unlock()
+
+					if w.OnFlowEnd != nil {
+						w.OnFlowEnd(name, passed, durationMs, errMsg)
+					}
 				}
-			}
 
-			// Suppress detailed command output during parallel execution
-			workerConfig.OnStepComplete = func(idx int, desc string, passed bool, durationMs int64, errMsg string) {}
-			workerConfig.OnNestedStep = func(depth int, desc string, passed bool, durationMs int64, errMsg string) {}
-			workerConfig.OnNestedFlowStart = func(depth int, desc string) {}
+				// Suppress detailed command output during parallel execution
+				workerConfig.OnStepComplete = func(idx int, desc string, passed bool, durationMs int64, errMsg string) {}
+				workerConfig.OnNestedStep = func(depth int, desc string, passed bool, durationMs int64, errMsg string) {}
+				workerConfig.OnNestedFlowStart = func(depth int, desc string) {}
 
-			// Create runner for this worker with device-specific config
-			runner := &Runner{
-				config: workerConfig,
-				driver: w.Driver,
-			}
+				// Create runner for this worker with device-specific config
+				runner := &Runner{
+					config: workerConfig,
+					driver: w.Driver,
+				}
 
-			// Process flows from queue
-			for item := range workQueue {
-				// Update flow detail with actual device
-				flowDetails[item.index].Device = deviceInfo
+				// Process flows from queue
+				for item := range workQueue {
+					// Update flow detail with actual device
+					flowDetails[item.index].Device = deviceInfo
 
-				// Execute flow
-				result := runner.executeFlow(ctx, item.flow, &flowDetails[item.index], indexWriter, item.index, totalFlows)
-				// Tag with the worker that produced it so cloud reporting can
-				// filter to only the flows this worker ran.
-				result.SessionID = w.SessionID
+					// Execute flow
+					result := runner.executeFlow(ctx, item.flow, &flowDetails[item.index], indexWriter, item.index, totalFlows)
+					// Tag with the worker that produced it so cloud reporting can
+					// filter to only the flows this worker ran.
+					result.SessionID = w.SessionID
 
-				// Store result
-				resultsMu.Lock()
-				results[item.index] = result
-				resultsMu.Unlock()
-			}
-		}(worker)
+					// Store result
+					resultsMu.Lock()
+					results[item.index] = result
+					resultsMu.Unlock()
+				}
+			}(worker)
+		}
+
+		// Wait for all workers to complete
+		wg.Wait()
 	}
 
-	// Wait for all workers to complete
-	wg.Wait()
+	// Longest known flow first so the slowest work is not picked up last
+	// (see longestFirst).
+	runRound(longestFirst(flows, priorDurations))
+	if retries != nil {
+		retries.run(ctx, results, indexWriter, runRound)
+	}
 
 	// Cleanup all workers after tests complete
 	// This ensures cleanup happens synchronously after all work is done

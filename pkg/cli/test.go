@@ -109,6 +109,10 @@ Examples:
 			Name:  "flatten",
 			Usage: "Don't create timestamp subfolder (requires --output)",
 		},
+		&cli.IntFlag{
+			Name:  "retries",
+			Usage: "Run flows that fail again, up to N more times, in the same run (the device agent stays up; the report keeps every attempt)",
+		},
 		&cli.BoolFlag{
 			Name:  "retry-failed",
 			Usage: "Run only the flows that failed in the previous run (looks for the last report under the same --output directory)",
@@ -555,6 +559,7 @@ type RunConfig struct {
 	// the JUnit (.xml) or HTML report is copied there. Empty means none.
 	ReportFile  string
 	RetryFailed bool // Narrow the selection to flows that failed in the previous run
+	Retries     int  // Run failing flows again, up to this many more times, in the same run
 
 	// Parallelization
 	Parallel int // Number of devices to use (0 = single device mode)
@@ -825,6 +830,7 @@ func runTest(c *cli.Context) error {
 		ReportBaseDir:      reportBaseDir,
 		ReportFile:         reportFile,
 		RetryFailed:        getBool("retry-failed"),
+		Retries:            getInt("retries"),
 		Parallel:           parallel,
 		Continuous:         getBool("continuous"),
 		Headed:             getBool("headed"),
@@ -1668,6 +1674,7 @@ func executeSingleDevice(cfg *RunConfig, flows []flow.Flow) (*executor.RunResult
 	runner := executor.New(driver, executor.RunnerConfig{
 		OutputDir:          cfg.OutputDir,
 		Parallelism:        0,
+		Retries:            cfg.Retries,
 		Artifacts:          cfg.Artifacts,
 		UpdateScreenshots:  cfg.UpdateScreenshots,
 		Record:             cfg.Record,
@@ -2102,6 +2109,7 @@ func executeAppiumSingleSession(cfg *RunConfig, flows []flow.Flow) (*executor.Ru
 	runner := executor.New(driver, executor.RunnerConfig{
 		OutputDir:          cfg.OutputDir,
 		Parallelism:        0,
+		Retries:            cfg.Retries,
 		Artifacts:          cfg.Artifacts,
 		UpdateScreenshots:  cfg.UpdateScreenshots,
 		Record:             cfg.Record,
@@ -2995,6 +3003,7 @@ func createParallelRunner(cfg *RunConfig, workers []executor.DeviceWorker, platf
 	runnerConfig := executor.RunnerConfig{
 		OutputDir:          cfg.OutputDir,
 		Parallelism:        0,
+		Retries:            cfg.Retries,
 		Artifacts:          cfg.Artifacts,
 		UpdateScreenshots:  cfg.UpdateScreenshots,
 		Record:             cfg.Record,
