@@ -338,6 +338,7 @@ func (a *Agent) launchXcodebuild(ctx context.Context, c *Client) error {
 	}
 	logDir := stateDir(a.opts.UDID)
 	_ = os.MkdirAll(logDir, 0o755)
+	keepPreviousLog(filepath.Join(logDir, "xcodebuild.log"), keptXcodebuildLogs)
 	logFile, err := os.Create(filepath.Join(logDir, "xcodebuild.log"))
 	if err != nil {
 		return err
@@ -362,6 +363,21 @@ func (a *Agent) launchXcodebuild(ctx context.Context, c *Client) error {
 		return fmt.Errorf("%v (log: %s)", err, logFile.Name())
 	}
 	return nil
+}
+
+// keptXcodebuildLogs is how many earlier agent launches keep their
+// xcodebuild log: a restart used to overwrite the log that said why the
+// agent before it went away.
+const keptXcodebuildLogs = 5
+
+// keepPreviousLog renames path to path.1 (path.1 to path.2, and so on),
+// keeping at most keep earlier copies.
+func keepPreviousLog(path string, keep int) {
+	_ = os.Remove(fmt.Sprintf("%s.%d", path, keep))
+	for i := keep - 1; i >= 1; i-- {
+		_ = os.Rename(fmt.Sprintf("%s.%d", path, i), fmt.Sprintf("%s.%d", path, i+1))
+	}
+	_ = os.Rename(path, path+".1")
 }
 
 // xctestrunFor writes a copy of agent.xctestrun next to the apps with the
