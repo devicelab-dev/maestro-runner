@@ -560,6 +560,9 @@ type RunConfig struct {
 	ReportFile  string
 	RetryFailed bool // Narrow the selection to flows that failed in the previous run
 	Retries     int  // Run failing flows again, up to this many more times, in the same run
+	// ShareHierarchy makes a test run answer `hierarchy` for its device
+	// (see hierarchy_share.go); off for the hierarchy command itself.
+	ShareHierarchy bool
 
 	// Parallelization
 	Parallel int // Number of devices to use (0 = single device mode)
@@ -831,6 +834,7 @@ func runTest(c *cli.Context) error {
 		ReportFile:         reportFile,
 		RetryFailed:        getBool("retry-failed"),
 		Retries:            getInt("retries"),
+		ShareHierarchy:     true,
 		Parallel:           parallel,
 		Continuous:         getBool("continuous"),
 		Headed:             getBool("headed"),

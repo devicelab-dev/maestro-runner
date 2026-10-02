@@ -145,6 +145,15 @@ func CreateAndroidDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		}
 	}
 
+	if cfg.ShareHierarchy {
+		stopShare := shareHierarchy(dev.Serial(), driver)
+		innerCleanup := cleanup
+		cleanup = func() {
+			stopShare()
+			innerCleanup()
+		}
+	}
+
 	return driver, cleanup, nil
 }
 
