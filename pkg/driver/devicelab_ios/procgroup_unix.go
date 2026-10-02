@@ -21,3 +21,13 @@ func killProcessGroup(cmd *exec.Cmd) {
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 	_ = cmd.Process.Kill()
 }
+
+// killPidGroup ends the process group pid leads: a kept xcodebuild from an
+// earlier run, known only by its pid.
+func killPidGroup(pid int) {
+	if pid <= 0 {
+		return
+	}
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+}

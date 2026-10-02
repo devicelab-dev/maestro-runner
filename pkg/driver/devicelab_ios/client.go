@@ -81,7 +81,7 @@ func (c *Client) Call(ctx context.Context, cmd string, args *Args) (*Response, e
 		return nil, fmt.Errorf("encode %s: %w", cmd, err)
 	}
 	resp, err := c.send(ctx, cmd, id, body)
-	if err == nil || !isTransport(err) || c.reviver == nil {
+	if err == nil || !(isTransport(err) || isTimeout(err)) || c.reviver == nil || ctx.Err() != nil {
 		return resp, err
 	}
 	port, rerr := c.reviver(ctx)
@@ -99,6 +99,17 @@ type transportError struct{ err error }
 
 func (e transportError) Error() string { return "agent unreachable: " + e.err.Error() }
 func (e transportError) Unwrap() error { return e.err }
+
+// timeoutError is an agent that took the whole call timeout to answer: as
+// good as dead, and restarted like one.
+type timeoutError struct{ msg string }
+
+func (e timeoutError) Error() string { return e.msg }
+
+func isTimeout(err error) bool {
+	var te timeoutError
+	return errors.As(err, &te)
+}
 
 func isTransport(err error) bool {
 	var te transportError
@@ -125,7 +136,7 @@ func (c *Client) send(ctx context.Context, cmd, id string, body []byte) (*Respon
 			return nil, fmt.Errorf("%s aborted: %w", cmd, ctx.Err())
 		}
 		if errors.Is(reqCtx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("%s: agent did not answer within %s", cmd, c.callTimeout)
+			return nil, timeoutError{fmt.Sprintf("%s: agent did not answer within %s", cmd, c.callTimeout)}
 		}
 		return nil, transportError{err}
 	}

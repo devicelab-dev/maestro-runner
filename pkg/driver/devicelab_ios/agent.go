@@ -62,6 +62,10 @@ type Agent struct {
 	device bool
 	ids    bundleIDs
 
+	// keptPid is the xcodebuild of an agent an earlier run left running and
+	// this one re-attached to, stopped if the agent has to be restarted.
+	keptPid int
+
 	mu       sync.Mutex
 	xcodeCmd *exec.Cmd
 	logFile  *os.File
@@ -108,6 +112,9 @@ func stateDir(udid string) string {
 type agentState struct {
 	Port    int    `json:"port"`
 	Version string `json:"version"`
+	// Pid is the xcodebuild the agent runs under, when it was started that
+	// way: a later run that finds the agent stuck stops it by this.
+	Pid int `json:"pid,omitempty"`
 }
 
 func loadState(udid string) (agentState, bool) {
@@ -183,15 +190,20 @@ func StartAgent(ctx context.Context, opts AgentOptions) (*Agent, *Client, error)
 	}
 	a := &Agent{opts: opts, version: m.Version}
 
-	// Re-attach to an agent a previous run left running.
+	// Re-attach to an agent a previous run left running, if it still does
+	// real work: a stuck agent answers status but not a snapshot, and
+	// re-attaching to one failed every later flow (RNTester iOS on CI).
 	if s, ok := loadState(opts.UDID); ok && s.Version == m.Version {
 		c := NewClient(s.Port)
-		if a.alive(ctx, c, 2*time.Second) {
-			a.port, a.mode = s.Port, "reattached"
+		if a.alive(ctx, c, 2*time.Second) && a.working(ctx, c, reattachProbeWait) {
+			a.port, a.mode, a.keptPid = s.Port, "reattached", s.Pid
 			logger.Info("[devicelab-ios] re-attached to agent %s on port %d", m.Version, s.Port)
 			c.SetReviver(a.revive)
 			return a, c, nil
 		}
+		logger.Info("[devicelab-ios] agent on port %d left by an earlier run does not answer; starting a new one", s.Port)
+		killPidGroup(s.Pid)
+		_ = os.Remove(filepath.Join(stateDir(opts.UDID), "agent.json"))
 	}
 
 	if err := a.install(ctx, m.Version); err != nil {
@@ -206,6 +218,19 @@ func StartAgent(ctx context.Context, opts AgentOptions) (*Agent, *Client, error)
 }
 
 // alive reports whether the agent at c answers status within wait.
+// reattachProbeWait bounds the snapshot a kept agent must answer before a
+// run re-attaches to it.
+var reattachProbeWait = 10 * time.Second
+
+// working reports whether the agent answers a real request, a one-node
+// snapshot, within wait.
+func (a *Agent) working(ctx context.Context, c *Client, wait time.Duration) bool {
+	callCtx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	resp, err := c.Call(callCtx, "snapshot", &Args{MaxNodes: 1})
+	return err == nil && resp.OK
+}
+
 func (a *Agent) alive(ctx context.Context, c *Client, wait time.Duration) bool {
 	callCtx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
@@ -271,7 +296,13 @@ func (a *Agent) launch(ctx context.Context) (*Client, error) {
 	if a.opts.Mode == ModeAuto || a.opts.Mode == ModeXcodebuild {
 		if err := a.launchXcodebuild(ctx, c); err == nil {
 			a.mode = ModeXcodebuild
-			saveState(a.opts.UDID, agentState{Port: port, Version: a.version})
+			pid := 0
+			a.mu.Lock()
+			if a.xcodeCmd != nil && a.xcodeCmd.Process != nil {
+				pid = a.xcodeCmd.Process.Pid
+			}
+			a.mu.Unlock()
+			saveState(a.opts.UDID, agentState{Port: port, Version: a.version, Pid: pid})
 			return c, nil
 		} else {
 			errs = append(errs, "xcodebuild: "+err.Error())
@@ -379,6 +410,10 @@ func (a *Agent) waitReady(ctx context.Context, c *Client, wait time.Duration, ex
 func (a *Agent) revive(ctx context.Context) (int, error) {
 	logger.Info("[devicelab-ios] agent on port %d stopped answering; restarting it", a.port)
 	a.stopXcodebuild()
+	if a.keptPid > 0 {
+		killPidGroup(a.keptPid) // the xcodebuild an earlier run left
+		a.keptPid = 0
+	}
 	if _, err := a.launch(ctx); err != nil {
 		return 0, err
 	}
