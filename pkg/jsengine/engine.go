@@ -459,6 +459,32 @@ func (e *Engine) EvalString(script string) (string, error) {
 	return fmt.Sprintf("%v", result), nil
 }
 
+// evalTemplate evaluates a ${...} expression as Maestro does: the value's
+// JavaScript string form (GraalJS Value.toString()), so undefined and null
+// come out as "undefined" and "null", not "". Expo's flows pass optional
+// parameters through as ${name} and their image-comparison server reads
+// "undefined" as "use the default"; an empty string failed its validation.
+func (e *Engine) evalTemplate(script string) (string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	result, err := e.runtime.RunString(script)
+	if err != nil {
+		return "", fmt.Errorf("JS eval error: %w", err)
+	}
+	switch {
+	case result == nil || goja.IsUndefined(result):
+		return "undefined", nil
+	case goja.IsNull(result):
+		return "null", nil
+	}
+	exported := result.Export()
+	if exported == nil {
+		return "", nil
+	}
+	return fmt.Sprintf("%v", exported), nil
+}
+
 // RunScript runs a JavaScript file/script
 func (e *Engine) RunScript(script string) error {
 	e.mu.Lock()
@@ -548,7 +574,7 @@ func (e *Engine) ExpandVariables(text string) (string, error) {
 func (e *Engine) evalWithUndefinedFallback(expr string) (string, error) {
 	const maxRetries = 10
 	for i := 0; i < maxRetries; i++ {
-		value, err := e.EvalString(expr)
+		value, err := e.evalTemplate(expr)
 		if err == nil {
 			return value, nil
 		}
