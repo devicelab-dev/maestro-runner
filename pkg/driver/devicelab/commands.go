@@ -1063,7 +1063,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		typed := false
 		if focused := d.waitForTypingTarget(); focused != nil {
 			before, _ := focused.Text()
-			if _, native := focused.(*NativeElement); native && d.fieldHoldsText(before) {
+			if fieldHoldsText(focused, before) {
 				// Maestro types at the cursor, so text already in the field
 				// stays: "1", Enter, "2" builds two lines. Setting the field
 				// replaced it, and a rich-text editor lost everything typed
@@ -1108,29 +1108,22 @@ func invalidateText(field core.TextField) {
 	}
 }
 
-// fieldHoldsText reports whether the focused field's value is known to be
-// text, rather than nothing. Android reports an empty field's hint as its
-// text, so the snapshot decides: the focused element's text must be the value
-// and must not be its hint-text. Without a snapshot that shows the focused
-// field, the answer is no and the field is set, as before.
-func (d *Driver) fieldHoldsText(value string) bool {
+// fieldHoldsText reports whether field's value is known to be text, rather
+// than nothing. Android reports an empty field's hint as its text; the agent
+// says which in the field's showingHintText. A field that does not say (an
+// agent without it, or a field that is not native) counts as empty and is set,
+// as before. A whole-tree snapshot used to decide this, and taking one at the
+// wrong moment in a rich-text editor took the agent down.
+func fieldHoldsText(field core.Element, value string) bool {
 	if value == "" {
 		return false
 	}
-	src, err := d.client.Snapshot(0)
-	if err != nil {
+	native, ok := field.(*NativeElement)
+	if !ok || native.elem == nil {
 		return false
 	}
-	elems, err := ParsePageSource(src)
-	if err != nil {
-		return false
-	}
-	for _, e := range elems {
-		if e.Focused && e.Text == value {
-			return e.HintText != value
-		}
-	}
-	return false
+	showing, known := native.elem.ShowingHint()
+	return known && !showing
 }
 
 // focusedFieldBefore resolves the element that key events will reach and reads

@@ -3529,16 +3529,15 @@ func TestWebViewRepeatBackoffGrowsAndCaps(t *testing.T) {
 	}
 }
 
-// TestInputText_NoSelector_AppendsToExistingText: a field that already holds
-// text is typed into at the cursor, as Maestro does, not replaced. A rich-text
-// editor typed "1", Enter, "2" lost the first line when the field was set.
+// TestInputText_NoSelector_AppendsToExistingText: a field that holds text is
+// typed into at the cursor, as Maestro does, not replaced. A rich-text editor
+// typed "1", Enter, "2" lost the first line when the field was set.
 func TestInputText_NoSelector_AppendsToExistingText(t *testing.T) {
 	var set string
 	client := &scriptedClient{trackingClient: newTrackingClient()}
-	client.activeElementReturn = makeFocusedElement("1\n", &set, nil, nil)
-	client.sourceFunc = func() (string, error) {
-		return `<hierarchy><node class="android.widget.EditText" text="1&#10;" focused="true" bounds="[0,0][100,50]"/></hierarchy>`, nil
-	}
+	field := makeFocusedElement("1\n", &set, nil, nil)
+	field.SetShowingHint(false)
+	client.activeElementReturn = field
 	driver := New(client, &core.PlatformInfo{}, &mockShell{})
 
 	res := driver.inputText(&flow.InputTextStep{Text: "2"})
@@ -3553,25 +3552,34 @@ func TestInputText_NoSelector_AppendsToExistingText(t *testing.T) {
 	}
 }
 
-// TestInputText_NoSelector_HintIsNotText: an empty field that reports its hint
-// as its text is still set in one call.
-func TestInputText_NoSelector_HintIsNotText(t *testing.T) {
-	var set string
-	client := &scriptedClient{trackingClient: newTrackingClient()}
-	client.activeElementReturn = makeFocusedElement("Email", &set, nil, nil)
-	client.sourceFunc = func() (string, error) {
-		return `<hierarchy><node class="android.widget.EditText" text="Email" hint-text="Email" focused="true" bounds="[0,0][100,50]"/></hierarchy>`, nil
-	}
-	driver := New(client, &core.PlatformInfo{}, &mockShell{})
+// TestInputText_NoSelector_SetsWhenFieldIsEmpty: a field showing its hint, or
+// one whose hint state is not reported (an older agent), is set in one call.
+func TestInputText_NoSelector_SetsWhenFieldIsEmpty(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		hint func(e *uiautomator2.Element)
+	}{
+		{"showing its hint", func(e *uiautomator2.Element) { e.SetShowingHint(true) }},
+		{"hint state not reported", func(*uiautomator2.Element) {}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var set string
+			client := &scriptedClient{trackingClient: newTrackingClient()}
+			field := makeFocusedElement("Email", &set, nil, nil)
+			tc.hint(field)
+			client.activeElementReturn = field
+			driver := New(client, &core.PlatformInfo{}, &mockShell{})
 
-	res := driver.inputText(&flow.InputTextStep{Text: "a@b.co"})
-	if !res.Success {
-		t.Fatalf("inputText: %v", res.Error)
-	}
-	if set != "a@b.co" {
-		t.Errorf("expected the empty field to be set to %q, got %q", "a@b.co", set)
-	}
-	if len(client.sendKeyActionsCalls) != 0 {
-		t.Errorf("expected no key events, got %v", client.sendKeyActionsCalls)
+			res := driver.inputText(&flow.InputTextStep{Text: "a@b.co"})
+			if !res.Success {
+				t.Fatalf("inputText: %v", res.Error)
+			}
+			if set != "a@b.co" {
+				t.Errorf("expected the field to be set to %q, got %q", "a@b.co", set)
+			}
+			if len(client.sendKeyActionsCalls) != 0 {
+				t.Errorf("expected no key events, got %v", client.sendKeyActionsCalls)
+			}
+		})
 	}
 }

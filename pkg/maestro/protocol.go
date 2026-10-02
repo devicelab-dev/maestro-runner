@@ -58,6 +58,9 @@ type ElementResult struct {
 	Enabled     bool         `json:"enabled"`
 	Clickable   bool         `json:"clickable"`
 	Selected    bool         `json:"selected"`
+	// ShowingHintText says whether the element's text is its hint, an empty
+	// field showing its placeholder. nil from an agent that does not send it.
+	ShowingHintText *bool `json:"showingHintText,omitempty"`
 
 	// Clicked reports whether findAndClick actually injected the tap. It is a
 	// pointer because absent and false mean different things: an agent built
