@@ -1301,6 +1301,24 @@ func executeTest(cfg *RunConfig) error {
 	return nil
 }
 
+// noFlowsMatchTagsError is Maestro's error for a tag filter that leaves no
+// flows, word for word: scripts look for "did not match any Flows" and treat
+// it as "nothing to run here" (react-native-enriched-html's run-tests.sh).
+func noFlowsMatchTagsError(include, exclude []string) error {
+	list := func(tags []string) string {
+		if len(tags) == 0 {
+			return "[]"
+		}
+		lines := make([]string, len(tags))
+		for i, t := range tags {
+			lines[i] = "- " + t
+		}
+		return strings.Join(lines, "\n")
+	}
+	return fmt.Errorf("Include / Exclude tags did not match any Flows:\n\nInclude Tags:\n%s\n\nExclude Tags:\n%s",
+		list(include), list(exclude))
+}
+
 // validateAndParseFlows validates and parses all flow files.
 func validateAndParseFlows(cfg *RunConfig) ([]flow.Flow, error) {
 	v := validator.New(cfg.IncludeTags, cfg.ExcludeTags)
@@ -1322,6 +1340,9 @@ func validateAndParseFlows(cfg *RunConfig) ([]flow.Flow, error) {
 	}
 
 	if len(allTestCases) == 0 {
+		if len(cfg.IncludeTags) > 0 || len(cfg.ExcludeTags) > 0 {
+			return nil, noFlowsMatchTagsError(cfg.IncludeTags, cfg.ExcludeTags)
+		}
 		return nil, fmt.Errorf("no test flows found")
 	}
 
