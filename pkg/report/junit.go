@@ -182,6 +182,9 @@ func buildTestCase(entry *FlowEntry, detail *FlowDetail, index *Index) string {
 			))
 		}
 	}
+	if entry.Attempts > 1 {
+		b.WriteString(fmt.Sprintf(`        <property name="attempts" value="%d"/>`+"\n", entry.Attempts))
+	}
 	b.WriteString("      </properties>\n")
 
 	// Status-specific elements
@@ -213,6 +216,7 @@ func buildTestCase(entry *FlowEntry, detail *FlowDetail, index *Index) string {
 	case StatusSkipped:
 		b.WriteString("      <skipped/>\n")
 	}
+	b.WriteString(junitEarlierAttempts(entry))
 
 	// Attachments via the [[ATTACHMENT|path]] convention (Jenkins JUnit
 	// Attachments and compatible CI tooling). Paths are relative to the
@@ -226,6 +230,28 @@ func buildTestCase(entry *FlowEntry, detail *FlowDetail, index *Index) string {
 	}
 
 	b.WriteString("    </testcase>\n")
+	return b.String()
+}
+
+// junitEarlierAttempts reports the failed attempts before a flow's last one
+// (--retries) as Surefire does: <flakyFailure> on a flow that passed in the
+// end, <rerunFailure> on one that kept failing. Jenkins, GitLab and most
+// JUnit report actions show a passed flow with flaky failures as flaky.
+func junitEarlierAttempts(entry *FlowEntry) string {
+	element := "rerunFailure"
+	if entry.Status == StatusPassed {
+		element = "flakyFailure"
+	}
+	var b strings.Builder
+	for i, a := range entry.AttemptHistory {
+		if i == len(entry.AttemptHistory)-1 || a.Status != StatusFailed {
+			continue
+		}
+		b.WriteString(fmt.Sprintf(
+			`      <%s message="%s" type="attempt %d">%s</%s>`+"\n",
+			element, xmlEscape(a.Error), a.Attempt, xmlEscape(a.Error), element,
+		))
+	}
 	return b.String()
 }
 

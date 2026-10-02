@@ -917,3 +917,18 @@ func TestGenerateHTMLShowsVersionWithoutAppID(t *testing.T) {
 		t.Error("App line fell back to a dash despite a known version")
 	}
 }
+
+func TestHTMLShowsAttempts(t *testing.T) {
+	data := HTMLData{Index: &Index{}, StatusClass: map[Status]string{}, Flows: []FlowHTMLData{{
+		FlowDetail:    FlowDetail{ID: "flow-000", Name: "flaky"},
+		StatusClass:   "passed",
+		AttemptsLabel: "passed on attempt 2",
+	}}}
+	out, err := renderHTML(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `<span class="flow-tag flow-attempts">passed on attempt 2</span>`) {
+		t.Error("attempts badge missing")
+	}
+}
