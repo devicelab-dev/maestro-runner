@@ -492,6 +492,35 @@ func createDeviceLabDriver(cfg *RunConfig, dev *device.AndroidDevice, info devic
 		fmt.Printf("  %s⚠%s Warning: failed to set implicit wait: %v\n", color(colorYellow), color(colorReset), err)
 	}
 
+	// An agent that dies mid-run (its connection drops) is restarted, as the
+	// iOS agent is; before, every later step of every later flow failed.
+	wsClient.SetReviver(func() error {
+		logger.Warn("DeviceLab agent connection on %s dropped; restarting the agent", dev.Serial())
+		if err := dev.StopDeviceLabDriver(); err != nil {
+			logger.Warn("stop DeviceLab driver before restart: %v", err)
+		}
+		if err := dev.StartDeviceLabDriver(driverCfg); err != nil {
+			return fmt.Errorf("restart DeviceLab driver: %w", err)
+		}
+		if dev.DeviceLabDriverSocket() == "" {
+			wsClient.SetTCPPort(dev.DeviceLabDriverLocalPort())
+		}
+		if err := wsClient.Connect(); err != nil {
+			return fmt.Errorf("reconnect WebSocket: %w", err)
+		}
+		if _, err := adapter.CreateSession(); err != nil {
+			return fmt.Errorf("recreate session: %w", err)
+		}
+		if err := adapter.SetAppiumSettings(settings); err != nil {
+			logger.Warn("reapply driver settings after restart: %v", err)
+		}
+		if err := adapter.SetImplicitWait(100 * time.Millisecond); err != nil {
+			logger.Warn("reapply implicit wait after restart: %v", err)
+		}
+		logger.Info("DeviceLab agent on %s restarted", dev.Serial())
+		return nil
+	})
+
 	// 5. Query app version and build number
 	appVersion, appBuild := "", ""
 	if cfg.AppID != "" {
