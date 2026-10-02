@@ -516,7 +516,7 @@ func (d *Driver) addMedia(files []string) *core.CommandResult {
 	}
 	media, documents := core.SplitMediaDocuments(files)
 	if len(media) > 0 {
-		if _, err := d.runSimctl(append([]string{"addmedia", d.udid}, media...)...); err != nil {
+		if err := d.addMediaToPhotos(media); err != nil {
 			return core.ErrorResult(err, fmt.Sprintf("Failed to add media: %v", err))
 		}
 	}
@@ -526,6 +526,25 @@ func (d *Driver) addMedia(files []string) *core.CommandResult {
 		}
 	}
 	return core.SuccessResult(fmt.Sprintf("Added %d media file(s) to the simulator", len(files)), nil)
+}
+
+// addMediaWaits bound `simctl addmedia`. On GitHub's macOS runners it hung
+// until the 5-minute simctl limit on every attempt of a flow, while on a new
+// local simulator it took 3s the first time and no time after: the first
+// import into the Photos library pays a setup cost. The first attempt gets a
+// minute, a second one longer, then the step fails saying so.
+var addMediaWaits = []time.Duration{60 * time.Second, 120 * time.Second}
+
+func (d *Driver) addMediaToPhotos(media []string) error {
+	var err error
+	for i, wait := range addMediaWaits {
+		if _, err = d.runSimctlWithin(wait, append([]string{"addmedia", d.udid}, media...)...); err == nil {
+			return nil
+		}
+		logger.Warn("simctl addmedia attempt %d of %d failed after up to %s: %v", i+1, len(addMediaWaits), wait, err)
+	}
+	return fmt.Errorf("simctl addmedia did not finish (%d attempts, up to %s): %w",
+		len(addMediaWaits), addMediaWaits[len(addMediaWaits)-1], err)
 }
 
 // simPrefs are the settings Appium applies to a simulator for automation;

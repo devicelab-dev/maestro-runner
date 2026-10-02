@@ -311,8 +311,12 @@ func TestAddMedia(t *testing.T) {
 		t.Fatalf("res = %+v calls = %v", res, sl.calls)
 	}
 	sl.fail["addmedia"] = errBoom
-	if res := d.Execute(&flow.AddMediaStep{Files: []string{img}}); res.Success {
-		t.Fatal("addmedia error")
+	before := len(sl.calls)
+	if res := d.Execute(&flow.AddMediaStep{Files: []string{img}}); res.Success || !strings.Contains(res.Message, "did not finish (2 attempts") {
+		t.Fatalf("addmedia error: %+v", res)
+	}
+	if tries := len(sl.calls) - before; tries != 2 {
+		t.Errorf("addmedia tried %d times, want 2", tries)
 	}
 	if res := d.Execute(&flow.AddMediaStep{}); res.Success {
 		t.Fatal("no files should fail")
