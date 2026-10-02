@@ -1063,7 +1063,19 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		typed := false
 		if focused := d.waitForTypingTarget(); focused != nil {
 			before, _ := focused.Text()
-			if err := focused.Input(text); err == nil {
+			if _, native := focused.(*NativeElement); native && d.fieldHoldsText(before) {
+				// Maestro types at the cursor, so text already in the field
+				// stays: "1", Enter, "2" builds two lines. Setting the field
+				// replaced it, and a rich-text editor lost everything typed
+				// before (enriched-html: 21 flows). Key events go to the
+				// focused field at its cursor. An empty field is still set in
+				// one call, which is faster and the same result.
+				if err := d.client.SendKeyActions(text); err == nil {
+					typed = true
+					invalidateText(focused)
+					typedInto, beforeText = focused, before
+				}
+			} else if err := focused.Input(text); err == nil {
 				typed = true
 				typedInto, beforeText = focused, before
 			}
@@ -1094,6 +1106,31 @@ func invalidateText(field core.TextField) {
 	if f, ok := field.(textInvalidator); ok {
 		f.InvalidateText()
 	}
+}
+
+// fieldHoldsText reports whether the focused field's value is known to be
+// text, rather than nothing. Android reports an empty field's hint as its
+// text, so the snapshot decides: the focused element's text must be the value
+// and must not be its hint-text. Without a snapshot that shows the focused
+// field, the answer is no and the field is set, as before.
+func (d *Driver) fieldHoldsText(value string) bool {
+	if value == "" {
+		return false
+	}
+	src, err := d.client.Snapshot(0)
+	if err != nil {
+		return false
+	}
+	elems, err := ParsePageSource(src)
+	if err != nil {
+		return false
+	}
+	for _, e := range elems {
+		if e.Focused && e.Text == value {
+			return e.HintText != value
+		}
+	}
+	return false
 }
 
 // focusedFieldBefore resolves the element that key events will reach and reads
