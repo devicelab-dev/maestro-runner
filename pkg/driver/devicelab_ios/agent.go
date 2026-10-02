@@ -425,6 +425,7 @@ func (a *Agent) waitReady(ctx context.Context, c *Client, wait time.Duration, ex
 // revive restarts a dead agent (the Client's Reviver).
 func (a *Agent) revive(ctx context.Context) (int, error) {
 	logger.Info("[devicelab-ios] agent on port %d stopped answering; restarting it", a.port)
+	captureStall(a.opts.UDID, fmt.Sprintf("agent on port %d stopped answering", a.port))
 	a.stopXcodebuild()
 	if a.keptPid > 0 {
 		killPidGroup(a.keptPid) // the xcodebuild an earlier run left

@@ -5,12 +5,14 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 )
 
 var (
 	globalLogger *log.Logger
 	logFile      *os.File
+	logDir       string
 	mu           sync.Mutex
 )
 
@@ -31,6 +33,7 @@ func Init(logPath string) error {
 	}
 
 	logFile = f
+	logDir = filepath.Dir(logPath)
 	globalLogger = log.New(f, "", log.Ltime|log.Lmicroseconds)
 
 	return nil
@@ -96,4 +99,12 @@ func GetWriter() io.Writer {
 		return logFile
 	}
 	return io.Discard
+}
+
+// Dir is the directory of the log file (the run's report directory), or ""
+// before Init.
+func Dir() string {
+	mu.Lock()
+	defer mu.Unlock()
+	return logDir
 }
