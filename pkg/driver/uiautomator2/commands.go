@@ -538,8 +538,9 @@ func (d *Driver) hideKeyboard(_ *flow.HideKeyboardStep) *core.CommandResult {
 	// confirming the keyboard is still up, which is what keeps it from navigating
 	// away (the side effect reported on the devicelab driver).
 
-	// If we can confirm the keyboard isn't shown, there's nothing to do.
-	if d.device != nil && !d.isKeyboardVisible() {
+	// If we can confirm the keyboard isn't shown, there's nothing to do. One read
+	// isn't enough: mid-transition it can say hidden while the IME is coming up.
+	if d.device != nil && d.keyboardConfirmedHidden() {
 		return successResult("Keyboard not visible", nil)
 	}
 

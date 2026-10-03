@@ -89,21 +89,35 @@ func (d *Driver) isKeyboardVisible() bool {
 	return d.getKeyboardBounds() != nil
 }
 
-// waitKeyboardHidden polls (up to ~600ms) until the soft keyboard is no longer
-// shown, allowing for the dismissal animation. Returns true once hidden. When
-// there's no shell to inspect (d.device == nil) it reports hidden immediately —
-// the caller can't verify, so it best-efforts the result.
+// keyboardHiddenConfirmGap separates the two reads keyboardConfirmedHidden needs:
+// while the IME is still coming up, dumpsys can report it not shown for a moment.
+const keyboardHiddenConfirmGap = 300 * time.Millisecond
+
+// keyboardConfirmedHidden reports hidden only when two reads keyboardHiddenConfirmGap
+// apart both say the keyboard is not shown.
+func (d *Driver) keyboardConfirmedHidden() bool {
+	if d.isKeyboardVisible() {
+		return false
+	}
+	time.Sleep(keyboardHiddenConfirmGap)
+	return !d.isKeyboardVisible()
+}
+
+// waitKeyboardHidden polls (about 600ms, plus the confirm gap) until the soft
+// keyboard is confirmed hidden, allowing for the dismissal animation. When there's
+// no shell to inspect (d.device == nil) it reports hidden immediately — the caller
+// can't verify, so it best-efforts the result.
 func (d *Driver) waitKeyboardHidden() bool {
 	if d.device == nil {
 		return true
 	}
 	for i := 0; i < 6; i++ {
-		if !d.isKeyboardVisible() {
+		if d.keyboardConfirmedHidden() {
 			return true
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return !d.isKeyboardVisible()
+	return d.keyboardConfirmedHidden()
 }
 
 // tapWouldHitKeyboard returns true if a tap on the element's center would land

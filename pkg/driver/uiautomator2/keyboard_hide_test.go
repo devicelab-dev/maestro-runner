@@ -1,6 +1,7 @@
 package uiautomator2
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -106,6 +107,76 @@ func TestHideKeyboard_NotVisible_NoOp(t *testing.T) {
 	}
 	if len(client.pressKeyCalls) != 0 {
 		t.Errorf("expected no key events when keyboard already hidden, got %v", client.pressKeyCalls)
+	}
+	if len(shell.commands) < 2 {
+		t.Errorf("expected hidden confirmed by a second read, got %d reads", len(shell.commands))
+	}
+}
+
+// errHideKeyboard404 is what Appium answers when it thinks no keyboard is shown.
+var errHideKeyboard404 = errors.New("HTTP 404: Soft keyboard not present, cannot hide keyboard")
+
+// keyboardSequenceShell replays reads in order (repeating the last) until BACK is
+// pressed, after which the keyboard reads hidden.
+func keyboardSequenceShell(client *MockUIA2Client, reads ...string) *closureShell {
+	n := 0
+	return &closureShell{fn: func(string) (string, error) {
+		for _, kc := range client.pressKeyCalls {
+			if kc == uiautomator2.KeyCodeBack {
+				return kbHiddenDumpsys, nil
+			}
+		}
+		out := reads[min(n, len(reads)-1)]
+		n++
+		return out, nil
+	}}
+}
+
+func backPresses(client *MockUIA2Client) int {
+	backs := 0
+	for _, kc := range client.pressKeyCalls {
+		if kc == uiautomator2.KeyCodeBack {
+			backs++
+		}
+	}
+	return backs
+}
+
+// A read taken while the keyboard is still coming up says hidden, and so does
+// Appium's 404. Neither may stand alone: the next read sees the keyboard, so the
+// driver must fall back to BACK instead of leaving it over the next target.
+func TestHideKeyboard_HiddenThenVisible_SendsBack(t *testing.T) {
+	client := &MockUIA2Client{hideKeyboardErr: errHideKeyboard404}
+	shell := keyboardSequenceShell(client, kbHiddenDumpsys, kbShownDumpsys, kbHiddenDumpsys, kbShownDumpsys)
+	d := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, shell)
+
+	result := d.hideKeyboard(&flow.HideKeyboardStep{})
+	if !result.Success {
+		t.Fatalf("expected success, got %v", result.Error)
+	}
+	if client.hideKeyboardCalls != 1 {
+		t.Errorf("expected Appium HideKeyboard tried once, got %d", client.hideKeyboardCalls)
+	}
+	if backs := backPresses(client); backs != 1 {
+		t.Errorf("expected exactly one BACK, got %d (keyCalls=%v)", backs, client.pressKeyCalls)
+	}
+	if result.Message != "Keyboard hidden (via back key)" {
+		t.Errorf("unexpected message %q", result.Message)
+	}
+}
+
+// Appium answers 404 while the keyboard is plainly up: BACK closes it.
+func TestHideKeyboard_Appium404KeyboardVisible_SendsBack(t *testing.T) {
+	client := &MockUIA2Client{hideKeyboardErr: errHideKeyboard404}
+	shell := keyboardSequenceShell(client, kbShownDumpsys)
+	d := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, shell)
+
+	result := d.hideKeyboard(&flow.HideKeyboardStep{})
+	if !result.Success {
+		t.Fatalf("expected success, got %v", result.Error)
+	}
+	if backs := backPresses(client); backs != 1 {
+		t.Errorf("expected exactly one BACK, got %d (keyCalls=%v)", backs, client.pressKeyCalls)
 	}
 }
 
