@@ -151,3 +151,24 @@ func TestCloseRemovesStagedApps(t *testing.T) {
 		t.Fatal("staged copy should be removed")
 	}
 }
+
+// The taps of a tapOn with repeat: after the first do not settle before
+// them, so they go out back to back as in Maestro; the step after the repeat
+// settles as after any tap.
+func TestRepeatTapsDoNotSettleBetween(t *testing.T) {
+	d, fa, _ := newTestDriver(t, screenOf(node(1, "Button", "Go", 0, 0, 100, 40)))
+	d.Execute(&flow.TapOnStep{Selector: flow.Selector{Text: "Go"}}) // something moved
+	d.Execute(&flow.TapOnStep{Point: "50%,50%", RepeatIndex: 0, RepeatCount: 3})
+	if n := len(fa.sent("settle")); n != 1 {
+		t.Fatalf("settles = %d, want 1 (the first tap of the repeat settles)", n)
+	}
+	d.Execute(&flow.TapOnStep{Point: "50%,50%", RepeatIndex: 1, RepeatCount: 3})
+	d.Execute(&flow.TapOnStep{Point: "50%,50%", RepeatIndex: 2, RepeatCount: 3})
+	if n := len(fa.sent("settle")); n != 1 {
+		t.Fatalf("settles = %d, want 1: the later taps of a repeat do not settle", n)
+	}
+	d.Execute(&flow.TapOnStep{Selector: flow.Selector{Text: "Go"}})
+	if n := len(fa.sent("settle")); n != 2 {
+		t.Fatalf("settles = %d, want 2 (the tap after the repeat settles)", n)
+	}
+}

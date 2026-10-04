@@ -524,6 +524,10 @@ func (d *Driver) SetWaitForIdleTimeout(ms int) error {
 	})
 }
 
+// WaitsAroundTaps reports that taps settle before and wait for a change
+// after them (see flow.RepeatTapAfterFirst).
+func (d *Driver) WaitsAroundTaps() bool { return true }
+
 // Execute runs a single step and returns the result.
 func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	start := time.Now()
@@ -532,7 +536,7 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	// tap on duckduckgo's menu button while the previous menu was still
 	// closing did nothing. Asserts and checks do not wait: they poll, and an
 	// element on both screens is a correct pass either way.
-	if d.lastStepWasTap && actsOnScreen(step) {
+	if d.lastStepWasTap && actsOnScreen(step) && !flow.RepeatTapAfterFirst(step) {
 		d.settle(settleAfterTapTimeoutMs, "tap")
 	}
 
@@ -542,7 +546,7 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	// the change counted the old screen as settled: RNTester read
 	// "offset:0" right after "ScrollToOffset 100".
 	var beforeTap uint64
-	watchTap := isTap(step) && d.settlingOn()
+	watchTap := isTap(step) && d.settlingOn() && !flow.RepeatTapBeforeLast(step)
 	if watchTap {
 		if h, err := d.client.TreeHash(); err == nil {
 			beforeTap = h

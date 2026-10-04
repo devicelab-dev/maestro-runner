@@ -262,10 +262,14 @@ func (d *Driver) StopScreenRecording(hostPath string) error {
 	return rec.Stop(hostPath)
 }
 
+// WaitsAroundTaps reports that a tap settles first when the step before it
+// moved the screen (see flow.RepeatTapAfterFirst).
+func (d *Driver) WaitsAroundTaps() bool { return true }
+
 // Execute implements core.Driver.
 func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	start := time.Now()
-	if d.screenMayMove && actsOnScreen(step) {
+	if d.screenMayMove && actsOnScreen(step) && !flow.RepeatTapAfterFirst(step) {
 		d.settle(defaultSettleTimeout)
 	}
 	// Asserts and waits between an action and the next one neither settle

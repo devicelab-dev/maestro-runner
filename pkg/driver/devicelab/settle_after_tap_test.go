@@ -251,3 +251,39 @@ func TestOpenLinkSettlesTapFirst(t *testing.T) {
 		t.Errorf("openLink after a tap settled %d times, want %d (the tap's, then its own)", client.settles, alone+1)
 	}
 }
+
+// The taps of a tapOn with repeat: go out back to back: the later ones do
+// not settle before them and the earlier ones do not wait for a change
+// after them, so a screen that never settles (a playing video) cannot space
+// them seconds apart. The repeat as a whole still waits for its change.
+func TestRepeatedTapsGoOutBackToBack(t *testing.T) {
+	base := &settleCountingClient{richClient: &richClient{trackingClient: newTrackingClient()}}
+	client := &hashSeqClient{settleCountingClient: base, seq: []uint64{7}} // never changes
+	d := New(client, &core.PlatformInfo{ScreenWidth: 1000, ScreenHeight: 2000}, &mockShell{})
+	tap := func(i, n int) *flow.TapOnStep {
+		return &flow.TapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepTapOn}, Point: "94%,97%", RepeatIndex: i, RepeatCount: n}
+	}
+
+	start := time.Now()
+	if res := d.Execute(tap(0, 2)); !res.Success {
+		t.Fatalf("first tap failed: %v", res.Error)
+	}
+	if took := time.Since(start); took >= tapChangeWait {
+		t.Errorf("the first of two taps waited %v for a change, want no wait", took)
+	}
+	if res := d.Execute(tap(1, 2)); !res.Success {
+		t.Fatalf("second tap failed: %v", res.Error)
+	}
+	if client.settles != 0 {
+		t.Errorf("the second tap settled %d times before it, want 0", client.settles)
+	}
+	if took := time.Since(start); took < tapChangeWait {
+		t.Errorf("the repeat took %v, want its last tap to wait for a change (%v)", took, tapChangeWait)
+	}
+
+	// A tap after the repeat settles the repeat's change first.
+	d.Execute(tap(0, 0))
+	if client.settles != 1 {
+		t.Errorf("a tap after the repeat settled %d times, want 1", client.settles)
+	}
+}

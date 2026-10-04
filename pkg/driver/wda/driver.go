@@ -211,6 +211,10 @@ const (
 	QuickFindTimeout    = 1000  // 1 second for quick checks
 )
 
+// WaitsAroundTaps reports that a tap settles first when the step before it
+// moved the screen (see flow.RepeatTapAfterFirst).
+func (d *Driver) WaitsAroundTaps() bool { return true }
+
 // Execute runs a single step and returns the result.
 func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	start := time.Now()
@@ -234,7 +238,7 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	// scroll (iOS takes that tap as "stop scrolling"), or while a menu was
 	// still animating in — and WDA reported success for a tap that did
 	// nothing. Maestro settles before every tap in the same way.
-	if d.screenMayMove && actsOnScreen(step) {
+	if d.screenMayMove && actsOnScreen(step) && !flow.RepeatTapAfterFirst(step) {
 		d.settleScreen()
 	}
 	d.screenMayMove = movesScreen(step)
