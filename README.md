@@ -188,7 +188,8 @@ counts and versions only, such as runner version, platform, driver, device
 kind, flow and step counts, failure kinds and duration. It holds no machine or
 user id, no flow or file names, selectors, app ids, URLs, environment values or
 error messages, and nothing is written on your machine. Projects are counted
-by a one-way hash of the repository's first commit.
+by a one-way hash of the repository (its remote address, or its first
+commit), never its name.
 
 Turn it off with `MAESTRO_RUNNER_NO_TELEMETRY=1` or `DO_NOT_TRACK=1`. Set
 `MAESTRO_RUNNER_TELEMETRY_DEBUG=1` to print the event instead of sending it.
