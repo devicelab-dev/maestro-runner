@@ -16,7 +16,7 @@ import (
 
 // clearEnv unsets the opt-out, debug and CI variables for one test.
 func clearEnv(t *testing.T) {
-	for _, k := range []string{"GITHUB_REPOSITORY_ID", "CI_PROJECT_ID", "BITRISE_APP_SLUG", "BUILDKITE_PIPELINE_ID", "CIRCLE_PROJECT_ID",
+	for _, k := range []string{
 		"DO_NOT_TRACK", "MAESTRO_RUNNER_NO_TELEMETRY", "MAESTRO_RUNNER_TELEMETRY_DEBUG",
 		"MAESTRO_RUNNER_TELEMETRY_URL", "CI", "GITHUB_ACTIONS", "GITLAB_CI", "BITRISE_IO", "CIRCLECI", "BUILDKITE",
 		"JENKINS_URL", "TF_BUILD", "TRAVIS", "CODEBUILD_BUILD_ID", "TEAMCITY_VERSION", "EAS_BUILD", "CM_BUILD_ID"} {
