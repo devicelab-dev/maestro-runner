@@ -122,10 +122,32 @@ func Build(run Run, index *report.Index, reportDir string) Event {
 	if index == nil {
 		return ev
 	}
-	if ev.DeviceKind == "" {
-		ev.DeviceKind = deviceKind(ev.Platform, index.Device)
+	// A multi-device run (local --parallel, several --device, Appium cloud
+	// sessions) records the device of each flow: count those, and report a
+	// kind or OS version only when they all agree ("mixed" otherwise).
+	devices, kinds, versions := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for i := range index.Flows {
+		if d := index.Flows[i].Device; d != nil {
+			id := d.ID
+			if d.SessionID != "" {
+				id = "session:" + d.SessionID
+			}
+			devices[id] = true
+			kinds[deviceKind(ev.Platform, *d)] = true
+			versions[osMajor(ev.Platform, d.OSVersion)] = true
+		}
 	}
-	ev.OSMajor = osMajor(ev.Platform, index.Device.OSVersion)
+	if len(devices) == 0 {
+		kinds[deviceKind(ev.Platform, index.Device)] = true
+		versions[osMajor(ev.Platform, index.Device.OSVersion)] = true
+	}
+	if len(devices) > ev.Devices {
+		ev.Devices = len(devices)
+	}
+	if ev.DeviceKind == "" {
+		ev.DeviceKind = only(kinds)
+	}
+	ev.OSMajor = only(versions)
 	for i := range index.Flows {
 		f := &index.Flows[i]
 		ev.FlowsTotal++
@@ -304,6 +326,19 @@ func DetectCI() string {
 		return "other"
 	}
 	return "none"
+}
+
+// only is the one value in set, "mixed" for several, "" for none.
+func only(set map[string]bool) string {
+	switch len(set) {
+	case 0:
+		return ""
+	case 1:
+		for v := range set {
+			return v
+		}
+	}
+	return "mixed"
 }
 
 func deviceKind(platform string, d report.Device) string {

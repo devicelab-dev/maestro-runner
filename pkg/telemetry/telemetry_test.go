@@ -303,3 +303,36 @@ func TestSendIsBounded(t *testing.T) {
 		t.Errorf("Send took %v, want about %v at most", took, sendTimeout)
 	}
 }
+
+// A parallel run counts the devices that ran flows and reports a kind or OS
+// version only when they agree.
+func TestBuildMultiDevice(t *testing.T) {
+	clearEnv(t)
+	flow := func(d report.Device) report.FlowEntry {
+		return report.FlowEntry{Status: report.StatusPassed, Attempts: 1, Device: &d}
+	}
+	emu35 := report.Device{ID: "emulator-5554", Platform: "android", OSVersion: "35", IsSimulator: true}
+	emu35b := report.Device{ID: "emulator-5556", Platform: "android", OSVersion: "35", IsSimulator: true}
+	real34 := report.Device{ID: "R5CT", Platform: "android", OSVersion: "34"}
+
+	same := Build(Run{Version: "1.1.29", Command: "test", Platform: "android", Devices: 2, Outcome: "completed"},
+		&report.Index{Flows: []report.FlowEntry{flow(emu35), flow(emu35b), flow(emu35)}}, "")
+	if same.Devices != 2 || same.DeviceKind != "emulator" || same.OSMajor != "android 35" {
+		t.Errorf("two alike emulators: devices %d kind %q os %q", same.Devices, same.DeviceKind, same.OSMajor)
+	}
+
+	mixed := Build(Run{Version: "1.1.29", Command: "test", Platform: "android", Devices: 2, Outcome: "completed"},
+		&report.Index{Flows: []report.FlowEntry{flow(emu35), flow(real34)}}, "")
+	if mixed.Devices != 2 || mixed.DeviceKind != "mixed" || mixed.OSMajor != "mixed" {
+		t.Errorf("emulator + real phone: devices %d kind %q os %q", mixed.Devices, mixed.DeviceKind, mixed.OSMajor)
+	}
+
+	// Appium cloud sessions have no local device list: count the sessions.
+	s1 := report.Device{Platform: "android", OSVersion: "14", SessionID: "a"}
+	s2 := report.Device{Platform: "android", OSVersion: "14", SessionID: "b"}
+	cloud := Build(Run{Version: "1.1.29", Command: "test", Platform: "android", Driver: "appium", Cloud: true, Devices: 1, Outcome: "completed"},
+		&report.Index{Flows: []report.FlowEntry{flow(s1), flow(s2), flow(s1)}}, "")
+	if cloud.Devices != 2 || cloud.DeviceKind != "cloud" || cloud.OSMajor != "android 14" {
+		t.Errorf("cloud sessions: devices %d kind %q os %q", cloud.Devices, cloud.DeviceKind, cloud.OSMajor)
+	}
+}
