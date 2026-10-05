@@ -1235,8 +1235,11 @@ func executeTest(cfg *RunConfig) error {
 		logger.Error("Flow execution failed: %v", err)
 		// crashed once a flow had started (the report shows it), otherwise
 		// the run never got going (driver or device setup): setup_failed.
+		// With --flatten the folder is reused, so a report.json older than
+		// this run is a previous run's and is ignored.
 		outcome := "setup_failed"
-		if index, ierr := report.ReadIndex(filepath.Join(cfg.OutputDir, "report.json")); ierr == nil && anyFlowStarted(index) {
+		if index, ierr := report.ReadIndex(filepath.Join(cfg.OutputDir, "report.json")); ierr == nil &&
+			!index.StartTime.Before(started) && anyFlowStarted(index) {
 			outcome = "crashed"
 		}
 		sendTelemetry(outcome, nil, len(deviceIDs))

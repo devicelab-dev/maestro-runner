@@ -258,7 +258,11 @@ func DetectCI() string {
 }
 
 // only is the one value in set, "mixed" for several, "" for none.
+// only returns the one value in set, "mixed" for several, or "" for none.
+// A blank value (a device whose kind or OS could not be read) is not a
+// different value: it is skipped.
 func only(set map[string]bool) string {
+	delete(set, "")
 	switch len(set) {
 	case 0:
 		return ""

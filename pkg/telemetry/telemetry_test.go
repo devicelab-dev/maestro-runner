@@ -246,6 +246,14 @@ func TestBuildMultiDevice(t *testing.T) {
 		t.Errorf("emulator + real phone: devices %d kind %q os %q", mixed.Devices, mixed.DeviceKind, mixed.OSMajor)
 	}
 
+	// A device whose OS version could not be read is not a different version.
+	emuBlank := report.Device{ID: "emulator-5558", Platform: "android", IsSimulator: true}
+	blank := Build(Run{Version: "1.1.29", Command: "test", Platform: "android", Devices: 2, Outcome: "completed"},
+		&report.Index{Flows: []report.FlowEntry{flow(emu35), flow(emuBlank)}}, "")
+	if blank.OSMajor != "android 35" {
+		t.Errorf("one OS unreadable: os %q, want android 35", blank.OSMajor)
+	}
+
 	// Appium cloud sessions have no local device list: count the sessions.
 	s1 := report.Device{Platform: "android", OSVersion: "14", SessionID: "a"}
 	s2 := report.Device{Platform: "android", OSVersion: "14", SessionID: "b"}
