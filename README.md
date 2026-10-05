@@ -187,9 +187,9 @@ maestro-runner sends one anonymous usage event at the end of each `test` run:
 counts and versions only, such as runner version, platform, driver, device
 kind, flow and step counts, failure kinds and duration. It holds no machine or
 user id, no flow or file names, selectors, app ids, URLs, environment values or
-error messages, and nothing is written on your machine. Projects are counted
-by a one-way hash of the contents of the flow files you run, never their
-names or paths.
+error messages, and nothing is written on your machine. Projects are told
+apart by a one-way hash of the list of flow files you run; the names
+themselves are never sent.
 
 Turn it off with `MAESTRO_RUNNER_NO_TELEMETRY=1` or `DO_NOT_TRACK=1`. Set
 `MAESTRO_RUNNER_TELEMETRY_DEBUG=1` to print the event instead of sending it.

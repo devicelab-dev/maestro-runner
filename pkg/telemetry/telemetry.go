@@ -83,16 +83,16 @@ func envSet(name string) bool {
 
 // Run is what the CLI knows about a run, beyond its report.
 type Run struct {
-	Version    string
-	Command    string
-	FlagNames  []string // names only, as typed: never values
-	Platform   string   // android, ios, web
-	Driver     string
-	Cloud      bool     // an Appium cloud provider ran it
-	Devices    int      // devices used
-	FlowHashes []string // content hash of each top-level flow file (for the project id)
-	Outcome    string   // completed, setup_failed, crashed, interrupted
-	Duration   time.Duration
+	Version   string
+	Command   string
+	FlagNames []string // names only, as typed: never values
+	Platform  string   // android, ios, web
+	Driver    string
+	Cloud     bool     // an Appium cloud provider ran it
+	Devices   int      // devices used
+	FlowPaths []string // top-level flow files, relative to the folder given (for the project id)
+	Outcome   string   // completed, setup_failed, crashed, interrupted
+	Duration  time.Duration
 }
 
 // Build assembles the event for a run from its report index (nil when the
@@ -102,7 +102,7 @@ func Build(run Run, index *report.Index, reportDir string) Event {
 		RunnerVersion: versionToken(run.Version),
 		Command:       oneOf(run.Command, "test", "hierarchy"),
 		Flags:         flagNames(run.FlagNames),
-		ProjectID:     ProjectID(run.FlowHashes),
+		ProjectID:     ProjectID(run.FlowPaths),
 		CI:            DetectCI(),
 		HostOS:        oneOf(runtime.GOOS, "darwin", "linux", "windows"),
 		HostArch:      oneOf(runtime.GOARCH, "amd64", "arm64"),
@@ -208,25 +208,27 @@ func Notice() string {
 }
 
 // ProjectID is a one-way hash of the flow files a run was pointed at: the
-// content hash of each top-level flow file found there (before tag
-// filtering), sorted and hashed together. The same flows give the same id on
-// every machine and CI runner, with no git or environment lookups; it
-// changes when a flow file is added, removed or edited. Nothing in it can be
-// reversed or guessed without every one of those files. Empty without flows.
-func ProjectID(flowHashes []string) string {
-	hashes := make([]string, 0, len(flowHashes))
+// top-level flow files found there (before tag filtering), as paths relative
+// to the folder given with "/" separators, sorted and hashed together. It
+// tells projects apart without naming them: the same suite gives the same id
+// on every machine, OS and CI runner, through edits to its flows, with no
+// git or environment lookups. It changes when a flow file is added, removed
+// or renamed, and a subset run (one file, a smoke folder) has its own id.
+// Empty without flows.
+func ProjectID(flowPaths []string) string {
+	paths := make([]string, 0, len(flowPaths))
 	seen := map[string]bool{}
-	for _, h := range flowHashes {
-		if h != "" && !seen[h] {
-			seen[h] = true
-			hashes = append(hashes, h)
+	for _, p := range flowPaths {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			paths = append(paths, p)
 		}
 	}
-	if len(hashes) == 0 {
+	if len(paths) == 0 {
 		return ""
 	}
-	sort.Strings(hashes)
-	sum := sha256.Sum256([]byte("maestro-runner/flows\n" + strings.Join(hashes, "\n")))
+	sort.Strings(paths)
+	sum := sha256.Sum256([]byte("maestro-runner/flows\n" + strings.Join(paths, "\n")))
 	return hex.EncodeToString(sum[:])
 }
 

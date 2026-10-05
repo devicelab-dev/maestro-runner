@@ -27,9 +27,10 @@ func (e *ValidationError) Error() string {
 type Result struct {
 	// TestCases is the list of top-level test case file paths.
 	TestCases []string
-	// FlowHashes maps every top-level flow file found, before tag
-	// filtering, to its content hash.
-	FlowHashes map[string]string
+	// FlowPaths are the top-level flow files found, before tag filtering,
+	// relative to the path validated (just the name when it is a file),
+	// with "/" separators.
+	FlowPaths []string
 	// Errors contains all validation errors found.
 	Errors []error
 }
@@ -56,7 +57,7 @@ func New(includeTags, excludeTags []string) *Validator {
 // Validate validates a file or directory.
 // It parses all flows, resolves runFlow references, and returns validation results.
 func (v *Validator) Validate(path string) *Result {
-	result := &Result{FlowHashes: map[string]string{}}
+	result := &Result{}
 
 	info, err := os.Stat(path)
 	if err != nil {
@@ -79,6 +80,16 @@ func (v *Validator) Validate(path string) *Result {
 		}
 	} else {
 		testCases = []string{path}
+	}
+
+	for _, file := range testCases {
+		rel := filepath.Base(file)
+		if info.IsDir() {
+			if r, err := filepath.Rel(path, file); err == nil {
+				rel = r
+			}
+		}
+		result.FlowPaths = append(result.FlowPaths, filepath.ToSlash(rel))
 	}
 
 	// Validate each test case and resolve dependencies
@@ -435,7 +446,6 @@ func (v *Validator) validateFile(filePath string, result *Result, validated map[
 				return
 			}
 		}
-		result.FlowHashes[filePath] = f.ContentHash
 		// Check tag filters
 		if flow.ShouldIncludeFlow(f, v.includeTags, v.excludeTags) {
 			result.TestCases = append(result.TestCases, filePath)

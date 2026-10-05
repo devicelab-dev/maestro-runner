@@ -654,9 +654,10 @@ type RunConfig struct {
 	// TelemetryFlags are the names (never values) of the flags this run was
 	// given, for the anonymous usage event (pkg/telemetry).
 	TelemetryFlags []string
-	// TelemetryFlowHashes are the content hashes of the top-level flow files
-	// found (before tag filtering), for the event's one-way project id.
-	TelemetryFlowHashes []string
+	// TelemetryFlowPaths are the top-level flow files found (before tag
+	// filtering), relative to the paths given, for the event's one-way
+	// project id.
+	TelemetryFlowPaths []string
 }
 
 func hyperlink(url, text string) string {
@@ -1016,7 +1017,7 @@ func executeTest(cfg *RunConfig) error {
 		return telemetry.Run{
 			Version: Version, Command: "test", FlagNames: cfg.TelemetryFlags,
 			Platform: telemetryPlatform(cfg), Driver: telemetryDriver(cfg), Cloud: cfg.CloudProvider != nil,
-			Devices: devices, FlowHashes: cfg.TelemetryFlowHashes, Outcome: outcome, Duration: time.Since(started),
+			Devices: devices, FlowPaths: cfg.TelemetryFlowPaths, Outcome: outcome, Duration: time.Since(started),
 		}
 	}
 	// One event per run: whichever path claims telemetrySent first sends it
@@ -1398,9 +1399,7 @@ func validateAndParseFlows(cfg *RunConfig) ([]flow.Flow, error) {
 		result := v.Validate(path)
 		allTestCases = append(allTestCases, result.TestCases...)
 		allErrors = append(allErrors, result.Errors...)
-		for _, h := range result.FlowHashes {
-			cfg.TelemetryFlowHashes = append(cfg.TelemetryFlowHashes, h)
-		}
+		cfg.TelemetryFlowPaths = append(cfg.TelemetryFlowPaths, result.FlowPaths...)
 	}
 
 	if len(allErrors) > 0 {

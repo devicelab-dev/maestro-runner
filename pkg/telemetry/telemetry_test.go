@@ -66,20 +66,25 @@ func TestDetectCI(t *testing.T) {
 	}
 }
 
-// The project id depends only on which flow files there are and what they
-// hold: not their order, duplicates, or where they were found. It is a hash
-// of the hashes, never one of them.
-func TestProjectIDFromFlowHashes(t *testing.T) {
-	a, b, c := strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64)
-	id := ProjectID([]string{a, b})
-	if len(id) != 64 || id == a || id == b {
+// The project id depends only on which flow files there are: not their
+// order or duplicates. Adding or renaming a file changes it. It is a hash,
+// not the names.
+func TestProjectIDFromFlowPaths(t *testing.T) {
+	id := ProjectID([]string{"login.yaml", "auth/signup.yaml"})
+	if len(id) != 64 {
 		t.Fatalf("id %q", id)
 	}
-	if got := ProjectID([]string{b, a, a, ""}); got != id {
+	if got := ProjectID([]string{"auth/signup.yaml", "login.yaml", "login.yaml", ""}); got != id {
 		t.Errorf("reordered with a duplicate: %q, want %q", got, id)
 	}
-	if ProjectID([]string{a, b, c}) == id || ProjectID([]string{a}) == id {
-		t.Error("a different set of flows gave the same id")
+	for _, other := range [][]string{
+		{"login.yaml", "auth/signup.yaml", "checkout.yaml"}, // added
+		{"login.yaml", "auth/register.yaml"},                // renamed
+		{"login.yaml"},                                      // a subset
+	} {
+		if ProjectID(other) == id {
+			t.Errorf("%v gave the same id", other)
+		}
 	}
 	for _, none := range [][]string{nil, {}, {""}} {
 		if got := ProjectID(none); got != "" {
