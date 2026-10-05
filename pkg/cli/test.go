@@ -30,6 +30,7 @@ import (
 	"github.com/devicelab-dev/maestro-runner/pkg/logger"
 	"github.com/devicelab-dev/maestro-runner/pkg/report"
 	"github.com/devicelab-dev/maestro-runner/pkg/simulator"
+	"github.com/devicelab-dev/maestro-runner/pkg/telemetry"
 	"github.com/devicelab-dev/maestro-runner/pkg/validator"
 	"github.com/urfave/cli/v2"
 )
@@ -648,6 +649,10 @@ type RunConfig struct {
 	// Cloud provider (detected from AppiumURL, nil if not a cloud provider)
 	CloudProvider cloud.Provider
 	CloudMeta     map[string]string
+
+	// TelemetryFlags are the names (never values) of the flags this run was
+	// given, for the anonymous usage event (pkg/telemetry).
+	TelemetryFlags []string
 }
 
 func hyperlink(url, text string) string {
@@ -911,6 +916,11 @@ func runTest(c *cli.Context) error {
 		}
 	}
 
+	for _, ctx := range c.Lineage() {
+		if ctx != nil {
+			cfg.TelemetryFlags = append(cfg.TelemetryFlags, ctx.LocalFlagNames()...)
+		}
+	}
 	return executeTest(cfg)
 }
 
@@ -998,6 +1008,29 @@ func resolveOutputDir(output string, flatten bool) (string, error) {
 }
 
 func executeTest(cfg *RunConfig) error {
+	started := time.Now()
+	// The anonymous usage event (pkg/telemetry) goes out when the run ends,
+	// in the background, and is waited for at most its 2s timeout.
+	var telemetryDone chan struct{}
+	sendTelemetry := func(outcome string, result *executor.RunResult, index *report.Index, devices int) {
+		if !telemetry.Enabled() {
+			return
+		}
+		run := telemetry.Run{
+			Version: Version, Command: "test", FlagNames: cfg.TelemetryFlags,
+			Platform: telemetryPlatform(cfg), Driver: telemetryDriver(cfg), Cloud: cfg.CloudProvider != nil,
+			Devices: devices, FlowDir: telemetryFlowDir(cfg), Outcome: outcome, Duration: time.Since(started),
+		}
+		ev := telemetry.Build(run, index, cfg.OutputDir)
+		telemetryDone = make(chan struct{})
+		go func() { defer close(telemetryDone); telemetry.Send(ev) }()
+	}
+	defer func() {
+		if telemetryDone != nil {
+			<-telemetryDone
+		}
+	}()
+
 	// 1. Create output directory
 	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
@@ -1184,6 +1217,7 @@ func executeTest(cfg *RunConfig) error {
 	result, err := executeFlowsWithMode(cfg, flows, needsParallel, deviceIDs)
 	if err != nil {
 		logger.Error("Flow execution failed: %v", err)
+		sendTelemetry("crashed", nil, nil, len(deviceIDs))
 		return err
 	}
 	logger.Info("Flow execution completed: %d passed, %d failed, %d skipped",
@@ -1287,10 +1321,20 @@ func executeTest(cfg *RunConfig) error {
 		fmt.Printf("    Allure: %s\n", allurePath)
 	}
 
-	// 7. Print update notice if available
-	printUpdateNotice()
+	// 7. Anonymous usage event (counts only; see pkg/telemetry)
+	if index, err := report.ReadIndex(jsonPath); err == nil {
+		sendTelemetry("completed", result, index, max(1, len(deviceIDs)))
+	} else {
+		sendTelemetry("completed", result, nil, max(1, len(deviceIDs)))
+	}
 
-	// 8. Print footer
+	// 8. Print update notice if available
+	printUpdateNotice()
+	if telemetry.Enabled() && telemetry.DetectCI() == "none" {
+		fmt.Printf("\n  %s%s%s\n", color(colorDim), telemetry.Notice(), color(colorReset))
+	}
+
+	// 9. Print footer
 	printFooter()
 
 	// Exit with code 1 if any flows failed (summary already printed)
@@ -3171,4 +3215,40 @@ func noIOSTargetMessage() string {
 	return "no iOS device found: nothing is booted and no device is connected\n" +
 		"Hint: boot a simulator (`xcrun simctl boot <udid>`), connect an iPhone, or pass --start-simulator <name>.\n" +
 		"      `maestro-runner devices` lists what this machine can see"
+}
+
+// telemetryPlatform is the run's platform for the usage event.
+func telemetryPlatform(cfg *RunConfig) string {
+	if cfg.Driver == "browser" || cfg.Platform == "web" {
+		return "web"
+	}
+	return cfg.Platform
+}
+
+// telemetryDriver is the run's driver name for the usage event.
+func telemetryDriver(cfg *RunConfig) string {
+	if telemetryPlatform(cfg) == "web" {
+		return "browser"
+	}
+	if cfg.Driver != "" {
+		return cfg.Driver
+	}
+	switch cfg.Platform {
+	case "android", "ios":
+		return "devicelab" // the default on both
+	}
+	return ""
+}
+
+// telemetryFlowDir is a directory of the run's flows, to find the git
+// repository they belong to (the event's one-way project id).
+func telemetryFlowDir(cfg *RunConfig) string {
+	if len(cfg.FlowPaths) == 0 {
+		return ""
+	}
+	p := cfg.FlowPaths[0]
+	if st, err := os.Stat(p); err == nil && !st.IsDir() {
+		p = filepath.Dir(p)
+	}
+	return p
 }
