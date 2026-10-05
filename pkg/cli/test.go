@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -916,11 +917,7 @@ func runTest(c *cli.Context) error {
 		}
 	}
 
-	for _, ctx := range c.Lineage() {
-		if ctx != nil {
-			cfg.TelemetryFlags = append(cfg.TelemetryFlags, ctx.LocalFlagNames()...)
-		}
-	}
+	cfg.TelemetryFlags = setFlagNames(c)
 	return executeTest(cfg)
 }
 
@@ -1012,19 +1009,25 @@ func executeTest(cfg *RunConfig) error {
 	// The anonymous usage event (pkg/telemetry) goes out when the run ends,
 	// in the background, and is waited for at most its 2s timeout.
 	var telemetryDone chan struct{}
-	sendTelemetry := func(outcome string, result *executor.RunResult, index *report.Index, devices int) {
-		if !telemetry.Enabled() {
-			return
-		}
-		run := telemetry.Run{
+	telemetryRun := func(outcome string, devices int) telemetry.Run {
+		return telemetry.Run{
 			Version: Version, Command: "test", FlagNames: cfg.TelemetryFlags,
 			Platform: telemetryPlatform(cfg), Driver: telemetryDriver(cfg), Cloud: cfg.CloudProvider != nil,
 			Devices: devices, FlowDir: telemetryFlowDir(cfg), Outcome: outcome, Duration: time.Since(started),
 		}
-		ev := telemetry.Build(run, index, cfg.OutputDir)
+	}
+	sendTelemetry := func(outcome string, index *report.Index, devices int) {
+		if !telemetry.Enabled() || telemetryDone != nil {
+			return
+		}
+		ev := telemetry.Build(telemetryRun(outcome, devices), index, cfg.OutputDir)
 		telemetryDone = make(chan struct{})
 		go func() { defer close(telemetryDone); telemetry.Send(ev) }()
 	}
+	// Set once the flows are valid: from then on a run that ends without
+	// reporting (device setup failed, the run errored) is sent as crashed,
+	// and one stopped with Ctrl-C as interrupted.
+	var telemetryArmed atomic.Bool
 	defer func() {
 		if telemetryDone != nil {
 			<-telemetryDone
@@ -1080,6 +1083,9 @@ func executeTest(cfg *RunConfig) error {
 		sig := <-sigCh
 		logger.Info("Received signal %v, cleaning up...", sig)
 		fmt.Fprintf(os.Stderr, "\nReceived %v, cleaning up...\n", sig)
+		if telemetryArmed.Load() && telemetry.Enabled() {
+			telemetry.SendWithin(telemetry.Build(telemetryRun("interrupted", 0), nil, ""), time.Second)
+		}
 
 		// Clean up driver resources (socket, adb forward, session)
 		cleanupMu.Lock()
@@ -1131,6 +1137,13 @@ func executeTest(cfg *RunConfig) error {
 	if cfg.Platform != "" {
 		warnUnsupportedSelectors(flows, cfg.Platform)
 	}
+
+	telemetryArmed.Store(true)
+	defer func() {
+		if telemetryDone == nil {
+			sendTelemetry("crashed", nil, 0)
+		}
+	}()
 
 	// Pre-checks for iOS with a direct driver (DeviceLab or WDA, not Appium).
 	// Appium handles everything via capabilities — no --app-file or --team-id needed.
@@ -1217,7 +1230,7 @@ func executeTest(cfg *RunConfig) error {
 	result, err := executeFlowsWithMode(cfg, flows, needsParallel, deviceIDs)
 	if err != nil {
 		logger.Error("Flow execution failed: %v", err)
-		sendTelemetry("crashed", nil, nil, len(deviceIDs))
+		sendTelemetry("crashed", nil, len(deviceIDs))
 		return err
 	}
 	logger.Info("Flow execution completed: %d passed, %d failed, %d skipped",
@@ -1323,9 +1336,9 @@ func executeTest(cfg *RunConfig) error {
 
 	// 7. Anonymous usage event (counts only; see pkg/telemetry)
 	if index, err := report.ReadIndex(jsonPath); err == nil {
-		sendTelemetry("completed", result, index, max(1, len(deviceIDs)))
+		sendTelemetry("completed", index, max(1, len(deviceIDs)))
 	} else {
-		sendTelemetry("completed", result, nil, max(1, len(deviceIDs)))
+		sendTelemetry("completed", nil, max(1, len(deviceIDs)))
 	}
 
 	// 8. Print update notice if available
@@ -3251,4 +3264,23 @@ func telemetryFlowDir(cfg *RunConfig) string {
 		p = filepath.Dir(p)
 	}
 	return p
+}
+
+// setFlagNames lists the flags this run was given, each once under its main
+// name (an alias like --udid for --device is not counted again).
+func setFlagNames(c *cli.Context) []string {
+	var defined []cli.Flag
+	if c.Command != nil {
+		defined = append(defined, c.Command.Flags...)
+	}
+	if c.App != nil {
+		defined = append(defined, c.App.Flags...)
+	}
+	var names []string
+	for _, f := range defined {
+		if n := f.Names(); len(n) > 0 && c.IsSet(n[0]) {
+			names = append(names, n[0])
+		}
+	}
+	return names
 }

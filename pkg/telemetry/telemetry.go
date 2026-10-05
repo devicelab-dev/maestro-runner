@@ -147,6 +147,11 @@ func Build(run Run, index *report.Index, reportDir string) Event {
 // Send posts the event, bounded by sendTimeout, ignoring every error. With
 // MAESTRO_RUNNER_TELEMETRY_DEBUG set it prints the event instead.
 func Send(ev Event) {
+	SendWithin(ev, sendTimeout)
+}
+
+// SendWithin is Send with its own bound (an interrupted run waits less).
+func SendWithin(ev Event, limit time.Duration) {
 	body, err := json.Marshal(ev)
 	if err != nil {
 		return
@@ -159,7 +164,7 @@ func Send(ev Event) {
 	if u := os.Getenv("MAESTRO_RUNNER_TELEMETRY_URL"); u != "" {
 		url = u
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
@@ -181,26 +186,97 @@ func Notice() string {
 	return fmt.Sprintf("Anonymous usage stats are on (counts only, no names or ids): %s\n  Turn off: MAESTRO_RUNNER_NO_TELEMETRY=1 (or DO_NOT_TRACK=1)", DocsURL)
 }
 
-// ProjectID is a one-way hash of the first commit of the git repository
-// holding dir: the same on every machine and CI runner for a repo, and
-// nothing to reverse into its name. Empty outside a git repository.
+// ProjectID is a one-way hash identifying the project's repository: the
+// same on every machine, clone and CI runner of a repository, and nothing to
+// reverse into its name. It keys, in order: the repository's remote address
+// (host/owner/repo, without scheme, credentials or .git), the first commit of
+// a full clone without a remote, or the CI service's repository id. Empty
+// when there is none. A shallow clone (CI checkouts usually are) only knows
+// its latest commit, so the first commit is never taken from one.
 func ProjectID(dir string) string {
-	if dir == "" {
+	key := repoKey(dir)
+	if key == "" {
 		return ""
 	}
+	sum := sha256.Sum256([]byte("maestro-runner/" + key))
+	return hex.EncodeToString(sum[:])
+}
+
+func repoKey(dir string) string {
+	if dir != "" {
+		if remote := git(dir, "remote", "get-url", "origin"); remote != "" {
+			if r := normalizeRemote(remote); r != "" {
+				return "remote:" + r
+			}
+		}
+		if remotes := strings.Fields(git(dir, "remote")); len(remotes) > 0 {
+			if r := normalizeRemote(git(dir, "remote", "get-url", remotes[0])); r != "" {
+				return "remote:" + r
+			}
+		}
+		if git(dir, "rev-parse", "--is-shallow-repository") == "false" {
+			if roots := strings.Fields(git(dir, "rev-list", "--max-parents=0", "HEAD")); len(roots) > 0 {
+				sort.Strings(roots) // several roots (merged histories): pick one stably
+				return "root:" + roots[0]
+			}
+		}
+	}
+	for _, env := range []string{"GITHUB_REPOSITORY_ID", "CI_PROJECT_ID", "BITRISE_APP_SLUG", "BUILDKITE_PIPELINE_ID", "CIRCLE_PROJECT_ID"} {
+		if v := strings.TrimSpace(os.Getenv(env)); v != "" {
+			return "ci:" + env + ":" + v
+		}
+	}
+	return ""
+}
+
+// git runs a git command in dir and returns its trimmed output, or "".
+func git(dir string, args ...string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-list", "--max-parents=0", "HEAD").Output()
+	out, err := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...).Output()
 	if err != nil {
 		return ""
 	}
-	roots := strings.Fields(string(out))
-	if len(roots) == 0 {
+	return strings.TrimSpace(string(out))
+}
+
+// normalizeRemote turns any form of a remote address into host/path, lower
+// case, without scheme, user, credentials, port or .git: the SSH and HTTPS
+// addresses of one repository give the same result.
+//
+//	git@github.com:Owner/Repo.git                    → github.com/owner/repo
+//	https://x-access-token:T@github.com/owner/repo   → github.com/owner/repo
+//	ssh://git@gitlab.example.com:2222/group/sub/repo → gitlab.example.com/group/sub/repo
+func normalizeRemote(remote string) string {
+	r := strings.TrimSpace(remote)
+	if r == "" {
 		return ""
 	}
-	sort.Strings(roots) // several roots (merged histories): pick one stably
-	sum := sha256.Sum256([]byte("maestro-runner/" + roots[0]))
-	return hex.EncodeToString(sum[:])
+	if i := strings.Index(r, "://"); i >= 0 {
+		r = r[i+3:]
+	} else if at := strings.Index(r, "@"); at >= 0 && strings.Contains(r[at:], ":") {
+		// scp-like: user@host:path
+		r = r[at+1:]
+		r = strings.Replace(r, ":", "/", 1)
+	} else if strings.HasPrefix(r, "/") || strings.HasPrefix(r, ".") {
+		return "" // a local path: nothing that names the project
+	}
+	if at := strings.LastIndex(strings.SplitN(r, "/", 2)[0], "@"); at >= 0 {
+		r = r[at+1:] // user:token@
+	}
+	parts := strings.SplitN(r, "/", 2)
+	if len(parts) != 2 || parts[1] == "" {
+		return ""
+	}
+	host := parts[0]
+	if i := strings.LastIndex(host, ":"); i >= 0 {
+		host = host[:i] // port
+	}
+	path := strings.Trim(strings.TrimSuffix(strings.TrimRight(parts[1], "/"), ".git"), "/")
+	if host == "" || path == "" {
+		return ""
+	}
+	return strings.ToLower(host + "/" + path)
 }
 
 // DetectCI names the CI service from its environment, "none" when not on CI.

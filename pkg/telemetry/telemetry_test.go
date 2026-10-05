@@ -17,7 +17,8 @@ import (
 
 // clearEnv unsets the opt-out, debug and CI variables for one test.
 func clearEnv(t *testing.T) {
-	for _, k := range []string{"DO_NOT_TRACK", "MAESTRO_RUNNER_NO_TELEMETRY", "MAESTRO_RUNNER_TELEMETRY_DEBUG",
+	for _, k := range []string{"GITHUB_REPOSITORY_ID", "CI_PROJECT_ID", "BITRISE_APP_SLUG", "BUILDKITE_PIPELINE_ID", "CIRCLE_PROJECT_ID",
+		"DO_NOT_TRACK", "MAESTRO_RUNNER_NO_TELEMETRY", "MAESTRO_RUNNER_TELEMETRY_DEBUG",
 		"MAESTRO_RUNNER_TELEMETRY_URL", "CI", "GITHUB_ACTIONS", "GITLAB_CI", "BITRISE_IO", "CIRCLECI", "BUILDKITE",
 		"JENKINS_URL", "TF_BUILD", "TRAVIS", "CODEBUILD_BUILD_ID", "TEAMCITY_VERSION", "EAS_BUILD", "CM_BUILD_ID"} {
 		if v, ok := os.LookupEnv(k); ok {
@@ -66,40 +67,105 @@ func TestDetectCI(t *testing.T) {
 	}
 }
 
-// The project id is the same for any directory of a repository, changes
-// with the repository, and is empty outside git; it is a sha256, not the
-// commit hash itself.
-func TestProjectID(t *testing.T) {
+// gitRepo makes a repository with one commit in a new directory.
+func gitRepo(t *testing.T) (string, func(dir string, args ...string) string) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
-	repo := t.TempDir()
-	run := func(args ...string) {
-		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
-		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
-		if out, err := cmd.CombinedOutput(); err != nil {
+	run := func(dir string, args ...string) string {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
 			t.Fatalf("git %v: %v %s", args, err, out)
 		}
+		return strings.TrimSpace(string(out))
 	}
-	run("init", "-q")
-	run("commit", "-q", "--allow-empty", "-m", "first")
+	repo := t.TempDir()
+	run(repo, "init", "-q")
+	run(repo, "commit", "-q", "--allow-empty", "-m", "first")
+	return repo, run
+}
+
+// A full clone with no remote is identified by its first commit, the same
+// from any of its directories; outside git there is no id. The id is a
+// hash, not the commit hash itself.
+func TestProjectIDFirstCommit(t *testing.T) {
+	clearEnv(t)
+	repo, run := gitRepo(t)
 	sub := filepath.Join(repo, "flows", "auth")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	id := ProjectID(repo)
-	if len(id) != 64 {
-		t.Fatalf("project id %q, want 64 hex chars", id)
+	if len(id) != 64 || ProjectID(sub) != id {
+		t.Fatalf("id %q / from a subdirectory %q", id, ProjectID(sub))
 	}
-	if ProjectID(sub) != id {
-		t.Error("a subdirectory gave a different project id")
-	}
-	root, _ := exec.Command("git", "-C", repo, "rev-list", "--max-parents=0", "HEAD").Output()
-	if strings.Contains(id, strings.TrimSpace(string(root))) {
+	if strings.Contains(id, run(repo, "rev-list", "--max-parents=0", "HEAD")) {
 		t.Error("project id carries the commit hash itself")
 	}
 	if got := ProjectID(t.TempDir()); got != "" {
 		t.Errorf("outside git: %q, want empty", got)
+	}
+}
+
+// A CI checkout is a shallow clone that only knows its latest commit: its id
+// must not change with every commit, and must match the full clone of the
+// same repository, whatever form the remote address takes.
+func TestProjectIDShallowClone(t *testing.T) {
+	clearEnv(t)
+	repo, run := gitRepo(t)
+	run(repo, "remote", "add", "origin", "git@github.com:Owner/Repo.git")
+	full := ProjectID(repo)
+
+	shallow := func() string {
+		dir := filepath.Join(t.TempDir(), "c")
+		run(t.TempDir(), "clone", "-q", "--depth", "1", "file://"+repo, dir)
+		if run(dir, "rev-parse", "--is-shallow-repository") != "true" {
+			t.Fatal("clone is not shallow")
+		}
+		run(dir, "remote", "set-url", "origin", "https://x-access-token:secret@github.com/owner/repo.git")
+		return ProjectID(dir)
+	}
+	first := shallow()
+	run(repo, "commit", "-q", "--allow-empty", "-m", "second")
+	second := shallow()
+	if first == "" || first != second {
+		t.Errorf("shallow clones of two commits: %q and %q, want one stable id", first, second)
+	}
+	if first != full {
+		t.Errorf("shallow clone %q, full clone %q: want the same project", first, full)
+	}
+
+	// A shallow clone with no remote has nothing stable: no id (not the
+	// latest commit).
+	dir := filepath.Join(t.TempDir(), "c")
+	run(t.TempDir(), "clone", "-q", "--depth", "1", "file://"+repo, dir)
+	run(dir, "remote", "remove", "origin")
+	if got := ProjectID(dir); got != "" {
+		t.Errorf("shallow clone without remote: %q, want empty", got)
+	}
+	t.Setenv("GITHUB_REPOSITORY_ID", "12345")
+	if got := ProjectID(dir); got == "" {
+		t.Error("shallow clone on GitHub Actions: want the repository id to give a project id")
+	}
+}
+
+func TestNormalizeRemote(t *testing.T) {
+	for in, want := range map[string]string{
+		"git@github.com:Owner/Repo.git":                        "github.com/owner/repo",
+		"https://github.com/owner/repo":                        "github.com/owner/repo",
+		"https://github.com/owner/repo.git/":                   "github.com/owner/repo",
+		"https://x-access-token:T0K3N@github.com/owner/repo":   "github.com/owner/repo",
+		"ssh://git@gitlab.example.com:2222/group/sub/repo.git": "gitlab.example.com/group/sub/repo",
+		"/home/me/repos/app":                                   "",
+		"./app":                                                "",
+		"":                                                     "",
+	} {
+		if got := normalizeRemote(in); got != want {
+			t.Errorf("normalizeRemote(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
