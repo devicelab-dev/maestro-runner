@@ -204,7 +204,7 @@ func SendWithin(ev Event, limit time.Duration) {
 // Notice is the line printed after a local run while telemetry is on. It is
 // printed every time: nothing is saved to remember it was shown.
 func Notice() string {
-	return fmt.Sprintf("Anonymous usage stats are on (counts only, no names or ids): %s\n  Turn off: MAESTRO_RUNNER_NO_TELEMETRY=1 (or DO_NOT_TRACK=1)", DocsURL)
+	return fmt.Sprintf("Anonymous usage stats are on (counts only; no names, paths or machine id): %s\n  Turn off: MAESTRO_RUNNER_NO_TELEMETRY=1 (or DO_NOT_TRACK=1)", DocsURL)
 }
 
 // ProjectID is a one-way hash of the flow files a run was pointed at: the
@@ -259,7 +259,6 @@ func DetectCI() string {
 	return "none"
 }
 
-// only is the one value in set, "mixed" for several, "" for none.
 // only returns the one value in set, "mixed" for several, or "" for none.
 // A blank value (a device whose kind or OS could not be read) is not a
 // different value: it is skipped.
