@@ -27,6 +27,9 @@ func (e *ValidationError) Error() string {
 type Result struct {
 	// TestCases is the list of top-level test case file paths.
 	TestCases []string
+	// FlowHashes maps every top-level flow file found, before tag
+	// filtering, to its content hash.
+	FlowHashes map[string]string
 	// Errors contains all validation errors found.
 	Errors []error
 }
@@ -53,7 +56,7 @@ func New(includeTags, excludeTags []string) *Validator {
 // Validate validates a file or directory.
 // It parses all flows, resolves runFlow references, and returns validation results.
 func (v *Validator) Validate(path string) *Result {
-	result := &Result{}
+	result := &Result{FlowHashes: map[string]string{}}
 
 	info, err := os.Stat(path)
 	if err != nil {
@@ -432,6 +435,7 @@ func (v *Validator) validateFile(filePath string, result *Result, validated map[
 				return
 			}
 		}
+		result.FlowHashes[filePath] = f.ContentHash
 		// Check tag filters
 		if flow.ShouldIncludeFlow(f, v.includeTags, v.excludeTags) {
 			result.TestCases = append(result.TestCases, filePath)

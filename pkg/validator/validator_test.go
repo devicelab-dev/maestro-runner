@@ -1498,3 +1498,48 @@ func TestCollectByPatterns_OnlyNegationsIsAnError(t *testing.T) {
 		t.Errorf("error should explain that nothing would match, got: %v", err)
 	}
 }
+
+// FlowHashes covers every top-level flow found, whatever the tag filter
+// keeps, so the same folder gives the same set with or without tags. A
+// subflow reached only through runFlow is not a top-level flow.
+func TestValidate_FlowHashesIgnoreTagsAndSubflows(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"smoke.yaml":        "appId: com.example\ntags:\n  - smoke\n---\n- runFlow: common/login.yaml\n",
+		"regression.yaml":   "appId: com.example\ntags:\n  - regression\n---\n- tapOn: \"R\"\n",
+		"common/login.yaml": "appId: com.example\n---\n- tapOn: \"Login\"\n",
+	}
+	for name, body := range files {
+		writeFile(t, filepath.Join(dir, name), body)
+	}
+
+	all := New(nil, nil).Validate(dir)
+	smoke := New([]string{"smoke"}, nil).Validate(dir)
+	if !all.IsValid() || !smoke.IsValid() {
+		t.Fatalf("errors: %v %v", all.Errors, smoke.Errors)
+	}
+	if len(smoke.TestCases) != 1 {
+		t.Fatalf("smoke test cases: %v", smoke.TestCases)
+	}
+	if len(all.FlowHashes) != 2 || len(smoke.FlowHashes) != 2 {
+		t.Fatalf("flow hashes: all %v, smoke %v; want the 2 top-level flows in both", all.FlowHashes, smoke.FlowHashes)
+	}
+	for path, h := range all.FlowHashes {
+		if smoke.FlowHashes[path] != h || len(h) != 64 {
+			t.Errorf("%s: %q vs %q", path, h, smoke.FlowHashes[path])
+		}
+		if strings.Contains(path, "common") {
+			t.Errorf("subflow %s counted as a top-level flow", path)
+		}
+	}
+}
+
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}

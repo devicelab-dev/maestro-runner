@@ -3,9 +3,10 @@ package flow
 
 // Flow represents a parsed Maestro flow file.
 type Flow struct {
-	SourcePath string // Path to the source file
-	Config     Config // Flow configuration (appId, tags, etc.)
-	Steps      []Step // Steps to execute
+	SourcePath  string // Path to the source file
+	ContentHash string // SHA-256 (hex) of the file's bytes
+	Config      Config // Flow configuration (appId, tags, etc.)
+	Steps       []Step // Steps to execute
 }
 
 // IsSuite returns true if this flow is a suite file (only contains runFlow steps with file references).

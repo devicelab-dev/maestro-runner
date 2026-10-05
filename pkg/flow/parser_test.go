@@ -2636,3 +2636,20 @@ func TestSwipeWordSpeedIgnored(t *testing.T) {
 		t.Errorf("numeric speed: got %d, want 80", s1.Speed)
 	}
 }
+
+// ContentHash is the SHA-256 of the file's bytes: equal for equal content,
+// different after any edit.
+func TestParse_ContentHash(t *testing.T) {
+	a, err := Parse([]byte("- tapOn: \"A\"\n"), "a.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	same, _ := Parse([]byte("- tapOn: \"A\"\n"), "elsewhere/b.yaml")
+	edited, _ := Parse([]byte("- tapOn: \"B\"\n"), "a.yaml")
+	if len(a.ContentHash) != 64 {
+		t.Fatalf("hash %q", a.ContentHash)
+	}
+	if same.ContentHash != a.ContentHash || edited.ContentHash == a.ContentHash {
+		t.Errorf("hashes: %q, same content %q, edited %q", a.ContentHash, same.ContentHash, edited.ContentHash)
+	}
+}

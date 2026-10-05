@@ -2,6 +2,8 @@
 package flow
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -38,8 +40,10 @@ func ParseFile(path string) (*Flow, error) {
 func Parse(data []byte, sourcePath string) (*Flow, error) {
 	parts := splitYAMLDocuments(string(data))
 
+	sum := sha256.Sum256(data)
 	flow := &Flow{
-		SourcePath: sourcePath,
+		SourcePath:  sourcePath,
+		ContentHash: hex.EncodeToString(sum[:]),
 	}
 
 	if len(parts) == 0 {

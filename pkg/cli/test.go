@@ -654,6 +654,9 @@ type RunConfig struct {
 	// TelemetryFlags are the names (never values) of the flags this run was
 	// given, for the anonymous usage event (pkg/telemetry).
 	TelemetryFlags []string
+	// TelemetryFlowHashes are the content hashes of the top-level flow files
+	// found (before tag filtering), for the event's one-way project id.
+	TelemetryFlowHashes []string
 }
 
 func hyperlink(url, text string) string {
@@ -1013,7 +1016,7 @@ func executeTest(cfg *RunConfig) error {
 		return telemetry.Run{
 			Version: Version, Command: "test", FlagNames: cfg.TelemetryFlags,
 			Platform: telemetryPlatform(cfg), Driver: telemetryDriver(cfg), Cloud: cfg.CloudProvider != nil,
-			Devices: devices, FlowDir: telemetryFlowDir(cfg), Outcome: outcome, Duration: time.Since(started),
+			Devices: devices, FlowHashes: cfg.TelemetryFlowHashes, Outcome: outcome, Duration: time.Since(started),
 		}
 	}
 	// One event per run: whichever path claims telemetrySent first sends it
@@ -1392,6 +1395,9 @@ func validateAndParseFlows(cfg *RunConfig) ([]flow.Flow, error) {
 		result := v.Validate(path)
 		allTestCases = append(allTestCases, result.TestCases...)
 		allErrors = append(allErrors, result.Errors...)
+		for _, h := range result.FlowHashes {
+			cfg.TelemetryFlowHashes = append(cfg.TelemetryFlowHashes, h)
+		}
 	}
 
 	if len(allErrors) > 0 {
@@ -3257,19 +3263,6 @@ func telemetryDriver(cfg *RunConfig) string {
 		return "devicelab" // the default on both
 	}
 	return ""
-}
-
-// telemetryFlowDir is a directory of the run's flows, to find the git
-// repository they belong to (the event's one-way project id).
-func telemetryFlowDir(cfg *RunConfig) string {
-	if len(cfg.FlowPaths) == 0 {
-		return ""
-	}
-	p := cfg.FlowPaths[0]
-	if st, err := os.Stat(p); err == nil && !st.IsDir() {
-		p = filepath.Dir(p)
-	}
-	return p
 }
 
 // setFlagNames lists the flags this run was given, each once under its main

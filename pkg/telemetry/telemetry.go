@@ -20,7 +20,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -84,16 +83,16 @@ func envSet(name string) bool {
 
 // Run is what the CLI knows about a run, beyond its report.
 type Run struct {
-	Version   string
-	Command   string
-	FlagNames []string // names only, as typed: never values
-	Platform  string   // android, ios, web
-	Driver    string
-	Cloud     bool   // an Appium cloud provider ran it
-	Devices   int    // devices used
-	FlowDir   string // a directory of the run's flows (for the project id)
-	Outcome   string // completed, setup_failed, crashed, interrupted
-	Duration  time.Duration
+	Version    string
+	Command    string
+	FlagNames  []string // names only, as typed: never values
+	Platform   string   // android, ios, web
+	Driver     string
+	Cloud      bool     // an Appium cloud provider ran it
+	Devices    int      // devices used
+	FlowHashes []string // content hash of each top-level flow file (for the project id)
+	Outcome    string   // completed, setup_failed, crashed, interrupted
+	Duration   time.Duration
 }
 
 // Build assembles the event for a run from its report index (nil when the
@@ -103,7 +102,7 @@ func Build(run Run, index *report.Index, reportDir string) Event {
 		RunnerVersion: versionToken(run.Version),
 		Command:       oneOf(run.Command, "test", "hierarchy"),
 		Flags:         flagNames(run.FlagNames),
-		ProjectID:     ProjectID(run.FlowDir),
+		ProjectID:     ProjectID(run.FlowHashes),
 		CI:            DetectCI(),
 		HostOS:        oneOf(runtime.GOOS, "darwin", "linux", "windows"),
 		HostArch:      oneOf(runtime.GOARCH, "amd64", "arm64"),
@@ -208,97 +207,27 @@ func Notice() string {
 	return fmt.Sprintf("Anonymous usage stats are on (counts only, no names or ids): %s\n  Turn off: MAESTRO_RUNNER_NO_TELEMETRY=1 (or DO_NOT_TRACK=1)", DocsURL)
 }
 
-// ProjectID is a one-way hash identifying the project's repository: the
-// same on every machine, clone and CI runner of a repository, and nothing to
-// reverse into its name. It keys, in order: the repository's remote address
-// (host/owner/repo, without scheme, credentials or .git), the first commit of
-// a full clone without a remote, or the CI service's repository id. Empty
-// when there is none. A shallow clone (CI checkouts usually are) only knows
-// its latest commit, so the first commit is never taken from one.
-func ProjectID(dir string) string {
-	key := repoKey(dir)
-	if key == "" {
+// ProjectID is a one-way hash of the flow files a run was pointed at: the
+// content hash of each top-level flow file found there (before tag
+// filtering), sorted and hashed together. The same flows give the same id on
+// every machine and CI runner, with no git or environment lookups; it
+// changes when a flow file is added, removed or edited. Nothing in it can be
+// reversed or guessed without every one of those files. Empty without flows.
+func ProjectID(flowHashes []string) string {
+	hashes := make([]string, 0, len(flowHashes))
+	seen := map[string]bool{}
+	for _, h := range flowHashes {
+		if h != "" && !seen[h] {
+			seen[h] = true
+			hashes = append(hashes, h)
+		}
+	}
+	if len(hashes) == 0 {
 		return ""
 	}
-	sum := sha256.Sum256([]byte("maestro-runner/" + key))
+	sort.Strings(hashes)
+	sum := sha256.Sum256([]byte("maestro-runner/flows\n" + strings.Join(hashes, "\n")))
 	return hex.EncodeToString(sum[:])
-}
-
-func repoKey(dir string) string {
-	if dir != "" {
-		if remote := git(dir, "remote", "get-url", "origin"); remote != "" {
-			if r := normalizeRemote(remote); r != "" {
-				return "remote:" + r
-			}
-		}
-		if remotes := strings.Fields(git(dir, "remote")); len(remotes) > 0 {
-			if r := normalizeRemote(git(dir, "remote", "get-url", remotes[0])); r != "" {
-				return "remote:" + r
-			}
-		}
-		if git(dir, "rev-parse", "--is-shallow-repository") == "false" {
-			if roots := strings.Fields(git(dir, "rev-list", "--max-parents=0", "HEAD")); len(roots) > 0 {
-				sort.Strings(roots) // several roots (merged histories): pick one stably
-				return "root:" + roots[0]
-			}
-		}
-	}
-	for _, env := range []string{"GITHUB_REPOSITORY_ID", "CI_PROJECT_ID", "BITRISE_APP_SLUG", "BUILDKITE_PIPELINE_ID", "CIRCLE_PROJECT_ID"} {
-		if v := strings.TrimSpace(os.Getenv(env)); v != "" {
-			return "ci:" + env + ":" + v
-		}
-	}
-	return ""
-}
-
-// git runs a git command in dir and returns its trimmed output, or "".
-func git(dir string, args ...string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...).Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
-// normalizeRemote turns any form of a remote address into host/path, lower
-// case, without scheme, user, credentials, port or .git: the SSH and HTTPS
-// addresses of one repository give the same result.
-//
-//	git@github.com:Owner/Repo.git                    → github.com/owner/repo
-//	https://x-access-token:T@github.com/owner/repo   → github.com/owner/repo
-//	ssh://git@gitlab.example.com:2222/group/sub/repo → gitlab.example.com/group/sub/repo
-func normalizeRemote(remote string) string {
-	r := strings.TrimSpace(remote)
-	if r == "" {
-		return ""
-	}
-	if i := strings.Index(r, "://"); i >= 0 {
-		r = r[i+3:]
-	} else if at := strings.Index(r, "@"); at >= 0 && strings.Contains(r[at:], ":") {
-		// scp-like: user@host:path
-		r = r[at+1:]
-		r = strings.Replace(r, ":", "/", 1)
-	} else if strings.HasPrefix(r, "/") || strings.HasPrefix(r, ".") {
-		return "" // a local path: nothing that names the project
-	}
-	if at := strings.LastIndex(strings.SplitN(r, "/", 2)[0], "@"); at >= 0 {
-		r = r[at+1:] // user:token@
-	}
-	parts := strings.SplitN(r, "/", 2)
-	if len(parts) != 2 || parts[1] == "" {
-		return ""
-	}
-	host := parts[0]
-	if i := strings.LastIndex(host, ":"); i >= 0 {
-		host = host[:i] // port
-	}
-	path := strings.Trim(strings.TrimSuffix(strings.TrimRight(parts[1], "/"), ".git"), "/")
-	if host == "" || path == "" {
-		return ""
-	}
-	return strings.ToLower(host + "/" + path)
 }
 
 // DetectCI names the CI service from its environment, "none" when not on CI.
