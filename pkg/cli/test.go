@@ -1016,17 +1016,21 @@ func executeTest(cfg *RunConfig) error {
 			Devices: devices, FlowDir: telemetryFlowDir(cfg), Outcome: outcome, Duration: time.Since(started),
 		}
 	}
+	// One event per run: whichever path claims telemetrySent first sends it
+	// (the end of the run, a failure, or Ctrl-C).
+	var telemetrySent atomic.Bool
 	sendTelemetry := func(outcome string, index *report.Index, devices int) {
-		if !telemetry.Enabled() || telemetryDone != nil {
+		if !telemetry.Enabled() || !telemetrySent.CompareAndSwap(false, true) {
 			return
 		}
 		ev := telemetry.Build(telemetryRun(outcome, devices), index, cfg.OutputDir)
 		telemetryDone = make(chan struct{})
 		go func() { defer close(telemetryDone); telemetry.Send(ev) }()
 	}
-	// Set once the flows are valid: from then on a run that ends without
-	// reporting (device setup failed, the run errored) is sent as crashed,
-	// and one stopped with Ctrl-C as interrupted.
+	// Set once the run's own checks have passed (flows valid, flags and
+	// variables consistent): from then on a run that ends without reporting
+	// is sent as setup_failed (no flow ran) or crashed, and one stopped with
+	// Ctrl-C as interrupted. A user's configuration mistake sends nothing.
 	var telemetryArmed atomic.Bool
 	defer func() {
 		if telemetryDone != nil {
@@ -1083,7 +1087,7 @@ func executeTest(cfg *RunConfig) error {
 		sig := <-sigCh
 		logger.Info("Received signal %v, cleaning up...", sig)
 		fmt.Fprintf(os.Stderr, "\nReceived %v, cleaning up...\n", sig)
-		if telemetryArmed.Load() && telemetry.Enabled() {
+		if telemetryArmed.Load() && telemetry.Enabled() && telemetrySent.CompareAndSwap(false, true) {
 			telemetry.SendWithin(telemetry.Build(telemetryRun("interrupted", 0), nil, ""), time.Second)
 		}
 
@@ -1137,13 +1141,6 @@ func executeTest(cfg *RunConfig) error {
 	if cfg.Platform != "" {
 		warnUnsupportedSelectors(flows, cfg.Platform)
 	}
-
-	telemetryArmed.Store(true)
-	defer func() {
-		if telemetryDone == nil {
-			sendTelemetry("crashed", nil, 0)
-		}
-	}()
 
 	// Pre-checks for iOS with a direct driver (DeviceLab or WDA, not Appium).
 	// Appium handles everything via capabilities — no --app-file or --team-id needed.
@@ -1206,6 +1203,9 @@ func executeTest(cfg *RunConfig) error {
 	}
 	cfg.AppID = expandRunnerVars(cfg.AppID, cfg.Env)
 
+	telemetryArmed.Store(true)
+	defer sendTelemetry("setup_failed", nil, 0) // a no-op once an event went out
+
 	// 3.5. Handle device startup (emulator or simulator, if requested)
 	if err := handleDeviceStartup(cfg, emulatorMgr, simulatorMgr); err != nil {
 		logger.Error("Device startup failed: %v", err)
@@ -1230,7 +1230,13 @@ func executeTest(cfg *RunConfig) error {
 	result, err := executeFlowsWithMode(cfg, flows, needsParallel, deviceIDs)
 	if err != nil {
 		logger.Error("Flow execution failed: %v", err)
-		sendTelemetry("crashed", nil, len(deviceIDs))
+		// crashed once a flow had started (the report shows it), otherwise
+		// the run never got going (driver or device setup): setup_failed.
+		outcome := "setup_failed"
+		if index, ierr := report.ReadIndex(filepath.Join(cfg.OutputDir, "report.json")); ierr == nil && anyFlowStarted(index) {
+			outcome = "crashed"
+		}
+		sendTelemetry(outcome, nil, len(deviceIDs))
 		return err
 	}
 	logger.Info("Flow execution completed: %d passed, %d failed, %d skipped",
@@ -3283,4 +3289,14 @@ func setFlagNames(c *cli.Context) []string {
 		}
 	}
 	return names
+}
+
+// anyFlowStarted reports whether a run's report shows a flow that began.
+func anyFlowStarted(index *report.Index) bool {
+	for _, f := range index.Flows {
+		if f.Status != report.StatusPending {
+			return true
+		}
+	}
+	return false
 }

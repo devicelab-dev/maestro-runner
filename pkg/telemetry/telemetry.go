@@ -92,7 +92,7 @@ type Run struct {
 	Cloud     bool   // an Appium cloud provider ran it
 	Devices   int    // devices used
 	FlowDir   string // a directory of the run's flows (for the project id)
-	Outcome   string // completed, crashed, interrupted
+	Outcome   string // completed, setup_failed, crashed, interrupted
 	Duration  time.Duration
 }
 
@@ -111,7 +111,7 @@ func Build(run Run, index *report.Index, reportDir string) Event {
 		Driver:        oneOf(run.Driver, "devicelab", "uiautomator2", "appium", "wda", "devicelab-legacy", "browser"),
 		Devices:       run.Devices,
 		FailureKinds:  map[string]int{},
-		RunOutcome:    oneOf(run.Outcome, "completed", "crashed", "interrupted"),
+		RunOutcome:    oneOf(run.Outcome, "completed", "setup_failed", "crashed", "interrupted"),
 		DurationS:     int(run.Duration.Round(time.Second) / time.Second),
 	}
 	if ev.Platform == "web" {
