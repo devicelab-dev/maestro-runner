@@ -181,6 +181,21 @@ maestro-runner --driver appium --appium-url <HUB_URL> --caps caps.json test flow
 - **[TestingBot](docs/cloud-providers/testingbot.md)** — Setup guide for running on TestingBot's real device cloud
 - **[Sauce Labs](docs/cloud-providers/saucelabs.md)** — Setup guide for running on Sauce Labs Appium cloud
 
+## Telemetry
+
+maestro-runner sends one anonymous usage event at the end of each `test` run:
+counts and versions only, such as runner version, platform, driver, device
+kind, flow and step counts, failure kinds and duration. It holds no machine or
+user id, no flow or file names, selectors, app ids, URLs, environment values or
+error messages, and nothing is written on your machine. Projects are counted
+by a one-way hash of the repository's first commit.
+
+Turn it off with `MAESTRO_RUNNER_NO_TELEMETRY=1` or `DO_NOT_TRACK=1`. Set
+`MAESTRO_RUNNER_TELEMETRY_DEBUG=1` to print the event instead of sending it.
+[Telemetry](https://open.devicelab.dev/maestro-runner/docs/telemetry) lists every field.
+
+The update check is separate and unchanged.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
