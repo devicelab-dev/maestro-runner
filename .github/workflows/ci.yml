@@ -14,7 +14,7 @@ jobs:
     name: Test Go (shard ${{ matrix.shard.id }})
     runs-on: ubuntu-latest
     env:
-      CDP_PARALLEL: "4"
+      TEST_PARALLEL: "4"
     strategy:
       fail-fast: false
       # Static sharding avoids a timing/preparation run. The slow CDP browser
@@ -45,6 +45,29 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      - name: Verify every Go package is in a shard
+        # Reads the shard lists back out of this file instead of repeating them:
+        # a second copy would drift and then validate itself, hiding a typo or a
+        # dropped package. `sort` is not `sort -u`, so a package listed in two
+        # shards still shows up. A package that cannot build on this runner
+        # (e.g. //go:build darwin) is absent from `go list`, so listing it fails
+        # — and omitting it hides it from this check entirely.
+        run: |
+          set -euo pipefail
+          workdir=$(mktemp -d)
+          trap 'rm -rf "$workdir"' EXIT
+          go list ./... | sort > "$workdir/all-packages.txt"
+          grep -oE '^[[:space:]]+packages: .*$' .github/workflows/ci.yml \
+            | sed -e "s/^[[:space:]]*packages: ['\"]//" -e "s/['\"]$//" \
+            | tr ' ' '\n' \
+            | grep -v '^$' \
+            | sort > "$workdir/sharded-packages.txt"
+          if ! diff -u "$workdir/all-packages.txt" "$workdir/sharded-packages.txt"; then
+            echo "::error::Go packages and test shards are out of sync. Every package from 'go list ./...' must appear in exactly one shard."
+            exit 1
+          fi
+          echo "All $(wc -l < "$workdir/all-packages.txt" | tr -d ' ') Go packages are covered by a test shard."
+
       - name: Run tests (shard ${{ matrix.shard.id }})
         env:
           # Race detection makes the browser-backed CDP tests substantially
@@ -55,7 +78,7 @@ jobs:
           echo "Testing shard ${{ matrix.shard.id }} (race='$RACE_FLAG'):"
           echo "$PKGS"
           # shellcheck disable=SC2086
-          go test $RACE_FLAG -parallel "$CDP_PARALLEL" -timeout 25m -v -coverprofile=coverage-${{ matrix.shard.id }}.out -covermode=atomic $PKGS
+          go test $RACE_FLAG -parallel "$TEST_PARALLEL" -timeout 25m -v -coverprofile=coverage-${{ matrix.shard.id }}.out -covermode=atomic $PKGS
 
       - name: Upload coverage
         if: ${{ hashFiles(format('coverage-{0}.out', matrix.shard.id)) != '' }}
