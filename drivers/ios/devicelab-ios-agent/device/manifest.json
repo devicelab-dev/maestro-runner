@@ -1,5 +1,5 @@
 {
-  "version": "93f9e69",
+  "version": "a98076f",
   "protocol": "1.0",
   "xcode": "Xcode 27.0",
   "runnerBundleId": "dev.devicelab.agent.uitests.xctrunner",
@@ -12,7 +12,7 @@
     "DevicelabIOSAgentUITests-Runner.app/DevicelabIOSAgentUITests-Runner": "26d1a9837de9735a1c9dcaef554144297f03d6291c8421aa04d6e8f6c9bc5833",
     "DevicelabIOSAgentUITests-Runner.app/Info.plist": "ffc0b193115180aa4af30f183fe4bf67eb821c79c763f363fdd7b41e82262498",
     "DevicelabIOSAgentUITests-Runner.app/PkgInfo": "82502191c9484b04d685374f9879a0066069c49b8acae7a04b01d38d07e8eca0",
-    "DevicelabIOSAgentUITests-Runner.app/PlugIns/DevicelabIOSAgentUITests.xctest/DevicelabIOSAgentUITests": "5764676eb0ecdeeb4e3aa2f832a86a74d6b1db19e9c5f12acbf6cf28d563156e",
+    "DevicelabIOSAgentUITests-Runner.app/PlugIns/DevicelabIOSAgentUITests.xctest/DevicelabIOSAgentUITests": "0760c19b2d8d974ca68e18c3e73ee8fa271b1924b51835221f78d948ee5baf28",
     "DevicelabIOSAgentUITests-Runner.app/PlugIns/DevicelabIOSAgentUITests.xctest/Info.plist": "82c7c5c76ae134228a1cbc5235630dc5a63964bf5d3721b660790b08bec534f7"
   }
 }
