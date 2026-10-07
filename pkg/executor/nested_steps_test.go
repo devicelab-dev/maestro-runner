@@ -139,6 +139,48 @@ func TestPasteTextInsideRunFlowUsesCopiedText(t *testing.T) {
 	}
 }
 
+// pasteText after setClipboard types the text setClipboard set, as Maestro
+// does, at the top level and inside a runFlow. It used to read the device
+// clipboard, which Android 10+ returns empty to the UiAutomator2 server (#202).
+func TestPasteTextAfterSetClipboardTypesItsText(t *testing.T) {
+	setClip := func(text string) *flow.SetClipboardStep {
+		return &flow.SetClipboardStep{BaseStep: flow.BaseStep{StepType: flow.StepSetClipboard}, Text: text}
+	}
+	paste := func() *flow.PasteTextStep {
+		return &flow.PasteTextStep{BaseStep: flow.BaseStep{StepType: flow.StepPasteText}}
+	}
+	var seen []flow.Step
+
+	result := runOneFlow(t, realDriverRejects(&seen), flow.Flow{
+		SourcePath: "test.yaml",
+		Config:     flow.Config{Name: "setClipboard then pasteText"},
+		Steps: []flow.Step{
+			setClip("4893010215"),
+			paste(),
+			&flow.RunFlowStep{
+				BaseStep: flow.BaseStep{StepType: flow.StepRunFlow},
+				Steps:    []flow.Step{setClip("nested-42"), paste()},
+			},
+		},
+	})
+
+	if result.Status != report.StatusPassed {
+		t.Errorf("Status = %v, want passed", result.Status)
+	}
+	var typed []string
+	for _, s := range seen {
+		if in, ok := s.(*flow.InputTextStep); ok {
+			typed = append(typed, in.Text)
+		}
+		if _, ok := s.(*flow.PasteTextStep); ok {
+			t.Error("pasteText reached the driver instead of typing the setClipboard text")
+		}
+	}
+	if strings.Join(typed, ",") != "4893010215,nested-42" {
+		t.Errorf("typed %q, want each setClipboard's text", typed)
+	}
+}
+
 // A step inside repeat expands ${...} afresh on every pass. Expansion used to
 // rewrite the shared step, so the first pass's value was baked in and every
 // later pass typed it again (duckduckgo/Android's autofill suite).

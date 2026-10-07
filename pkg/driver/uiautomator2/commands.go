@@ -1597,22 +1597,19 @@ func (d *Driver) copyTextFrom(step *flow.CopyTextFromStep) *core.CommandResult {
 	}
 }
 
+// pasteText types the clipboard's text the way inputText does, as Maestro's
+// pasteText does: into the focused field when the server reports one, else as
+// key events. Requiring a reported focused element failed in fields the
+// server does not report as active (#202).
 func (d *Driver) pasteText(_ *flow.PasteTextStep) *core.CommandResult {
 	text, err := d.client.GetClipboard()
 	if err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to get clipboard: %v", err))
 	}
-
-	active, err := d.client.ActiveElement()
-	if err != nil {
-		return errorResult(err, "No focused element to paste into")
+	if text == "" {
+		return successResult("Nothing to paste: the clipboard is empty", nil) // as Maestro: no-op
 	}
-
-	if err := active.SendKeys(text); err != nil {
-		return errorResult(err, fmt.Sprintf("Failed to paste text: %v", err))
-	}
-
-	return successResult(fmt.Sprintf("Pasted text: %s", text), nil)
+	return d.inputText(&flow.InputTextStep{Text: text})
 }
 
 func (d *Driver) setClipboard(step *flow.SetClipboardStep) *core.CommandResult {

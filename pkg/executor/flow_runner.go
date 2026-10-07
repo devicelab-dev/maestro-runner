@@ -572,6 +572,10 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 	case *flow.AssertScreenshotStep:
 		result = fr.executeAssertScreenshot(s, idx)
 
+	// SetClipboard - set it on the device and keep the text for pasteText
+	case *flow.SetClipboardStep:
+		result = fr.executeSetClipboard(s)
+
 	// PasteText - use in-memory copiedText first, clipboard as fallback
 	case *flow.PasteTextStep:
 		result = fr.executePasteText(s)
@@ -1427,8 +1431,22 @@ func (fr *FlowRunner) enrichTimeoutError(result *core.CommandResult) *core.Comma
 	return &enriched
 }
 
-// executePasteText pastes the text copyTextFrom saved, as Maestro does, and
-// falls back to the device clipboard when nothing was copied in this flow.
+// executeSetClipboard sets the device clipboard and keeps the text for
+// pasteText, as Maestro's setClipboard does. pasteText then types the kept
+// text instead of reading the device clipboard, which Android 10+ does not
+// let a background app (the UiAutomator2 server) read: it comes back empty
+// (#202).
+func (fr *FlowRunner) executeSetClipboard(step *flow.SetClipboardStep) *core.CommandResult {
+	result := fr.driver.Execute(step)
+	if result.Success {
+		fr.script.SetCopiedText(step.Text)
+	}
+	return result
+}
+
+// executePasteText pastes the text copyTextFrom or setClipboard saved, as
+// Maestro does, and falls back to the device clipboard when nothing was
+// copied in this flow.
 func (fr *FlowRunner) executePasteText(step *flow.PasteTextStep) *core.CommandResult {
 	text := fr.script.GetCopiedText()
 	if text == "" {
@@ -1589,6 +1607,9 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 	case *flow.RunShellStep:
 		fr.script.ExpandStep(step)
 		result = fr.executeRunShell(s)
+	case *flow.SetClipboardStep:
+		fr.script.ExpandStep(step)
+		result = fr.executeSetClipboard(s)
 	case *flow.PasteTextStep:
 		fr.script.ExpandStep(step)
 		result = fr.executePasteText(s)

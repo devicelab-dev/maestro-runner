@@ -80,7 +80,8 @@ func (c *Client) OpenNotifications() error {
 
 // GetClipboard returns the clipboard text.
 func (c *Client) GetClipboard() (string, error) {
-	data, err := c.request("POST", c.sessionPath("/appium/device/get_clipboard"), nil)
+	req := GetClipboardRequest{ContentType: "plaintext"}
+	data, err := c.request("POST", c.sessionPath("/appium/device/get_clipboard"), req)
 	if err != nil {
 		return "", err
 	}

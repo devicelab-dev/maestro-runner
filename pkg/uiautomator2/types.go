@@ -131,6 +131,12 @@ type ClipboardRequest struct {
 	ContentType string `json:"contentType"` // plaintext
 }
 
+// GetClipboardRequest for reading the clipboard. The server reads its model
+// from the body, so a request without one fails with a NullPointerException.
+type GetClipboardRequest struct {
+	ContentType string `json:"contentType"` // plaintext
+}
+
 // SettingsRequest for updating settings.
 type SettingsRequest struct {
 	Settings map[string]interface{} `json:"settings"`
