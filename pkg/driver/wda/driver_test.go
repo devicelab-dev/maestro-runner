@@ -4688,9 +4688,7 @@ func TestParseResponseWDAErrorNoMessage(t *testing.T) {
 
 // TestTapOnPointWithPercentageWindowSizeError tests when screen size is not cached
 func TestTapOnPointWithPercentageWindowSizeError(t *testing.T) {
-	client := &Client{}
-	// No screen size in PlatformInfo
-	driver := NewDriver(client, &core.PlatformInfo{Platform: "ios"}, "")
+	driver := noSizeDriver(t)
 
 	result := driver.tapOnPointWithCoords("50%, 50%")
 

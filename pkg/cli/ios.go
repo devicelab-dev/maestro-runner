@@ -157,10 +157,12 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		appVersion, appBuild = readBundleVersionAndBuild(cfg.AppFile)
 	}
 
-	// 8. Get screen size
+	// 8. Get screen size (read again on first use if this read fails)
 	var screenW, screenH int
 	if w, h, err := client.WindowSize(); err == nil {
 		screenW, screenH = w, h
+	} else {
+		logger.Warn("WDA did not report the screen size at startup (read again when needed): %v", err)
 	}
 
 	platformInfo := &core.PlatformInfo{

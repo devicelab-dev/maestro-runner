@@ -22,6 +22,9 @@ type Driver struct {
 	info   *core.PlatformInfo
 	udid   string // Device UDID for simctl commands
 
+	// Guards the screen size kept in info when screenSize reads it again.
+	sizeMu sync.Mutex
+
 	// In-flight --record capture (simulators only)
 	recording *simulator.Recording
 
@@ -141,11 +144,30 @@ func (d *Driver) EnsureSession(appID string) error {
 }
 
 // screenSize returns cached screen dimensions from PlatformInfo.
+// screenSize is the screen size WDA reports, read at startup and kept. When
+// that read failed (WDA not answering yet), it is read again here, and kept
+// once it succeeds: one failed read at startup no longer fails every point
+// tap, percentage swipe and scroll of the run (#201).
 func (d *Driver) screenSize() (int, int, error) {
+	d.sizeMu.Lock()
+	defer d.sizeMu.Unlock()
 	if d.info != nil && d.info.ScreenWidth > 0 && d.info.ScreenHeight > 0 {
 		return d.info.ScreenWidth, d.info.ScreenHeight, nil
 	}
-	return 0, 0, fmt.Errorf("screen dimensions not available")
+	if d.client == nil {
+		return 0, 0, fmt.Errorf("screen dimensions not available")
+	}
+	w, h, err := d.client.WindowSize()
+	if err != nil {
+		return 0, 0, fmt.Errorf("screen dimensions not available: %w", err)
+	}
+	if w <= 0 || h <= 0 {
+		return 0, 0, fmt.Errorf("screen dimensions not available: WDA reported %dx%d", w, h)
+	}
+	if d.info != nil {
+		d.info.ScreenWidth, d.info.ScreenHeight = w, h
+	}
+	return w, h, nil
 }
 
 // SetContext sets the parent context for element-finding operations.

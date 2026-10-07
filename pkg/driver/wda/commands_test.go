@@ -473,9 +473,7 @@ func TestCopyTextFromByID(t *testing.T) {
 
 // TestScrollScreenSizeNotAvailable tests scroll when screen size is not cached.
 func TestScrollWindowSizeError(t *testing.T) {
-	client := &Client{}
-	// No screen size in PlatformInfo
-	driver := NewDriver(client, &core.PlatformInfo{Platform: "ios"}, "")
+	driver := noSizeDriver(t)
 
 	step := &flow.ScrollStep{Direction: "down"}
 	result := driver.scroll(step)
@@ -2822,9 +2820,7 @@ func TestTapOnPointDirectPixelCoordinates(t *testing.T) {
 
 // TestTapOnPointPercentageScreenSizeNotAvailable tests tapOnPointWithCoords when screen size not cached.
 func TestTapOnPointPercentageWindowSizeFails(t *testing.T) {
-	client := &Client{}
-	// No screen size in PlatformInfo
-	driver := NewDriver(client, &core.PlatformInfo{Platform: "ios"}, "")
+	driver := noSizeDriver(t)
 
 	result := driver.tapOnPointWithCoords("50%, 50%")
 
