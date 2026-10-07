@@ -534,7 +534,7 @@ func TestScriptEngine_EvalCondition(t *testing.T) {
 		{"comparison false", "count > 10", false},
 		{"equality", "count == 5", true},
 		{"string true", "'true'", true},
-		{"string other", "'yes'", false},
+		{"string other", "'yes'", true}, // true in Maestro: only a falsy string is false
 		{"empty string", "''", false},
 		{"number non-zero", "42", true},
 		{"number zero", "0", false},

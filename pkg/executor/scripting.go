@@ -378,9 +378,9 @@ func (se *ScriptEngine) EvalCondition(script string) (bool, error) {
 	// Expand any remaining $VAR style variables
 	script = se.expandDollarVars(script)
 
-	// Pre-define potential env variables as undefined to avoid ReferenceError
-	matches := envVarPattern.FindAllString(script, -1)
-	for _, name := range matches {
+	// An undeclared name is undefined, not a ReferenceError, as in Maestro's
+	// JS engine (GraalJsEngine.kt:198-204).
+	for _, name := range referencedIdentifiers(script) {
 		se.js.DefineUndefinedIfMissing(name)
 	}
 
@@ -394,7 +394,7 @@ func (se *ScriptEngine) EvalCondition(script string) (bool, error) {
 	case bool:
 		return v, nil
 	case string:
-		return v == "true", nil
+		return maestroTruthy(v), nil
 	case int64:
 		return v != 0, nil
 	case float64:
@@ -402,6 +402,42 @@ func (se *ScriptEngine) EvalCondition(script string) (bool, error) {
 	default:
 		return result != nil, nil
 	}
+}
+
+// maestroTruthy is how Maestro reads the value of a `true:` condition or an
+// assertTrue: false when it is blank, "false" in any case, "undefined",
+// "null" or a number equal to zero, and true otherwise, so "abc" is true
+// (Orchestra.kt:1030-1052).
+func maestroTruthy(value string) bool {
+	if strings.TrimSpace(value) == "" || strings.EqualFold(value, "false") ||
+		value == "undefined" || value == "null" {
+		return false
+	}
+	if f, err := strconv.ParseFloat(strings.TrimSpace(value), 64); err == nil && f == 0 {
+		return false
+	}
+	return true
+}
+
+// isWholeExpression reports whether text is one ${...} and nothing else.
+func isWholeExpression(text string) bool {
+	s := strings.TrimSpace(text)
+	if !strings.HasPrefix(s, "${") {
+		return false
+	}
+	depth := 0
+	for i := 1; i < len(s); i++ {
+		switch s[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return i == len(s)-1
+			}
+		}
+	}
+	return false
 }
 
 // ResolvePath resolves a relative path against the flow directory.
@@ -879,7 +915,10 @@ func (se *ScriptEngine) ExpandCondition(cond *flow.Condition) {
 	if cond.NotVisible != nil {
 		cond.NotVisible = se.expandSelector(cond.NotVisible)
 	}
-	if cond.Script != "" {
+	// A script that is one ${...} is left for EvalCondition, which judges its
+	// value as Maestro does. Expanded here, the value was then run as JS
+	// itself: "abc" became a ReferenceError, and "" no condition at all.
+	if cond.Script != "" && !isWholeExpression(cond.Script) {
 		cond.Script = se.ExpandVariables(cond.Script)
 	}
 	if cond.Platform != "" {
