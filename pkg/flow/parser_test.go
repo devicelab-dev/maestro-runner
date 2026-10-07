@@ -2109,6 +2109,35 @@ func TestFlow_IsSuite(t *testing.T) {
 			},
 			expected: false, // Only 1 runFlow with file
 		},
+		{
+			name: "two runFlows with files and an inline one - not a suite",
+			flow: Flow{
+				Steps: []Step{
+					&RunFlowStep{BaseStep: BaseStep{StepType: StepRunFlow}, File: "open.yaml"},
+					&RunFlowStep{
+						BaseStep: BaseStep{StepType: StepRunFlow},
+						When:     &Condition{Visible: &Selector{Text: "Menu"}},
+						Steps:    []Step{&TapOnStep{BaseStep: BaseStep{StepType: StepTapOn}}},
+					},
+					&RunFlowStep{BaseStep: BaseStep{StepType: StepRunFlow}, File: "close.yaml"},
+				},
+			},
+			expected: false, // expanding would drop the inline commands
+		},
+		{
+			name: "two runFlows with files, one conditional - not a suite",
+			flow: Flow{
+				Steps: []Step{
+					&RunFlowStep{BaseStep: BaseStep{StepType: StepRunFlow}, File: "open.yaml"},
+					&RunFlowStep{
+						BaseStep: BaseStep{StepType: StepRunFlow},
+						File:     "reset.yaml",
+						When:     &Condition{Visible: &Selector{Text: "Menu"}},
+					},
+				},
+			},
+			expected: false, // expanding would run reset.yaml whatever the condition says
+		},
 	}
 
 	for _, tt := range tests {
