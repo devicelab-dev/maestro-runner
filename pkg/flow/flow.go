@@ -12,7 +12,9 @@ type Flow struct {
 // Suite files orchestrate multiple test cases; each runFlow represents a test case.
 // Requires at least 2 runFlow steps with file references to be considered a suite.
 // A single runFlow is just a wrapper, not a suite.
-// Inline runFlow steps (no file, only commands) are NOT considered suite entries.
+// A runFlow with inline commands, a `when` condition or an else branch is part of the flow itself, not a
+// test case: expanding the file would drop the commands and run conditional files unconditionally, so a
+// flow that has one is not a suite.
 // onFlowStart/onFlowComplete hooks are ignored for detection as they're setup/teardown.
 func (f *Flow) IsSuite() bool {
 	if len(f.Steps) == 0 {
@@ -25,10 +27,11 @@ func (f *Flow) IsSuite() bool {
 			// Any non-runFlow step means it's not a pure suite
 			return false
 		}
-		// Check if this runFlow has a file reference (not inline)
-		if rf, ok := step.(*RunFlowStep); ok && rf.File != "" {
-			runFlowWithFileCount++
+		rf, ok := step.(*RunFlowStep)
+		if !ok || rf.File == "" || rf.When != nil || rf.ElseFile != "" || len(rf.ElseSteps) > 0 {
+			return false
 		}
+		runFlowWithFileCount++
 	}
 
 	// Must have at least 2 runFlow steps with file references to be a suite
