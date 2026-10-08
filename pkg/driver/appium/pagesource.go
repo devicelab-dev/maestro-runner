@@ -573,12 +573,13 @@ func FilterRightOf(elements []*ParsedElement, anchor *ParsedElement) []*ParsedEl
 	return result
 }
 
-// FilterChildOf returns elements inside anchor bounds.
+// FilterChildOf returns elements that are descendants of anchor.
 func FilterChildOf(elements []*ParsedElement, anchor *ParsedElement) []*ParsedElement {
+	// Element must be a descendant of anchor in the element tree (not merely inside its bounds).
 	var result []*ParsedElement
 
 	for _, elem := range elements {
-		if isInside(elem.Bounds, anchor.Bounds) {
+		if isDescendantOf(elem, anchor) {
 			result = append(result, elem)
 		}
 	}
@@ -586,17 +587,41 @@ func FilterChildOf(elements []*ParsedElement, anchor *ParsedElement) []*ParsedEl
 	return result
 }
 
-// FilterContainsChild returns elements that contain anchor.
+// FilterContainsChild returns elements that are ancestors of anchor.
 func FilterContainsChild(elements []*ParsedElement, anchor *ParsedElement) []*ParsedElement {
+	// Element must be an ancestor of anchor in the element tree (not merely enclose its bounds).
 	var result []*ParsedElement
 
 	for _, elem := range elements {
-		if isInside(anchor.Bounds, elem.Bounds) {
+		if anchor.Parent == nil && len(anchor.Children) == 0 {
+			if isInside(anchor.Bounds, elem.Bounds) {
+				result = append(result, elem)
+			}
+			continue
+		}
+		if isDescendantOf(anchor, elem) {
 			result = append(result, elem)
 		}
 	}
 
 	return result
+}
+
+// isDescendantOf reports whether elem sits under anchor in the parsed element tree, which is what
+// Maestro's childOf means. A position check alone also matches elements that merely lie inside the
+// anchor's rectangle, such as list rows behind an overlay that covers them, and turns a failing
+// assertion into a pass. Anchors rebuilt from a relative selector carry no tree links; for those,
+// fall back to bounds containment.
+func isDescendantOf(elem, anchor *ParsedElement) bool {
+	if anchor.Parent == nil && len(anchor.Children) == 0 {
+		return isInside(elem.Bounds, anchor.Bounds)
+	}
+	for p := elem.Parent; p != nil; p = p.Parent {
+		if p == anchor {
+			return true
+		}
+	}
+	return false
 }
 
 // FilterInsideOf returns elements whose center is inside anchor.
