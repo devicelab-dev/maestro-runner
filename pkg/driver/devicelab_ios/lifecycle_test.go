@@ -71,6 +71,10 @@ func TestLaunchAppDefaultsAndErrors(t *testing.T) {
 	if !sl.has("privacy SIM-1 grant all com.x") {
 		t.Fatalf("default all:allow missing: %v", sl.calls)
 	}
+	// A reset would lose grants that simctl cannot give back (contacts, notifications).
+	if sl.has("privacy SIM-1 reset") {
+		t.Fatalf("default all:allow must not reset permissions: %v", sl.calls)
+	}
 	if sl.has("terminate") {
 		t.Fatal("stopApp: false must not terminate")
 	}

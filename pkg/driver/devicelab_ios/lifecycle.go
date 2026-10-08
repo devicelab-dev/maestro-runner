@@ -335,8 +335,14 @@ func (d *Driver) applyLaunchPermissions(bid string, perms map[string]string) {
 	if len(perms) == 0 {
 		perms = map[string]string{"all": "allow"}
 	}
-	if _, err := d.runSimctl("privacy", d.udid, "reset", "all", bid); err != nil {
-		logger.Warn("launchApp: permission reset failed: %v", err)
+	// With all:allow nothing is meant to stay "not determined", so the reset can only lose grants, and
+	// simctl cannot put all of them back: its contacts grant does not take (iOS 18.6 simulator) and it has
+	// no notifications service. Grants made another way (the user's tap on the prompt, applesimutils, an
+	// earlier run) are kept instead of being asked for again on every launch.
+	if !hasOnlyAllAllow(perms) {
+		if _, err := d.runSimctl("privacy", d.udid, "reset", "all", bid); err != nil {
+			logger.Warn("launchApp: permission reset failed: %v", err)
+		}
 	}
 	set := map[string]string{}
 	for name, value := range perms {
@@ -347,6 +353,15 @@ func (d *Driver) applyLaunchPermissions(bid string, perms map[string]string) {
 	if _, failures := d.applyPermissions(bid, set); len(failures) > 0 {
 		logger.Warn("launchApp: permissions not applied: %s", strings.Join(failures, "; "))
 	}
+}
+
+// hasOnlyAllAllow reports whether perms is just all:allow, launchApp's default.
+func hasOnlyAllAllow(perms map[string]string) bool {
+	if len(perms) != 1 {
+		return false
+	}
+	value, ok := perms["all"]
+	return ok && strings.EqualFold(strings.TrimSpace(value), "allow")
 }
 
 // applyPermissions sets each permission with `simctl privacy`, one service
