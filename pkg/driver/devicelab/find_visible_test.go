@@ -50,6 +50,11 @@ func TestChecksBySnapshot(t *testing.T) {
 	if checksBySnapshot(flow.Selector{Text: "a", Index: "2"}) {
 		t.Error("index selectors keep their own path")
 	}
+	// The snapshot path ignores the index: one that is not a whole number
+	// must take the index path, which reports it (it used to mean "first").
+	if checksBySnapshot(flow.Selector{Text: "a", Index: "undefined"}) {
+		t.Error("a non-numeric index must not take the snapshot path")
+	}
 }
 
 // An anchored id matches an id with a package prefix, as in Maestro. The

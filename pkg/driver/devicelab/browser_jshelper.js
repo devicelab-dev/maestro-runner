@@ -54,7 +54,7 @@ window.__maestro = {
     var results = [];
     switch (selectorType) {
       case 'css':
-        try { results = Array.from(document.querySelectorAll(selectorValue)); } catch(e) {}
+        try { results = Array.from(document.querySelectorAll(selectorValue)); } catch(e) { if (e && e.name === 'SyntaxError') throw e; }
         break;
       case 'id':
         var el = document.getElementById(selectorValue);

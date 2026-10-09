@@ -573,8 +573,8 @@ func (d *Driver) findElementByPageSource(sel flow.Selector) (*core.ElementInfo, 
 
 	// Prioritize clickable, then select by index or deepest
 	candidates = SortClickableFirst(candidates)
-	if core.IndexOutOfRange(len(candidates), sel.Index) {
-		return nil, fmt.Errorf("no element at index %s: %d match(es)", sel.Index, len(candidates))
+	if err := core.IndexError(len(candidates), sel.Index); err != nil {
+		return nil, err
 	}
 	selected := SelectByIndex(candidates, sel.Index)
 
@@ -979,8 +979,8 @@ func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements 
 		// (first) element to match Maestro's .firstOrNull() behavior.
 		selected = candidates[0]
 	} else {
-		if core.IndexOutOfRange(len(candidates), sel.Index) {
-			return nil, fmt.Errorf("no element at index %s: %d match(es)", sel.Index, len(candidates))
+		if err := core.IndexError(len(candidates), sel.Index); err != nil {
+			return nil, err
 		}
 		selected = SelectByIndex(candidates, sel.Index)
 	}

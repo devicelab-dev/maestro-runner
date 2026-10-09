@@ -655,8 +655,12 @@ func TestSelector_HasNonZeroIndex(t *testing.T) {
 		{"positive index", "1", true},
 		{"negative index", "-1", true},
 		{"large index", "99", true},
-		{"non-numeric index", "abc", false},
-		{"variable reference", "${idx}", false},
+		// Not a whole number: routed to the path that reads the index, which
+		// accepts "2.0" and reports the rest instead of using the first match.
+		{"non-numeric index", "abc", true},
+		{"variable reference", "${idx}", true},
+		{"decimal index", "2.0", true},
+		{"padded zero", " 0 ", false},
 	}
 
 	for _, tt := range tests {
@@ -1176,6 +1180,17 @@ func TestSelector_UnmarshalYAML_EmptyText(t *testing.T) {
 		}
 		if s.Text != c.want {
 			t.Errorf("%s: Text = %q, want %q", c.yaml, s.Text, c.want)
+		}
+	}
+}
+
+// EffectiveNth reads "2.0" as 2, as Maestro does; other non-numbers stay 0
+// (the driver reports them before it looks).
+func TestSelector_EffectiveNthDecimal(t *testing.T) {
+	for index, want := range map[string]int{"2.0": 2, " 3 ": 3, "abc": 0, "NaN": 0, "-1": 0} {
+		s := Selector{Index: index}
+		if got := s.EffectiveNth(); got != want {
+			t.Errorf("EffectiveNth(%q) = %d, want %d", index, got, want)
 		}
 	}
 }
