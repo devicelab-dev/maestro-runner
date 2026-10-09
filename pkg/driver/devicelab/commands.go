@@ -2879,12 +2879,45 @@ func (d *Driver) setLocation(step *flow.SetLocationStep) *core.CommandResult {
 		return errorResult(fmt.Errorf("latitude and longitude required"), "Missing coordinates")
 	}
 
-	cmd := fmt.Sprintf("am broadcast -a android.intent.action.MOCK_LOCATION --ef lat %s --ef lon %s", lat, lon)
-	if _, err := d.device.Shell(cmd); err != nil {
+	if err := d.mockLocation(lat, lon); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to set location: %v", err))
 	}
 
 	return successResult(fmt.Sprintf("Set location to %s, %s", lat, lon), nil)
+}
+
+// agentPackage is the DeviceLab agent app, which holds the mock location app op.
+const agentPackage = "dev.devicelab.driver.android"
+
+// locationSetter is the agent client that can set the device's location.
+type locationSetter interface {
+	SetLocation(latitude, longitude float64) error
+}
+
+// mockLocation moves the device to lat,lon through the agent's test location
+// providers, after allowing the agent the mock location app op (once per
+// session). The `am broadcast ... MOCK_LOCATION` sent before had no receiver
+// on the device: setLocation and travel passed and the location never moved.
+func (d *Driver) mockLocation(lat, lon string) error {
+	la, err := strconv.ParseFloat(strings.TrimSpace(lat), 64)
+	if err != nil || la < -90 || la > 90 {
+		return fmt.Errorf("latitude %q must be a number between -90 and 90", lat)
+	}
+	lo, err := strconv.ParseFloat(strings.TrimSpace(lon), 64)
+	if err != nil || lo < -180 || lo > 180 {
+		return fmt.Errorf("longitude %q must be a number between -180 and 180", lon)
+	}
+	setter, ok := d.client.(locationSetter)
+	if !ok {
+		return fmt.Errorf("this DeviceLab agent cannot set the location")
+	}
+	if !d.mockLocationAllowed {
+		if out, err := d.device.Shell("appops set " + agentPackage + " android:mock_location allow"); err != nil {
+			return fmt.Errorf("allowing mock locations for the agent: %v %s", err, strings.TrimSpace(out))
+		}
+		d.mockLocationAllowed = true
+	}
+	return setter.SetLocation(la, lo)
 }
 
 // applyAirplaneMode sets airplane mode on/off using the best available method.
@@ -2968,8 +3001,7 @@ func (d *Driver) travel(step *flow.TravelStep) *core.CommandResult {
 		lat := strings.TrimSpace(parts[0])
 		lon := strings.TrimSpace(parts[1])
 
-		cmd := fmt.Sprintf("am broadcast -a android.intent.action.MOCK_LOCATION --ef lat %s --ef lon %s", lat, lon)
-		if _, err := d.device.Shell(cmd); err != nil {
+		if err := d.mockLocation(lat, lon); err != nil {
 			return errorResult(err, fmt.Sprintf("Failed to set location during travel: %v", err))
 		}
 

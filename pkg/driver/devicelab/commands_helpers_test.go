@@ -368,6 +368,13 @@ type trackingClient struct {
 	pressKeyErr    error
 	addMediaNames  []string
 	addMediaErr    error
+	locations      [][2]float64
+	setLocationErr error
+}
+
+func (t *trackingClient) SetLocation(latitude, longitude float64) error {
+	t.locations = append(t.locations, [2]float64{latitude, longitude})
+	return t.setLocationErr
 }
 
 func (t *trackingClient) AddMedia(name, mime string, data []byte) error {
@@ -1095,39 +1102,57 @@ func TestSwipeWithMaestroCoordinates(t *testing.T) {
 // setLocation
 // =============================================================================
 
+// setLocation goes through the agent's test location providers, after one
+// appops grant per session. The am broadcast it used to send had no receiver:
+// the step passed and the location never moved.
 func TestSetLocation(t *testing.T) {
 	shell := &mockShell{}
-	driver := New(newTrackingClient(), &core.PlatformInfo{}, shell)
+	client := newTrackingClient()
+	driver := New(client, &core.PlatformInfo{}, shell)
 
-	res := driver.setLocation(&flow.SetLocationStep{Latitude: "37.7749", Longitude: "-122.4194"})
-	if !res.Success {
-		t.Fatalf("setLocation failed: %v", res.Error)
+	for i := 0; i < 2; i++ {
+		res := driver.setLocation(&flow.SetLocationStep{Latitude: "37.7749", Longitude: "-122.4194"})
+		if !res.Success {
+			t.Fatalf("setLocation failed: %v", res.Error)
+		}
 	}
-	if !strings.Contains(shell.commands[0], "MOCK_LOCATION") ||
-		!strings.Contains(shell.commands[0], "37.7749") ||
-		!strings.Contains(shell.commands[0], "-122.4194") {
-		t.Errorf("unexpected setLocation command: %s", shell.commands[0])
+	if len(shell.commands) != 1 || shell.commands[0] != "appops set dev.devicelab.driver.android android:mock_location allow" {
+		t.Errorf("want one appops grant, got %q", shell.commands)
+	}
+	for _, c := range shell.commands {
+		if strings.Contains(c, "MOCK_LOCATION") {
+			t.Errorf("the broadcast nothing receives is still sent: %s", c)
+		}
+	}
+	if len(client.locations) != 2 || client.locations[0] != [2]float64{37.7749, -122.4194} {
+		t.Errorf("agent got %v, want 37.7749,-122.4194 twice", client.locations)
 	}
 
-	// Missing lat
-	res = driver.setLocation(&flow.SetLocationStep{Latitude: "", Longitude: "-122"})
-	if res.Success {
-		t.Error("missing latitude should fail")
-	}
-	// Missing lon
-	res = driver.setLocation(&flow.SetLocationStep{Latitude: "37", Longitude: ""})
-	if res.Success {
-		t.Error("missing longitude should fail")
+	for _, bad := range []flow.SetLocationStep{
+		{Latitude: "", Longitude: "-122"}, {Latitude: "37", Longitude: ""},
+		{Latitude: "91", Longitude: "0"}, {Latitude: "0", Longitude: "181"}, {Latitude: "north", Longitude: "0"},
+	} {
+		if res := driver.setLocation(&bad); res.Success {
+			t.Errorf("setLocation(%s, %s) should fail", bad.Latitude, bad.Longitude)
+		}
 	}
 	// No device
-	res = New(newTrackingClient(), &core.PlatformInfo{}, nil).setLocation(&flow.SetLocationStep{Latitude: "1", Longitude: "2"})
-	if res.Success {
+	if res := New(newTrackingClient(), &core.PlatformInfo{}, nil).setLocation(&flow.SetLocationStep{Latitude: "1", Longitude: "2"}); res.Success {
 		t.Error("setLocation without device should fail")
 	}
-	// Shell error
-	res = New(newTrackingClient(), &core.PlatformInfo{}, &mockShell{err: errors.New("blocked")}).setLocation(&flow.SetLocationStep{Latitude: "1", Longitude: "2"})
-	if res.Success {
-		t.Error("setLocation should propagate shell error")
+	// The appops grant fails
+	if res := New(newTrackingClient(), &core.PlatformInfo{}, &mockShell{err: errors.New("blocked")}).setLocation(&flow.SetLocationStep{Latitude: "1", Longitude: "2"}); res.Success {
+		t.Error("setLocation should report a refused appops grant")
+	}
+	// The agent refuses (no mock location op, old agent)
+	refusing := newTrackingClient()
+	refusing.setLocationErr = errors.New("mock_location_denied")
+	if res := New(refusing, &core.PlatformInfo{}, &mockShell{}).setLocation(&flow.SetLocationStep{Latitude: "1", Longitude: "2"}); res.Success {
+		t.Error("setLocation should report the agent's refusal")
+	}
+	// A client that cannot set the location at all
+	if res := New(&mockDeviceLabClient{}, &core.PlatformInfo{}, &mockShell{}).setLocation(&flow.SetLocationStep{Latitude: "1", Longitude: "2"}); res.Success {
+		t.Error("setLocation on a client without SetLocation should fail")
 	}
 }
 
@@ -2558,13 +2583,9 @@ func TestTravel_HappyPath(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("travel: %v", res.Error)
 	}
-	if len(shell.commands) != 2 {
-		t.Errorf("expected 2 MOCK_LOCATION broadcasts, got %d", len(shell.commands))
-	}
-	for _, c := range shell.commands {
-		if !strings.Contains(c, "MOCK_LOCATION") {
-			t.Errorf("expected MOCK_LOCATION command, got %s", c)
-		}
+	client := driver.client.(*trackingClient)
+	if len(client.locations) != 2 || client.locations[1] != [2]float64{37.8, -122.5} {
+		t.Errorf("agent got %v, want both points", client.locations)
 	}
 }
 

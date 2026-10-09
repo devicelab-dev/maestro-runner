@@ -107,6 +107,9 @@ type Driver struct {
 	// Animation scales saved while disableAnimations is on
 	animations core.AndroidAnimations
 
+	// mockLocationAllowed is set once the agent holds the mock location app op.
+	mockLocationAllowed bool
+
 	// currentAppID is the app the flow last launched, remembered so a
 	// mid-flow death can be explained rather than surfacing as "not found".
 	currentAppID string

@@ -508,6 +508,16 @@ func (a *Adapter) SetClipboard(text string) error {
 	return err
 }
 
+// SetLocation moves the device to latitude,longitude through the agent's test
+// location providers; the agent keeps it there until the session ends.
+func (a *Adapter) SetLocation(latitude, longitude float64) error {
+	_, err := a.client.Call("Device.setLocation", map[string]interface{}{
+		"latitude":  latitude,
+		"longitude": longitude,
+	})
+	return err
+}
+
 // GetDeviceInfo returns device information.
 func (a *Adapter) GetDeviceInfo() (*uiautomator2.DeviceInfo, error) {
 	resp, err := a.client.Call("Device.getInfo", nil)
