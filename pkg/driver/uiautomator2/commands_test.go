@@ -1191,29 +1191,6 @@ func TestToggleAirplaneModeFromOn(t *testing.T) {
 // Travel Tests
 // ============================================================================
 
-func TestTravelNoDevice(t *testing.T) {
-	driver := &Driver{device: nil}
-	step := &flow.TravelStep{Points: []string{"37.7749, -122.4194", "37.8049, -122.4094"}}
-
-	result := driver.travel(step)
-
-	if result.Success {
-		t.Error("expected failure when device is nil")
-	}
-}
-
-func TestTravelNotEnoughPoints(t *testing.T) {
-	mock := &MockShellExecutor{}
-	driver := &Driver{device: mock}
-	step := &flow.TravelStep{Points: []string{"37.7749, -122.4194"}}
-
-	result := driver.travel(step)
-
-	if result.Success {
-		t.Error("expected failure when less than 2 points")
-	}
-}
-
 // ============================================================================
 // AssertNotVisible HTTP Mock Tests
 // ============================================================================
@@ -3245,84 +3222,6 @@ func TestSetWaitForIdleTimeoutServerError(t *testing.T) {
 // ============================================================================
 // travel Additional Tests
 // ============================================================================
-
-func TestTravelSuccess(t *testing.T) {
-	shell := &MockShellExecutor{}
-	driver := &Driver{device: shell}
-
-	step := &flow.TravelStep{
-		Points: []string{"37.7749, -122.4194", "37.8049, -122.4094"},
-		Speed:  3600, // High speed to minimize delay (3600 km/h = 1 point/sec)
-	}
-	result := driver.travel(step)
-
-	if !result.Success {
-		t.Errorf("expected success, got error: %v", result.Error)
-	}
-	if !strings.Contains(result.Message, "2 points") {
-		t.Errorf("expected '2 points' in message, got: %s", result.Message)
-	}
-	// Should have issued 2 shell commands (one per point)
-	if len(shell.commands) != 2 {
-		t.Fatalf("expected 2 commands, got %d", len(shell.commands))
-	}
-	if !strings.Contains(shell.commands[0], "37.7749") {
-		t.Errorf("expected first point lat in command, got: %s", shell.commands[0])
-	}
-	if !strings.Contains(shell.commands[1], "37.8049") {
-		t.Errorf("expected second point lat in command, got: %s", shell.commands[1])
-	}
-}
-
-func TestTravelShellError(t *testing.T) {
-	shell := &MockShellExecutor{err: errors.New("shell failed")}
-	driver := &Driver{device: shell}
-
-	step := &flow.TravelStep{
-		Points: []string{"37.7749, -122.4194", "37.8049, -122.4094"},
-		Speed:  3600,
-	}
-	result := driver.travel(step)
-
-	if result.Success {
-		t.Error("expected failure when shell command fails")
-	}
-}
-
-func TestTravelDefaultSpeed(t *testing.T) {
-	// Verify that speed=0 defaults to 50 km/h internally.
-	// We can't easily test the actual wait (72s per point), but we verify
-	// the field is set correctly on the step before calling.
-	step := &flow.TravelStep{
-		Points: []string{"37.7749, -122.4194", "37.8049, -122.4094"},
-		Speed:  0,
-	}
-	if step.Speed != 0 {
-		t.Errorf("expected speed 0, got %f", step.Speed)
-	}
-	// The travel() function sets speed=50 internally when step.Speed<=0.
-	// This is tested indirectly by TestTravelSuccess which uses high speed.
-}
-
-func TestTravelMalformedPoints(t *testing.T) {
-	shell := &MockShellExecutor{}
-	driver := &Driver{device: shell}
-
-	step := &flow.TravelStep{
-		Points: []string{"malformed_point", "also_malformed"},
-		Speed:  3600,
-	}
-	result := driver.travel(step)
-
-	// Malformed points are silently skipped (continue), so success
-	if !result.Success {
-		t.Errorf("expected success (malformed points are skipped), got error: %v", result.Error)
-	}
-	// No shell commands should have been issued since no valid points
-	if len(shell.commands) != 0 {
-		t.Errorf("expected 0 commands for malformed points, got %d", len(shell.commands))
-	}
-}
 
 // ============================================================================
 // getAllPermissions Tests

@@ -2564,6 +2564,11 @@ func TestScriptEngine_ExpandStep_DeviceControlFields(t *testing.T) {
 	if clip.Text != "hello" {
 		t.Errorf("setClipboard not expanded: %q", clip.Text)
 	}
+	trip := &flow.TravelStep{Points: []string{"${LAT}, ${LON}", "0, 0"}}
+	se.ExpandStep(trip)
+	if trip.Points[0] != "37.7, -122.4" || trip.Points[1] != "0, 0" {
+		t.Errorf("travel points not expanded: %q", trip.Points)
+	}
 }
 
 // TestScriptEngine_RunScript_Require verifies a runScript can require a helper

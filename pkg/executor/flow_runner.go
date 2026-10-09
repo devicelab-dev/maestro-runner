@@ -612,6 +612,11 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 		opts, _ := extractTapOptions(step)
 		result = fr.executeTapWithOptions(step, opts)
 
+	// travel - walked here with setLocation, so every driver that can set
+	// the location can travel.
+	case *flow.TravelStep:
+		result = fr.executeTravel(s)
+
 	// Plain time delay - handled here, no driver involved. Honours run
 	// cancellation so Ctrl-C during a long wait stops the run promptly.
 	case *flow.WaitStep:

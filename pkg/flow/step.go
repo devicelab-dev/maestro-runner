@@ -641,7 +641,7 @@ type AssertLightModeStep struct {
 type TravelStep struct {
 	BaseStep `yaml:",inline"`
 	Points   []string `yaml:"points"` // "lat, long"
-	Speed    float64  `yaml:"speed"`  // km/h
+	Speed    float64  `yaml:"speed"`  // metres per second, as in Maestro
 }
 
 // OpenLinkStep opens a URL.

@@ -2572,51 +2572,6 @@ func TestWaitUntil_Visible_Timeout(t *testing.T) {
 // travel
 // =============================================================================
 
-func TestTravel_HappyPath(t *testing.T) {
-	shell := &mockShell{}
-	driver := New(newTrackingClient(), &core.PlatformInfo{}, shell)
-
-	res := driver.travel(&flow.TravelStep{
-		Points: []string{"37.7,-122.4", "37.8,-122.5"},
-		Speed:  100000, // very fast → ~0s sleep between points
-	})
-	if !res.Success {
-		t.Fatalf("travel: %v", res.Error)
-	}
-	client := driver.client.(*trackingClient)
-	if len(client.locations) != 2 || client.locations[1] != [2]float64{37.8, -122.5} {
-		t.Errorf("agent got %v, want both points", client.locations)
-	}
-}
-
-func TestTravel_NoDevice(t *testing.T) {
-	res := New(newTrackingClient(), &core.PlatformInfo{}, nil).travel(&flow.TravelStep{
-		Points: []string{"0,0", "1,1"},
-	})
-	if res.Success {
-		t.Error("travel without device should fail")
-	}
-}
-
-func TestTravel_OnePointInsufficient(t *testing.T) {
-	driver := New(newTrackingClient(), &core.PlatformInfo{}, &mockShell{})
-	res := driver.travel(&flow.TravelStep{Points: []string{"0,0"}})
-	if res.Success {
-		t.Error("travel with <2 points should fail")
-	}
-}
-
-func TestTravel_ShellError(t *testing.T) {
-	driver := New(newTrackingClient(), &core.PlatformInfo{}, &mockShell{err: errors.New("blocked")})
-	res := driver.travel(&flow.TravelStep{
-		Points: []string{"0,0", "1,1"},
-		Speed:  100000,
-	})
-	if res.Success {
-		t.Error("travel should propagate shell error")
-	}
-}
-
 // =============================================================================
 // getRelativeFilter / applyRelativeFilter
 // =============================================================================

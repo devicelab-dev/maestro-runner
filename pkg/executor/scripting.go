@@ -887,6 +887,10 @@ func (se *ScriptEngine) ExpandStep(step flow.Step) {
 		s.Longitude = se.ExpandVariables(s.Longitude)
 	case *flow.SetClipboardStep:
 		s.Text = se.ExpandVariables(s.Text)
+	case *flow.TravelStep:
+		for i, p := range s.Points {
+			s.Points[i] = se.ExpandVariables(p)
+		}
 	case *flow.SwipeStep:
 		s.Direction = se.ExpandVariables(s.Direction)
 		s.Start = se.ExpandVariables(s.Start)

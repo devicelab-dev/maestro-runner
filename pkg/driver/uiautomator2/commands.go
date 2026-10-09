@@ -2077,43 +2077,6 @@ func (d *Driver) toggleAirplaneMode(_ *flow.ToggleAirplaneModeStep) *core.Comman
 	return d.applyAirplaneMode(enable)
 }
 
-func (d *Driver) travel(step *flow.TravelStep) *core.CommandResult {
-	if d.device == nil {
-		return errorResult(fmt.Errorf("device not configured"), "travel requires device access")
-	}
-
-	if len(step.Points) < 2 {
-		return errorResult(fmt.Errorf("at least 2 points required"), "Travel requires at least 2 waypoints")
-	}
-
-	speed := step.Speed
-	if speed <= 0 {
-		speed = 50 // default 50 km/h
-	}
-
-	// Simulate travel by updating location at each point
-	for _, point := range step.Points {
-		// Parse "lat, lon" format
-		parts := strings.Split(point, ",")
-		if len(parts) != 2 {
-			continue
-		}
-		lat := strings.TrimSpace(parts[0])
-		lon := strings.TrimSpace(parts[1])
-
-		cmd := fmt.Sprintf("am broadcast -a android.intent.action.MOCK_LOCATION --ef lat %s --ef lon %s", lat, lon)
-		if _, err := d.device.Shell(cmd); err != nil {
-			return errorResult(err, fmt.Sprintf("Failed to set location during travel: %v", err))
-		}
-
-		// Wait based on speed (simplified - assumes ~1km between points)
-		delay := time.Duration(3600/speed) * time.Second
-		time.Sleep(delay)
-	}
-
-	return successResult(fmt.Sprintf("Traveled through %d points", len(step.Points)), nil)
-}
-
 // ============================================================================
 // Helpers
 // ============================================================================
