@@ -110,6 +110,10 @@ type Driver struct {
 	// mockLocationAllowed is set once the agent holds the mock location app op.
 	mockLocationAllowed bool
 
+	// typingDelayMs is the pause after each typed character (0 = none), from
+	// --typing-frequency or a flow's typingFrequency:.
+	typingDelayMs int
+
 	// currentAppID is the app the flow last launched, remembered so a
 	// mid-flow death can be explained rather than surfacing as "not found".
 	currentAppID string

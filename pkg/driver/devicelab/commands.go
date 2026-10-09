@@ -883,6 +883,34 @@ func (d *Driver) waitForFocused(wait time.Duration) core.Element {
 	}
 }
 
+// delayedKeySender is an agent client that can pause between typed characters.
+type delayedKeySender interface {
+	SendKeyActionsWithDelay(text string, delayMs int) error
+}
+
+// sendKeys types text as key events, at the typing frequency when one is set.
+func (d *Driver) sendKeys(text string) error {
+	if d.typingDelayMs > 0 {
+		if s, ok := d.client.(delayedKeySender); ok {
+			return s.SendKeyActionsWithDelay(text, d.typingDelayMs)
+		}
+	}
+	return d.client.SendKeyActions(text)
+}
+
+// SetTypingFrequency implements core.TypingFrequencyConfigurer. freq is in
+// keys per second and becomes a pause of 1000/freq ms after each character
+// typed as key events, for apps that drop keys typed faster than a person
+// would. freq <= 0 clears it.
+func (d *Driver) SetTypingFrequency(freq int) error {
+	if freq <= 0 {
+		d.typingDelayMs = 0
+		return nil
+	}
+	d.typingDelayMs = 1000 / freq
+	return nil
+}
+
 // focusOnTappedWait bounds the wait for a tapped field to take focus. Focus
 // normally moves within a few hundred milliseconds of the tap.
 const focusOnTappedWait = 1500 * time.Millisecond
@@ -978,7 +1006,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		// Resolve and read the focused field first: after typing, "unchanged"
 		// is the only thing that separates a hint from a lost keystroke.
 		target, before := d.focusedFieldBefore()
-		if err := d.client.SendKeyActions(text); err != nil {
+		if err := d.sendKeys(text); err != nil {
 			return errorResult(err, "Failed to input text via key press")
 		}
 		invalidateText(target)
@@ -1004,7 +1032,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 				// events go to whatever holds focus, which after a tap is that
 				// same field, so they get the text in without a second lookup.
 				logger.Warn("inputText: send-keys failed (%v), falling back to key events", err)
-				if keyErr := d.client.SendKeyActions(text); keyErr != nil {
+				if keyErr := d.sendKeys(text); keyErr != nil {
 					return errorResult(err, fmt.Sprintf("Failed to input text: %v (key events also failed: %v)", err, keyErr))
 				}
 			}
@@ -1069,7 +1097,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 			}
 		}
 		if !typed {
-			if err := d.client.SendKeyActions(text); err != nil {
+			if err := d.sendKeys(text); err != nil {
 				return errorResult(err, fmt.Sprintf("Failed to input text: %v", err))
 			}
 			// The key events went wherever focus landed. Read that field back

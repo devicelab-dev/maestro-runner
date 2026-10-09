@@ -259,6 +259,24 @@ func TestAdapterSendKeyActions(t *testing.T) {
 	}
 }
 
+func TestAdapterSendKeyActionsWithDelay(t *testing.T) {
+	adapter, cleanup := adapterWithMock(t, func(req Request) interface{} {
+		if req.Method != "Input.sendKeyActions" {
+			t.Errorf("expected Input.sendKeyActions, got %s", req.Method)
+		}
+		params, _ := req.Params.(map[string]interface{})
+		if params["text"] != "hello" || params["delayMs"] != float64(80) {
+			t.Errorf("params = %v, want text hello and delayMs 80", req.Params)
+		}
+		return map[string]interface{}{}
+	})
+	defer cleanup()
+
+	if err := adapter.SendKeyActionsWithDelay("hello", 80); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestAdapterScreenshot(t *testing.T) {
 	adapter, cleanup := adapterWithMock(t, func(req Request) interface{} {
 		if req.Method != "UI.screenshot" {

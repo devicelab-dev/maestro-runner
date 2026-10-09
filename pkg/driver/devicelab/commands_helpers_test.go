@@ -2227,6 +2227,43 @@ func TestInputText_NoSelector_SendsKeyActions(t *testing.T) {
 	}
 }
 
+// delayKeysClient is an agent client that can pause between typed characters.
+type delayKeysClient struct {
+	*scriptedClient
+	delayed []string
+}
+
+func (c *delayKeysClient) SendKeyActionsWithDelay(text string, delayMs int) error {
+	c.delayed = append(c.delayed, fmt.Sprintf("%s@%d", text, delayMs))
+	return nil
+}
+
+func TestInputText_KeyPressHonoursTypingFrequency(t *testing.T) {
+	client := &delayKeysClient{scriptedClient: &scriptedClient{trackingClient: newTrackingClient()}}
+	driver := New(client, &core.PlatformInfo{}, &mockShell{})
+
+	// No frequency: plain key events.
+	if res := driver.inputText(&flow.InputTextStep{Text: "abc", KeyPress: true}); !res.Success {
+		t.Fatalf("inputText keyPress: %v", res.Error)
+	}
+	// 10 keys/sec: a 100ms pause after each character.
+	if err := driver.SetTypingFrequency(10); err != nil {
+		t.Fatal(err)
+	}
+	if res := driver.inputText(&flow.InputTextStep{Text: "xyz", KeyPress: true}); !res.Success {
+		t.Fatalf("inputText keyPress: %v", res.Error)
+	}
+	// Cleared again.
+	_ = driver.SetTypingFrequency(0)
+	if res := driver.inputText(&flow.InputTextStep{Text: "q", KeyPress: true}); !res.Success {
+		t.Fatalf("inputText keyPress: %v", res.Error)
+	}
+
+	if fmt.Sprint(client.sendKeyActionsCalls) != "[abc q]" || fmt.Sprint(client.delayed) != "[xyz@100]" {
+		t.Errorf("plain %v, delayed %v; want [abc q] and [xyz@100]", client.sendKeyActionsCalls, client.delayed)
+	}
+}
+
 func TestInputText_KeyPress(t *testing.T) {
 	client := &scriptedClient{trackingClient: newTrackingClient()}
 	driver := New(client, &core.PlatformInfo{}, &mockShell{})
