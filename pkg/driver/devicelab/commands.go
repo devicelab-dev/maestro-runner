@@ -2158,7 +2158,9 @@ func (d *Driver) resolveLauncherActivity(appID string, apiLevel int) (string, er
 
 // launchWithMonkey launches an app using the monkey command.
 func (d *Driver) launchWithMonkey(appID string) *core.CommandResult {
-	monkeyCmd := fmt.Sprintf("monkey -p %s -c android.intent.category.LAUNCHER 1", appID)
+	// --pct-syskeys 0: on an emulator without a hardware keyboard (hw.keyboard=no)
+	// monkey otherwise refuses to start ("system keys" need a physical key map).
+	monkeyCmd := fmt.Sprintf("monkey -p %s --pct-syskeys 0 -c android.intent.category.LAUNCHER 1", appID)
 	output, err := d.shellBounded(monkeyCmd, launchShellTimeout)
 	if err != nil || strings.Contains(output, "monkey aborted") {
 		errMsg := fmt.Sprintf("launchApp: all launch methods failed for '%s'. "+

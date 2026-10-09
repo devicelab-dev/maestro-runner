@@ -824,6 +824,9 @@ func TestLaunchWithMonkey(t *testing.T) {
 	if !strings.Contains(shell.commands[0], "monkey -p com.test.app") {
 		t.Errorf("expected monkey command, got %s", shell.commands[0])
 	}
+	if !strings.Contains(shell.commands[0], "--pct-syskeys 0") {
+		t.Errorf("monkey launch should pass --pct-syskeys 0, got %q", shell.commands[0])
+	}
 
 	// Output contains "monkey aborted" → failure
 	driver2 := New(newTrackingClient(), &core.PlatformInfo{}, &mockShell{out: "monkey aborted: no main activity"})
