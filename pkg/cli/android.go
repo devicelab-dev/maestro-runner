@@ -293,12 +293,20 @@ func createUIAutomator2Driver(cfg *RunConfig, dev *device.AndroidDevice, info de
 		AppBuild:     appBuild,
 	}
 	driver := uia2driver.New(client, platformInfo, dev)
+	driver.SetLocationProvisioner(func() error {
+		apksDir, err := getDriversDir("android")
+		if err != nil {
+			return err
+		}
+		return dev.InstallAppiumSettings(apksDir)
+	})
 	// Typing frequency is applied centrally by the executor (flow_runner) to
 	// every driver that supports it, honouring --typing-frequency and a flow's
 	// typingFrequency:. No per-driver wiring is needed here.
 
 	// Cleanup function (silent)
 	cleanup := func() {
+		driver.StopMockLocation()
 		if err := client.Close(); err != nil {
 			logger.Debug("failed to close client during cleanup: %v", err)
 		}

@@ -2001,21 +2001,76 @@ func (d *Driver) setLocation(step *flow.SetLocationStep) *core.CommandResult {
 	if d.device == nil {
 		return errorResult(fmt.Errorf("device not configured"), "setLocation requires device access")
 	}
-
-	lat := step.Latitude
-	lon := step.Longitude
-	if lat == "" || lon == "" {
-		return errorResult(fmt.Errorf("latitude and longitude required"), "Missing coordinates")
+	lat, err := strconv.ParseFloat(strings.TrimSpace(step.Latitude), 64)
+	if err != nil || lat < -90 || lat > 90 {
+		err = fmt.Errorf("latitude %q must be a number between -90 and 90", step.Latitude)
+		return errorResult(err, err.Error())
 	}
-
-	// Enable mock locations and set location via appops
-	// Note: Requires mock location app or root access
-	cmd := fmt.Sprintf("am broadcast -a android.intent.action.MOCK_LOCATION --ef lat %s --ef lon %s", lat, lon)
-	if _, err := d.device.Shell(cmd); err != nil {
+	lon, err := strconv.ParseFloat(strings.TrimSpace(step.Longitude), 64)
+	if err != nil || lon < -180 || lon > 180 {
+		err = fmt.Errorf("longitude %q must be a number between -180 and 180", step.Longitude)
+		return errorResult(err, err.Error())
+	}
+	if err := d.mockLocation(lat, lon); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to set location: %v", err))
 	}
+	return successResult(fmt.Sprintf("Set location to %s, %s", step.Latitude, step.Longitude), nil)
+}
 
-	return successResult(fmt.Sprintf("Set location to %s, %s", lat, lon), nil)
+// locationApp is the Appium settings app, whose LocationService feeds a
+// location to the gps, network and fused providers as their mock.
+const locationApp = "io.appium.settings"
+
+// mockLocation moves the device to lat, lon through the location app. The
+// broadcast used before had no receiver on any device, so the step passed and
+// nothing moved. The first call installs the app if needed and grants it the
+// location permissions and the mock location app op.
+func (d *Driver) mockLocation(lat, lon float64) error {
+	if !d.locationReady {
+		if d.provisionLocation != nil {
+			if err := d.provisionLocation(); err != nil {
+				return fmt.Errorf("installing %s: %w", locationApp, err)
+			}
+		}
+		for _, perm := range []string{"ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "ACCESS_BACKGROUND_LOCATION"} {
+			// Background location does not exist before Android 10; a
+			// refused grant shows up below as a service that cannot start.
+			_, _ = d.device.Shell("pm grant " + locationApp + " android.permission." + perm)
+		}
+		if out, err := d.device.Shell("appops set " + locationApp + " android:mock_location allow"); err != nil {
+			return fmt.Errorf("allowing mock locations for %s: %v %s", locationApp, err, strings.TrimSpace(out))
+		}
+		d.locationReady = true
+	}
+	cmd := fmt.Sprintf("am start-foreground-service --user 0 -n %s/.LocationService --es latitude %s --es longitude %s",
+		locationApp, strconv.FormatFloat(lat, 'f', -1, 64), strconv.FormatFloat(lon, 'f', -1, 64))
+	out, err := d.device.Shell(cmd)
+	if err != nil {
+		return fmt.Errorf("%v %s", err, strings.TrimSpace(out))
+	}
+	if strings.Contains(out, "Error") || strings.Contains(out, "Exception") {
+		return fmt.Errorf("%s did not start: %s", locationApp, strings.TrimSpace(out))
+	}
+	d.locationSet = true
+	return nil
+}
+
+// SetLocationProvisioner sets how the location app is installed when a flow
+// first sets the location.
+func (d *Driver) SetLocationProvisioner(provision func() error) {
+	d.provisionLocation = provision
+}
+
+// StopMockLocation ends a location a flow set, so the device reports its real
+// location again after the run.
+func (d *Driver) StopMockLocation() {
+	if !d.locationSet || d.device == nil {
+		return
+	}
+	if _, err := d.device.Shell("am stopservice " + locationApp + "/.LocationService"); err != nil {
+		logger.Debug("stopping the mock location: %v", err)
+	}
+	d.locationSet = false
 }
 
 // applyAirplaneMode sets airplane mode on/off using the best available method.
