@@ -698,13 +698,24 @@ func (d *Driver) Screenshot() ([]byte, error) {
 // read it. The active window alone came back empty while duckduckgo's
 // suggestions sheet (another window) was up, so the report showed nothing.
 func (d *Driver) Hierarchy() ([]byte, error) {
-	source, err := d.client.Snapshot(0)
+	source, err := d.screenXML()
 	if err != nil {
-		if source, err = d.client.Source(); err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 	return []byte(source), nil
+}
+
+// screenXML reads every window's complete tree (UI.snapshot), the read that
+// element lookups match against. The active-window page source is the
+// fallback: it misses sheets, dialogs and popups in other windows, and its
+// prefetching walk can cut deep subtrees short, so relative, index and count
+// lookups made on it failed where a plain text selector found the element.
+func (d *Driver) screenXML() (string, error) {
+	xml, err := d.client.Snapshot(0)
+	if err == nil {
+		return xml, nil
+	}
+	return d.client.Source()
 }
 
 // GetState returns the current device/app state.
@@ -1527,7 +1538,7 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector) (*core.ElementInfo, 
 		Checked:   sel.Checked,
 	}
 
-	pageSource, err := d.client.Source()
+	pageSource, err := d.screenXML()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get page source: %w", err)
 	}
@@ -1689,7 +1700,7 @@ func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements 
 
 // findElementByPageSourceOnce performs a single page source search without polling.
 func (d *Driver) findElementByPageSourceOnce(sel flow.Selector) (*uiautomator2.Element, *core.ElementInfo, error) {
-	pageSource, err := d.client.Source()
+	pageSource, err := d.screenXML()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get page source: %w", err)
 	}
@@ -1750,7 +1761,7 @@ func (d *Driver) findElementByPageSourceWithContext(ctx context.Context, sel flo
 
 // findElementByPageSourceOnceInternal performs a single page source search.
 func (d *Driver) findElementByPageSourceOnceInternal(sel flow.Selector) (*core.ElementInfo, error) {
-	pageSource, err := d.client.Source()
+	pageSource, err := d.screenXML()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get page source: %w", err)
 	}
@@ -2062,11 +2073,9 @@ func checksBySnapshot(sel flow.Selector) bool {
 // whole, part or regex), where the agent's per-form finds took a call each:
 // nine for a text selector, ~1.8s a round when the element was absent.
 func (d *Driver) findVisibleOnce(sel flow.Selector) (*core.ElementInfo, error) {
-	xml, err := d.client.Snapshot(0)
+	xml, err := d.screenXML()
 	if err != nil {
-		if xml, err = d.client.Source(); err != nil {
-			return nil, fmt.Errorf("failed to read the screen: %w", err)
-		}
+		return nil, fmt.Errorf("failed to read the screen: %w", err)
 	}
 	elements, err := ParsePageSource(xml)
 	if err != nil {

@@ -744,7 +744,7 @@ func (d *Driver) assertVisibleCount(step *flow.AssertVisibleStep) *core.CommandR
 
 // countVisibleMatches reads the page source once and counts visible matches.
 func (d *Driver) countVisibleMatches(sel flow.Selector) (int, error) {
-	pageSource, err := d.client.Source()
+	pageSource, err := d.screenXML()
 	if err != nil {
 		return 0, fmt.Errorf("failed to get page source: %w", err)
 	}
@@ -1325,7 +1325,7 @@ func (d *Driver) scroll(step *flow.ScrollStep) *core.CommandResult {
 // nothing. Any failure to establish the ancestry answers false: an
 // unverifiable tree must not block a match that the geometry accepted.
 func (d *Driver) atScrollContainerEdge(b core.Bounds, direction string) bool {
-	src, err := d.client.Source()
+	src, err := d.screenXML()
 	if err != nil {
 		return false
 	}
@@ -1443,7 +1443,9 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 
 // scrollSurfaceSignature reduces the current page source to a key for
 // core.ScrollProgress. A capture that cannot be read reports ok=false and is
-// not observed, so a hiccup never passes for the end of the content.
+// not observed, so a hiccup never passes for the end of the content. It stays
+// on the active window: the status bar's clock and notifications in the
+// all-window snapshot would change the key with no scroll progress.
 func (d *Driver) scrollSurfaceSignature() (string, bool) {
 	source, err := d.client.Source()
 	if err != nil || source == "" {
@@ -1582,7 +1584,10 @@ func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
 	return d.swipeWithMaestroCoordinates(direction, width, height, step.Duration)
 }
 
-// findScrollableElement waits for and finds a scrollable element.
+// findScrollableElement waits for and finds a scrollable element. It reads
+// the active window only: across every window the largest scrollable is often
+// the screen behind a sheet or dialog, and a swipe at its centre would land
+// on the dimmed area and dismiss the sheet.
 func (d *Driver) findScrollableElement(timeoutMs int) (*core.ElementInfo, int) {
 	timeout := time.Duration(timeoutMs) * time.Millisecond
 	deadline := time.Now().Add(timeout)
