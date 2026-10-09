@@ -1238,26 +1238,41 @@ func (d *Driver) eraseTextBrowser(chars int) *core.CommandResult {
 }
 
 func (d *Driver) hideKeyboard(_ *flow.HideKeyboardStep) *core.CommandResult {
-	// Retry up to 3 times. The on-device agent sends KEYCODE_ESCAPE, which is
-	// keyboard-only, and deliberately never KEYCODE_BACK — Back navigates away
-	// when the IME is not actually up. It also guards on a real IME window
-	// (AccessibilityWindowInfo.TYPE_INPUT_METHOD) rather than guessing from the
-	// node tree, so calling this with no keyboard showing is a no-op rather
-	// than a stray back-navigation.
-	for attempt := 0; attempt < 3; attempt++ {
-		_ = d.client.HideKeyboard()
-
-		// Wait for keyboard to actually disappear (animation ~300ms).
-		deadline := time.Now().Add(500 * time.Millisecond)
-		for time.Now().Before(deadline) {
-			if !d.isKeyboardVisible() {
-				return successResult("Keyboard hidden", nil)
-			}
-			time.Sleep(100 * time.Millisecond)
+	// The on-device agent sends KEYCODE_ESCAPE, and only while a real IME
+	// window (AccessibilityWindowInfo.TYPE_INPUT_METHOD) is up. Many keyboards
+	// ignore ESC — Samsung's HoneyBoard and the AOSP keyboard among them, in
+	// native and React Native fields alike — and the step used to pass with the
+	// keyboard still open. While the keyboard is still shown, BACK closes it
+	// and the app never sees the key; BACK only navigates when no keyboard is
+	// up, so it is sent once and only after confirming the keyboard is there
+	// (#42), as the uiautomator2 driver does.
+	if !d.isKeyboardVisible() {
+		return successResult("Keyboard not visible", nil)
+	}
+	_ = d.client.HideKeyboard()
+	if d.waitKeyboardHidden() {
+		return successResult("Keyboard hidden", nil)
+	}
+	if d.isKeyboardVisible() {
+		if err := d.client.PressKeyCode(uiautomator2.KeyCodeBack); err == nil && d.waitKeyboardHidden() {
+			return successResult("Keyboard hidden (via back key)", nil)
 		}
 	}
+	return successResult("Hide keyboard (dismissal not confirmed)", nil)
+}
 
-	return successResult("Hide keyboard (may not have been visible)", nil)
+// waitKeyboardHidden waits for the keyboard's close animation (~300ms).
+func (d *Driver) waitKeyboardHidden() bool {
+	deadline := time.Now().Add(600 * time.Millisecond)
+	for {
+		if !d.isKeyboardVisible() {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func (d *Driver) inputRandom(step *flow.InputRandomStep) *core.CommandResult {

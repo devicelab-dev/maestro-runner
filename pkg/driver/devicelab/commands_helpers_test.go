@@ -988,9 +988,8 @@ func (h *hideKbClient) HideKeyboard() error {
 }
 
 func TestHideKeyboard_NoDevice_SucceedsImmediately(t *testing.T) {
-	// When d.device == nil, isKeyboardVisible() returns false on the first
-	// check (getKeyboardBounds returns nil without a shell), so
-	// hideKeyboard returns success after a single client call.
+	// Without a shell the keyboard cannot be seen (getKeyboardBounds returns
+	// nil), so there is nothing to hide and nothing is sent.
 	client := &hideKbClient{trackingClient: newTrackingClient()}
 	driver := New(client, &core.PlatformInfo{}, nil)
 
@@ -998,8 +997,71 @@ func TestHideKeyboard_NoDevice_SucceedsImmediately(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("hideKeyboard should succeed when keyboard is reported hidden: %v", res.Error)
 	}
-	if client.hideCount != 1 {
-		t.Errorf("expected 1 HideKeyboard call (no retries), got %d", client.hideCount)
+	if client.hideCount != 0 || len(client.pressKeyCodes) != 0 {
+		t.Errorf("sent ESC %d times and keys %v with no keyboard up; want nothing", client.hideCount, client.pressKeyCodes)
+	}
+}
+
+// keyboardShell reports the keyboard up until closed is set.
+type keyboardShell struct{ closed bool }
+
+func (k *keyboardShell) Shell(cmd string) (string, error) {
+	if k.closed {
+		return "mInputShown=false", nil
+	}
+	return "mInputShown=true\n    touchable region=SkRegion((0,1428,1080,2340))", nil
+}
+
+// escKeyboardClient closes the keyboard on ESC, on BACK, or never.
+type escKeyboardClient struct {
+	*trackingClient
+	shell       *keyboardShell
+	closesOnEsc bool
+	closesOnKey int
+	escCount    int
+}
+
+func (c *escKeyboardClient) HideKeyboard() error {
+	c.escCount++
+	if c.closesOnEsc {
+		c.shell.closed = true
+	}
+	return nil
+}
+
+func (c *escKeyboardClient) PressKeyCode(code int) error {
+	_ = c.trackingClient.PressKeyCode(code)
+	if code == c.closesOnKey {
+		c.shell.closed = true
+	}
+	return nil
+}
+
+func TestHideKeyboard_BackOnlyWhileKeyboardIsUp(t *testing.T) {
+	for name, tc := range map[string]struct {
+		closesOnEsc bool
+		closesOnKey int
+		wantKeys    []int
+		wantMsg     string
+	}{
+		"keyboard honours ESC":        {closesOnEsc: true, wantKeys: nil, wantMsg: "Keyboard hidden"},
+		"keyboard ignores ESC (#42)":  {closesOnKey: uiautomator2.KeyCodeBack, wantKeys: []int{uiautomator2.KeyCodeBack}, wantMsg: "via back key"},
+		"keyboard ignores everything": {wantKeys: []int{uiautomator2.KeyCodeBack}, wantMsg: "not confirmed"},
+	} {
+		shell := &keyboardShell{}
+		client := &escKeyboardClient{trackingClient: newTrackingClient(), shell: shell, closesOnEsc: tc.closesOnEsc, closesOnKey: tc.closesOnKey}
+		driver := New(client, &core.PlatformInfo{}, shell)
+
+		res := driver.hideKeyboard(&flow.HideKeyboardStep{})
+		if !res.Success || !strings.Contains(res.Message, tc.wantMsg) {
+			t.Errorf("%s: success=%v message %q, want %q", name, res.Success, res.Message, tc.wantMsg)
+		}
+		if client.escCount != 1 {
+			t.Errorf("%s: ESC sent %d times, want once", name, client.escCount)
+		}
+		if fmt.Sprint(client.pressKeyCodes) != fmt.Sprint(tc.wantKeys) {
+			t.Errorf("%s: keys %v, want %v (BACK once, only while the keyboard is up)", name, client.pressKeyCodes, tc.wantKeys)
+		}
 	}
 }
 
