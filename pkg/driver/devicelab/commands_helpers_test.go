@@ -368,6 +368,13 @@ type trackingClient struct {
 	pressKeyErr    error
 	addMediaNames  []string
 	addMediaErr    error
+	locations      [][2]float64
+	setLocationErr error
+}
+
+func (t *trackingClient) SetLocation(latitude, longitude float64) error {
+	t.locations = append(t.locations, [2]float64{latitude, longitude})
+	return t.setLocationErr
 }
 
 func (t *trackingClient) AddMedia(name, mime string, data []byte) error {
@@ -824,6 +831,9 @@ func TestLaunchWithMonkey(t *testing.T) {
 	if !strings.Contains(shell.commands[0], "monkey -p com.test.app") {
 		t.Errorf("expected monkey command, got %s", shell.commands[0])
 	}
+	if !strings.Contains(shell.commands[0], "--pct-syskeys 0") {
+		t.Errorf("monkey launch should pass --pct-syskeys 0, got %q", shell.commands[0])
+	}
 
 	// Output contains "monkey aborted" → failure
 	driver2 := New(newTrackingClient(), &core.PlatformInfo{}, &mockShell{out: "monkey aborted: no main activity"})
@@ -978,9 +988,8 @@ func (h *hideKbClient) HideKeyboard() error {
 }
 
 func TestHideKeyboard_NoDevice_SucceedsImmediately(t *testing.T) {
-	// When d.device == nil, isKeyboardVisible() returns false on the first
-	// check (getKeyboardBounds returns nil without a shell), so
-	// hideKeyboard returns success after a single client call.
+	// Without a shell the keyboard cannot be seen (getKeyboardBounds returns
+	// nil), so there is nothing to hide and nothing is sent.
 	client := &hideKbClient{trackingClient: newTrackingClient()}
 	driver := New(client, &core.PlatformInfo{}, nil)
 
@@ -988,8 +997,71 @@ func TestHideKeyboard_NoDevice_SucceedsImmediately(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("hideKeyboard should succeed when keyboard is reported hidden: %v", res.Error)
 	}
-	if client.hideCount != 1 {
-		t.Errorf("expected 1 HideKeyboard call (no retries), got %d", client.hideCount)
+	if client.hideCount != 0 || len(client.pressKeyCodes) != 0 {
+		t.Errorf("sent ESC %d times and keys %v with no keyboard up; want nothing", client.hideCount, client.pressKeyCodes)
+	}
+}
+
+// keyboardShell reports the keyboard up until closed is set.
+type keyboardShell struct{ closed bool }
+
+func (k *keyboardShell) Shell(cmd string) (string, error) {
+	if k.closed {
+		return "mInputShown=false", nil
+	}
+	return "mInputShown=true\n    touchable region=SkRegion((0,1428,1080,2340))", nil
+}
+
+// escKeyboardClient closes the keyboard on ESC, on BACK, or never.
+type escKeyboardClient struct {
+	*trackingClient
+	shell       *keyboardShell
+	closesOnEsc bool
+	closesOnKey int
+	escCount    int
+}
+
+func (c *escKeyboardClient) HideKeyboard() error {
+	c.escCount++
+	if c.closesOnEsc {
+		c.shell.closed = true
+	}
+	return nil
+}
+
+func (c *escKeyboardClient) PressKeyCode(code int) error {
+	_ = c.trackingClient.PressKeyCode(code)
+	if code == c.closesOnKey {
+		c.shell.closed = true
+	}
+	return nil
+}
+
+func TestHideKeyboard_BackOnlyWhileKeyboardIsUp(t *testing.T) {
+	for name, tc := range map[string]struct {
+		closesOnEsc bool
+		closesOnKey int
+		wantKeys    []int
+		wantMsg     string
+	}{
+		"keyboard honours ESC":        {closesOnEsc: true, wantKeys: nil, wantMsg: "Keyboard hidden"},
+		"keyboard ignores ESC (#42)":  {closesOnKey: uiautomator2.KeyCodeBack, wantKeys: []int{uiautomator2.KeyCodeBack}, wantMsg: "via back key"},
+		"keyboard ignores everything": {wantKeys: []int{uiautomator2.KeyCodeBack}, wantMsg: "not confirmed"},
+	} {
+		shell := &keyboardShell{}
+		client := &escKeyboardClient{trackingClient: newTrackingClient(), shell: shell, closesOnEsc: tc.closesOnEsc, closesOnKey: tc.closesOnKey}
+		driver := New(client, &core.PlatformInfo{}, shell)
+
+		res := driver.hideKeyboard(&flow.HideKeyboardStep{})
+		if !res.Success || !strings.Contains(res.Message, tc.wantMsg) {
+			t.Errorf("%s: success=%v message %q, want %q", name, res.Success, res.Message, tc.wantMsg)
+		}
+		if client.escCount != 1 {
+			t.Errorf("%s: ESC sent %d times, want once", name, client.escCount)
+		}
+		if fmt.Sprint(client.pressKeyCodes) != fmt.Sprint(tc.wantKeys) {
+			t.Errorf("%s: keys %v, want %v (BACK once, only while the keyboard is up)", name, client.pressKeyCodes, tc.wantKeys)
+		}
 	}
 }
 
@@ -1092,39 +1164,57 @@ func TestSwipeWithMaestroCoordinates(t *testing.T) {
 // setLocation
 // =============================================================================
 
+// setLocation goes through the agent's test location providers, after one
+// appops grant per session. The am broadcast it used to send had no receiver:
+// the step passed and the location never moved.
 func TestSetLocation(t *testing.T) {
 	shell := &mockShell{}
-	driver := New(newTrackingClient(), &core.PlatformInfo{}, shell)
+	client := newTrackingClient()
+	driver := New(client, &core.PlatformInfo{}, shell)
 
-	res := driver.setLocation(&flow.SetLocationStep{Latitude: "37.7749", Longitude: "-122.4194"})
-	if !res.Success {
-		t.Fatalf("setLocation failed: %v", res.Error)
+	for i := 0; i < 2; i++ {
+		res := driver.setLocation(&flow.SetLocationStep{Latitude: "37.7749", Longitude: "-122.4194"})
+		if !res.Success {
+			t.Fatalf("setLocation failed: %v", res.Error)
+		}
 	}
-	if !strings.Contains(shell.commands[0], "MOCK_LOCATION") ||
-		!strings.Contains(shell.commands[0], "37.7749") ||
-		!strings.Contains(shell.commands[0], "-122.4194") {
-		t.Errorf("unexpected setLocation command: %s", shell.commands[0])
+	if len(shell.commands) != 1 || shell.commands[0] != "appops set dev.devicelab.driver.android android:mock_location allow" {
+		t.Errorf("want one appops grant, got %q", shell.commands)
+	}
+	for _, c := range shell.commands {
+		if strings.Contains(c, "MOCK_LOCATION") {
+			t.Errorf("the broadcast nothing receives is still sent: %s", c)
+		}
+	}
+	if len(client.locations) != 2 || client.locations[0] != [2]float64{37.7749, -122.4194} {
+		t.Errorf("agent got %v, want 37.7749,-122.4194 twice", client.locations)
 	}
 
-	// Missing lat
-	res = driver.setLocation(&flow.SetLocationStep{Latitude: "", Longitude: "-122"})
-	if res.Success {
-		t.Error("missing latitude should fail")
-	}
-	// Missing lon
-	res = driver.setLocation(&flow.SetLocationStep{Latitude: "37", Longitude: ""})
-	if res.Success {
-		t.Error("missing longitude should fail")
+	for _, bad := range []flow.SetLocationStep{
+		{Latitude: "", Longitude: "-122"}, {Latitude: "37", Longitude: ""},
+		{Latitude: "91", Longitude: "0"}, {Latitude: "0", Longitude: "181"}, {Latitude: "north", Longitude: "0"},
+	} {
+		if res := driver.setLocation(&bad); res.Success {
+			t.Errorf("setLocation(%s, %s) should fail", bad.Latitude, bad.Longitude)
+		}
 	}
 	// No device
-	res = New(newTrackingClient(), &core.PlatformInfo{}, nil).setLocation(&flow.SetLocationStep{Latitude: "1", Longitude: "2"})
-	if res.Success {
+	if res := New(newTrackingClient(), &core.PlatformInfo{}, nil).setLocation(&flow.SetLocationStep{Latitude: "1", Longitude: "2"}); res.Success {
 		t.Error("setLocation without device should fail")
 	}
-	// Shell error
-	res = New(newTrackingClient(), &core.PlatformInfo{}, &mockShell{err: errors.New("blocked")}).setLocation(&flow.SetLocationStep{Latitude: "1", Longitude: "2"})
-	if res.Success {
-		t.Error("setLocation should propagate shell error")
+	// The appops grant fails
+	if res := New(newTrackingClient(), &core.PlatformInfo{}, &mockShell{err: errors.New("blocked")}).setLocation(&flow.SetLocationStep{Latitude: "1", Longitude: "2"}); res.Success {
+		t.Error("setLocation should report a refused appops grant")
+	}
+	// The agent refuses (no mock location op, old agent)
+	refusing := newTrackingClient()
+	refusing.setLocationErr = errors.New("mock_location_denied")
+	if res := New(refusing, &core.PlatformInfo{}, &mockShell{}).setLocation(&flow.SetLocationStep{Latitude: "1", Longitude: "2"}); res.Success {
+		t.Error("setLocation should report the agent's refusal")
+	}
+	// A client that cannot set the location at all
+	if res := New(&mockDeviceLabClient{}, &core.PlatformInfo{}, &mockShell{}).setLocation(&flow.SetLocationStep{Latitude: "1", Longitude: "2"}); res.Success {
+		t.Error("setLocation on a client without SetLocation should fail")
 	}
 }
 
@@ -2137,6 +2227,43 @@ func TestInputText_NoSelector_SendsKeyActions(t *testing.T) {
 	}
 }
 
+// delayKeysClient is an agent client that can pause between typed characters.
+type delayKeysClient struct {
+	*scriptedClient
+	delayed []string
+}
+
+func (c *delayKeysClient) SendKeyActionsWithDelay(text string, delayMs int) error {
+	c.delayed = append(c.delayed, fmt.Sprintf("%s@%d", text, delayMs))
+	return nil
+}
+
+func TestInputText_KeyPressHonoursTypingFrequency(t *testing.T) {
+	client := &delayKeysClient{scriptedClient: &scriptedClient{trackingClient: newTrackingClient()}}
+	driver := New(client, &core.PlatformInfo{}, &mockShell{})
+
+	// No frequency: plain key events.
+	if res := driver.inputText(&flow.InputTextStep{Text: "abc", KeyPress: true}); !res.Success {
+		t.Fatalf("inputText keyPress: %v", res.Error)
+	}
+	// 10 keys/sec: a 100ms pause after each character.
+	if err := driver.SetTypingFrequency(10); err != nil {
+		t.Fatal(err)
+	}
+	if res := driver.inputText(&flow.InputTextStep{Text: "xyz", KeyPress: true}); !res.Success {
+		t.Fatalf("inputText keyPress: %v", res.Error)
+	}
+	// Cleared again.
+	_ = driver.SetTypingFrequency(0)
+	if res := driver.inputText(&flow.InputTextStep{Text: "q", KeyPress: true}); !res.Success {
+		t.Fatalf("inputText keyPress: %v", res.Error)
+	}
+
+	if fmt.Sprint(client.sendKeyActionsCalls) != "[abc q]" || fmt.Sprint(client.delayed) != "[xyz@100]" {
+		t.Errorf("plain %v, delayed %v; want [abc q] and [xyz@100]", client.sendKeyActionsCalls, client.delayed)
+	}
+}
+
 func TestInputText_KeyPress(t *testing.T) {
 	client := &scriptedClient{trackingClient: newTrackingClient()}
 	driver := New(client, &core.PlatformInfo{}, &mockShell{})
@@ -2543,55 +2670,6 @@ func TestWaitUntil_Visible_Timeout(t *testing.T) {
 // =============================================================================
 // travel
 // =============================================================================
-
-func TestTravel_HappyPath(t *testing.T) {
-	shell := &mockShell{}
-	driver := New(newTrackingClient(), &core.PlatformInfo{}, shell)
-
-	res := driver.travel(&flow.TravelStep{
-		Points: []string{"37.7,-122.4", "37.8,-122.5"},
-		Speed:  100000, // very fast → ~0s sleep between points
-	})
-	if !res.Success {
-		t.Fatalf("travel: %v", res.Error)
-	}
-	if len(shell.commands) != 2 {
-		t.Errorf("expected 2 MOCK_LOCATION broadcasts, got %d", len(shell.commands))
-	}
-	for _, c := range shell.commands {
-		if !strings.Contains(c, "MOCK_LOCATION") {
-			t.Errorf("expected MOCK_LOCATION command, got %s", c)
-		}
-	}
-}
-
-func TestTravel_NoDevice(t *testing.T) {
-	res := New(newTrackingClient(), &core.PlatformInfo{}, nil).travel(&flow.TravelStep{
-		Points: []string{"0,0", "1,1"},
-	})
-	if res.Success {
-		t.Error("travel without device should fail")
-	}
-}
-
-func TestTravel_OnePointInsufficient(t *testing.T) {
-	driver := New(newTrackingClient(), &core.PlatformInfo{}, &mockShell{})
-	res := driver.travel(&flow.TravelStep{Points: []string{"0,0"}})
-	if res.Success {
-		t.Error("travel with <2 points should fail")
-	}
-}
-
-func TestTravel_ShellError(t *testing.T) {
-	driver := New(newTrackingClient(), &core.PlatformInfo{}, &mockShell{err: errors.New("blocked")})
-	res := driver.travel(&flow.TravelStep{
-		Points: []string{"0,0", "1,1"},
-		Speed:  100000,
-	})
-	if res.Success {
-		t.Error("travel should propagate shell error")
-	}
-}
 
 // =============================================================================
 // getRelativeFilter / applyRelativeFilter

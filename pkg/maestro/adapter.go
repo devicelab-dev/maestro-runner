@@ -399,6 +399,16 @@ func (a *Adapter) SendKeyActions(text string) error {
 	return err
 }
 
+// SendKeyActionsWithDelay types text as key events with a pause of delayMs
+// after each character. An agent that predates delayMs types without pauses.
+func (a *Adapter) SendKeyActionsWithDelay(text string, delayMs int) error {
+	_, err := a.client.Call("Input.sendKeyActions", map[string]interface{}{
+		"text":    text,
+		"delayMs": delayMs,
+	})
+	return err
+}
+
 // AddMedia inserts a single media file into the device MediaStore via the
 // on-device agent (base64-encoded bytes over the RPC channel).
 func (a *Adapter) AddMedia(name, mime string, data []byte) error {
@@ -507,6 +517,16 @@ func (a *Adapter) GetClipboard() (string, error) {
 func (a *Adapter) SetClipboard(text string) error {
 	_, err := a.client.Call("Device.setClipboard", map[string]interface{}{
 		"text": text,
+	})
+	return err
+}
+
+// SetLocation moves the device to latitude,longitude through the agent's test
+// location providers; the agent keeps it there until the session ends.
+func (a *Adapter) SetLocation(latitude, longitude float64) error {
+	_, err := a.client.Call("Device.setLocation", map[string]interface{}{
+		"latitude":  latitude,
+		"longitude": longitude,
 	})
 	return err
 }

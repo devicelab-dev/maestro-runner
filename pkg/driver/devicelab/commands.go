@@ -744,7 +744,7 @@ func (d *Driver) assertVisibleCount(step *flow.AssertVisibleStep) *core.CommandR
 
 // countVisibleMatches reads the page source once and counts visible matches.
 func (d *Driver) countVisibleMatches(sel flow.Selector) (int, error) {
-	pageSource, err := d.client.Source()
+	pageSource, err := d.screenXML()
 	if err != nil {
 		return 0, fmt.Errorf("failed to get page source: %w", err)
 	}
@@ -883,6 +883,34 @@ func (d *Driver) waitForFocused(wait time.Duration) core.Element {
 	}
 }
 
+// delayedKeySender is an agent client that can pause between typed characters.
+type delayedKeySender interface {
+	SendKeyActionsWithDelay(text string, delayMs int) error
+}
+
+// sendKeys types text as key events, at the typing frequency when one is set.
+func (d *Driver) sendKeys(text string) error {
+	if d.typingDelayMs > 0 {
+		if s, ok := d.client.(delayedKeySender); ok {
+			return s.SendKeyActionsWithDelay(text, d.typingDelayMs)
+		}
+	}
+	return d.client.SendKeyActions(text)
+}
+
+// SetTypingFrequency implements core.TypingFrequencyConfigurer. freq is in
+// keys per second and becomes a pause of 1000/freq ms after each character
+// typed as key events, for apps that drop keys typed faster than a person
+// would. freq <= 0 clears it.
+func (d *Driver) SetTypingFrequency(freq int) error {
+	if freq <= 0 {
+		d.typingDelayMs = 0
+		return nil
+	}
+	d.typingDelayMs = 1000 / freq
+	return nil
+}
+
 // focusOnTappedWait bounds the wait for a tapped field to take focus. Focus
 // normally moves within a few hundred milliseconds of the tap.
 const focusOnTappedWait = 1500 * time.Millisecond
@@ -978,7 +1006,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		// Resolve and read the focused field first: after typing, "unchanged"
 		// is the only thing that separates a hint from a lost keystroke.
 		target, before := d.focusedFieldBefore()
-		if err := d.client.SendKeyActions(text); err != nil {
+		if err := d.sendKeys(text); err != nil {
 			return errorResult(err, "Failed to input text via key press")
 		}
 		invalidateText(target)
@@ -1004,7 +1032,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 				// events go to whatever holds focus, which after a tap is that
 				// same field, so they get the text in without a second lookup.
 				logger.Warn("inputText: send-keys failed (%v), falling back to key events", err)
-				if keyErr := d.client.SendKeyActions(text); keyErr != nil {
+				if keyErr := d.sendKeys(text); keyErr != nil {
 					return errorResult(err, fmt.Sprintf("Failed to input text: %v (key events also failed: %v)", err, keyErr))
 				}
 			}
@@ -1081,7 +1109,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 			}
 		}
 		if !typed {
-			if err := d.client.SendKeyActions(text); err != nil {
+			if err := d.sendKeys(text); err != nil {
 				return errorResult(err, fmt.Sprintf("Failed to input text: %v", err))
 			}
 			// The key events went wherever focus landed. Read that field back
@@ -1268,26 +1296,41 @@ func (d *Driver) eraseTextBrowser(chars int) *core.CommandResult {
 }
 
 func (d *Driver) hideKeyboard(_ *flow.HideKeyboardStep) *core.CommandResult {
-	// Retry up to 3 times. The on-device agent sends KEYCODE_ESCAPE, which is
-	// keyboard-only, and deliberately never KEYCODE_BACK — Back navigates away
-	// when the IME is not actually up. It also guards on a real IME window
-	// (AccessibilityWindowInfo.TYPE_INPUT_METHOD) rather than guessing from the
-	// node tree, so calling this with no keyboard showing is a no-op rather
-	// than a stray back-navigation.
-	for attempt := 0; attempt < 3; attempt++ {
-		_ = d.client.HideKeyboard()
-
-		// Wait for keyboard to actually disappear (animation ~300ms).
-		deadline := time.Now().Add(500 * time.Millisecond)
-		for time.Now().Before(deadline) {
-			if !d.isKeyboardVisible() {
-				return successResult("Keyboard hidden", nil)
-			}
-			time.Sleep(100 * time.Millisecond)
+	// The on-device agent sends KEYCODE_ESCAPE, and only while a real IME
+	// window (AccessibilityWindowInfo.TYPE_INPUT_METHOD) is up. Many keyboards
+	// ignore ESC — Samsung's HoneyBoard and the AOSP keyboard among them, in
+	// native and React Native fields alike — and the step used to pass with the
+	// keyboard still open. While the keyboard is still shown, BACK closes it
+	// and the app never sees the key; BACK only navigates when no keyboard is
+	// up, so it is sent once and only after confirming the keyboard is there
+	// (#42), as the uiautomator2 driver does.
+	if !d.isKeyboardVisible() {
+		return successResult("Keyboard not visible", nil)
+	}
+	_ = d.client.HideKeyboard()
+	if d.waitKeyboardHidden() {
+		return successResult("Keyboard hidden", nil)
+	}
+	if d.isKeyboardVisible() {
+		if err := d.client.PressKeyCode(uiautomator2.KeyCodeBack); err == nil && d.waitKeyboardHidden() {
+			return successResult("Keyboard hidden (via back key)", nil)
 		}
 	}
+	return successResult("Hide keyboard (dismissal not confirmed)", nil)
+}
 
-	return successResult("Hide keyboard (may not have been visible)", nil)
+// waitKeyboardHidden waits for the keyboard's close animation (~300ms).
+func (d *Driver) waitKeyboardHidden() bool {
+	deadline := time.Now().Add(600 * time.Millisecond)
+	for {
+		if !d.isKeyboardVisible() {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func (d *Driver) inputRandom(step *flow.InputRandomStep) *core.CommandResult {
@@ -1355,7 +1398,7 @@ func (d *Driver) scroll(step *flow.ScrollStep) *core.CommandResult {
 // nothing. Any failure to establish the ancestry answers false: an
 // unverifiable tree must not block a match that the geometry accepted.
 func (d *Driver) atScrollContainerEdge(b core.Bounds, direction string) bool {
-	src, err := d.client.Source()
+	src, err := d.screenXML()
 	if err != nil {
 		return false
 	}
@@ -1493,7 +1536,9 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 
 // scrollSurfaceSignature reduces the current page source to a key for
 // core.ScrollProgress. A capture that cannot be read reports ok=false and is
-// not observed, so a hiccup never passes for the end of the content.
+// not observed, so a hiccup never passes for the end of the content. It stays
+// on the active window: the status bar's clock and notifications in the
+// all-window snapshot would change the key with no scroll progress.
 func (d *Driver) scrollSurfaceSignature() (string, bool) {
 	source, err := d.client.Source()
 	if err != nil || source == "" {
@@ -1632,7 +1677,10 @@ func (d *Driver) swipe(step *flow.SwipeStep) *core.CommandResult {
 	return d.swipeWithMaestroCoordinates(direction, width, height, step.Duration)
 }
 
-// findScrollableElement waits for and finds a scrollable element.
+// findScrollableElement waits for and finds a scrollable element. It reads
+// the active window only: across every window the largest scrollable is often
+// the screen behind a sheet or dialog, and a swipe at its centre would land
+// on the dimmed area and dismiss the sheet.
 func (d *Driver) findScrollableElement(timeoutMs int) (*core.ElementInfo, int) {
 	timeout := time.Duration(timeoutMs) * time.Millisecond
 	deadline := time.Now().Add(timeout)
@@ -2246,7 +2294,9 @@ func (d *Driver) resolveLauncherActivity(appID string, apiLevel int) (string, er
 
 // launchWithMonkey launches an app using the monkey command.
 func (d *Driver) launchWithMonkey(appID string) *core.CommandResult {
-	monkeyCmd := fmt.Sprintf("monkey -p %s -c android.intent.category.LAUNCHER 1", appID)
+	// --pct-syskeys 0: on an emulator without a hardware keyboard (hw.keyboard=no)
+	// monkey otherwise refuses to start ("system keys" need a physical key map).
+	monkeyCmd := fmt.Sprintf("monkey -p %s --pct-syskeys 0 -c android.intent.category.LAUNCHER 1", appID)
 	output, err := d.shellBounded(monkeyCmd, launchShellTimeout)
 	if err != nil || strings.Contains(output, "monkey aborted") {
 		errMsg := fmt.Sprintf("launchApp: all launch methods failed for '%s'. "+
@@ -2965,12 +3015,45 @@ func (d *Driver) setLocation(step *flow.SetLocationStep) *core.CommandResult {
 		return errorResult(fmt.Errorf("latitude and longitude required"), "Missing coordinates")
 	}
 
-	cmd := fmt.Sprintf("am broadcast -a android.intent.action.MOCK_LOCATION --ef lat %s --ef lon %s", lat, lon)
-	if _, err := d.device.Shell(cmd); err != nil {
+	if err := d.mockLocation(lat, lon); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to set location: %v", err))
 	}
 
 	return successResult(fmt.Sprintf("Set location to %s, %s", lat, lon), nil)
+}
+
+// agentPackage is the DeviceLab agent app, which holds the mock location app op.
+const agentPackage = "dev.devicelab.driver.android"
+
+// locationSetter is the agent client that can set the device's location.
+type locationSetter interface {
+	SetLocation(latitude, longitude float64) error
+}
+
+// mockLocation moves the device to lat,lon through the agent's test location
+// providers, after allowing the agent the mock location app op (once per
+// session). The `am broadcast ... MOCK_LOCATION` sent before had no receiver
+// on the device: setLocation and travel passed and the location never moved.
+func (d *Driver) mockLocation(lat, lon string) error {
+	la, err := strconv.ParseFloat(strings.TrimSpace(lat), 64)
+	if err != nil || la < -90 || la > 90 {
+		return fmt.Errorf("latitude %q must be a number between -90 and 90", lat)
+	}
+	lo, err := strconv.ParseFloat(strings.TrimSpace(lon), 64)
+	if err != nil || lo < -180 || lo > 180 {
+		return fmt.Errorf("longitude %q must be a number between -180 and 180", lon)
+	}
+	setter, ok := d.client.(locationSetter)
+	if !ok {
+		return fmt.Errorf("this DeviceLab agent cannot set the location")
+	}
+	if !d.mockLocationAllowed {
+		if out, err := d.device.Shell("appops set " + agentPackage + " android:mock_location allow"); err != nil {
+			return fmt.Errorf("allowing mock locations for the agent: %v %s", err, strings.TrimSpace(out))
+		}
+		d.mockLocationAllowed = true
+	}
+	return setter.SetLocation(la, lo)
 }
 
 // applyAirplaneMode sets airplane mode on/off using the best available method.
@@ -3030,40 +3113,6 @@ func (d *Driver) toggleAirplaneMode(_ *flow.ToggleAirplaneModeStep) *core.Comman
 
 	enable := strings.TrimSpace(output) != "1"
 	return d.applyAirplaneMode(enable)
-}
-
-func (d *Driver) travel(step *flow.TravelStep) *core.CommandResult {
-	if d.device == nil {
-		return errorResult(fmt.Errorf("device not configured"), "travel requires device access")
-	}
-
-	if len(step.Points) < 2 {
-		return errorResult(fmt.Errorf("at least 2 points required"), "Travel requires at least 2 waypoints")
-	}
-
-	speed := step.Speed
-	if speed <= 0 {
-		speed = 50
-	}
-
-	for _, point := range step.Points {
-		parts := strings.Split(point, ",")
-		if len(parts) != 2 {
-			continue
-		}
-		lat := strings.TrimSpace(parts[0])
-		lon := strings.TrimSpace(parts[1])
-
-		cmd := fmt.Sprintf("am broadcast -a android.intent.action.MOCK_LOCATION --ef lat %s --ef lon %s", lat, lon)
-		if _, err := d.device.Shell(cmd); err != nil {
-			return errorResult(err, fmt.Sprintf("Failed to set location during travel: %v", err))
-		}
-
-		delay := time.Duration(3600/speed) * time.Second
-		time.Sleep(delay)
-	}
-
-	return successResult(fmt.Sprintf("Traveled through %d points", len(step.Points)), nil)
 }
 
 // ============================================================================

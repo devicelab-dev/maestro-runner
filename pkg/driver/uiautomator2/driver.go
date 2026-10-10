@@ -96,6 +96,15 @@ type Driver struct {
 
 	// Selector validation dedup
 	warnedFields map[string]bool
+
+	// provisionLocation installs the location helper app when it is missing;
+	// set by the CLI, which knows where the bundled APKs are.
+	provisionLocation func() error
+	// locationReady: the helper app is installed and allowed to mock the
+	// location. locationSet: a mocked location is active and stopped at the
+	// end of the run.
+	locationReady bool
+	locationSet   bool
 }
 
 // New creates a new UIAutomator2 driver.
@@ -259,8 +268,6 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 		result = d.assertDarkMode(s)
 	case *flow.AssertLightModeStep:
 		result = d.assertLightMode(s)
-	case *flow.TravelStep:
-		result = d.travel(s)
 
 	// Wait commands
 	case *flow.WaitUntilStep:

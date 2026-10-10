@@ -392,6 +392,19 @@ func IsOwnerAlive(socketPath string) bool {
 	return proc.Signal(syscall.Signal(0)) == nil
 }
 
+// InstallAppiumSettings installs the bundled Appium settings app, which the
+// uiautomator2 driver sets the location through, when it is not installed.
+func (d *AndroidDevice) InstallAppiumSettings(apksDir string) error {
+	if d.IsInstalled(AppiumSettings) {
+		return nil
+	}
+	apkPath, err := findAPK(apksDir, "settings_apk-debug.apk")
+	if err != nil {
+		return fmt.Errorf("failed to find APK for %s: %w", AppiumSettings, err)
+	}
+	return d.Install(apkPath)
+}
+
 // UninstallUIAutomator2 removes UIAutomator2 packages from the device.
 func (d *AndroidDevice) UninstallUIAutomator2() error {
 	packages := []string{UIAutomator2Server, UIAutomator2Test, AppiumSettings}
