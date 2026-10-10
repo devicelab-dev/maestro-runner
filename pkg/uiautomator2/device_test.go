@@ -106,6 +106,13 @@ func TestGetClipboard(t *testing.T) {
 		if !strings.Contains(r.URL.Path, "/appium/device/get_clipboard") {
 			t.Errorf("expected /appium/device/get_clipboard, got %s", r.URL.Path)
 		}
+		// The server builds its model from the body: none fails with a
+		// NullPointerException on the device (#202).
+		var body GetClipboardRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ContentType != "plaintext" {
+			http.Error(w, `{"value":{"error":"unknown error","message":"java.lang.NullPointerException"}}`, http.StatusInternalServerError)
+			return
+		}
 		// Base64 encoded "clipboard text"
 		encoded := base64.StdEncoding.EncodeToString([]byte("clipboard text"))
 		if err := json.NewEncoder(w).Encode(map[string]interface{}{

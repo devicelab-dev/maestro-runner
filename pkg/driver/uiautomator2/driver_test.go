@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1290,7 +1291,7 @@ func TestExecuteAllStepTypes(t *testing.T) {
 		{"BackStep", &flow.BackStep{}, false},
 		{"PressKeyStep", &flow.PressKeyStep{Key: "enter"}, false},
 		{"CopyTextFromStep", &flow.CopyTextFromStep{Selector: flow.Selector{Text: "btn"}}, true},
-		{"PasteTextStep", &flow.PasteTextStep{}, true},
+		{"PasteTextStep", &flow.PasteTextStep{}, false}, // empty clipboard: nothing to paste (Maestro: no-op)
 	}
 
 	for _, tt := range tests {
@@ -2118,6 +2119,7 @@ func TestCopyTextFromClipboardError(t *testing.T) {
 }
 
 func TestPasteTextWithActiveElement(t *testing.T) {
+	typed := false
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /appium/device/get_clipboard": func(w http.ResponseWriter, r *http.Request) {
 			// Clipboard returns base64 encoded text
@@ -2129,7 +2131,15 @@ func TestPasteTextWithActiveElement(t *testing.T) {
 			})
 		},
 		"POST /element/active-elem/value": func(w http.ResponseWriter, r *http.Request) {
+			typed = true
 			writeJSON(w, map[string]interface{}{"value": nil})
+		},
+		"GET /element/active-elem/text": func(w http.ResponseWriter, r *http.Request) {
+			text := ""
+			if typed {
+				text = "Hello World"
+			}
+			writeJSON(w, map[string]interface{}{"value": text})
 		},
 	})
 	defer server.Close()
@@ -2145,15 +2155,23 @@ func TestPasteTextWithActiveElement(t *testing.T) {
 	}
 }
 
-func TestPasteTextNoActiveElement(t *testing.T) {
+// With no field reported as active, pasteText types the clipboard as key
+// events, as inputText does (#202: Maestro's pasteText is an inputText).
+func TestPasteTextNoActiveElementTypesKeys(t *testing.T) {
+	var actions string
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /appium/device/get_clipboard": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w, map[string]interface{}{"value": "SGVsbG8="})
+			writeJSON(w, map[string]interface{}{"value": "SGVsbG8="}) // "Hello"
 		},
 		"GET /element/active": func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]interface{}{
 				"value": map[string]string{"ELEMENT": ""},
 			})
+		},
+		"POST /actions": func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			actions += string(b)
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 	})
 	defer server.Close()
@@ -2161,15 +2179,20 @@ func TestPasteTextNoActiveElement(t *testing.T) {
 	client := newMockHTTPClient(server.URL)
 	driver := New(client.Client, nil, nil)
 
-	step := &flow.PasteTextStep{}
-	result := driver.Execute(step)
+	result := driver.Execute(&flow.PasteTextStep{})
 
-	if result.Success {
-		t.Error("expected failure when no active element")
+	if !result.Success {
+		t.Fatalf("expected the clipboard typed as key events, got error: %v", result.Error)
+	}
+	if !strings.Contains(actions, `"H"`) || !strings.Contains(actions, `"o"`) {
+		t.Errorf("key actions did not carry the clipboard text: %s", actions)
 	}
 }
 
-func TestPasteTextSendKeysError(t *testing.T) {
+// When typing into the active field fails, pasteText falls back to key
+// events, as inputText does.
+func TestPasteTextSendKeysErrorFallsBackToKeys(t *testing.T) {
+	var actions string
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /appium/device/get_clipboard": func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]interface{}{"value": "SGVsbG8="})
@@ -2179,9 +2202,17 @@ func TestPasteTextSendKeysError(t *testing.T) {
 				"value": map[string]string{"ELEMENT": "active-elem"},
 			})
 		},
+		"GET /element/active-elem/text": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{"value": ""})
+		},
 		"POST /element/active-elem/value": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			writeJSON(w, map[string]interface{}{"value": "send keys failed"})
+		},
+		"POST /actions": func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			actions += string(b)
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 	})
 	defer server.Close()
@@ -2189,11 +2220,30 @@ func TestPasteTextSendKeysError(t *testing.T) {
 	client := newMockHTTPClient(server.URL)
 	driver := New(client.Client, nil, nil)
 
-	step := &flow.PasteTextStep{}
-	result := driver.Execute(step)
+	result := driver.Execute(&flow.PasteTextStep{})
 
-	if result.Success {
-		t.Error("expected failure on SendKeys error")
+	if !result.Success {
+		t.Fatalf("expected the key-event fallback, got error: %v", result.Error)
+	}
+	if !strings.Contains(actions, `"H"`) {
+		t.Errorf("key actions did not carry the clipboard text: %s", actions)
+	}
+}
+
+// An empty clipboard pastes nothing and is not an error (Maestro: no-op).
+func TestPasteTextEmptyClipboard(t *testing.T) {
+	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
+		"POST /appium/device/get_clipboard": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{"value": ""})
+		},
+	})
+	defer server.Close()
+
+	client := newMockHTTPClient(server.URL)
+	driver := New(client.Client, nil, nil)
+
+	if result := driver.Execute(&flow.PasteTextStep{}); !result.Success {
+		t.Errorf("empty clipboard: expected success, got error: %v", result.Error)
 	}
 }
 
