@@ -116,7 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 1. Reported `inputText` replacing a field's text instead of typing at the cursor ([#189](https://github.com/devicelab-dev/maestro-runner/issues/189))
 
 [@Cancercookie](https://github.com/Cancercookie)
-1. Asked for readable step labels and script output in reports ([#192](https://github.com/devicelab-dev/maestro-runner/issues/192))
+1. Asked for script output and step labels in reports ([#192](https://github.com/devicelab-dev/maestro-runner/issues/192))
 
 [@jalie](https://github.com/jalie)
 1. Reported WDA failing every `point:` tap after a missed screen-size read ([#201](https://github.com/devicelab-dev/maestro-runner/issues/201))
@@ -125,7 +125,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 1. Reported `pasteText` after `setClipboard` failing on UIAutomator2 ([#202](https://github.com/devicelab-dev/maestro-runner/issues/202))
 
 [@vlasov-pepperstone](https://github.com/vlasov-pepperstone)
-1. Reported deep iOS screens coming back empty ([#171](https://github.com/devicelab-dev/maestro-runner/issues/171))
+1. Reported nested elements missing from iOS screens ([#171](https://github.com/devicelab-dev/maestro-runner/issues/171))
 
 ## [1.1.28] - 2026-09-30
 
