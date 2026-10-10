@@ -115,6 +115,16 @@ func TestClientRevivesAndResendsReadOnly(t *testing.T) {
 		t.Fatalf("err=%v served=%d", err, served.Load())
 	}
 
+	// Setting the orientation is re-sent; opening a URL is not.
+	c.SetPort(deadPort(t))
+	if _, err := c.Call(context.Background(), "device", &Args{Action: "orientation", Value: "portrait"}); err != nil || served.Load() != 2 {
+		t.Fatalf("orientation: err=%v served=%d", err, served.Load())
+	}
+	c.SetPort(deadPort(t))
+	if _, err := c.Call(context.Background(), "device", &Args{Action: "openURL", Value: "x://y"}); err == nil || !strings.Contains(err.Error(), "not re-sent") {
+		t.Fatalf("openURL: err=%v", err)
+	}
+
 	// A failed restart is reported.
 	c.SetPort(deadPort(t))
 	c.SetReviver(func(context.Context) (int, error) { return 0, errBoom })

@@ -109,8 +109,8 @@ func TestGenerateJUnit(t *testing.T) {
 		`<?xml version="1.0" encoding="UTF-8"?>`,
 		`<testsuites tests="2" failures="0" skipped="0" errors="0"`,
 		`<testsuite name="maestro-runner" tests="2" failures="0" skipped="0"`,
-		`<testcase name="Login Test" classname="Login Test" time="5.000"`,
-		`<testcase name="Signup Test" classname="Signup Test" time="3.000"`,
+		`<testcase id="Login Test" name="Login Test" classname="Login Test" time="5.000"`,
+		`<testcase id="Signup Test" name="Signup Test" classname="Signup Test" time="3.000"`,
 		`<property name="file" value="flows/login.yaml"/>`,
 		`<property name="file" value="flows/signup.yaml"/>`,
 		`<property name="device.name" value="Pixel 6"/>`,
@@ -480,9 +480,13 @@ func TestGenerateJUnitMixedResults(t *testing.T) {
 
 	checks := []string{
 		`tests="3" failures="1" skipped="1"`,
-		`<testcase name="Login"`,
-		`<testcase name="Checkout"`,
-		`<testcase name="Settings"`,
+		// status as Maestro writes it; Expo's parser keys on SUCCESS.
+		`<testcase id="Login" name="Login" classname="Login" time="5.000"`,
+		`<testcase id="Checkout" name="Checkout"`,
+		`<testcase id="Settings" name="Settings" classname="Settings" time="0.000"`,
+		`status="SUCCESS">`,
+		`status="ERROR">`,
+		`status="SKIPPED">`,
 		`<failure message="Tap failed" type="ElementInteractionError">Tap failed</failure>`,
 		`<skipped/>`,
 	}
@@ -835,4 +839,26 @@ func TestJUnitFailureErrorInBothMessageAndBody(t *testing.T) {
 			t.Errorf("body should fall back to the step description:\n%s", xml)
 		}
 	})
+}
+
+func TestJUnitEarlierAttempts(t *testing.T) {
+	flaky := &FlowEntry{Status: StatusPassed, Attempts: 2, AttemptHistory: []AttemptEntry{
+		{Attempt: 1, Status: StatusFailed, Error: "Element 'Go' not found"},
+		{Attempt: 2, Status: StatusPassed},
+	}}
+	if got := junitEarlierAttempts(flaky); !strings.Contains(got, `<flakyFailure message="Element &apos;Go&apos; not found" type="attempt 1">`) {
+		t.Errorf("flaky: %s", got)
+	}
+	broken := &FlowEntry{Status: StatusFailed, Attempts: 3, AttemptHistory: []AttemptEntry{
+		{Attempt: 1, Status: StatusFailed, Error: "a"},
+		{Attempt: 2, Status: StatusFailed, Error: "b"},
+		{Attempt: 3, Status: StatusFailed, Error: "c"},
+	}}
+	got := junitEarlierAttempts(broken)
+	if strings.Count(got, "<rerunFailure") != 2 || strings.Contains(got, ">c<") {
+		t.Errorf("broken: %s", got)
+	}
+	if got := junitEarlierAttempts(&FlowEntry{Status: StatusPassed}); got != "" {
+		t.Errorf("no retries: %q", got)
+	}
 }

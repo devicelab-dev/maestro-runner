@@ -405,6 +405,11 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	// Stop early when the surface stops moving — a target that is not in the
 	// list should not cost every scroll the step allows.
 	var progress core.ScrollProgress
+	// centerElement: a visible element keeps the scroll going until it is
+	// near the middle. shown is the last match that was already visible
+	// enough, accepted if the list ends or the scrolls run out first.
+	var centering core.Centering
+	var shown *core.ElementInfo
 
 	for i := 0; i < maxScrolls && time.Now().Before(deadline); i++ {
 		if err := d.parentContext().Err(); err != nil {
@@ -423,7 +428,14 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 			if !boundsKnown {
 				return successResult("Element found", info)
 			}
-			if core.MeetsVisibility(info.Bounds, w, h, step.VisibilityPercentage) {
+			if decided, done := centering.Check(step.CenterElement, info.Bounds, direction, w, h); decided {
+				if done {
+					return successResult("Element centred", info)
+				}
+				if core.MeetsVisibility(info.Bounds, w, h, step.VisibilityPercentage) {
+					shown = info
+				}
+			} else if core.MeetsVisibility(info.Bounds, w, h, step.VisibilityPercentage) {
 				// Computed from a rect the hierarchy may already have clipped
 				// to the scroll container, where a sliver at the fold scores
 				// 100% (#164). A rect flush with the container's leading edge
@@ -444,6 +456,9 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 		}
 
 		if sig, ok := d.scrollSurfaceSignature(); ok && progress.Observe(sig) {
+			if shown != nil {
+				return successResult("Element visible (end of content before centring)", shown)
+			}
 			reason := fmt.Sprintf("scrolling %s made no progress after %d scrolls (end of content?)", direction, i)
 			if partiallyVisible {
 				return errorResult(fmt.Errorf("element found but never sufficiently visible after scrolling"), reason)
@@ -459,6 +474,9 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 		time.Sleep(300 * time.Millisecond)
 	}
 
+	if shown != nil {
+		return successResult("Element visible (scrolls ran out before centring)", shown)
+	}
 	if partiallyVisible {
 		return errorResult(fmt.Errorf("element found but never sufficiently visible after scrolling"), "")
 	}

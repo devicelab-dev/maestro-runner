@@ -2567,3 +2567,14 @@ func TestEnvFlagKeepsCommasAndEquals(t *testing.T) {
 		t.Errorf("second run env = %v, want empty", gotEnv)
 	}
 }
+
+func TestNoFlowsMatchTagsError(t *testing.T) {
+	got := noFlowsMatchTagsError([]string{"accessibility"}, []string{"android-only", "flaky"}).Error()
+	want := "Include / Exclude tags did not match any Flows:\n\nInclude Tags:\n- accessibility\n\nExclude Tags:\n- android-only\n- flaky"
+	if got != want {
+		t.Errorf("got\n%s\nwant\n%s", got, want)
+	}
+	if got := noFlowsMatchTagsError(nil, []string{"x"}).Error(); !strings.Contains(got, "Include Tags:\n[]") {
+		t.Errorf("empty include list: %s", got)
+	}
+}

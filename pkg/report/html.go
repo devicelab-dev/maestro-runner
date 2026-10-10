@@ -80,6 +80,9 @@ type FlowHTMLData struct {
 	DurationMs  int64
 	DurationPct float64
 	Commands    []CommandHTMLData
+	// AttemptsLabel is "passed on attempt 2" / "failed all 3 attempts" for a
+	// flow run more than once (--retries); empty otherwise.
+	AttemptsLabel string
 }
 
 // CommandHTMLData contains command data formatted for HTML.
@@ -156,6 +159,12 @@ func buildHTMLData(index *Index, flows []FlowDetail, cfg HTMLConfig) HTMLData {
 			DurationMs:  durationMs,
 			DurationPct: durationPct,
 			Commands:    cmds,
+		}
+		if n := index.Flows[i].Attempts; n > 1 {
+			flowsData[i].AttemptsLabel = fmt.Sprintf("failed all %d attempts", n)
+			if index.Flows[i].Status == StatusPassed {
+				flowsData[i].AttemptsLabel = fmt.Sprintf("passed on attempt %d", n)
+			}
 		}
 	}
 
@@ -695,6 +704,11 @@ const htmlTemplate = `<!DOCTYPE html>
             overflow: hidden;
         }
 
+        .flow-attempts {
+            color: var(--warning, #b7791f);
+            border-color: currentColor;
+        }
+
         .flow-tag {
             font-size: 10px;
             padding: 2px 8px;
@@ -922,6 +936,18 @@ const htmlTemplate = `<!DOCTYPE html>
             gap: 1px;
             background: var(--border-color);
             margin-left: 24px;
+        }
+
+        .command-logs {
+            font-family: 'SF Mono', Monaco, Consolas, monospace;
+            font-size: 12px;
+            color: var(--text-primary);
+            white-space: pre-wrap;
+            word-break: break-all;
+            background: var(--bg-tertiary);
+            border-left: 3px solid var(--border-color);
+            padding: 8px;
+            border-radius: 4px;
         }
 
         .command-yaml {
@@ -1204,8 +1230,11 @@ const htmlTemplate = `<!DOCTYPE html>
                         <span class="status-dot {{$flow.StatusClass}}"></span>
                         <span class="flow-name">{{$flow.Name}}</span>
                     </div>
-                    {{if or $flow.Tags $flow.Device}}
+                    {{if or $flow.Tags $flow.Device $flow.AttemptsLabel}}
                     <div class="flow-tags">
+                        {{if $flow.AttemptsLabel}}
+                        <span class="flow-tag flow-attempts">{{$flow.AttemptsLabel}}</span>
+                        {{end}}
                         {{if $flow.Device}}
                         <span class="flow-device">
                             <span class="device-icon {{$flow.Device.Platform}}"></span>
@@ -1753,7 +1782,8 @@ const htmlTemplate = `<!DOCTYPE html>
             const keyValue = extractKeyValue(cmd);
             const hasSubCommands = cmd.subCommands && cmd.subCommands.length > 0;
             const hasScreenshots = cmd.artifacts && (cmd.artifacts.screenshotBefore || cmd.artifacts.screenshotAfter);
-            const hasDetails = cmd.yaml || cmd.error || hasScreenshots;
+            const hasLogs = cmd.logs && cmd.logs.length > 0;
+            const hasDetails = cmd.yaml || cmd.error || hasScreenshots || hasLogs;
             const isExpandable = hasDetails || hasSubCommands;
 
             let html = '<div class="command-item ' + status + (hasSubCommands ? ' has-subcommands' : '') + '" id="flow-' + flowIndex + '-cmd-' + index + '-d' + depth + '" onclick="toggleCommand(this, event)">';
@@ -1778,6 +1808,10 @@ const htmlTemplate = `<!DOCTYPE html>
 
                 if (cmd.yaml && !hasSubCommands) {
                     html += '<div class="command-yaml">' + escapeHtml(cmd.yaml) + '</div>';
+                }
+
+                if (hasLogs) {
+                    html += '<div class="command-logs">' + escapeHtml(cmd.logs.join('\n')) + '</div>';
                 }
 
                 if (cmd.error) {

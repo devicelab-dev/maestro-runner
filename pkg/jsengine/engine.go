@@ -15,6 +15,12 @@ import (
 
 // Engine wraps goja runtime with Maestro-compatible features
 type Engine struct {
+	// logs keeps what console.log/warn/error printed since the last
+	// TakeLogs, for the report. The console functions run while Eval holds
+	// mu, so it has its own lock.
+	logsMu sync.Mutex
+	logs   []string
+
 	runtime      *goja.Runtime
 	variables    map[string]interface{}
 	output       map[string]interface{}
@@ -100,6 +106,16 @@ func (e *Engine) setupBuiltins() {
 	}
 }
 
+// TakeLogs returns the console lines printed since the last call and
+// clears them.
+func (e *Engine) TakeLogs() []string {
+	e.logsMu.Lock()
+	defer e.logsMu.Unlock()
+	logs := e.logs
+	e.logs = nil
+	return logs
+}
+
 // setupConsole adds console.log, console.error, etc.
 func (e *Engine) setupConsole() {
 	// Helper to create console methods
@@ -109,11 +125,16 @@ func (e *Engine) setupConsole() {
 			for i, arg := range call.Arguments {
 				args[i] = arg.Export()
 			}
+			var line string
 			if prefix != "" {
-				fmt.Println(prefix, args)
+				line = fmt.Sprintln(append([]interface{}{prefix}, args...)...)
 			} else {
-				fmt.Println(args...)
+				line = fmt.Sprintln(args...)
 			}
+			fmt.Print(line)
+			e.logsMu.Lock()
+			e.logs = append(e.logs, strings.TrimSuffix(line, "\n"))
+			e.logsMu.Unlock()
 			return goja.Undefined()
 		}
 	}
@@ -438,6 +459,32 @@ func (e *Engine) EvalString(script string) (string, error) {
 	return fmt.Sprintf("%v", result), nil
 }
 
+// evalTemplate evaluates a ${...} expression as Maestro does: the value's
+// JavaScript string form (GraalJS Value.toString()), so undefined and null
+// come out as "undefined" and "null", not "". Expo's flows pass optional
+// parameters through as ${name} and their image-comparison server reads
+// "undefined" as "use the default"; an empty string failed its validation.
+func (e *Engine) evalTemplate(script string) (string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	result, err := e.runtime.RunString(script)
+	if err != nil {
+		return "", fmt.Errorf("JS eval error: %w", err)
+	}
+	switch {
+	case result == nil || goja.IsUndefined(result):
+		return "undefined", nil
+	case goja.IsNull(result):
+		return "null", nil
+	}
+	exported := result.Export()
+	if exported == nil {
+		return "", nil
+	}
+	return fmt.Sprintf("%v", exported), nil
+}
+
 // RunScript runs a JavaScript file/script
 func (e *Engine) RunScript(script string) error {
 	e.mu.Lock()
@@ -527,7 +574,7 @@ func (e *Engine) ExpandVariables(text string) (string, error) {
 func (e *Engine) evalWithUndefinedFallback(expr string) (string, error) {
 	const maxRetries = 10
 	for i := 0; i < maxRetries; i++ {
-		value, err := e.EvalString(expr)
+		value, err := e.evalTemplate(expr)
 		if err == nil {
 			return value, nil
 		}

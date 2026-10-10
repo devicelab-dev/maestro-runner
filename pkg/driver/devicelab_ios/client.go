@@ -23,6 +23,16 @@ var readOnly = map[string]bool{
 	"status": true, "snapshot": true, "find": true, "settle": true, "screenshot": true,
 }
 
+// resendable is a command that may be sent again after a restart: a read, or
+// setting the orientation or appearance (the same end state however often it
+// is sent; the agent skips a change already made).
+func resendable(cmd string, args *Args) bool {
+	if readOnly[cmd] {
+		return true
+	}
+	return cmd == "device" && args != nil && (args.Action == "orientation" || args.Action == "appearance")
+}
+
 // Reviver restarts a dead agent and returns its new port.
 type Reviver func(ctx context.Context) (int, error)
 
@@ -69,7 +79,7 @@ func (c *Client) url() string {
 
 // Call sends one command and returns the envelope. An `ok: false` answer is
 // an *AgentError (with the envelope still returned). A dead agent is
-// restarted once through the reviver; read-only commands are then re-sent.
+// restarted once through the reviver; resendable commands are then re-sent.
 func (c *Client) Call(ctx context.Context, cmd string, args *Args) (*Response, error) {
 	id := fmt.Sprintf("%s%d", c.prefix, c.seq.Add(1))
 	body, err := json.Marshal(struct {
@@ -81,7 +91,7 @@ func (c *Client) Call(ctx context.Context, cmd string, args *Args) (*Response, e
 		return nil, fmt.Errorf("encode %s: %w", cmd, err)
 	}
 	resp, err := c.send(ctx, cmd, id, body)
-	if err == nil || !isTransport(err) || c.reviver == nil {
+	if err == nil || !(isTransport(err) || isTimeout(err)) || c.reviver == nil || ctx.Err() != nil {
 		return resp, err
 	}
 	port, rerr := c.reviver(ctx)
@@ -89,7 +99,7 @@ func (c *Client) Call(ctx context.Context, cmd string, args *Args) (*Response, e
 		return nil, fmt.Errorf("%w (restart failed: %v)", err, rerr)
 	}
 	c.SetPort(port)
-	if !readOnly[cmd] {
+	if !resendable(cmd, args) {
 		return nil, fmt.Errorf("%w (agent restarted; %s not re-sent)", err, cmd)
 	}
 	return c.send(ctx, cmd, id, body)
@@ -99,6 +109,17 @@ type transportError struct{ err error }
 
 func (e transportError) Error() string { return "agent unreachable: " + e.err.Error() }
 func (e transportError) Unwrap() error { return e.err }
+
+// timeoutError is an agent that took the whole call timeout to answer: as
+// good as dead, and restarted like one.
+type timeoutError struct{ msg string }
+
+func (e timeoutError) Error() string { return e.msg }
+
+func isTimeout(err error) bool {
+	var te timeoutError
+	return errors.As(err, &te)
+}
 
 func isTransport(err error) bool {
 	var te transportError
@@ -125,7 +146,7 @@ func (c *Client) send(ctx context.Context, cmd, id string, body []byte) (*Respon
 			return nil, fmt.Errorf("%s aborted: %w", cmd, ctx.Err())
 		}
 		if errors.Is(reqCtx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("%s: agent did not answer within %s", cmd, c.callTimeout)
+			return nil, timeoutError{fmt.Sprintf("%s: agent did not answer within %s", cmd, c.callTimeout)}
 		}
 		return nil, transportError{err}
 	}

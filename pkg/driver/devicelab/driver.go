@@ -524,6 +524,10 @@ func (d *Driver) SetWaitForIdleTimeout(ms int) error {
 	})
 }
 
+// WaitsAroundTaps reports that taps settle before and wait for a change
+// after them (see flow.RepeatTapAfterFirst).
+func (d *Driver) WaitsAroundTaps() bool { return true }
+
 // Execute runs a single step and returns the result.
 func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	start := time.Now()
@@ -532,8 +536,23 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	// tap on duckduckgo's menu button while the previous menu was still
 	// closing did nothing. Asserts and checks do not wait: they poll, and an
 	// element on both screens is a correct pass either way.
-	if d.lastStepWasTap && actsOnScreen(step) {
+	if d.lastStepWasTap && actsOnScreen(step) && !flow.RepeatTapAfterFirst(step) {
 		d.settle(settleAfterTapTimeoutMs, "tap")
+	}
+
+	// A tap returns only once the screen has started to react, or after
+	// tapChangeWait. An app can react a moment after the tap (React Native
+	// scrolls a list from JS), and a 200ms quiet window that starts before
+	// the change counted the old screen as settled: RNTester read
+	// "offset:0" right after "ScrollToOffset 100".
+	var beforeTap uint64
+	watchTap := isTap(step) && d.settlingOn() && !flow.RepeatTapBeforeLast(step)
+	if watchTap {
+		if h, err := d.client.TreeHash(); err == nil {
+			beforeTap = h
+		} else {
+			watchTap = false
+		}
 	}
 
 	var result *core.CommandResult
@@ -670,9 +689,16 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	default:
 		d.lastStepWasInput = false
 	}
+	if watchTap && result.Success {
+		d.waitForTapChange(beforeTap)
+	}
 	switch step.(type) {
 	case *flow.TapOnStep, *flow.DoubleTapOnStep, *flow.LongPressOnStep, *flow.TapOnPointStep:
 		d.lastStepWasTap = result.Success
+	case *flow.WaitForAnimationToEndStep:
+		// A wait between a tap and the next step keeps the tap's settle: a
+		// tap, waitForAnimationToEnd, copyTextFrom read the text before the
+		// tap's change had finished.
 	default:
 		d.lastStepWasTap = false
 	}
@@ -2030,11 +2056,24 @@ func (d *Driver) SetAnimationsDisabled(disabled bool) error {
 
 // actsOnScreen reports whether a step acts on what is on screen, so it must
 // not run while the previous tap's UI is still changing.
+// isTap reports whether a step is a tap of some kind.
+func isTap(step flow.Step) bool {
+	switch step.(type) {
+	case *flow.TapOnStep, *flow.DoubleTapOnStep, *flow.LongPressOnStep, *flow.TapOnPointStep:
+		return true
+	}
+	return false
+}
+
 func actsOnScreen(step flow.Step) bool {
 	switch step.(type) {
 	case *flow.TapOnStep, *flow.DoubleTapOnStep, *flow.LongPressOnStep, *flow.TapOnPointStep,
 		*flow.DragAndDropStep, *flow.ScrollStep, *flow.SwipeStep,
-		*flow.BackStep, *flow.PressKeyStep, *flow.CopyTextFromStep:
+		*flow.BackStep, *flow.PressKeyStep, *flow.CopyTextFromStep,
+		// openLink sees the link take effect by the screen changing from how
+		// it was before: a tap's change still under way passed for that, and
+		// the next step read the old page (DuckDuckGo deeplink_to_serp).
+		*flow.OpenLinkStep:
 		return true
 	}
 	return false

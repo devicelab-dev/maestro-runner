@@ -66,6 +66,9 @@ type Driver struct {
 
 	// runSimctl runs `xcrun simctl args…`; tests replace it.
 	runSimctl func(args ...string) (string, error)
+	// runSimctlWithin runs `xcrun simctl args…` with its own time limit;
+	// tests replace it.
+	runSimctlWithin func(timeout time.Duration, args ...string) (string, error)
 
 	// web reads whether the visible web page is still loading (WebKit's
 	// inspector); openWeb connects it, and tests replace it.
@@ -83,6 +86,9 @@ func NewDriver(agent agentAPI, info *core.PlatformInfo, udid string) *Driver {
 		optionalTimeout: defaultOptionalTimeout,
 		runSimctl: func(args ...string) (string, error) {
 			return simctl(context.Background(), 5*time.Minute, args...)
+		},
+		runSimctlWithin: func(timeout time.Duration, args ...string) (string, error) {
+			return simctl(context.Background(), timeout, args...)
 		},
 	}
 	// DL_IOS_WEB_READY=0 turns the web readiness check off (A/B timing).
@@ -256,10 +262,14 @@ func (d *Driver) StopScreenRecording(hostPath string) error {
 	return rec.Stop(hostPath)
 }
 
+// WaitsAroundTaps reports that a tap settles first when the step before it
+// moved the screen (see flow.RepeatTapAfterFirst).
+func (d *Driver) WaitsAroundTaps() bool { return true }
+
 // Execute implements core.Driver.
 func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	start := time.Now()
-	if d.screenMayMove && actsOnScreen(step) {
+	if d.screenMayMove && actsOnScreen(step) && !flow.RepeatTapAfterFirst(step) {
 		d.settle(defaultSettleTimeout)
 	}
 	// Asserts and waits between an action and the next one neither settle

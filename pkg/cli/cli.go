@@ -87,6 +87,7 @@ var GlobalFlags = []cli.Flag{
 	},
 	&cli.StringFlag{
 		Name:    "team-id",
+		Aliases: []string{"apple-team-id"},
 		Usage:   "Apple Development Team ID for WDA code signing (iOS)",
 		EnvVars: []string{"MAESTRO_TEAM_ID", "DEVELOPMENT_TEAM"},
 	},
@@ -133,6 +134,12 @@ var GlobalFlags = []cli.Flag{
 		Usage:   "Set appium:newCommandTimeout (seconds) for the Appium session when it is not already set in --caps. 0 = leave unset (honor the caps-file value, else the Appium server default). Raise this for cloud farms where --parallel pre-creates sessions that sit idle during setup and would otherwise be reaped.",
 		EnvVars: []string{"MAESTRO_NEW_COMMAND_TIMEOUT"},
 	},
+
+	// Maestro's driver connection options; maestro-runner manages its own
+	// driver, so they are accepted and ignored.
+	&cli.StringFlag{Name: "host", Hidden: true},
+	&cli.StringFlag{Name: "port", Hidden: true},
+	&cli.StringFlag{Name: "driver-host-port", Hidden: true},
 }
 
 // Execute runs the CLI.
@@ -184,7 +191,7 @@ Examples:
 		},
 	}
 
-	if err := app.Run(os.Args); err != nil {
+	if err := app.Run(normalizeArgs(os.Args, GlobalFlags, testCommand.Flags, app.Commands)); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}

@@ -618,3 +618,25 @@ func TestDefineUndefinedIfMissing(t *testing.T) {
 	// Calling again is idempotent (no-op).
 	e.DefineUndefinedIfMissing("MY_VAR")
 }
+
+// ${...} expands as Maestro's GraalJS does: undefined and null become the
+// strings "undefined" and "null" (Expo's flows pass optional parameters
+// through as ${name} and read "undefined" as the default).
+func TestExpandVariablesUndefinedAndNull(t *testing.T) {
+	e := New()
+	defer e.Close()
+	cases := map[string]string{
+		"factor=${resizingFactor}": "factor=undefined",
+		"${null}":                  "null",
+		"${notSet || 'fallback'}":  "fallback",
+		"${notSetEither ?? 0.5}":   "0.5",
+		"${typeof stillNotSet}":    "undefined",
+		"plain text":               "plain text",
+	}
+	for in, want := range cases {
+		got, err := e.ExpandVariables(in)
+		if err != nil || got != want {
+			t.Errorf("ExpandVariables(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+}

@@ -1063,7 +1063,19 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		typed := false
 		if focused := d.waitForTypingTarget(); focused != nil {
 			before, _ := focused.Text()
-			if err := focused.Input(text); err == nil {
+			if fieldHoldsText(focused, before) {
+				// Maestro types at the cursor, so text already in the field
+				// stays: "1", Enter, "2" builds two lines. Setting the field
+				// replaced it, and a rich-text editor lost everything typed
+				// before (enriched-html: 21 flows). Key events go to the
+				// focused field at its cursor. An empty field is still set in
+				// one call, which is faster and the same result.
+				if err := d.client.SendKeyActions(text); err == nil {
+					typed = true
+					invalidateText(focused)
+					typedInto, beforeText = focused, before
+				}
+			} else if err := focused.Input(text); err == nil {
 				typed = true
 				typedInto, beforeText = focused, before
 			}
@@ -1094,6 +1106,24 @@ func invalidateText(field core.TextField) {
 	if f, ok := field.(textInvalidator); ok {
 		f.InvalidateText()
 	}
+}
+
+// fieldHoldsText reports whether field's value is known to be text, rather
+// than nothing. Android reports an empty field's hint as its text; the agent
+// says which in the field's showingHintText. A field that does not say (an
+// agent without it, or a field that is not native) counts as empty and is set,
+// as before. A whole-tree snapshot used to decide this, and taking one at the
+// wrong moment in a rich-text editor took the agent down.
+func fieldHoldsText(field core.Element, value string) bool {
+	if value == "" {
+		return false
+	}
+	native, ok := field.(*NativeElement)
+	if !ok || native.elem == nil {
+		return false
+	}
+	showing, known := native.elem.ShowingHint()
+	return known && !showing
 }
 
 // focusedFieldBefore resolves the element that key events will reach and reads
@@ -1397,16 +1427,30 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	// list should not cost every scroll the step allows.
 	var progress core.ScrollProgress
 
+	// centerElement: a visible element keeps the scroll going until it is
+	// near the middle. shown is the last match that was already visible
+	// enough, accepted if the list ends or the scrolls run out first.
+	var centering core.Centering
+	var shown *core.ElementInfo
+
 	for i := 0; i < maxScrolls && time.Now().Before(deadline); i++ {
 		_, info, err := d.findElement(step.Element, true, 1000)
 		if err == nil && info != nil {
-			// The DeviceLab agent returns matches from the full view hierarchy,
-			// including items below the fold in a ScrollView — and a match
-			// half-hidden at the screen edge is no better, because the tap that
-			// follows lands wrong. Stop only when the element meets the flow's
-			// visibility requirement (default: fully inside the viewport, which
-			// here is the full physical display — see tappableScreenSize above).
-			if core.MeetsVisibility(info.Bounds, width, height, step.VisibilityPercentage) {
+			if decided, done := centering.Check(step.CenterElement, info.Bounds, direction, width, height); decided {
+				if done {
+					return successResult(fmt.Sprintf("Element centred after %d scrolls", i), info)
+				}
+				if core.MeetsVisibility(info.Bounds, width, height, step.VisibilityPercentage) {
+					shown = info
+				}
+			} else if core.MeetsVisibility(info.Bounds, width, height, step.VisibilityPercentage) {
+				// The DeviceLab agent returns matches from the full view hierarchy,
+				// including items below the fold in a ScrollView — and a match
+				// half-hidden at the screen edge is no better, because the tap that
+				// follows lands wrong. Stop only when the element meets the flow's
+				// visibility requirement (default: fully inside the viewport, which
+				// here is the full physical display — see tappableScreenSize above).
+				//
 				// The geometry says fully visible, but it is computed from a
 				// rect the hierarchy may already have clipped to the scroll
 				// container — a sliver at the fold scores 100% (#164). A rect
@@ -1428,6 +1472,9 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 		}
 
 		if sig, ok := d.scrollSurfaceSignature(); ok && progress.Observe(sig) {
+			if shown != nil {
+				return successResult(fmt.Sprintf("Element visible after %d scrolls (end of content before centring)", i), shown)
+			}
 			return errorResult(fmt.Errorf("element not found"), fmt.Sprintf("Element not found: scrolling %s made no progress after %d scrolls (end of content?)", direction, i))
 		}
 
@@ -1438,6 +1485,9 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 		time.Sleep(300 * time.Millisecond)
 	}
 
+	if shown != nil {
+		return successResult("Element visible (scrolls ran out before centring)", shown)
+	}
 	return errorResult(fmt.Errorf("element not found"), fmt.Sprintf("Element not found after %d scrolls", maxScrolls))
 }
 
@@ -1784,8 +1834,46 @@ func (d *Driver) settlePage(maxMs int, what string) {
 	d.settleFor(maxMs, pageSettleQuietMs, what)
 }
 
+// settlingOn reports whether steps wait for the screen to settle; a
+// waitForIdleTimeout of 0 turns it off.
+func (d *Driver) settlingOn() bool {
+	return !(d.idleTimeoutSet && d.idleTimeoutMs == 0)
+}
+
+// tapChangeWait bounds how long a tap waits for the screen to start
+// changing. MAESTRO_DEVICELAB_TAP_CHANGE_WAIT_MS overrides it.
+var tapChangeWait = durationFromEnvMs("MAESTRO_DEVICELAB_TAP_CHANGE_WAIT_MS", 300*time.Millisecond)
+
+// tapChangePoll spaces the tree reads while a tap waits for its change.
+const tapChangePoll = 25 * time.Millisecond
+
+// waitForTapChange returns as soon as the screen differs from before, the
+// tree read before the tap, or after tapChangeWait when the tap changed
+// nothing. The settle before the next step then waits for the change to
+// finish.
+func (d *Driver) waitForTapChange(before uint64) {
+	start := time.Now()
+	deadline := start.Add(tapChangeWait)
+	for time.Now().Before(deadline) {
+		if h, err := d.client.TreeHash(); err != nil || h != before {
+			return
+		}
+		time.Sleep(tapChangePoll)
+	}
+	logger.Debug("[devicelab] tap: screen unchanged after %v", time.Since(start).Round(time.Millisecond))
+}
+
+func durationFromEnvMs(name string, def time.Duration) time.Duration {
+	if v := os.Getenv(name); v != "" {
+		if ms, err := strconv.Atoi(v); err == nil && ms >= 0 {
+			return time.Duration(ms) * time.Millisecond
+		}
+	}
+	return def
+}
+
 func (d *Driver) settleFor(maxMs, quietMs int, what string) {
-	if d.idleTimeoutSet && d.idleTimeoutMs == 0 {
+	if !d.settlingOn() {
 		return
 	}
 	if settled, err := d.client.WaitForSettle(maxMs, quietMs); err != nil {

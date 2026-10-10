@@ -109,6 +109,10 @@ Examples:
 			Name:  "flatten",
 			Usage: "Don't create timestamp subfolder (requires --output)",
 		},
+		&cli.IntFlag{
+			Name:  "retries",
+			Usage: "Run flows that fail again, up to N more times, in the same run (the device agent stays up; the report keeps every attempt)",
+		},
 		&cli.BoolFlag{
 			Name:  "retry-failed",
 			Usage: "Run only the flows that failed in the previous run (looks for the last report under the same --output directory)",
@@ -144,6 +148,7 @@ Examples:
 		},
 		&cli.StringFlag{
 			Name:    "window-size",
+			Aliases: []string{"screen-size"},
 			Usage:   "Browser viewport as WxH, e.g. 390x844 (web only, default 1280x800). Lets one suite run against phone, tablet and desktop breakpoints.",
 			EnvVars: []string{"MAESTRO_WINDOW_SIZE"},
 		},
@@ -213,6 +218,41 @@ Examples:
 		// Emulator management flags (start-emulator, auto-start-emulator,
 		// shutdown-after, boot-timeout) are global flags defined in cli.go.
 
+		// Maestro's `test` options, so a command written for Maestro runs as
+		// it is.
+		&cli.StringFlag{
+			Name:  "format",
+			Usage: "As Maestro: junit or html also writes that report to --output <file> (default report.xml / report.html); the full reports then go to --test-output-dir (default ./reports)",
+		},
+		&cli.StringFlag{
+			Name:  "test-output-dir",
+			Usage: "As Maestro: directory for the reports and artifacts (the same as --output when --format is not given)",
+		},
+		&cli.StringFlag{
+			Name:  "debug-output",
+			Usage: "As Maestro: directory for the logs and artifacts; used for the reports when --test-output-dir is not given",
+		},
+		&cli.BoolFlag{
+			Name:  "flatten-debug-output",
+			Usage: "As Maestro: no timestamp subfolder (the same as --flatten)",
+		},
+		&cli.IntFlag{
+			Name:    "shard-split",
+			Aliases: []string{"shards", "s"},
+			Usage:   "As Maestro: split the flows across N devices (the same as --parallel)",
+		},
+		&cli.IntFlag{
+			Name:   "shard-all",
+			Usage:  "Maestro's run-every-flow-on-each-device mode; not supported (use --parallel to split flows)",
+			Hidden: true,
+		},
+		&cli.StringFlag{Name: "test-suite-name", Hidden: true},
+		&cli.BoolFlag{Name: "reinstall-driver", Hidden: true},
+		&cli.BoolFlag{Name: "no-reinstall-driver", Hidden: true},
+		&cli.BoolFlag{Name: "headless", Hidden: true},
+		&cli.BoolFlag{Name: "analyze", Hidden: true},
+		&cli.StringFlag{Name: "api-key", Hidden: true},
+		&cli.StringFlag{Name: "api-url", Hidden: true},
 	},
 	Action: runTest,
 }
@@ -515,7 +555,14 @@ type RunConfig struct {
 	// ReportBaseDir is the root the runner writes runs under (--output, or
 	// ./reports) — where --retry-failed looks for the previous run's report.
 	ReportBaseDir string
-	RetryFailed   bool // Narrow the selection to flows that failed in the previous run
+	// ReportFile is where Maestro's --format/--output asked for the report;
+	// the JUnit (.xml) or HTML report is copied there. Empty means none.
+	ReportFile  string
+	RetryFailed bool // Narrow the selection to flows that failed in the previous run
+	Retries     int  // Run failing flows again, up to this many more times, in the same run
+	// ShareHierarchy makes a test run answer `hierarchy` for its device
+	// (see hierarchy_share.go); off for the hierarchy command itself.
+	ShareHierarchy bool
 
 	// Parallelization
 	Parallel int // Number of devices to use (0 = single device mode)
@@ -682,15 +729,36 @@ func runTest(c *cli.Context) error {
 	// Parse environment variables
 	env := parseEnvVars(takeEnvValues(c))
 
+	if getInt("shard-all") > 0 {
+		return fmt.Errorf("--shard-all (every flow on each device) is not supported; use --parallel N to split the flows across N devices")
+	}
+
+	// Maestro's --format makes --output the report file; the reports
+	// directory then comes from --test-output-dir or --debug-output.
+	base, reportFile, err := resolveMaestroOutput(getString("format"), getString("output"),
+		getString("test-output-dir"), getString("debug-output"))
+	if err != nil {
+		return err
+	}
+	flatten := getBool("flatten") || getBool("flatten-debug-output")
+	if flatten && base == "" && !c.IsSet("flatten") {
+		flatten = false // Maestro allows --flatten-debug-output alone
+	}
+
 	// Resolve output directory
-	outputDir, err := resolveOutputDir(getString("output"), getBool("flatten"))
+	outputDir, err := resolveOutputDir(base, flatten)
 	if err != nil {
 		return err
 	}
 
+	parallel := getInt("parallel")
+	if parallel == 0 {
+		parallel = getInt("shard-split")
+	}
+
 	// The base directory (before any timestamp subfolder) is where
 	// --retry-failed looks for the previous run's report.
-	reportBaseDir := getString("output")
+	reportBaseDir := base
 	if reportBaseDir == "" {
 		reportBaseDir = "./reports"
 	}
@@ -763,8 +831,11 @@ func runTest(c *cli.Context) error {
 		ExcludeTags:        getStringSlice("exclude-tags"),
 		OutputDir:          outputDir,
 		ReportBaseDir:      reportBaseDir,
+		ReportFile:         reportFile,
 		RetryFailed:        getBool("retry-failed"),
-		Parallel:           getInt("parallel"),
+		Retries:            getInt("retries"),
+		ShareHierarchy:     true,
+		Parallel:           parallel,
 		Continuous:         getBool("continuous"),
 		Headed:             getBool("headed"),
 		Browser:            getString("browser"),
@@ -806,6 +877,12 @@ func runTest(c *cli.Context) error {
 		RecordMode:         videoMode,
 	}
 
+	// A --device without --platform: Maestro takes the platform from the
+	// device, so `maestro --device <simulator> test …` (Expo's e2e harness)
+	// runs on iOS. Here it ran on Android and timed out waiting for a device
+	// with that id.
+	inferPlatformFromDevice(cfg)
+
 	// disableAnimations: the CLI flag, or Maestro's workspace platform option.
 	if !cfg.DisableAnimations && workspaceConfig != nil {
 		platform := cfg.Platform
@@ -835,6 +912,66 @@ func runTest(c *cli.Context) error {
 	}
 
 	return executeTest(cfg)
+}
+
+// inferPlatformFromDevice sets the platform to ios when none was given and
+// the first --device is an iOS simulator or iPhone.
+func inferPlatformFromDevice(cfg *RunConfig) {
+	if cfg.Platform == "" && len(cfg.Devices) > 0 && isIOSDeviceID(cfg.Devices[0]) {
+		cfg.Platform = "ios"
+		logger.Info("--device %s is an iOS device; running on iOS", cfg.Devices[0])
+	}
+}
+
+// resolveMaestroOutput maps Maestro's report options onto ours. Without
+// --format, --output is our reports directory, as before. With --format junit
+// or html, --output is the report file (default report.xml or report.html,
+// as Maestro writes), and the reports directory is --test-output-dir, else
+// --debug-output, else the default. It returns the reports directory ("" for
+// the default) and the report file ("" for none).
+func resolveMaestroOutput(format, output, testOutputDir, debugOutput string) (string, string, error) {
+	dir := testOutputDir
+	if dir == "" {
+		dir = debugOutput
+	}
+	switch strings.ToLower(format) {
+	case "", "noop":
+		if output != "" {
+			dir = output
+		}
+		return dir, "", nil
+	case "junit":
+		if output == "" {
+			output = "report.xml"
+		}
+		return dir, output, nil
+	case "html", "html-detailed":
+		if output == "" {
+			output = "report.html"
+		}
+		return dir, output, nil
+	default:
+		return "", "", fmt.Errorf("--format %q: use junit, html or noop", format)
+	}
+}
+
+// writeReportFile copies the generated report Maestro's --format asked for
+// to the --output file.
+func writeReportFile(cfg *RunConfig) error {
+	src := filepath.Join(cfg.OutputDir, "junit-report.xml")
+	if strings.HasSuffix(strings.ToLower(cfg.ReportFile), ".html") {
+		src = filepath.Join(cfg.OutputDir, "report.html")
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	if dir := filepath.Dir(cfg.ReportFile); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(cfg.ReportFile, data, 0o644)
 }
 
 // resolveOutputDir determines the output directory based on flags.
@@ -1091,6 +1228,14 @@ func executeTest(cfg *RunConfig) error {
 		fmt.Printf("  %s⚠%s Warning: failed to generate Allure report: %v\n", color(colorYellow), color(colorReset), err)
 	}
 
+	if cfg.ReportFile != "" {
+		if err := writeReportFile(cfg); err != nil {
+			fmt.Printf("  %s⚠%s Warning: failed to write %s: %v\n", color(colorYellow), color(colorReset), cfg.ReportFile, err)
+		} else {
+			fmt.Printf("  Report: %s\n", cfg.ReportFile)
+		}
+	}
+
 	// Report result to cloud provider (if detected)
 	if cfg.CloudProvider != nil {
 		cloudResult := &cloud.TestResult{
@@ -1156,6 +1301,24 @@ func executeTest(cfg *RunConfig) error {
 	return nil
 }
 
+// noFlowsMatchTagsError is Maestro's error for a tag filter that leaves no
+// flows, word for word: scripts look for "did not match any Flows" and treat
+// it as "nothing to run here" (react-native-enriched-html's run-tests.sh).
+func noFlowsMatchTagsError(include, exclude []string) error {
+	list := func(tags []string) string {
+		if len(tags) == 0 {
+			return "[]"
+		}
+		lines := make([]string, len(tags))
+		for i, t := range tags {
+			lines[i] = "- " + t
+		}
+		return strings.Join(lines, "\n")
+	}
+	return fmt.Errorf("Include / Exclude tags did not match any Flows:\n\nInclude Tags:\n%s\n\nExclude Tags:\n%s",
+		list(include), list(exclude))
+}
+
 // validateAndParseFlows validates and parses all flow files.
 func validateAndParseFlows(cfg *RunConfig) ([]flow.Flow, error) {
 	v := validator.New(cfg.IncludeTags, cfg.ExcludeTags)
@@ -1177,6 +1340,9 @@ func validateAndParseFlows(cfg *RunConfig) ([]flow.Flow, error) {
 	}
 
 	if len(allTestCases) == 0 {
+		if len(cfg.IncludeTags) > 0 || len(cfg.ExcludeTags) > 0 {
+			return nil, noFlowsMatchTagsError(cfg.IncludeTags, cfg.ExcludeTags)
+		}
 		return nil, fmt.Errorf("no test flows found")
 	}
 
@@ -1533,6 +1699,7 @@ func executeSingleDevice(cfg *RunConfig, flows []flow.Flow) (*executor.RunResult
 	runner := executor.New(driver, executor.RunnerConfig{
 		OutputDir:          cfg.OutputDir,
 		Parallelism:        0,
+		Retries:            cfg.Retries,
 		Artifacts:          cfg.Artifacts,
 		UpdateScreenshots:  cfg.UpdateScreenshots,
 		Record:             cfg.Record,
@@ -1967,6 +2134,7 @@ func executeAppiumSingleSession(cfg *RunConfig, flows []flow.Flow) (*executor.Ru
 	runner := executor.New(driver, executor.RunnerConfig{
 		OutputDir:          cfg.OutputDir,
 		Parallelism:        0,
+		Retries:            cfg.Retries,
 		Artifacts:          cfg.Artifacts,
 		UpdateScreenshots:  cfg.UpdateScreenshots,
 		Record:             cfg.Record,
@@ -2860,6 +3028,7 @@ func createParallelRunner(cfg *RunConfig, workers []executor.DeviceWorker, platf
 	runnerConfig := executor.RunnerConfig{
 		OutputDir:          cfg.OutputDir,
 		Parallelism:        0,
+		Retries:            cfg.Retries,
 		Artifacts:          cfg.Artifacts,
 		UpdateScreenshots:  cfg.UpdateScreenshots,
 		Record:             cfg.Record,

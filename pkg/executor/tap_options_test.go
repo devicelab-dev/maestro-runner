@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -368,5 +369,57 @@ func TestExecuteTapWithOptions_WaitToSettleNative(t *testing.T) {
 	}
 	if n := atomic.LoadInt32(&hierarchyCalls); n != 0 {
 		t.Errorf("hierarchy read %d times; the native settle replaces it", n)
+	}
+}
+
+// waitingDriver is a driver that waits for the screen around taps.
+type waitingDriver struct{ mockDriver }
+
+func (d *waitingDriver) WaitsAroundTaps() bool { return true }
+
+// Each tap of a repeat goes to the driver as a copy that carries its place
+// in the repeat; the flow's own step is left as it was.
+func TestExecuteTapWithOptions_RepeatTapsCarryTheirPlace(t *testing.T) {
+	var seen [][2]int
+	driver := &mockDriver{executeFunc: func(step flow.Step) *core.CommandResult {
+		tap := step.(*flow.TapOnStep)
+		seen = append(seen, [2]int{tap.RepeatIndex, tap.RepeatCount})
+		return &core.CommandResult{Success: true}
+	}}
+	fr := &FlowRunner{ctx: context.Background(), driver: driver}
+
+	step := &flow.TapOnStep{Repeat: 3}
+	fr.executeTapWithOptions(step, tapOptions{Repeat: 3})
+	if want := [][2]int{{0, 3}, {1, 3}, {2, 3}}; fmt.Sprint(seen) != fmt.Sprint(want) {
+		t.Errorf("taps carried %v, want %v", seen, want)
+	}
+	if step.RepeatIndex != 0 || step.RepeatCount != 0 {
+		t.Errorf("the flow's step was changed: %+v", step)
+	}
+
+	seen = nil
+	fr.executeTapWithOptions(&flow.TapOnStep{}, tapOptions{DelayMs: 100})
+	if fmt.Sprint(seen) != "[[0 0]]" {
+		t.Errorf("a single tap carried %v, want no place in a repeat", seen)
+	}
+}
+
+// With a driver that waits around taps, the whole delay separates the taps
+// even when the first Execute was slow (its settle for the step before).
+func TestExecuteTapWithOptions_RepeatDelayAfterSlowFirstTap(t *testing.T) {
+	var at []time.Time
+	d := &waitingDriver{}
+	d.executeFunc = func(step flow.Step) *core.CommandResult {
+		if len(at) == 0 {
+			time.Sleep(300 * time.Millisecond) // the settle before the first tap
+		}
+		at = append(at, time.Now())
+		return &core.CommandResult{Success: true}
+	}
+	fr := &FlowRunner{ctx: context.Background(), driver: d}
+
+	fr.executeTapWithOptions(&flow.TapOnStep{}, tapOptions{Repeat: 2, DelayMs: 200})
+	if gap := at[1].Sub(at[0]); gap < 200*time.Millisecond {
+		t.Errorf("taps %v apart, want at least the 200ms delay", gap)
 	}
 }

@@ -161,7 +161,7 @@ func tcpClientFromServer(t *testing.T, server *httptest.Server) *Client {
 	}
 	conn.SetReadLimit(32 * 1024 * 1024)
 	client.conn = conn
-	go client.readLoop()
+	go client.readLoop(conn, client.ctx, client.done)
 
 	return client
 }

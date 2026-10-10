@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 )
@@ -117,6 +118,7 @@ func newTestDriver(t *testing.T, handler func(string, Args) (*Response, error)) 
 	d := NewDriver(fa, &core.PlatformInfo{Platform: "ios", IsSimulator: true, ScreenWidth: 400, ScreenHeight: 800}, "SIM-1")
 	sl := &simctlLog{answers: map[string]string{}, fail: map[string]error{}}
 	d.runSimctl = sl.run
+	d.runSimctlWithin = func(_ time.Duration, args ...string) (string, error) { return sl.run(args...) }
 	d.openWeb = func() (webPages, error) { return nil, errNoInspector }
 	d.SetFindTimeout(300)
 	d.SetOptionalFindTimeout(200)

@@ -179,6 +179,32 @@ type TapOnStep struct {
 	RetryTapIfNoChange    *bool    `yaml:"retryTapIfNoChange"`
 	WaitUntilVisible      *bool    `yaml:"waitUntilVisible"`
 	WaitToSettleTimeoutMs int      `yaml:"waitToSettleTimeoutMs"`
+
+	// Set by the executor, never by YAML: this tap is tap RepeatIndex (from
+	// 0) of RepeatCount in a tapOn with repeat:. See RepeatTapAfterFirst.
+	RepeatIndex int `yaml:"-" json:"-"`
+	RepeatCount int `yaml:"-" json:"-"`
+}
+
+// The taps of a tapOn with repeat: go out back to back, delay: apart, as
+// Maestro sends them: a driver that waits for the screen around taps waits
+// before the first tap and after the last, not between them. Waiting between
+// them spaced expo-video's two fullscreen-exit taps (delay: 400) seconds
+// apart on a playing video, which never settles, so the player's controls hid
+// again before the second tap.
+
+// RepeatTapAfterFirst reports whether step is a tap of a repeat: other than
+// the first; a driver does not settle before it.
+func RepeatTapAfterFirst(step Step) bool {
+	t, ok := step.(*TapOnStep)
+	return ok && t.RepeatCount > 1 && t.RepeatIndex > 0
+}
+
+// RepeatTapBeforeLast reports whether step is a tap of a repeat: other than
+// the last; a driver does not wait for the screen to change after it.
+func RepeatTapBeforeLast(step Step) bool {
+	t, ok := step.(*TapOnStep)
+	return ok && t.RepeatCount > 1 && t.RepeatIndex < t.RepeatCount-1
 }
 
 // DoubleTapOnStep double taps on an element (alias for tapOn with repeat=2).

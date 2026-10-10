@@ -135,6 +135,25 @@ func (fr *FlowRunner) waitForSettle(timeoutMs int) []byte {
 	return hierarchy
 }
 
+// repeatTap is tap i of count of a tapOn with repeat:, as a copy of the step
+// that carries its place; any other step is returned as it is.
+func repeatTap(step flow.Step, i, count int) flow.Step {
+	t, ok := step.(*flow.TapOnStep)
+	if !ok || count <= 1 {
+		return step
+	}
+	c := *t
+	c.RepeatIndex, c.RepeatCount = i, count
+	return &c
+}
+
+// waitsAroundTaps reports whether the driver waits for the screen to settle
+// before a tap (DeviceLab Android and iOS, WDA).
+func waitsAroundTaps(driver core.Driver) bool {
+	w, ok := core.Unwrap(driver).(interface{ WaitsAroundTaps() bool })
+	return ok && w.WaitsAroundTaps()
+}
+
 // executeTapWithOptions wraps a tap step with repeat, delay,
 // retryTapIfNoChange, and waitToSettleTimeoutMs logic.
 //
@@ -194,17 +213,26 @@ func (fr *FlowRunner) executeTapWithOptions(step flow.Step, opts tapOptions) *co
 			}
 		}
 
-		// Execute tap (possibly repeated)
+		// Execute tap (possibly repeated). Each tap of a repeat carries its
+		// place in it (flow.RepeatTapAfterFirst), so a driver that waits for
+		// the screen around taps sends them back to back, as Maestro does.
 		for i := 0; i < repeatCount; i++ {
 			tapStart := time.Now()
-			lastResult = fr.driver.Execute(step)
+			lastResult = fr.driver.Execute(repeatTap(step, i, repeatCount))
 			if !lastResult.Success {
 				return lastResult
 			}
 
-			// Delay between repeated taps (not after the last one)
+			// Delay between repeated taps (not after the last one). Maestro
+			// counts it from the tap, less the time the tap took. The first
+			// Execute of a driver that waits around taps can include a
+			// settle for the step before (seconds on a playing video), which
+			// used up the delay, so after it the whole delay follows.
 			if repeatCount > 1 && i < repeatCount-1 {
-				sleepTime := time.Duration(delayMs)*time.Millisecond - time.Since(tapStart)
+				sleepTime := time.Duration(delayMs) * time.Millisecond
+				if !(i == 0 && waitsAroundTaps(fr.driver)) {
+					sleepTime -= time.Since(tapStart)
+				}
 				if sleepTime > 0 {
 					time.Sleep(sleepTime)
 				}

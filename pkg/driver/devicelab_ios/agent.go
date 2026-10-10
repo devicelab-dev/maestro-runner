@@ -62,6 +62,10 @@ type Agent struct {
 	device bool
 	ids    bundleIDs
 
+	// keptPid is the xcodebuild of an agent an earlier run left running and
+	// this one re-attached to, stopped if the agent has to be restarted.
+	keptPid int
+
 	mu       sync.Mutex
 	xcodeCmd *exec.Cmd
 	logFile  *os.File
@@ -108,6 +112,9 @@ func stateDir(udid string) string {
 type agentState struct {
 	Port    int    `json:"port"`
 	Version string `json:"version"`
+	// Pid is the xcodebuild the agent runs under, when it was started that
+	// way: a later run that finds the agent stuck stops it by this.
+	Pid int `json:"pid,omitempty"`
 }
 
 func loadState(udid string) (agentState, bool) {
@@ -183,15 +190,20 @@ func StartAgent(ctx context.Context, opts AgentOptions) (*Agent, *Client, error)
 	}
 	a := &Agent{opts: opts, version: m.Version}
 
-	// Re-attach to an agent a previous run left running.
+	// Re-attach to an agent a previous run left running, if it still does
+	// real work: a stuck agent answers status but not a snapshot, and
+	// re-attaching to one failed every later flow (RNTester iOS on CI).
 	if s, ok := loadState(opts.UDID); ok && s.Version == m.Version {
 		c := NewClient(s.Port)
-		if a.alive(ctx, c, 2*time.Second) {
-			a.port, a.mode = s.Port, "reattached"
+		if a.alive(ctx, c, 2*time.Second) && a.working(ctx, c, reattachProbeWait) {
+			a.port, a.mode, a.keptPid = s.Port, "reattached", s.Pid
 			logger.Info("[devicelab-ios] re-attached to agent %s on port %d", m.Version, s.Port)
 			c.SetReviver(a.revive)
 			return a, c, nil
 		}
+		logger.Info("[devicelab-ios] agent on port %d left by an earlier run does not answer; starting a new one", s.Port)
+		killPidGroup(s.Pid)
+		_ = os.Remove(filepath.Join(stateDir(opts.UDID), "agent.json"))
 	}
 
 	if err := a.install(ctx, m.Version); err != nil {
@@ -206,6 +218,19 @@ func StartAgent(ctx context.Context, opts AgentOptions) (*Agent, *Client, error)
 }
 
 // alive reports whether the agent at c answers status within wait.
+// reattachProbeWait bounds the snapshot a kept agent must answer before a
+// run re-attaches to it.
+var reattachProbeWait = 10 * time.Second
+
+// working reports whether the agent answers a real request, a one-node
+// snapshot, within wait.
+func (a *Agent) working(ctx context.Context, c *Client, wait time.Duration) bool {
+	callCtx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	resp, err := c.Call(callCtx, "snapshot", &Args{MaxNodes: 1})
+	return err == nil && resp.OK
+}
+
 func (a *Agent) alive(ctx context.Context, c *Client, wait time.Duration) bool {
 	callCtx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
@@ -246,6 +271,13 @@ func (a *Agent) launch(ctx context.Context) (*Client, error) {
 	// to xcodebuild, instead of paying the simctl wait on every run.
 	noSimctl := filepath.Join(stateDir(a.opts.UDID), "simctl-failed-"+a.version)
 	skipSimctl := a.opts.Mode == ModeAuto && pathExists(noSimctl)
+	if skipSimctl {
+		// On the console too: in CI the log file is often not kept, and this
+		// is why every run then pays a full agent start.
+		reason, _ := os.ReadFile(noSimctl)
+		fmt.Fprintf(os.Stderr, "  ⚠ simctl launch failed on this simulator before (%s); starting the agent with xcodebuild\n",
+			strings.TrimSpace(oneLine(string(reason))))
+	}
 	if (a.opts.Mode == ModeAuto && !skipSimctl) || a.opts.Mode == ModeSimctl {
 		if err := a.launchSimctl(ctx, c); err == nil {
 			a.mode = ModeSimctl
@@ -254,6 +286,7 @@ func (a *Agent) launch(ctx context.Context) (*Client, error) {
 		} else {
 			errs = append(errs, "simctl launch: "+err.Error())
 			logger.Info("[devicelab-ios] simctl launch did not bring the agent up (%v)", err)
+			fmt.Fprintf(os.Stderr, "  ⚠ simctl launch did not bring the agent up (%s); trying xcodebuild\n", oneLine(err.Error()))
 			if a.opts.Mode == ModeAuto {
 				_ = os.MkdirAll(filepath.Dir(noSimctl), 0o755)
 				_ = os.WriteFile(noSimctl, []byte(err.Error()), 0o644)
@@ -263,7 +296,13 @@ func (a *Agent) launch(ctx context.Context) (*Client, error) {
 	if a.opts.Mode == ModeAuto || a.opts.Mode == ModeXcodebuild {
 		if err := a.launchXcodebuild(ctx, c); err == nil {
 			a.mode = ModeXcodebuild
-			saveState(a.opts.UDID, agentState{Port: port, Version: a.version})
+			pid := 0
+			a.mu.Lock()
+			if a.xcodeCmd != nil && a.xcodeCmd.Process != nil {
+				pid = a.xcodeCmd.Process.Pid
+			}
+			a.mu.Unlock()
+			saveState(a.opts.UDID, agentState{Port: port, Version: a.version, Pid: pid})
 			return c, nil
 		} else {
 			errs = append(errs, "xcodebuild: "+err.Error())
@@ -279,6 +318,9 @@ func (a *Agent) launchSimctl(ctx context.Context, c *Client) error {
 	_, _ = simctl(ctx, 15*time.Second, "terminate", a.opts.UDID, runnerBundleID)
 	cmd := exec.CommandContext(ctx, "xcrun", "simctl", "launch", a.opts.UDID, runnerBundleID)
 	cmd.Env = append(os.Environ(), fmt.Sprintf("SIMCTL_CHILD_DL_AGENT_PORT=%d", a.port))
+	if os.Getenv("SIMCTL_CHILD_"+snapshotDepthVar) == "" {
+		cmd.Env = append(cmd.Env, "SIMCTL_CHILD_"+snapshotDepthVar+"="+agentSnapshotMaxDepth())
+	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -296,6 +338,7 @@ func (a *Agent) launchXcodebuild(ctx context.Context, c *Client) error {
 	}
 	logDir := stateDir(a.opts.UDID)
 	_ = os.MkdirAll(logDir, 0o755)
+	keepPreviousLog(filepath.Join(logDir, "xcodebuild.log"), keptXcodebuildLogs)
 	logFile, err := os.Create(filepath.Join(logDir, "xcodebuild.log"))
 	if err != nil {
 		return err
@@ -322,6 +365,21 @@ func (a *Agent) launchXcodebuild(ctx context.Context, c *Client) error {
 	return nil
 }
 
+// keptXcodebuildLogs is how many earlier agent launches keep their
+// xcodebuild log: a restart used to overwrite the log that said why the
+// agent before it went away.
+const keptXcodebuildLogs = 5
+
+// keepPreviousLog renames path to path.1 (path.1 to path.2, and so on),
+// keeping at most keep earlier copies.
+func keepPreviousLog(path string, keep int) {
+	_ = os.Remove(fmt.Sprintf("%s.%d", path, keep))
+	for i := keep - 1; i >= 1; i-- {
+		_ = os.Rename(fmt.Sprintf("%s.%d", path, i), fmt.Sprintf("%s.%d", path, i+1))
+	}
+	_ = os.Rename(path, path+".1")
+}
+
 // xctestrunFor writes a copy of agent.xctestrun next to the apps with the
 // port set, one per port so parallel simulators never share a file.
 func (a *Agent) xctestrunFor(port int) (string, error) {
@@ -338,6 +396,10 @@ func (a *Agent) xctestrunFor(port int) (string, error) {
 		path := fmt.Sprintf("%s.%s.DL_AGENT_PORT", testTargetName, key)
 		if out, err := exec.Command("plutil", "-replace", path, "-string", strconv.Itoa(port), dst).CombinedOutput(); err != nil {
 			return "", fmt.Errorf("set port in %s: %v: %s", dst, err, strings.TrimSpace(string(out)))
+		}
+		path = fmt.Sprintf("%s.%s.%s", testTargetName, key, snapshotDepthVar)
+		if out, err := exec.Command("plutil", "-replace", path, "-string", agentSnapshotMaxDepth(), dst).CombinedOutput(); err != nil {
+			return "", fmt.Errorf("set snapshot depth in %s: %v: %s", dst, err, strings.TrimSpace(string(out)))
 		}
 	}
 	return dst, nil
@@ -363,24 +425,78 @@ func (a *Agent) waitReady(ctx context.Context, c *Client, wait time.Duration, ex
 // revive restarts a dead agent (the Client's Reviver).
 func (a *Agent) revive(ctx context.Context) (int, error) {
 	logger.Info("[devicelab-ios] agent on port %d stopped answering; restarting it", a.port)
+	captureStall(a.opts.UDID, fmt.Sprintf("agent on port %d stopped answering", a.port))
 	a.stopXcodebuild()
+	if a.keptPid > 0 {
+		killPidGroup(a.keptPid) // the xcodebuild an earlier run left
+		a.keptPid = 0
+	}
 	if _, err := a.launch(ctx); err != nil {
 		return 0, err
 	}
 	return a.port, nil
 }
 
-// Release ends the run's hold on the agent. One started by simctl stays up
-// as a daemon for the next run to re-attach to; one this process runs under
-// xcodebuild cannot outlive it, so it is stopped. DEVICELAB_IOS_AGENT_KEEP=0
-// stops it either way.
-func (a *Agent) Release(ctx context.Context, c *Client) {
-	a.mu.Lock()
-	owned := a.xcodeCmd != nil
-	a.mu.Unlock()
-	if owned || os.Getenv("DEVICELAB_IOS_AGENT_KEEP") == "0" {
-		a.Stop(ctx, c)
+// snapshotDepthVar is the agent's accessibility-snapshot depth setting.
+const snapshotDepthVar = "DL_AGENT_SNAPSHOT_MAX_DEPTH"
+
+// agentSnapshotMaxDepth is the snapshot depth the agent is started with. With
+// a cap above 62, XCTest returns no elements at all for a screen nested deeper
+// than 62 levels, so a deep screen came back blank at the agent's own default
+// of 100 (#171, measured on iOS 27). 62 is the deepest cap that still returns
+// it, and is the same as 100 for any screen 100 worked on. Set
+// DL_AGENT_SNAPSHOT_MAX_DEPTH (or its SIMCTL_CHILD_ form) to override.
+func agentSnapshotMaxDepth() string {
+	for _, name := range []string{snapshotDepthVar, "SIMCTL_CHILD_" + snapshotDepthVar} {
+		if v := os.Getenv(name); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				return strconv.Itoa(n)
+			}
+		}
 	}
+	return "62"
+}
+
+// Release ends the run's hold on the agent, which stays up for the next run
+// to re-attach to, however it was started: xcodebuild runs in its own
+// process group, so it outlives this process as a simctl-launched agent
+// does. Stopping it here made a harness that runs one process per flow
+// (React Native's iOS E2E) restart the agent for every flow when simctl
+// launch did not work on the machine. DEVICELAB_IOS_AGENT_KEEP=0 stops it.
+func (a *Agent) Release(ctx context.Context, c *Client) {
+	if os.Getenv("DEVICELAB_IOS_AGENT_KEEP") == "0" {
+		a.Stop(ctx, c)
+		return
+	}
+	a.mu.Lock()
+	cmd, logFile := a.xcodeCmd, a.logFile
+	a.xcodeCmd, a.logFile = nil, nil
+	a.mu.Unlock()
+	if logFile != nil {
+		_ = logFile.Close() // xcodebuild keeps its own descriptor
+	}
+	if cmd != nil && cmd.Process != nil {
+		watchKeptAgent(a.opts.UDID, cmd.Process.Pid)
+	}
+}
+
+// watchKeptAgent is watchXcodebuild; tests replace it.
+var watchKeptAgent = watchXcodebuild
+
+// watchXcodebuild starts a detached watcher that stops the xcodebuild
+// process group pid leads once the simulator is no longer booted: xcodebuild
+// does not exit when its simulator shuts down, and a kept agent must not
+// outlive it. The watcher ends by itself when xcodebuild does.
+func watchXcodebuild(udid string, pid int) {
+	script := fmt.Sprintf(`while kill -0 %[1]d 2>/dev/null && xcrun simctl list devices booted | grep -q %[2]q; do sleep 20; done
+kill -TERM -%[1]d 2>/dev/null; sleep 5; kill -KILL -%[1]d 2>/dev/null; exit 0`, pid, udid)
+	w := exec.Command("/bin/sh", "-c", script)
+	setProcessGroup(w)
+	if err := w.Start(); err != nil {
+		logger.Warn("[devicelab-ios] could not watch the kept agent (pid %d): %v", pid, err)
+		return
+	}
+	go func() { _ = w.Wait() }()
 }
 
 // Stop asks the agent to exit and ends an xcodebuild it was started by.
@@ -414,4 +530,12 @@ func simctl(ctx context.Context, timeout time.Duration, args ...string) (string,
 	defer cancel()
 	out, err := exec.CommandContext(c, "xcrun", append([]string{"simctl"}, args...)...).CombinedOutput()
 	return string(out), err
+}
+
+// oneLine is s up to its first line break, for a one-line console note.
+func oneLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }

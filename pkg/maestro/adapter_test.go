@@ -507,3 +507,31 @@ func TestAdapterStatus(t *testing.T) {
 		t.Error("expected ready=true")
 	}
 }
+
+// The agent says whether a field's text is its hint; an older agent does not.
+func TestAdapterActiveElementShowingHint(t *testing.T) {
+	yes, no := true, false
+	for _, tc := range []struct {
+		name           string
+		sent           *bool
+		showing, known bool
+	}{
+		{"showing its hint", &yes, true, true},
+		{"holds text", &no, false, true},
+		{"not reported", nil, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			adapter, cleanup := adapterWithMock(t, func(req Request) interface{} {
+				return ElementResult{ElementID: "a1", Text: "Email", ShowingHintText: tc.sent}
+			})
+			defer cleanup()
+			elem, err := adapter.ActiveElement()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if showing, known := elem.ShowingHint(); showing != tc.showing || known != tc.known {
+				t.Errorf("ShowingHint() = %v, %v; want %v, %v", showing, known, tc.showing, tc.known)
+			}
+		})
+	}
+}

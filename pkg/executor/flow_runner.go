@@ -75,7 +75,7 @@ func (fr *FlowRunner) Run() FlowResult {
 
 	// Apply CLI environment variables (from -e flags)
 	// These take precedence over system env, but flow-level env takes precedence over these
-	fr.script.SetVariables(fr.config.Env)
+	fr.script.SetExternalVariables(fr.config.Env)
 
 	// DEVICE_UDID: the device this flow runs on. The flow's own env: can
 	// still override it.
@@ -282,10 +282,16 @@ func (fr *FlowRunner) Run() FlowResult {
 
 		// Describe before executing: expansion rewrites the step in place, and
 		// the description is what the console shows.
-		desc := step.Describe()
+		describe, desc := fr.stepNames(step)
 
 		// Execute step
 		stepStatus, stepError, stepDuration := fr.executeStep(i, step)
+
+		// The report described the step before the run, with every ${NAME}
+		// as written; give it the flow values that are known now.
+		if describe != step.Describe() {
+			fr.flowWriter.CommandYAML(i, describe)
+		}
 
 		// Notify step complete
 		if fr.config.OnStepComplete != nil {
@@ -680,6 +686,8 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 	if result.Element != nil {
 		element = commandResultToElement(result)
 	}
+
+	fr.flowWriter.CommandLogs(idx, fr.script.TakeConsoleLogs())
 
 	// Update report - use CommandEndWithSubs for compound steps
 	switch step.(type) {
@@ -1482,21 +1490,17 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 	// report is built, so they showed `${PASSWORD}`; a sub-flow's steps were
 	// described here after ExpandStep had rewritten them, so the same step
 	// inside a runFlow showed the password itself.
-	desc := step.Describe()
+	describe, desc := fr.stepNames(step)
 
 	// For nested compound steps, we need to track their sub-commands separately
-	var nestedSubCommands []report.Command
+	var nestedSubCommands, parentSubCommands []report.Command
 	isCompoundStep := false
 	switch step.(type) {
 	case *flow.RepeatStep, *flow.RetryStep, *flow.RunFlowStep:
 		isCompoundStep = true
 		// Save parent's subCommands and start fresh for this nested compound step
-		parentSubCommands := fr.subCommands
+		parentSubCommands = fr.subCommands
 		fr.subCommands = nil
-		defer func() {
-			nestedSubCommands = fr.subCommands
-			fr.subCommands = parentSubCommands
-		}()
 	}
 
 	switch s := step.(type) {
@@ -1672,6 +1676,15 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 		fr.config.OnNestedStep(fr.depth, desc, result.Success, duration, errMsg)
 	}
 
+	// Back to the parent's list before recording this step in it. This was a
+	// defer, which ran after the append below: a runFlow, repeat or retry
+	// nested in another one was appended to its own list and then dropped,
+	// with its steps, from the report.
+	if isCompoundStep {
+		nestedSubCommands = fr.subCommands
+		fr.subCommands = parentSubCommands
+	}
+
 	// Add to parent's sub-commands for report
 	status := report.StatusPassed
 	if !result.Success {
@@ -1684,7 +1697,7 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 		Index:     len(fr.subCommands),
 		Type:      string(step.Type()),
 		Label:     step.Label(),
-		YAML:      desc,
+		YAML:      describe,
 		Status:    status,
 		StartTime: &start,
 		EndTime:   &now,
@@ -1703,6 +1716,7 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 	if isCompoundStep {
 		cmd.SubCommands = nestedSubCommands
 	}
+	cmd.Logs = fr.script.TakeConsoleLogs()
 
 	// A failed nested step (inside runFlow / repeat / retry) now gets its own
 	// screenshot + hierarchy, the same post-mortem a failed top-level step has.
@@ -1970,4 +1984,16 @@ func (fr *FlowRunner) deviceID() string {
 		return info.DeviceID
 	}
 	return ""
+}
+
+// stepNames returns the step's description and its console line: its label
+// when the flow gives one, as the report and the summary show it, else its
+// description. Both fill in the ${NAME}s defined in the flow files, never
+// the ones given from outside (see ScriptEngine.DisplayText).
+func (fr *FlowRunner) stepNames(step flow.Step) (describe, title string) {
+	describe = fr.script.DisplayText(step.Describe())
+	if label := step.Label(); label != "" {
+		return describe, fr.script.DisplayText(label)
+	}
+	return describe, describe
 }

@@ -82,6 +82,9 @@ func (a *Adapter) newElement(result ElementResult) *uiautomator2.Element {
 			Height: result.Bounds.Height,
 		},
 	)
+	if result.ShowingHintText != nil {
+		elem.SetShowingHint(*result.ShowingHintText)
+	}
 	a.wireElementActions(elem, result.ElementID)
 	elem.SetTextFunc(func() (string, error) {
 		return a.focusedFieldText(result.ElementID, result.Bounds)

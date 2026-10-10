@@ -352,3 +352,33 @@ func TestScrollUntilVisibleTakesOnScreenCopy(t *testing.T) {
 		t.Errorf("swiped %d times; the on-screen copy was already there", swipes)
 	}
 }
+
+// The taps of a tapOn with repeat: after the first do not settle before
+// them, so they go out back to back as in Maestro.
+func TestRepeatTapsDoNotSettleBetween(t *testing.T) {
+	var mu sync.Mutex
+	shots := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/screenshot") {
+			mu.Lock()
+			shots++
+			mu.Unlock()
+			jsonResponse(w, map[string]interface{}{"value": base64.StdEncoding.EncodeToString([]byte("same"))})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	d := createTestDriver(server)
+
+	d.Execute(&flow.SwipeStep{Direction: "up"}) // moves the screen
+	d.Execute(&flow.TapOnStep{Point: "50%,50%", RepeatIndex: 0, RepeatCount: 2})
+	if shots != 2 {
+		t.Fatalf("screenshots = %d, want 2 (the first tap of the repeat settles)", shots)
+	}
+	d.Execute(&flow.TapOnStep{Point: "50%,50%", RepeatIndex: 1, RepeatCount: 2})
+	if shots != 2 {
+		t.Errorf("screenshots = %d, want 2: the second tap of the repeat settled", shots)
+	}
+}

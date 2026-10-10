@@ -15,6 +15,9 @@ type Element struct {
 	// from a single round-trip, avoiding extra HTTP calls for text/rect.
 	cachedText *string
 	cachedRect *ElementRect
+	// showingHint is whether cachedText is the field's hint; nil when the
+	// source did not say.
+	showingHint *bool
 
 	// Action callbacks — when set, used instead of HTTP calls.
 	// Used by the Maestro WebSocket adapter to route actions through WebSocket.
@@ -40,6 +43,18 @@ func NewCachedElement(id string, text string, rect ElementRect) *Element {
 		cachedText: &text,
 		cachedRect: &rect,
 	}
+}
+
+// SetShowingHint records whether the cached text is the field's hint.
+func (e *Element) SetShowingHint(showing bool) { e.showingHint = &showing }
+
+// ShowingHint reports whether the cached text is the field's hint, and
+// whether that is known at all.
+func (e *Element) ShowingHint() (showing, known bool) {
+	if e.showingHint == nil {
+		return false, false
+	}
+	return *e.showingHint, true
 }
 
 // SetClickFunc sets the callback for Click().

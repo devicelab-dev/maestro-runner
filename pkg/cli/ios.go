@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -625,6 +626,27 @@ func autoDetectIOSDevices(count int) ([]string, error) {
 	}
 
 	return devices, nil
+}
+
+// isIOSDeviceID reports whether id is an iOS simulator or a connected
+// iPhone, for a --device given without --platform. Only macOS has either.
+var isIOSDeviceID = func(id string) bool {
+	if runtime.GOOS != "darwin" || id == "" {
+		return false
+	}
+	if isIOSSimulator(id) {
+		return true
+	}
+	udids, err := listPhysicalIOSUDIDs()
+	if err != nil {
+		return false
+	}
+	for _, u := range udids {
+		if strings.EqualFold(u, id) {
+			return true
+		}
+	}
+	return false
 }
 
 // listPhysicalIOSUDIDs returns the UDIDs of every physical iOS device attached

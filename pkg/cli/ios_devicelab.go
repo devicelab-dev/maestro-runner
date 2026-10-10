@@ -2,12 +2,16 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	dlios "github.com/devicelab-dev/maestro-runner/pkg/driver/devicelab_ios"
 	"github.com/devicelab-dev/maestro-runner/pkg/flutter"
+	"github.com/devicelab-dev/maestro-runner/pkg/logger"
 )
 
 // createDevicelabIOSDriver constructs the default iOS driver (--driver devicelab):
@@ -33,6 +37,9 @@ func createDevicelabIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	}
 	if !isIOSSimulator(udid) {
 		return createDevicelabIOSDeviceDriver(cfg, udid)
+	}
+	if err := waitForSimulatorBoot(udid, simulatorBootWait); err != nil {
+		return nil, nil, err
 	}
 
 	if cfg.AppFile != "" && !cfg.NoAppInstall {
@@ -118,4 +125,73 @@ func createDevicelabIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		}
 	}
 	return driver, cleanup, nil
+}
+
+// simulatorBootWait bounds the wait for a simulator that is still booting.
+// GitHub's macOS runners took 3-5 minutes to finish a boot.
+var simulatorBootWait = 15 * time.Minute
+
+// simctlBootstatus runs `simctl bootstatus` (no -b: a shut-down simulator is
+// not booted by it); a variable so tests can stand in for it.
+var simctlBootstatus = func(ctx context.Context, udid string) ([]byte, error) {
+	return exec.CommandContext(ctx, "xcrun", "simctl", "bootstatus", udid).CombinedOutput()
+}
+
+// waitForSimulatorBoot waits for a simulator to finish booting. `simctl boot`
+// returns, and simctl lists the simulator as Booted, minutes before the boot
+// has finished on a slow machine (GitHub: boot 7-14s, bootstatus another
+// 173s); a CI step that booted and moved on handed over a simulator where
+// installing the app hung. On a fully booted simulator bootstatus answers at
+// once ("already booted"); a shut-down one is left alone, as before.
+func waitForSimulatorBoot(udid string, timeout time.Duration) error {
+	if state := simulatorState(udid); state != "Booting" && state != "Booted" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	start := time.Now()
+	out, err := simctlBootstatus(ctx, udid)
+	if ctx.Err() != nil {
+		return fmt.Errorf("simulator %s did not finish booting within %s", udid, timeout)
+	}
+	if err != nil {
+		// Not worth failing the run over: the install or the agent start
+		// that follows reports a simulator that is really not usable.
+		logger.Warn("simctl bootstatus %s: %v: %s", udid, err, strings.TrimSpace(string(out)))
+		return nil
+	}
+	if waited := time.Since(start); waited >= time.Second {
+		printSetupSuccess(fmt.Sprintf("Simulator finished booting (waited %s)", waited.Round(time.Second)))
+	}
+	return nil
+}
+
+// simulatorState is the simulator's state as simctl reports it ("Booted",
+// "Booting", "Shutdown", ...), or "" when it is not listed.
+var simulatorState = func(udid string) string {
+	out, err := exec.Command("xcrun", "simctl", "list", "devices", "-j").Output()
+	if err != nil {
+		return ""
+	}
+	return parseSimulatorState(out, udid)
+}
+
+func parseSimulatorState(listJSON []byte, udid string) string {
+	var list struct {
+		Devices map[string][]struct {
+			UDID  string `json:"udid"`
+			State string `json:"state"`
+		} `json:"devices"`
+	}
+	if json.Unmarshal(listJSON, &list) != nil {
+		return ""
+	}
+	for _, devices := range list.Devices {
+		for _, d := range devices {
+			if d.UDID == udid {
+				return d.State
+			}
+		}
+	}
+	return ""
 }

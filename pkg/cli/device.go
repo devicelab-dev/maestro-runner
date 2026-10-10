@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/device"
@@ -66,6 +67,10 @@ Examples:
 			Name:  "screenshot",
 			Usage: "Also capture a screenshot to this path, from the same session",
 		},
+		&cli.StringFlag{
+			Name:  "format",
+			Usage: "Output format: tree (normalized, the default) or maestro (Maestro's `maestro hierarchy` JSON; the default when run as `maestro`)",
+		},
 	},
 	Action: runHierarchy,
 }
@@ -101,6 +106,10 @@ func runHierarchy(c *cli.Context) error {
 	runDevice := c.String("device")
 	compact := c.Bool("compact")
 	find := c.String("find")
+	format, err := hierarchyFormat(c.String("format"))
+	if err != nil {
+		return err
+	}
 
 	// Status goes to stderr (logger) so stdout carries only the hierarchy —
 	// keeps `maestro-runner hierarchy | jq` / `> tree.json` clean.
@@ -111,6 +120,15 @@ func runHierarchy(c *cli.Context) error {
 	cfg, err := buildDeviceRunConfig(c)
 	if err != nil {
 		return err
+	}
+
+	// A test running on the device answers for it (Maestro allows
+	// `maestro hierarchy` next to a running test, and tools call it
+	// mid-flow).
+	if !strings.EqualFold(cfg.Platform, "ios") && !strings.EqualFold(cfg.Platform, "web") {
+		if share := liveHierarchyShare(runDevice); share != "" {
+			return hierarchyFromRunningTest(share, c.String("screenshot"), format, compact, find)
+		}
 	}
 
 	// Driver setup and teardown print progress to stdout; redirect that to
@@ -154,8 +172,41 @@ func runHierarchy(c *cli.Context) error {
 	os.Stdout = realStdout
 
 	// Normalize the driver's platform-specific output (Android/iOS XML or the
-	// devicelab JSON) into one consistent tree, then render.
-	out, err := formatHierarchy(raw, compact, find)
+	// devicelab JSON) into one consistent tree, or Maestro's, then render.
+	return printHierarchy(raw, format, compact, find)
+}
+
+// hierarchyFromRunningTest prints the hierarchy (and writes the screenshot)
+// that a running test returns for its device.
+func hierarchyFromRunningTest(share, shotPath, format string, compact bool, find string) error {
+	logger.Info("Device is in use by a running test; asking it for the hierarchy (%s)", share)
+	raw, err := askHierarchyShare(share, "hierarchy")
+	if err != nil {
+		return fmt.Errorf("failed to get hierarchy: %w", err)
+	}
+	if shotPath != "" {
+		data, err := askHierarchyShare(share, "screenshot")
+		if err != nil {
+			return fmt.Errorf("failed to take screenshot: %w", err)
+		}
+		if err := writeScreenshotFile(shotPath, data); err != nil {
+			return err
+		}
+		logger.Info("Screenshot written to %s", shotPath)
+	}
+	return printHierarchy(raw, format, compact, find)
+}
+
+// printHierarchy renders raw in the chosen format: --compact and --find are
+// the normalized views, and override --format.
+func printHierarchy(raw []byte, format string, compact bool, find string) error {
+	var out string
+	var err error
+	if format == "maestro" && !compact && find == "" {
+		out, err = formatMaestroHierarchy(raw)
+	} else {
+		out, err = formatHierarchy(raw, compact, find)
+	}
 	if err != nil {
 		return fmt.Errorf("format hierarchy: %w", err)
 	}
@@ -170,6 +221,12 @@ func captureHierarchyScreenshot(driver core.Driver, path string) error {
 	if err != nil {
 		return fmt.Errorf("failed to capture screenshot: %w", err)
 	}
+	return writeScreenshotFile(path, data)
+}
+
+// writeScreenshotFile writes screenshot data to path, creating parent
+// directories as needed.
+func writeScreenshotFile(path string, data []byte) error {
 	if len(data) == 0 {
 		return fmt.Errorf("screenshot capture returned no image data")
 	}

@@ -24,7 +24,15 @@ const (
 
 // Client communicates with the DeviceLab on-device driver over WebSocket.
 type Client struct {
-	conn *websocket.Conn
+	// connMu guards conn, ctx, cancel and done, which a revive replaces.
+	connMu sync.RWMutex
+	conn   *websocket.Conn
+
+	// lost is set when the connection to the agent drops; the next call
+	// revives it (see SetReviver).
+	lost     atomic.Bool
+	reviver  func() error
+	reviveMu sync.Mutex
 
 	// Connection parameters — exactly one will be set
 	socketPath string
@@ -88,7 +96,10 @@ func (c *Client) Connect() error {
 
 // ConnectWithTimeout dials with a custom timeout.
 func (c *Client) ConnectWithTimeout(timeout time.Duration) error {
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
 	c.ctx, c.cancel = context.WithCancel(context.Background())
+	c.done = make(chan struct{})
 
 	dialCtx, dialCancel := context.WithTimeout(c.ctx, timeout)
 	defer dialCancel()
@@ -120,7 +131,53 @@ func (c *Client) ConnectWithTimeout(timeout time.Duration) error {
 	conn.SetReadLimit(32 * 1024 * 1024) // 32 MB
 
 	c.conn = conn
-	go c.readLoop()
+	c.lost.Store(false)
+	go c.readLoop(conn, c.ctx, c.done)
+	return nil
+}
+
+// SetTCPPort changes the local port a TCP client connects to, for a revive
+// whose port forward came back on another port.
+func (c *Client) SetTCPPort(port int) { c.tcpPort = port }
+
+// SetReviver installs the function that brings a dropped agent back: it
+// restarts the agent on the device, reconnects (Connect) and recreates the
+// session. Without one, a dropped connection fails every later call.
+func (c *Client) SetReviver(r func() error) { c.reviver = r }
+
+// readOnlyMethods have no effect on the device, so after a revive they are
+// sent again. An action is not: the agent that died may have performed it.
+var readOnlyMethods = map[string]bool{
+	"UI.snapshot": true, "UI.getSource": true, "UI.activeElement": true, "UI.treeHash": true,
+	"UI.screenshot": true, "UI.findElement": true, "UI.findElements": true, "UI.waitForSettle": true,
+	"UI.detectWebView": true, "UI.viewHierarchy": true,
+}
+
+// errConnectionLost is what a call gets when the connection drops under it.
+var errConnectionLost = &ErrorPayload{Code: "connection_lost", Message: "the connection to the DeviceLab agent was lost"}
+
+// revive brings a dropped connection back once, however many calls notice.
+func (c *Client) revive() error {
+	c.reviveMu.Lock()
+	defer c.reviveMu.Unlock()
+	if !c.lost.Load() {
+		return nil // another call already revived it
+	}
+	c.logger.Printf("connection lost; restarting the agent")
+	c.connMu.RLock()
+	old, cancel := c.conn, c.cancel
+	c.connMu.RUnlock()
+	if cancel != nil {
+		cancel()
+	}
+	if old != nil {
+		_ = old.CloseNow()
+	}
+	if err := c.reviver(); err != nil {
+		c.logger.Printf("restart failed: %v", err)
+		return err
+	}
+	c.logger.Printf("agent restarted")
 	return nil
 }
 
@@ -129,8 +186,29 @@ func (c *Client) Call(method string, params interface{}) (*Response, error) {
 	return c.CallWithTimeout(method, params, defaultCallTimeout)
 }
 
-// CallWithTimeout sends a request and waits for the matching response.
+// CallWithTimeout sends a request and waits for the matching response. A
+// connection that has dropped is revived first; a call the drop interrupted
+// is sent again after the revive when it is read-only.
 func (c *Client) CallWithTimeout(method string, params interface{}, timeout time.Duration) (*Response, error) {
+	if c.lost.Load() && c.reviver != nil {
+		if err := c.revive(); err != nil {
+			return nil, fmt.Errorf("%s: agent connection lost (restart failed: %v)", method, err)
+		}
+	}
+	resp, err := c.callOnce(method, params, timeout)
+	if err == nil || !c.lost.Load() || c.reviver == nil {
+		return resp, err
+	}
+	if rerr := c.revive(); rerr != nil {
+		return nil, fmt.Errorf("%w (restart failed: %v)", err, rerr)
+	}
+	if !readOnlyMethods[method] {
+		return nil, fmt.Errorf("%w (agent restarted; %s not re-sent)", err, method)
+	}
+	return c.callOnce(method, params, timeout)
+}
+
+func (c *Client) callOnce(method string, params interface{}, timeout time.Duration) (*Response, error) {
 	id := c.nextID.Add(1)
 
 	req := Request{
@@ -152,10 +230,17 @@ func (c *Client) CallWithTimeout(method string, params interface{}, timeout time
 	start := time.Now()
 	c.logger.Printf("→ %s id=%d", method, id)
 
-	writeCtx, writeCancel := context.WithTimeout(c.ctx, 5*time.Second)
+	c.connMu.RLock()
+	conn, ctx := c.conn, c.ctx
+	c.connMu.RUnlock()
+
+	writeCtx, writeCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer writeCancel()
 
-	if err := c.conn.Write(writeCtx, websocket.MessageText, data); err != nil {
+	if err := conn.Write(writeCtx, websocket.MessageText, data); err != nil {
+		if ctx.Err() == nil {
+			c.lost.Store(true)
+		}
 		return nil, fmt.Errorf("write request: %w", err)
 	}
 
@@ -171,22 +256,35 @@ func (c *Client) CallWithTimeout(method string, params interface{}, timeout time
 		return resp, nil
 	case <-time.After(timeout):
 		return nil, fmt.Errorf("timeout waiting for response to %s (id=%d)", method, id)
-	case <-c.ctx.Done():
+	case <-ctx.Done():
+		if c.lost.Load() {
+			return nil, errConnectionLost
+		}
 		return nil, fmt.Errorf("client closed")
 	}
 }
 
-// readLoop reads frames from the WebSocket and dispatches them.
-func (c *Client) readLoop() {
-	defer close(c.done)
+// readLoop reads frames from one connection and dispatches them. When the
+// connection drops (not a Close), every call waiting on it fails at once
+// instead of waiting out its timeout, and the next call revives it.
+func (c *Client) readLoop(conn *websocket.Conn, ctx context.Context, done chan struct{}) {
+	defer close(done)
 
 	for {
-		msgType, data, err := c.conn.Read(c.ctx)
+		msgType, data, err := conn.Read(ctx)
 		if err != nil {
-			if c.ctx.Err() != nil {
-				return // normal shutdown
+			if ctx.Err() != nil {
+				return // normal shutdown, or a revive replaced this connection
 			}
 			c.logger.Printf("read error: %v", err)
+			c.lost.Store(true)
+			c.pending.Range(func(_, ch any) bool {
+				select {
+				case ch.(chan *Response) <- &Response{Error: errConnectionLost}:
+				default:
+				}
+				return true
+			})
 			return
 		}
 
@@ -258,14 +356,17 @@ func (c *Client) dispatch(data []byte) {
 
 // Close cleanly shuts down the connection.
 func (c *Client) Close() error {
-	if c.cancel != nil {
-		c.cancel()
+	c.connMu.RLock()
+	conn, cancel, done := c.conn, c.cancel, c.done
+	c.connMu.RUnlock()
+	if cancel != nil {
+		cancel()
 	}
-	if c.conn != nil {
-		err := c.conn.Close(websocket.StatusNormalClosure, "client closing")
+	if conn != nil {
+		err := conn.Close(websocket.StatusNormalClosure, "client closing")
 		// Wait for readLoop to finish
 		select {
-		case <-c.done:
+		case <-done:
 		case <-time.After(2 * time.Second):
 		}
 		return err
