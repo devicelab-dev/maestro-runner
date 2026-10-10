@@ -1098,7 +1098,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 				// before (enriched-html: 21 flows). Key events go to the
 				// focused field at its cursor. An empty field is still set in
 				// one call, which is faster and the same result.
-				if err := d.client.SendKeyActions(text); err == nil {
+				if err := d.sendKeys(text); err == nil {
 					typed = true
 					invalidateText(focused)
 					typedInto, beforeText = focused, before
