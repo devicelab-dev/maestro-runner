@@ -7,7 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ⚠️ Behaviour changes
+
+**`inputText` types at the cursor into a field that already holds text, as Maestro does (DeviceLab Android).** It used to replace the field's whole value, so a rich-text editor typed "1", Enter, "2" kept only "2". An empty field is still set in one call. To replace a field's text, use `eraseText` first, as with Maestro ([#189](https://github.com/devicelab-dev/maestro-runner/issues/189)).
+
+**`runScript` runs every script as written.** `${...}` in a script is a JavaScript template literal, as in Maestro, and flow variables reach the script as plain names. The runner used to expand `${...}` as flow variables first, so Expo's `${SERVER_URL}/process` became `/process`.
+
+**An undefined `${name}` expands to `undefined`, and `null` to `null`, as in Maestro.** Both used to expand to an empty string.
+
+**`travel` reads `speed` in metres per second (default 4), as Maestro does, and walks each leg in 50 steps.** It read km/h and paused `3600/speed` whole seconds at each point whatever the distance: 72 s a point by default, and none at all above 3600. Leg length is computed as Maestro computes it, so flows keep the timing they were tuned for.
+
+**DeviceLab Android `hideKeyboard` presses Back when ESC does not close the keyboard.** Samsung's keyboard and the AOSP keyboard ignore ESC, so the step passed with the keyboard still open. One Back is sent only while the keyboard is confirmed up, which the keyboard consumes; with no keyboard up nothing is sent, so the step still cannot navigate away ([#42](https://github.com/devicelab-dev/maestro-runner/issues/42)). This is what the UIAutomator2 driver does. It is still not Maestro's unconditional Back: a flow that relied on `hideKeyboard` to leave a screen should use `back`.
+
+### Added
+- **`--retries N` runs failing flows again in the same run**, round by round, up to N more times, with the driver and the on-device agent kept up between rounds; works with `--parallel`. Each earlier attempt is kept as `flows/<id>.attempt-<n>.json` with its assets; `report.json` fills `attempts` and `attemptHistory`; the console says "passed on attempt 2" or "failed all 3 attempts". JUnit gets an `attempts` property and Surefire's `<flakyFailure>` / `<rerunFailure>`, which CI report viewers show as flaky, and the HTML report badges the flow.
+- **Maestro's `test` command line runs unchanged.** Options may follow the flow paths, and global options may follow `test`. `--format junit|html` writes that report to `--output <file>` (default `report.xml` / `report.html`), with the full reports in `--test-output-dir` or `--debug-output`; without `--format`, `--output` is the reports directory as before. `--flatten-debug-output`, `--shard-split` / `--shards` / `-s`, `--screen-size` and `--apple-team-id` map to ours; `--reinstall-driver`, `--no-reinstall-driver`, `--headless`, `--analyze`, `--api-key`, `--api-url`, `--test-suite-name`, `--host`, `--port` and `--driver-host-port` are accepted and ignored; `--shard-all` is refused with a pointer to `--parallel`.
+- **`hierarchy` works while a test runs on the device, and prints Maestro's format.** An Android test run answers hierarchy and screenshot requests for its device through the driver it already has, so tools that call `maestro hierarchy` mid-flow (Expo's image comparison) work. `--format maestro` prints Maestro's TreeNode JSON; it is the default when the binary runs as `maestro`, and `--format tree` keeps the normalized output.
+- **`console.log` output is kept on the step that printed it.** Each step's report entry carries the lines its `runScript` / `evalScript` printed (a new optional `logs` field), shown in the HTML report's step details ([#192](https://github.com/devicelab-dev/maestro-runner/issues/192)).
+- **Step names show the values defined in the flow, never secrets.** `${NAME}` in a step name is filled in when the value comes from the flow files (`env:`, a `runFlow` / `retry` / `repeat` `env:`, `defineVariables`, a command's output). A value from outside the flow (`-e`, `--env-file`, workspace config, the shell), or one that carries such a value, stays `${NAME}`.
+- **`travel` on every driver that can set the location**, including the iOS drivers, which had none.
+- **DeviceLab Android honours `--typing-frequency` and `typingFrequency:`**: a pause of 1000/frequency ms after each character typed as key events. They were ignored.
+- **DeviceLab iOS saves stall diagnostics before restarting a stuck agent**: a 2 s stack sample of the agent and of each app on the simulator, the process list and a screenshot, in `<report dir>/diagnostics/stall-<n>-<time>/` (at most 3 per run).
+
+### Changed
+- **DeviceLab Android taps are faster.** The agent keeps the element it found and watches only its bounds to settle, instead of finding it again and waiting for four identical whole-tree hashes: on a 2-core emulator, tap median 361 → 287 ms and p90 1268 → 695 ms.
+- **DeviceLab Android typing waits once per character, not once per key event.** Each character still reaches the app before the next one starts, so OTP boxes and input masks see the keys one by one; 36 characters take 1.9 s instead of 2.3 s.
+- **The Android agent exits after 10 minutes with no client.** A run killed outright (SIGKILL, a cancelled CI job) left it holding UiAutomation, the device's single accessibility automation session, and `uiautomator dump`, Appium and Maestro then failed on that device until someone stopped it by hand.
+- **DeviceLab iOS keeps an agent started by `xcodebuild` for the next run**, as it already kept one started by `simctl launch`; a watcher stops it once its simulator shuts down. A harness running one process per flow on GitHub's macOS runners restarted the agent for every flow, about 14 s each. Why `simctl launch` failed is printed to the console.
+- **iOS snapshot depth defaults to 62.** Above 62, XCTest returns no elements at all for a screen nested deeper than 62 levels, so such a screen came back empty on DeviceLab and WDA; `DL_AGENT_SNAPSHOT_MAX_DEPTH` or `MAESTRO_WDA_SNAPSHOT_MAX_DEPTH` override it ([#171](https://github.com/devicelab-dev/maestro-runner/issues/171)).
+
 ### Fixed
+- **`checked:` selectors work on DeviceLab Android.** The agent reported no checked state, so `checked: true` never matched a switch that was on and `checked: false` always did ([#205](https://github.com/devicelab-dev/maestro-runner/issues/205)).
+- **`setLocation` moves the device on Android.** Both Android drivers sent a broadcast nothing on the device receives: the step passed and the location never changed. DeviceLab puts test providers in place of gps, network and fused through its agent; UIAutomator2 starts the bundled Appium settings app's location service, installing the app on first use. The mock ends with the run. Coordinates out of range or not numbers fail the step.
+- **Text selectors no longer match the soft keyboard's keys (DeviceLab Android).** With the keyboard up, `assertVisible: "q"` passed on the keyboard's key.
+- **DeviceLab Android relative, `index:` and count lookups read every window.** They read only the active window, with a walk that can cut deep subtrees short, so `below:`, `index:` and counts missed elements in sheets, dialogs and popups that a plain text selector found.
+- **DeviceLab Android types characters that have no key on the keyboard** (accents, CJK, emoji) by pasting them. They were dropped, and the runner then retyped the whole field by setting it.
+- **A key the device refuses fails the step** instead of passing (DeviceLab Android).
+- **DeviceLab Android typing keeps touch mode, and input no longer waits for running animations on Android 12+**, where a stuck animation cost about 10 s per tap or key.
+- **An `index:` that is not a number fails the step, as in Maestro.** An `index:` of "undefined" (an unset `${VAR}`) or a typo silently meant the first match, so a tap hit the wrong element and passed. `"2.0"` is 2.
+- **`scrollUntilVisible` with `speed` outside 0..100 is a parse error**, as in Maestro; it fell back to the default without a word.
+- **`scrollUntilVisible` honours `centerElement` on DeviceLab Android, UIAutomator2, Appium and WDA.** It was parsed and ignored, so the scroll stopped with the element at the edge of the list. As in Maestro, scrolling continues, for up to 4 more scrolls, until the element's centre is near the middle.
+- **Web: a malformed CSS selector fails at once** with the browser's error, instead of waiting out the timeout as "not found".
+- **WDA: a screen size missed at startup is read again when needed.** A failed size read at startup left it at 0x0, and every `point:` tap, percentage swipe and scroll of the run failed with "screen dimensions not available" ([#201](https://github.com/devicelab-dev/maestro-runner/issues/201)).
+- **UIAutomator2: `pasteText` after `setClipboard` pastes its text.** It failed with a NullPointerException, and Android 10+ does not let a background app read the clipboard anyway. As in Maestro, `setClipboard` keeps its text for `pasteText`, which types it ([#202](https://github.com/devicelab-dev/maestro-runner/issues/202)).
+- **DeviceLab Android: a tap waits for the screen to change**, up to 300 ms when nothing changes (`MAESTRO_DEVICELAB_TAP_CHANGE_WAIT_MS`), and `waitForAnimationToEnd` no longer drops the settle after a tap. `copyTextFrom` after a tap and `waitForAnimationToEnd` could read a label mid-scroll.
+- **DeviceLab Android: `openLink` right after a tap waits for the tap's change to settle**, so the next step no longer reads the page the link was replacing.
+- **The taps of a `repeat:` go out back to back, `delay:` apart, as in Maestro.** DeviceLab and WDA settled before every tap after the first, so on a screen that never settles (a playing video) the taps landed seconds apart.
+- **DeviceLab Android: an agent that drops its connection is restarted.** The call in flight waited out its 30 s timeout and every later call failed with "broken pipe", so one agent crash failed every remaining flow. Now the next call restarts the agent and recreates the session; read-only calls are sent again, actions never.
+- **DeviceLab Android: `inputText` reads whether a field shows its hint from the agent**, instead of taking a snapshot of the whole tree, which could take the agent down in a rich-text editor.
+- **DeviceLab iOS: a stuck kept agent is restarted, not re-attached to.** Re-attaching needs a small snapshot answered within 10 s; a call the agent never answers restarts it.
+- **DeviceLab iOS: orientation and appearance are re-sent after an agent restart**, instead of failing the step.
+- **DeviceLab iOS: rotating or changing appearance on a busy app no longer holds the agent.**
+- **DeviceLab iOS: system sheets drawn by another process (HealthKit authorization, share sheet, photo picker) are tapped where they are drawn.** Their rows were reported 62 pt above where an iOS 27 simulator draws them, so taps missed ([#191](https://github.com/devicelab-dev/maestro-runner/issues/191)).
+- **DeviceLab iOS waits for a simulator to finish booting** (`simctl bootstatus`) before installing the app, as WDA already did; a simulator listed as Booted can take minutes more on a CI runner.
+- **DeviceLab iOS: `addMedia` gives `simctl addmedia` a minute, then retries once**, and says simctl did not finish instead of "signal: killed".
+- **DeviceLab iOS keeps the last 5 `xcodebuild` logs** across agent restarts (`xcodebuild.log.1` … `.5`).
+- **A WebView whose DevTools never answers no longer hangs the run.** The whole CDP setup is bounded at 3 s; steps continue on native automation and the connection is retried later.
+- **`--device` without `--platform` runs on the device's platform**, as in Maestro: an iOS simulator or connected iPhone id means iOS.
+- **A tag filter that leaves no flows says what Maestro says** ("Include / Exclude tags did not match any Flows:"), which scripts look for.
+- **JUnit testcases carry Maestro's `id`, `timestamp` and `status`** (SUCCESS, ERROR, …); harnesses that read `status` treated every testcase without it as failed.
+- **A `runFlow`, `repeat` or `retry` nested in another one is reported**, steps and all; it was missing from the report and the summary.
+- **Live step lines show a step's `label:`**, as the report and summary already did ([#192](https://github.com/devicelab-dev/maestro-runner/issues/192)).
+- **The end-of-run summary shows steps that never ran as skipped**, not with a red ✗.
+- **The monkey launch fallback passes `--pct-syskeys 0`**, without which monkey refuses to start on an emulator with no hardware keyboard.
 - **A flow run directly is no longer split into a "suite" when it has inline or conditional `runFlow` steps.** A flow made only of `runFlow` steps, two or more of them with a file, was expanded into one flow per file. Inline `runFlow` blocks (`when:` + `commands:`) were dropped without a word, and a file's `when:` was ignored, so the file ran whatever the condition said. A reset flow such as "open the screen, `when` a menu shows close it, `when` items are selected clear them" ran only its file steps and still passed. Such a flow is now run as written; flows made only of unconditional file `runFlow` steps are still suites.
 - **DeviceLab iOS: `launchApp` with the default `all: allow` no longer resets the app's permissions on a simulator.** It reset every permission and then granted `all` with `simctl`, but simctl's contacts grant does not take (iOS 18.6 simulator) and it has no notifications service, so a grant made another way (the user's tap on the prompt, applesimutils, an earlier run) was lost on every launch and the app asked again: an app that shows a permission onboarding when a permission is undecided opened on it after every `launchApp`. An explicit `permissions:` map still resets first, so permissions it doesn't name stay undecided.
 - **`childOf` and `containsChild` follow the element tree, as in Maestro, on DeviceLab, UIAutomator2, Appium and WDA.** They compared rectangles, so any element inside the anchor's bounds counted as its child. A list row behind an overlay that covers it (a search-results list drawn over the full list) "was in" the overlay, and `assertVisible: {id: title, childOf: {id: search_results}}` passed while the results list was empty. Both filters now walk the parent chain; an anchor without tree links (rebuilt from a relative selector) still uses bounds. The DeviceLab iOS driver already did this.
@@ -23,6 +85,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **WDA sends a read or a lookup again when its connection drops.** Through a forwarded port to a physical iPhone, WDA sometimes closes a connection before it answers, and the request came back as EOF; one dropped text read made `copyTextFrom` copy an empty string. net/http does not send these again (it only repeats a GET on a connection it had used before). A GET, or a POST that only finds elements, is now sent once more, with a warning in the log. An action (a tap, typing, a swipe, launching an app) is never repeated, because it may have reached WDA before the connection went.
 - **`when: true:` and `assertTrue` read their value as Maestro does.** Maestro reads the evaluated text as false only when it is blank, `false` in any case, `undefined`, `null` or zero, so `abc` is true. The runner took a string as true only when it was exactly `true`, so `assertTrue: ${name}` failed for any other value. A `when: true: ${name}` condition was worse: the value was run as JavaScript a second time, so `abc` became a ReferenceError, and an unset variable became an empty condition, which ran the branch Maestro skips. A condition that is one `${...}` is now evaluated once, and its value is read by Maestro's rule.
 - **A failing `onFlowComplete` step fails the flow, as in Maestro.** The hook ran in a deferred call that ignored every failure, after the flow had already been reported, so a flow whose cleanup failed passed. It now runs before the result is final, also when `onFlowStart` failed. A failing step that is not optional ends the hook and fails a flow that had passed, and a flow that had already failed keeps its own error. The hook's steps are counted in the flow's totals, and a flow that fails in `onFlowStart` is a failed flow for `--video on-failure`, which had thrown its recording away.
+
+### Contributors
+
+[@bulatgaleev](https://github.com/bulatgaleev)
+1. WDA keeps enough idle connections for its parallel reads ([#181](https://github.com/devicelab-dev/maestro-runner/pull/181))
+2. `retry` counts retries, not attempts ([#182](https://github.com/devicelab-dev/maestro-runner/pull/182))
+3. WDA `launchApp` restarts a running app unless `stopApp: false` ([#183](https://github.com/devicelab-dev/maestro-runner/pull/183))
+4. WDA `notVisible` passes only when a lookup finds the element absent ([#184](https://github.com/devicelab-dev/maestro-runner/pull/184))
+5. `checked` selectors on iOS ([#185](https://github.com/devicelab-dev/maestro-runner/pull/185))
+6. `runScript` runs a script file as written ([#194](https://github.com/devicelab-dev/maestro-runner/pull/194))
+7. A `runFlow` or `retry` `env` no longer leaves its keys behind ([#195](https://github.com/devicelab-dev/maestro-runner/pull/195))
+8. A script's `http` call waits up to 5 minutes ([#196](https://github.com/devicelab-dev/maestro-runner/pull/196))
+9. WDA sends a dropped read or lookup again ([#197](https://github.com/devicelab-dev/maestro-runner/pull/197))
+10. `when: true:` and `assertTrue` read their value as Maestro does ([#198](https://github.com/devicelab-dev/maestro-runner/pull/198))
+11. A failing `onFlowComplete` fails the flow ([#199](https://github.com/devicelab-dev/maestro-runner/pull/199))
+12. Removed unused UIAutomator2 code ([#200](https://github.com/devicelab-dev/maestro-runner/pull/200))
+13. Reported system sheets tapped in the wrong place on iOS ([#191](https://github.com/devicelab-dev/maestro-runner/issues/191))
+
+[@MxScripter](https://github.com/MxScripter)
+1. `childOf` and `containsChild` follow the element tree ([#203](https://github.com/devicelab-dev/maestro-runner/pull/203))
+2. DeviceLab iOS `launchApp` keeps permission grants with the default `all: allow` ([#207](https://github.com/devicelab-dev/maestro-runner/pull/207))
+3. A flow with inline or conditional `runFlow` steps is not split into a suite ([#208](https://github.com/devicelab-dev/maestro-runner/pull/208))
+4. Reported `checked:` selectors failing on DeviceLab Android ([#205](https://github.com/devicelab-dev/maestro-runner/issues/205))
+
+[@Lykhoyda](https://github.com/Lykhoyda)
+1. UIAutomator2 `hideKeyboard` confirms the keyboard hidden with two reads ([#193](https://github.com/devicelab-dev/maestro-runner/pull/193))
+
+[@aralshukaili](https://github.com/aralshukaili)
+1. Reported `inputText` replacing a field's text instead of typing at the cursor ([#189](https://github.com/devicelab-dev/maestro-runner/issues/189))
+
+[@Cancercookie](https://github.com/Cancercookie)
+1. Asked for readable step labels and script output in reports ([#192](https://github.com/devicelab-dev/maestro-runner/issues/192))
+
+[@jalie](https://github.com/jalie)
+1. Reported WDA failing every `point:` tap after a missed screen-size read ([#201](https://github.com/devicelab-dev/maestro-runner/issues/201))
+
+[@emil-doychev-bijenkorf](https://github.com/emil-doychev-bijenkorf)
+1. Reported `pasteText` after `setClipboard` failing on UIAutomator2 ([#202](https://github.com/devicelab-dev/maestro-runner/issues/202))
+
+[@vlasov-pepperstone](https://github.com/vlasov-pepperstone)
+1. Reported deep iOS screens coming back empty ([#171](https://github.com/devicelab-dev/maestro-runner/issues/171))
 
 ## [1.1.28] - 2026-09-30
 
