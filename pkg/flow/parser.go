@@ -416,6 +416,12 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 		} else if err := valueNode.Decode(&s); err != nil {
 			return nil, wrapParseError(sourcePath, valueNode.Line, err)
 		}
+		// Maestro's range. Outside it the scroll silently used the default
+		// duration, so a typo (speed: 400) was never noticed.
+		if s.Speed < 0 || s.Speed > 100 {
+			return nil, wrapParseError(sourcePath, valueNode.Line,
+				fmt.Errorf("scrollUntilVisible speed %d is out of range: speed must be between 0 and 100", s.Speed))
+		}
 		s.StepType = stepType
 		return &s, nil
 

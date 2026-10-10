@@ -53,6 +53,9 @@ func (d *Driver) evalRetry(opts *rod.EvalOptions) (*proto.RuntimeRemoteObject, e
 // Uses Rod's clone-based timeout: creates a new page object with deadline.
 func (d *Driver) findElement(sel flow.Selector, optional bool, stepTimeoutMs int) (*rod.Element, *core.ElementInfo, error) {
 	d.recordUnsupportedFields(&sel)
+	if err := d.selectorError(sel); err != nil {
+		return nil, nil, err
+	}
 
 	timeout := d.calculateTimeout(optional, stepTimeoutMs)
 	deadline := time.Now().Add(timeout)
@@ -72,6 +75,31 @@ func (d *Driver) findElement(sel flow.Selector, optional bool, stepTimeoutMs int
 		return nil, nil, fmt.Errorf("element '%s' not found within %v%s: %w", sel.Describe(), timeout, hint, lastErr)
 	}
 	return nil, nil, fmt.Errorf("element '%s' not found within %v%s", sel.Describe(), timeout, hint)
+}
+
+// selectorError is why sel can never match, checked once before polling: an
+// index that is not a number, or CSS the browser rejects. A typo in either
+// used to look like "not found yet" and only failed when the timeout ran out.
+func (d *Driver) selectorError(sel flow.Selector) error {
+	if sel.Nth == 0 && strings.TrimSpace(sel.Index) != "" {
+		if _, err := core.ParseIndex(sel.Index); err != nil {
+			return err
+		}
+	}
+	if sel.CSS == "" {
+		return nil
+	}
+	obj, err := d.evalRetry(rod.Eval(`(css) => {
+		try { document.createDocumentFragment().querySelector(css); return ""; }
+		catch (e) { return (e && e.name === "SyntaxError") ? String(e.message || e) : ""; }
+	}`, sel.CSS))
+	if err != nil || obj == nil {
+		return nil // the page is not readable yet: let the lookup decide
+	}
+	if msg := obj.Value.Str(); msg != "" {
+		return fmt.Errorf("invalid CSS selector %q: %s", sel.CSS, msg)
+	}
+	return nil
 }
 
 // crossOriginHint returns a human-readable suffix listing how many cross-origin

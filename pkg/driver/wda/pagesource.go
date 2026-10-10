@@ -719,7 +719,7 @@ func DeepestMatchingElement(elements []*ParsedElement) *ParsedElement {
 func SelectByIndex(candidates []*ParsedElement, index string) *ParsedElement {
 	if index != "" {
 		idx := 0
-		if i, err := strconv.Atoi(index); err == nil {
+		if i, err := core.ParseIndex(index); err == nil {
 			if i < 0 {
 				i = len(candidates) + i
 			}

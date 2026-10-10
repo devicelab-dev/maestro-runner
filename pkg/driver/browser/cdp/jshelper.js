@@ -338,7 +338,8 @@ window.__maestro = {
     switch (selectorType) {
       case 'css':
         for (var d = 0; d < docs.length; d++) {
-          try { pushAll(docs[d].querySelectorAll(selectorValue)); } catch (e) {}
+          // A malformed selector never matches: report it instead of waiting out the timeout.
+          try { pushAll(docs[d].querySelectorAll(selectorValue)); } catch (e) { if (e && e.name === 'SyntaxError') throw e; }
         }
         break;
       case 'id': {
