@@ -3,6 +3,7 @@ package maestro
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/devicelab-dev/maestro-runner/pkg/core"
 )
 
 // mockServer creates an httptest.Server that upgrades to WebSocket
@@ -244,8 +247,8 @@ func TestClientCallTimeout(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
-	if !strings.Contains(err.Error(), "timeout") {
-		t.Errorf("expected timeout error, got: %v", err)
+	if !strings.Contains(err.Error(), "timeout") || !errors.Is(err, core.ErrUnanswered) {
+		t.Errorf("expected an unanswered timeout error, got: %v", err)
 	}
 }
 

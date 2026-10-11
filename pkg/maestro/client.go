@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/devicelab-dev/maestro-runner/pkg/core"
 )
 
 const (
@@ -203,7 +205,7 @@ func (c *Client) CallWithTimeout(method string, params interface{}, timeout time
 		return nil, fmt.Errorf("%w (restart failed: %v)", err, rerr)
 	}
 	if !readOnlyMethods[method] {
-		return nil, fmt.Errorf("%w (agent restarted; %s not re-sent)", err, method)
+		return nil, fmt.Errorf("%w (agent restarted; %s not re-sent): %w", core.ErrUnanswered, method, err)
 	}
 	return c.callOnce(method, params, timeout)
 }
@@ -255,7 +257,7 @@ func (c *Client) callOnce(method string, params interface{}, timeout time.Durati
 		c.logger.Printf("← %s id=%d [%v] OK", method, id, elapsed)
 		return resp, nil
 	case <-time.After(timeout):
-		return nil, fmt.Errorf("timeout waiting for response to %s (id=%d)", method, id)
+		return nil, fmt.Errorf("%w: timeout waiting for response to %s (id=%d)", core.ErrUnanswered, method, id)
 	case <-ctx.Done():
 		if c.lost.Load() {
 			return nil, errConnectionLost

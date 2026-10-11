@@ -1,8 +1,15 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 )
+
+// ErrUnanswered marks an action that was sent to the device agent and got no
+// answer: a timeout, or a dropped connection the action was not sent again
+// after. The agent may have performed it, so a caller must not send it again —
+// a tap sent twice taps twice.
+var ErrUnanswered = errors.New("the device agent did not answer")
 
 // ExecutionError represents a structured error with category and details
 type ExecutionError struct {

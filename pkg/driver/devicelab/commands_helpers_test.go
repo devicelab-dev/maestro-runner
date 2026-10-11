@@ -3661,3 +3661,23 @@ func TestInputText_NoSelector_SetsWhenFieldIsEmpty(t *testing.T) {
 		})
 	}
 }
+
+// A find-and-click that gets no answer may have tapped: tapOn must not send it
+// again, however much of its timeout is left. Any other error keeps polling.
+func TestTapOn_UnansweredClickIsNotRepeated(t *testing.T) {
+	client := &scriptedClient{trackingClient: newTrackingClient()}
+	client.findAndClickErr = fmt.Errorf("%w: timeout waiting for response to Gesture.findAndClick (id=7)", core.ErrUnanswered)
+	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, &mockShell{})
+
+	start := time.Now()
+	res := driver.tapOn(&flow.TapOnStep{Selector: flow.Selector{Text: "Pay"}, BaseStep: flow.BaseStep{TimeoutMs: 3000}})
+	if res.Success {
+		t.Fatal("tapOn succeeded on a click with no answer")
+	}
+	if client.findAndClickCalls != 1 {
+		t.Errorf("find-and-click sent %d times, want once", client.findAndClickCalls)
+	}
+	if !strings.Contains(res.Message, "not repeated") || time.Since(start) > time.Second {
+		t.Errorf("message %q after %v; want an immediate 'not repeated' failure", res.Message, time.Since(start))
+	}
+}
