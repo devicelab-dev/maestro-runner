@@ -43,8 +43,17 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 
 	wasInput := d.consumeInputFlag()
 
-	// Quick check: if previous step was input and keyboard is blocking, fail fast
-	if result := d.checkKeyboardBlocking(wasInput, step.Selector); result != nil {
+	// Quick check: if previous step was input and keyboard is blocking, fail
+	// fast. A text or id tap goes to the agent, which taps the part of the
+	// element the keyboard leaves showing, so only a fully covered element
+	// fails there; every other tap aims at the centre.
+	agentPlaced := (step.Selector.Text != "" || step.Selector.ID != "") && step.Point == "" &&
+		!step.Selector.HasRelativeSelector() && !d.isBrowserMode()
+	covering := keyboardStillCovering
+	if agentPlaced {
+		covering = keyboardCoversAll
+	}
+	if result := d.checkKeyboardBlockingFor(wasInput, step.Selector, covering); result != nil {
 		return result
 	}
 
