@@ -1002,14 +1002,28 @@ func TestHideKeyboard_NoDevice_SucceedsImmediately(t *testing.T) {
 	}
 }
 
-// keyboardShell reports the keyboard up until closed is set.
-type keyboardShell struct{ closed bool }
+// keyboardShell reports the keyboard up until closed is set. The keyboard
+// serves com.app's process; focus is on focusPkg (com.app when empty).
+type keyboardShell struct {
+	closed   bool
+	focusPkg string
+}
 
 func (k *keyboardShell) Shell(cmd string) (string, error) {
-	if k.closed {
+	switch {
+	case strings.HasPrefix(cmd, "cat /proc/4242/cmdline"):
+		return "com.app\x00", nil
+	case strings.Contains(cmd, "mCurrentFocus"):
+		pkg := k.focusPkg
+		if pkg == "" {
+			pkg = "com.app"
+		}
+		return "  mCurrentFocus=Window{3579058 u0 " + pkg + "/" + pkg + ".Main}", nil
+	case k.closed:
 		return "mInputShown=false", nil
 	}
-	return "mInputShown=true\n    touchable region=SkRegion((0,1428,1080,2340))", nil
+	return "mCurClient=ClientState{a9bbbf6 mUid=10410 mPid=4242 mSelfReportedDisplayId=0}\n" +
+		"mInputShown=true\n    touchable region=SkRegion((0,1428,1080,2340))", nil
 }
 
 // escKeyboardClient closes the keyboard on ESC, on BACK, or never.
@@ -1041,14 +1055,18 @@ func TestHideKeyboard_BackOnlyWhileKeyboardIsUp(t *testing.T) {
 	for name, tc := range map[string]struct {
 		closesOnEsc bool
 		closesOnKey int
+		focusPkg    string
 		wantKeys    []int
 		wantMsg     string
 	}{
 		"keyboard honours ESC":        {closesOnEsc: true, wantKeys: nil, wantMsg: "Keyboard hidden"},
 		"keyboard ignores ESC (#42)":  {closesOnKey: uiautomator2.KeyCodeBack, wantKeys: []int{uiautomator2.KeyCodeBack}, wantMsg: "via back key"},
 		"keyboard ignores everything": {wantKeys: []int{uiautomator2.KeyCodeBack}, wantMsg: "not confirmed"},
+		// Just after an app switch: the previous app's keyboard still reads
+		// as shown while another app has focus. BACK would navigate that app.
+		"keyboard left by another app": {focusPkg: "com.other", wantKeys: nil, wantMsg: "not the focused app's"},
 	} {
-		shell := &keyboardShell{}
+		shell := &keyboardShell{focusPkg: tc.focusPkg}
 		client := &escKeyboardClient{trackingClient: newTrackingClient(), shell: shell, closesOnEsc: tc.closesOnEsc, closesOnKey: tc.closesOnKey}
 		driver := New(client, &core.PlatformInfo{}, shell)
 

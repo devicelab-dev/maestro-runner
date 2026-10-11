@@ -1329,11 +1329,55 @@ func (d *Driver) hideKeyboard(_ *flow.HideKeyboardStep) *core.CommandResult {
 		return successResult("Keyboard hidden", nil)
 	}
 	if d.isKeyboardVisible() {
+		if !d.imeServesFocusedWindow() {
+			// Right after an app switch the previous app's keyboard can still
+			// read as shown while another app has focus: BACK would go to that
+			// app and navigate it (#42).
+			logger.Info("[devicelab] hideKeyboard: the keyboard does not belong to the focused window — not pressing back")
+			return successResult("Hide keyboard (the keyboard is not the focused app's)", nil)
+		}
 		if err := d.client.PressKeyCode(uiautomator2.KeyCodeBack); err == nil && d.waitKeyboardHidden() {
 			return successResult("Keyboard hidden (via back key)", nil)
 		}
 	}
 	return successResult("Hide keyboard (dismissal not confirmed)", nil)
+}
+
+var (
+	imeClientPid = regexp.MustCompile(`mCurClient=ClientState\{[^}]*mPid=(\d+)`)
+	focusWindow  = regexp.MustCompile(`mCurrentFocus=Window\{\S+ u\d+ ([^/\s}]+)`)
+)
+
+// imeServesFocusedWindow reports whether the shown keyboard belongs to the
+// window that has focus, the one a BACK key goes to: the input method's client
+// process is the focused window's app. Only then does the keyboard take the
+// BACK and the app never see it. Anything unreadable answers false.
+func (d *Driver) imeServesFocusedWindow() bool {
+	if d.device == nil {
+		return false
+	}
+	ime, err := d.device.Shell("dumpsys input_method")
+	if err != nil || !strings.Contains(ime, "mInputShown=true") {
+		return false
+	}
+	m := imeClientPid.FindStringSubmatch(ime)
+	if m == nil {
+		return false
+	}
+	cmdline, err := d.device.Shell("cat /proc/" + m[1] + "/cmdline")
+	if err != nil {
+		return false
+	}
+	client := strings.TrimRight(strings.TrimSpace(cmdline), "\x00")
+	if i := strings.IndexAny(client, ":\x00"); i >= 0 {
+		client = client[:i] // "com.app:remote" runs in com.app
+	}
+	win, err := d.device.Shell("dumpsys window | grep mCurrentFocus")
+	if err != nil {
+		return false
+	}
+	f := focusWindow.FindStringSubmatch(win)
+	return client != "" && f != nil && f[1] == client
 }
 
 // waitKeyboardHidden waits for the keyboard's close animation (~300ms).
