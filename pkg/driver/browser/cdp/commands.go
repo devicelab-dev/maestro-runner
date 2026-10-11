@@ -947,10 +947,15 @@ func elementSwipeCoords(dir string, b core.Bounds) (startX, startY, endX, endY f
 	}
 }
 
+// pageLoadTimeout bounds the wait for a page's load event after navigating.
+const pageLoadTimeout = 30 * time.Second
+
 // waitForPageReady waits for the page to finish loading and DOM to stabilize.
 // Used after navigations to handle SPAs that render content after the load event.
 func (d *Driver) waitForPageReady() {
-	_ = d.page.WaitLoad()
+	// The load event never fires on a page with a resource that never
+	// finishes; unbounded, that held the step for good.
+	_ = d.page.Timeout(pageLoadTimeout).WaitLoad()
 	p := d.page.Timeout(5 * time.Second)
 	_ = p.WaitDOMStable(300*time.Millisecond, 0)
 	if d.network != nil {
