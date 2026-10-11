@@ -174,7 +174,14 @@ func (m *webViewManager) connectViaUnixSocket(cdpInfo *core.CDPInfo, cdpType str
 		return fmt.Errorf("no pages found in WebView")
 	}
 
-	page := pages.First()
+	// An app with several WebViews (a tab or back-stack screen kept alive
+	// next to the one on screen) has a page for each, and the first is not
+	// necessarily the one on screen. A hidden first page made the visibility
+	// gate turn CDP off while the visible WebView went unused.
+	page := pages[visiblePageIndex(len(pages), func(i int) bool {
+		res, err := pages[i].Timeout(visibilityCheckTimeout).Eval(`() => document.visibilityState`)
+		return err == nil && res.Value.Str() == "visible"
+	})]
 	// The page calls are bounded per call (a Timeout copy of a page is safe;
 	// only the browser's copy loses its event observable, #149) as well as by
 	// the socket deadline.
@@ -1194,6 +1201,21 @@ func (m *webViewManager) refreshPage() error {
 	}
 
 	return nil
+}
+
+// visiblePageIndex picks the WebView page to drive: the first that reports
+// itself visible, or the first page when none does (a WebView that answers
+// slowly is still better driven than skipped). A single page is not asked.
+func visiblePageIndex(n int, visible func(i int) bool) int {
+	if n <= 1 {
+		return 0
+	}
+	for i := 0; i < n; i++ {
+		if visible(i) {
+			return i
+		}
+	}
+	return 0
 }
 
 // visibilityCheckTimeout is a short timeout for the document.visibilityState check.
