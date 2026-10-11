@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
@@ -1783,6 +1784,30 @@ func cssEscapeID(s string) string {
 type unixDialer struct {
 	socketPath string
 	conn       net.Conn // the last connection dialed, for clearDeadline
+	// limit is the setup deadline in Unix nanoseconds (0: none). A write
+	// never waits past it, nor past cdpWriteTimeout.
+	limit atomic.Int64
+}
+
+// cdpWriteTimeout bounds one write to a DevTools socket. Reads stay
+// unbounded, since the client waits on them for events; a write that cannot
+// go out within this is a socket nobody reads, which would otherwise hold the
+// step, and every later one, forever.
+var cdpWriteTimeout = 10 * time.Second
+
+// writeBoundConn gives every write its own deadline.
+type writeBoundConn struct {
+	net.Conn
+	d *unixDialer
+}
+
+func (c *writeBoundConn) Write(p []byte) (int, error) {
+	deadline := time.Now().Add(cdpWriteTimeout)
+	if l := c.d.limit.Load(); l != 0 && time.Unix(0, l).Before(deadline) {
+		deadline = time.Unix(0, l)
+	}
+	_ = c.Conn.SetWriteDeadline(deadline)
+	return c.Conn.Write(p)
 }
 
 // DialContext dials the forwarded socket and puts ctx's deadline on the
@@ -1797,7 +1822,9 @@ func (d *unixDialer) DialContext(ctx context.Context, _, _ string) (net.Conn, er
 	if err != nil {
 		return nil, err
 	}
+	conn = &writeBoundConn{Conn: conn, d: d}
 	if deadline, ok := ctx.Deadline(); ok {
+		d.limit.Store(deadline.UnixNano())
 		_ = conn.SetDeadline(deadline)
 	}
 	d.conn = conn
@@ -1812,6 +1839,11 @@ func (d *unixDialer) clearDeadline() {
 
 // setDeadline puts a deadline on the dialed connection (zero lifts it).
 func (d *unixDialer) setDeadline(t time.Time) {
+	if t.IsZero() {
+		d.limit.Store(0)
+	} else {
+		d.limit.Store(t.UnixNano())
+	}
 	if d.conn != nil {
 		_ = d.conn.SetDeadline(t)
 	}
