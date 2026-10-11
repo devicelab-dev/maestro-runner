@@ -194,6 +194,24 @@ func keyboardStillCovering(element core.Bounds, keyboard *core.Bounds) bool {
 // path pays exactly what it did before. Only taps that previously skipped the
 // check outright spend a dumpsys, and only to discover the keyboard is down.
 func (d *Driver) checkKeyboardBlocking(wasInput bool, sel flow.Selector) *core.CommandResult {
+	return d.checkKeyboardBlockingFor(wasInput, sel, keyboardStillCovering)
+}
+
+// exposedBandPx is the least height of an element showing above the keyboard
+// that the agent can tap: it keeps 12px from the element's edge and 12px from
+// the keyboard (EXPOSED_MARGIN_PX in the agent).
+const exposedBandPx = 25
+
+// keyboardCoversAll is the verdict for a tap the agent places itself: blocked
+// only when no band of the element tall enough to tap shows above the keyboard.
+// A button whose lower half the keyboard covers is tapped on its upper half.
+func keyboardCoversAll(element core.Bounds, keyboard *core.Bounds) bool {
+	return keyboard != nil && keyboard.Y-element.Y < exposedBandPx
+}
+
+// checkKeyboardBlockingFor is checkKeyboardBlocking with the verdict given.
+func (d *Driver) checkKeyboardBlockingFor(wasInput bool, sel flow.Selector,
+	covering func(core.Bounds, *core.Bounds) bool) *core.CommandResult {
 	if !wasInput && d.getKeyboardBounds() == nil {
 		return nil
 	}
@@ -209,6 +227,7 @@ func (d *Driver) checkKeyboardBlocking(wasInput bool, sel flow.Selector) *core.C
 			return info, true
 		},
 		d.getKeyboardBounds,
+		covering,
 	)
 }
 
@@ -217,7 +236,7 @@ func (d *Driver) checkKeyboardBlocking(wasInput bool, sel flow.Selector) *core.C
 // the suggestion-strip margin), and error. The loop itself is shared with the uiautomator2
 // driver so the two can't drift on timing behavior.
 func settleKeyboardBlocking(findElement func() (*core.ElementInfo, bool),
-	keyboardBounds func() *core.Bounds) *core.CommandResult {
+	keyboardBounds func() *core.Bounds, covering func(core.Bounds, *core.Bounds) bool) *core.CommandResult {
 	blocked, kbTop, centerY := core.SettleKeyboardBlocking(
 		func() (core.Bounds, bool) {
 			info, ok := findElement()
@@ -227,7 +246,7 @@ func settleKeyboardBlocking(findElement func() (*core.ElementInfo, bool),
 			return info.Bounds, true
 		},
 		keyboardBounds,
-		keyboardStillCovering,
+		covering,
 		keyboardSettleWindow, keyboardSettlePoll,
 	)
 	if !blocked {

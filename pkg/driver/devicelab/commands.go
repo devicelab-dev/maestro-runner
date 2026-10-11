@@ -24,6 +24,17 @@ import (
 // Tap Commands
 // ============================================================================
 
+// unansweredTap ends a tap whose find-and-click got no answer from the agent.
+// The agent may have tapped before the answer was lost, so the tap is not sent
+// again: polling on would tap a second time. nil for any other outcome.
+func unansweredTap(step *flow.TapOnStep, err error) *core.CommandResult {
+	if err == nil || !errors.Is(err, core.ErrUnanswered) {
+		return nil
+	}
+	return errorResult(err, fmt.Sprintf("Tap on %s not confirmed: the agent did not answer, and the tap is not repeated because it may already have happened: %v",
+		step.Selector.Describe(), err))
+}
+
 func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 	// Check if using Point WITHOUT selector (screen-relative tap)
 	if step.Point != "" && step.Selector.IsEmpty() {
@@ -32,8 +43,17 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 
 	wasInput := d.consumeInputFlag()
 
-	// Quick check: if previous step was input and keyboard is blocking, fail fast
-	if result := d.checkKeyboardBlocking(wasInput, step.Selector); result != nil {
+	// Quick check: if previous step was input and keyboard is blocking, fail
+	// fast. A text or id tap goes to the agent, which taps the part of the
+	// element the keyboard leaves showing, so only a fully covered element
+	// fails there; every other tap aims at the centre.
+	agentPlaced := (step.Selector.Text != "" || step.Selector.ID != "") && step.Point == "" &&
+		!step.Selector.HasRelativeSelector() && !d.isBrowserMode()
+	covering := keyboardStillCovering
+	if agentPlaced {
+		covering = keyboardCoversAll
+	}
+	if result := d.checkKeyboardBlockingFor(wasInput, step.Selector, covering); result != nil {
 		return result
 	}
 
@@ -152,6 +172,9 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 						pairs = append(pairs, s.Strategy, s.Value)
 					}
 					elem, clicked, blockedBy, idx, err := d.client.FindFirstAndClickChecked(pairs, guardW, guardH, hitTest)
+					if res := unansweredTap(step, err); res != nil {
+						return res
+					}
 					if err == nil && idx >= 0 && idx < len(strategies) {
 						if res, retry := d.tapHit(step, strategies[idx], elem, clicked, blockedBy, guardW, guardH); res != nil {
 							return res
@@ -174,6 +197,9 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 				for _, s := range strategies {
 					d.recordTap(step.Selector)
 					elem, clicked, blockedBy, err := d.client.FindAndClickChecked(s.Strategy, s.Value, guardW, guardH, hitTest)
+					if res := unansweredTap(step, err); res != nil {
+						return res
+					}
 					if err == nil {
 						if res, retry := d.tapHit(step, s, elem, clicked, blockedBy, guardW, guardH); res != nil {
 							return res

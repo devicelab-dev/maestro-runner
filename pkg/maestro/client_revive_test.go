@@ -2,6 +2,7 @@ package maestro
 
 import (
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/devicelab-dev/maestro-runner/pkg/core"
 )
 
 // dyingAgent answers every call, except that it drops the connection, the
@@ -87,8 +90,8 @@ func TestClientRevivesButDoesNotResendActions(t *testing.T) {
 	c := revivingClient(t, port, &revives)
 
 	_, err := c.Call("Input.sendKeyActions", map[string]string{"text": "x"})
-	if err == nil || !strings.Contains(err.Error(), "not re-sent") {
-		t.Fatalf("err = %v, want the action reported as not re-sent", err)
+	if err == nil || !strings.Contains(err.Error(), "not re-sent") || !errors.Is(err, core.ErrUnanswered) {
+		t.Fatalf("err = %v, want the action reported as not re-sent and unanswered", err)
 	}
 	if revives.Load() != 1 {
 		t.Errorf("revives = %d, want 1", revives.Load())

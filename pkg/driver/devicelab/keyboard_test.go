@@ -74,6 +74,7 @@ func TestSettleKeyboardBlocking_ElementNotFound(t *testing.T) {
 			t.Fatal("keyboardBounds must not be sampled when the element is missing")
 			return nil
 		},
+		keyboardStillCovering,
 	)
 	if res != nil {
 		t.Errorf("expected nil (caller does the full-timeout find), got %+v", res)
@@ -89,6 +90,7 @@ func TestSettleKeyboardBlocking_ClearOnFirstSample(t *testing.T) {
 			return &core.ElementInfo{Bounds: elementCenteredAtY(1400)}, true
 		},
 		func() *core.Bounds { return &core.Bounds{X: 0, Y: 1560, Width: 1080, Height: 840} },
+		keyboardStillCovering,
 	)
 	if res != nil {
 		t.Errorf("element above the keyboard must not block, got %+v", res)
@@ -113,6 +115,7 @@ func TestSettleKeyboardBlocking_RelayoutLiftsElementMidSettle(t *testing.T) {
 			return &core.ElementInfo{Bounds: elementCenteredAtY(1400)}, true
 		},
 		func() *core.Bounds { return &core.Bounds{X: 0, Y: 1560, Width: 1080, Height: 840} },
+		keyboardStillCovering,
 	)
 	if res != nil {
 		t.Errorf("element lifted mid-settle must not block, got %+v", res)
@@ -139,6 +142,7 @@ func TestSettleKeyboardBlocking_KeyboardDismissedMidSettle(t *testing.T) {
 			}
 			return nil // keyboard gone
 		},
+		keyboardStillCovering,
 	)
 	if res != nil {
 		t.Errorf("dismissed keyboard must not block, got %+v", res)
@@ -154,6 +158,7 @@ func TestSettleKeyboardBlocking_PersistentOverlapFails(t *testing.T) {
 			return &core.ElementInfo{Bounds: elementCenteredAtY(1627)}, true
 		},
 		func() *core.Bounds { return &core.Bounds{X: 0, Y: 1560, Width: 1080, Height: 840} },
+		keyboardStillCovering,
 	)
 	if res == nil {
 		t.Fatal("persistent overlap through the whole settle window must fail")
@@ -215,5 +220,31 @@ func TestCheckKeyboardBlocking_ElementNotFoundProceeds(t *testing.T) {
 	d := New(&mockDeviceLabClient{}, &core.PlatformInfo{}, &mockShell{})
 	if res := d.checkKeyboardBlocking(true, flow.Selector{ID: "android:id/button1"}); res != nil {
 		t.Errorf("element not found must proceed to the normal find, got %+v", res)
+	}
+}
+
+// A tap the agent places is blocked only when no band of the element tall
+// enough to tap shows above the keyboard; a centre tap is blocked as soon as
+// the centre is under it.
+func TestKeyboardCoversAll(t *testing.T) {
+	kb := &core.Bounds{X: 0, Y: 1500, Width: 1080, Height: 900}
+	for name, tc := range map[string]struct {
+		el                core.Bounds
+		centre, coversAll bool
+	}{
+		"above the keyboard":       {core.Bounds{Y: 1200, Height: 100}, false, false},
+		"lower half covered":       {core.Bounds{Y: 1420, Height: 200}, true, false},
+		"24px showing, too little": {core.Bounds{Y: 1476, Height: 200}, true, true},
+		"fully covered":            {core.Bounds{Y: 1600, Height: 100}, true, true},
+	} {
+		if got := keyboardStillCovering(tc.el, kb); got != tc.centre {
+			t.Errorf("%s: centre verdict %v, want %v", name, got, tc.centre)
+		}
+		if got := keyboardCoversAll(tc.el, kb); got != tc.coversAll {
+			t.Errorf("%s: covers-all verdict %v, want %v", name, got, tc.coversAll)
+		}
+	}
+	if keyboardCoversAll(core.Bounds{Y: 1600}, nil) {
+		t.Error("no keyboard covers nothing")
 	}
 }

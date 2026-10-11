@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Step names show the values defined in the flow, never secrets.** `${NAME}` in a step name is filled in when the value comes from the flow files (`env:`, a `runFlow` / `retry` / `repeat` `env:`, `defineVariables`, a command's output). A value from outside the flow (`-e`, `--env-file`, workspace config, the shell), or one that carries such a value, stays `${NAME}`.
 - **`travel` on every driver that can set the location**, including the iOS drivers, which had none.
 - **DeviceLab Android honours `--typing-frequency` and `typingFrequency:`**: a pause of 1000/frequency ms after each character typed as key events. They were ignored.
+- **DeviceLab Android: the hierarchy marks `password` and `editable` fields and gives a slider's or progress bar's `range-min`, `range-max` and `range-current`**, in the hierarchy each run saves and in the `hierarchy` command.
+- **The run log names the DeviceLab Android agent build**, the commit it was built from, and warns when it was built from uncommitted source.
 - **DeviceLab iOS saves stall diagnostics before restarting a stuck agent**: a 2 s stack sample of the agent and of each app on the simulator, the process list and a screenshot, in `<report dir>/diagnostics/stall-<n>-<time>/` (at most 3 per run).
 
 ### Changed
@@ -37,6 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **iOS snapshot depth defaults to 62.** Above 62, XCTest returns no elements at all for a screen nested deeper than 62 levels, so such a screen came back empty on DeviceLab and WDA; `DL_AGENT_SNAPSHOT_MAX_DEPTH` or `MAESTRO_WDA_SNAPSHOT_MAX_DEPTH` override it ([#171](https://github.com/devicelab-dev/maestro-runner/issues/171)).
 
 ### Fixed
+- **DeviceLab Android: a tap the agent never answered is not sent again.** A tap that timed out, or that a dropped connection cut off, may already have happened; the tap loop polled again and could tap twice. The step now fails at once and says the tap is not repeated.
+- **DeviceLab Android: a text or id tap on an element partly under the keyboard taps the part that shows.** It failed with "keyboard is covering it" whenever the element's centre was under the keyboard, however much of it showed. The agent taps the clear point nearest the centre, under any window above the app (keyboard, system dialog, overlay), and the step fails only when less than 25 px of the element shows. Double taps, long presses, relative selectors and `point:` keep the centre check.
+- **DeviceLab Android: `hideKeyboard` presses Back only for the focused app's keyboard.** Right after an app switch, the previous app's keyboard can still read as shown; Back then went to the newly launched app and closed it ([#42](https://github.com/devicelab-dev/maestro-runner/issues/42)).
+- **WebViews: the one on screen is driven, not the first one.** With several WebViews (a tab or back-stack screen kept alive beside the visible one), a hidden first page turned CDP off, and `css:` selectors failed.
+- **A write to a WebView's or mobile browser's DevTools socket gives up after 10 s**, instead of holding the step forever when the device side stops reading.
+- **Web: waiting for a page's load event after `launchApp`, `openLink` or `openBrowser` gives up after 30 s.** A page with a resource that never finished held the step with no end.
+- **The screenshot and hierarchy saved for a failed step wait at most 10 s each.** With a hung agent each one waited out the driver's own timeouts, up to about 90 s per failing step.
 - **`checked:` selectors work on DeviceLab Android.** The agent reported no checked state, so `checked: true` never matched a switch that was on and `checked: false` always did ([#205](https://github.com/devicelab-dev/maestro-runner/issues/205)).
 - **`setLocation` moves the device on Android.** Both Android drivers sent a broadcast nothing on the device receives: the step passed and the location never changed. DeviceLab puts test providers in place of gps, network and fused through its agent; UIAutomator2 starts the bundled Appium settings app's location service, installing the app on first use. The mock ends with the run. Coordinates out of range or not numbers fail the step.
 - **Text selectors no longer match the soft keyboard's keys (DeviceLab Android).** With the keyboard up, `assertVisible: "q"` passed on the keyboard's key.

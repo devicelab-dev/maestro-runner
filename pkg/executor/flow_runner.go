@@ -1749,12 +1749,12 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 	if !result.Success {
 		seq := fr.nestedArtifactSeq
 		fr.nestedArtifactSeq++
-		if data, err := fr.driver.Screenshot(); err == nil && len(data) > 0 {
+		if data, err := captureWithin("screenshot", artifactCaptureTimeout, fr.driver.Screenshot); err == nil && len(data) > 0 {
 			if path, saveErr := fr.flowWriter.SaveNestedScreenshot(seq, data); saveErr == nil {
 				cmd.Artifacts.ScreenshotAfter = path
 			}
 		}
-		if data, err := fr.driver.Hierarchy(); err == nil && len(data) > 0 {
+		if data, err := captureWithin("view hierarchy", artifactCaptureTimeout, fr.driver.Hierarchy); err == nil && len(data) > 0 {
 			if path, saveErr := fr.flowWriter.SaveNestedHierarchy(seq, data); saveErr == nil {
 				cmd.Artifacts.ViewHierarchy = path
 			}
@@ -1857,11 +1857,40 @@ func (fr *FlowRunner) executeSubFlowWithRetry(subFlow flow.Flow, attempts int) *
 // callers pass captureHierarchy=true only for a failed step — not for every
 // passing step under `--artifacts always`, where it would cost extra device
 // round-trips for a dump nobody reads.
+// artifactCaptureTimeout bounds each screenshot or hierarchy read taken as
+// evidence around a step. A hung agent answers neither; each read then waited
+// out its driver's own timeouts (DeviceLab: 30s for the screenshot, 30s for
+// the snapshot and 30s for its fallback), on every failing step.
+var artifactCaptureTimeout = 10 * time.Second
+
+// captureWithin runs read, giving up after d. A read that has not answered is
+// left to finish in the background; its result is dropped.
+func captureWithin(what string, d time.Duration, read func() ([]byte, error)) ([]byte, error) {
+	type result struct {
+		data []byte
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		data, err := read()
+		ch <- result{data, err}
+	}()
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case r := <-ch:
+		return r.data, r.err
+	case <-timer.C:
+		logger.Warn("%s for the report did not answer within %v; skipped", what, d)
+		return nil, fmt.Errorf("%s: no answer within %v", what, d)
+	}
+}
+
 func (fr *FlowRunner) captureArtifacts(cmdIdx int, timing string, captureHierarchy bool) report.CommandArtifacts {
 	var artifacts report.CommandArtifacts
 
 	// Capture screenshot
-	if data, err := fr.driver.Screenshot(); err == nil && len(data) > 0 {
+	if data, err := captureWithin("screenshot", artifactCaptureTimeout, fr.driver.Screenshot); err == nil && len(data) > 0 {
 		path, saveErr := fr.flowWriter.SaveScreenshot(cmdIdx, timing, data)
 		if saveErr == nil {
 			if timing == "before" {
@@ -1873,7 +1902,7 @@ func (fr *FlowRunner) captureArtifacts(cmdIdx int, timing string, captureHierarc
 	}
 
 	if captureHierarchy {
-		if data, err := fr.driver.Hierarchy(); err == nil && len(data) > 0 {
+		if data, err := captureWithin("view hierarchy", artifactCaptureTimeout, fr.driver.Hierarchy); err == nil && len(data) > 0 {
 			path, saveErr := fr.flowWriter.SaveViewHierarchy(cmdIdx, data)
 			if saveErr == nil {
 				artifacts.ViewHierarchy = path

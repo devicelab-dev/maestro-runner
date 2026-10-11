@@ -1,6 +1,7 @@
 package device
 
 import (
+	"archive/zip"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -488,6 +490,38 @@ func checkDeviceLabHandshake(network, address string) bool {
 
 	// Check for HTTP 101 Switching Protocols
 	return strings.Contains(string(buf[:n]), "101")
+}
+
+// agentBuildMarker is how the agent's build embeds the commit it came from.
+var agentBuildMarker = regexp.MustCompile(`devicelab-agent-commit:([0-9a-f]{7,40}(?:-dirty)?|unknown)`)
+
+// AgentBuildOf reads the commit an agent APK was built from, "-dirty" when
+// its source had uncommitted changes, without installing it. An APK that
+// predates the marker gives an error.
+func AgentBuildOf(apkPath string) (string, error) {
+	zr, err := zip.OpenReader(apkPath)
+	if err != nil {
+		return "", err
+	}
+	defer zr.Close()
+	for _, f := range zr.File {
+		if !strings.HasSuffix(f.Name, ".dex") {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return "", err
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			return "", err
+		}
+		if m := agentBuildMarker.FindSubmatch(data); m != nil {
+			return string(m[1]), nil
+		}
+	}
+	return "", fmt.Errorf("%s carries no agent build marker", filepath.Base(apkPath))
 }
 
 // InstallDeviceLabDriver installs DeviceLab Android Driver APKs from the given directory.

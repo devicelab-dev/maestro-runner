@@ -6,6 +6,7 @@ package devicelab
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -366,6 +367,13 @@ func (d *Driver) maybeLazyRetryTap() bool {
 	sw, sh, _ := d.tappableScreenSize()
 	for _, s := range buildClickableOrAllStrategies(d.lastTapSelector) {
 		_, clicked, err := d.client.FindAndClickGuarded(s.Strategy, s.Value, sw, sh)
+		if errors.Is(err, core.ErrUnanswered) {
+			// The re-tap may have happened; another one could tap twice.
+			logger.Info("[devicelab] lazy retry: no answer to the re-tap of %s — not sending another", d.lastTapSelector.Describe())
+			d.lastTapRetries++
+			d.lastTapTime = time.Now()
+			return true
+		}
 		if err != nil {
 			continue
 		}

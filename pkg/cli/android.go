@@ -480,7 +480,10 @@ func createDeviceLabDriver(cfg *RunConfig, dev *device.AndroidDevice, info devic
 		}
 		return nil, nil, fmt.Errorf("create session: %w", err)
 	}
-	logger.Info("Session created: %s", session.SessionID)
+	logger.Info("Session created: %s (agent build %s)", session.SessionID, orUnknown(session.AgentBuild))
+	if strings.HasSuffix(session.AgentBuild, "-dirty") {
+		logger.Warn("the DeviceLab agent on the device was built from uncommitted source (%s)", session.AgentBuild)
+	}
 	printSetupSuccess("Session created")
 
 	// Set waitForIdle timeout. MAESTRO_DEVICELAB_SETTLE_DIAG=1 also turns on
@@ -603,4 +606,12 @@ func createDeviceLabDriver(cfg *RunConfig, dev *device.AndroidDevice, info devic
 	}
 
 	return driver, cleanup, nil
+}
+
+// orUnknown names a value an older component does not report.
+func orUnknown(s string) string {
+	if s == "" {
+		return "unknown"
+	}
+	return s
 }
