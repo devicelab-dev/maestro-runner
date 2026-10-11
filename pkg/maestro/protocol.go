@@ -89,6 +89,9 @@ type BoundsResult struct {
 type SessionResult struct {
 	SessionID  string       `json:"sessionId"`
 	DeviceInfo DeviceResult `json:"deviceInfo"`
+	// AgentBuild is the commit the agent was built from, "-dirty" when built
+	// from uncommitted source; empty from an agent that predates it.
+	AgentBuild string `json:"agentBuild,omitempty"`
 }
 
 // DeviceResult is returned by Device.getInfo and Session.create.
