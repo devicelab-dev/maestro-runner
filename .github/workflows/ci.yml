@@ -10,9 +10,28 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
-    name: Test
+  test-go:
+    name: Test Go (shard ${{ matrix.shard.id }})
     runs-on: ubuntu-latest
+    env:
+      TEST_PARALLEL: "4"
+    strategy:
+      fail-fast: false
+      # Static sharding avoids a timing/preparation run. The slow CDP browser
+      # package runs alone in its own shard; the remaining packages are split
+      # across three shards. Keep node_modules out of these lists — they are
+      # not repository test packages. Update the lists when packages are added
+      # or renamed.
+      matrix:
+        shard:
+          - id: cdp
+            packages: "github.com/devicelab-dev/maestro-runner/pkg/driver/browser/cdp"
+          - id: s1
+            packages: "github.com/devicelab-dev/maestro-runner/pkg/cli github.com/devicelab-dev/maestro-runner/pkg/core github.com/devicelab-dev/maestro-runner/pkg/driver/devicelab github.com/devicelab-dev/maestro-runner/pkg/driver/uiautomator2 github.com/devicelab-dev/maestro-runner/pkg/executor github.com/devicelab-dev/maestro-runner/pkg/jsengine github.com/devicelab-dev/maestro-runner/pkg/report github.com/devicelab-dev/maestro-runner/pkg/uiautomator2"
+          - id: s2
+            packages: "github.com/devicelab-dev/maestro-runner github.com/devicelab-dev/maestro-runner/pkg/cloud github.com/devicelab-dev/maestro-runner/pkg/device github.com/devicelab-dev/maestro-runner/pkg/driver/devicelab_ios github.com/devicelab-dev/maestro-runner/pkg/driver/wda github.com/devicelab-dev/maestro-runner/pkg/flow github.com/devicelab-dev/maestro-runner/pkg/logger github.com/devicelab-dev/maestro-runner/pkg/validator"
+          - id: s3
+            packages: "github.com/devicelab-dev/maestro-runner/drivers github.com/devicelab-dev/maestro-runner/pkg/config github.com/devicelab-dev/maestro-runner/pkg/driver/appium github.com/devicelab-dev/maestro-runner/pkg/driver/mock github.com/devicelab-dev/maestro-runner/pkg/emulator github.com/devicelab-dev/maestro-runner/pkg/flutter github.com/devicelab-dev/maestro-runner/pkg/maestro github.com/devicelab-dev/maestro-runner/pkg/simulator"
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -26,13 +45,50 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Run tests
-        run: go test -race -timeout 25m -coverprofile=coverage.out -covermode=atomic ./...
+      - name: Verify every Go package is in a shard
+        # Reads the shard lists back out of this file instead of repeating them:
+        # a second copy would drift and then validate itself, hiding a typo or a
+        # dropped package. `sort` is not `sort -u`, so a package listed in two
+        # shards still shows up. A package that cannot build on this runner
+        # (e.g. //go:build darwin) is absent from `go list`, so listing it fails
+        # — and omitting it hides it from this check entirely.
+        run: |
+          set -euo pipefail
+          workdir=$(mktemp -d)
+          trap 'rm -rf "$workdir"' EXIT
+          go list ./... | sort > "$workdir/all-packages.txt"
+          grep -oE '^[[:space:]]+packages: .*$' .github/workflows/ci.yml \
+            | sed -e "s/^[[:space:]]*packages: ['\"]//" -e "s/['\"]$//" \
+            | tr ' ' '\n' \
+            | grep -v '^$' \
+            | sort > "$workdir/sharded-packages.txt"
+          if ! diff -u "$workdir/all-packages.txt" "$workdir/sharded-packages.txt"; then
+            echo "::error::Go packages and test shards are out of sync. Every package from 'go list ./...' must appear in exactly one shard."
+            exit 1
+          fi
+          echo "All $(wc -l < "$workdir/all-packages.txt" | tr -d ' ') Go packages are covered by a test shard."
+
+      - name: Run tests (shard ${{ matrix.shard.id }})
+        env:
+          # Race detection makes the browser-backed CDP tests substantially
+          # slower. The other shards retain -race; CDP is bounded separately.
+          RACE_FLAG: ${{ matrix.shard.id != 'cdp' && '-race' || '' }}
+        run: |
+          PKGS="${{ matrix.shard.packages }}"
+          echo "Testing shard ${{ matrix.shard.id }} (race='$RACE_FLAG'):"
+          echo "$PKGS"
+          # shellcheck disable=SC2086
+          go test $RACE_FLAG -parallel "$TEST_PARALLEL" -timeout 25m -v -coverprofile=coverage-${{ matrix.shard.id }}.out -covermode=atomic $PKGS
 
       - name: Upload coverage
+        if: ${{ hashFiles(format('coverage-{0}.out', matrix.shard.id)) != '' }}
         uses: codecov/codecov-action@v5
+        # The shared flag and name let Codecov combine each shard's partial
+        # upload into one coverage report for the commit.
         with:
-          files: ./coverage.out
+          files: ./coverage-${{ matrix.shard.id }}.out
+          flags: unittests
+          name: coverage-report
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
@@ -65,7 +121,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [test, lint]
+    needs: [test-go, lint]
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
