@@ -56,8 +56,8 @@ func TestAndroidSessionSearchesAllWindows(t *testing.T) {
 // WebDriverAgent's default snapshot depth of 50 clips deep React Native trees
 // (#171); the WDA driver raises it to 100 and Appium sessions now match.
 func TestIOSSessionRaisesSnapshotDepth(t *testing.T) {
-	if got := connectCapturingSettings(t, "iOS")["snapshotMaxDepth"]; got != float64(100) {
-		t.Errorf("snapshotMaxDepth = %v, want 100", got)
+	if got := connectCapturingSettings(t, "iOS")["snapshotMaxDepth"]; got != float64(62) {
+		t.Errorf("snapshotMaxDepth = %v, want 62", got)
 	}
 	t.Setenv("MAESTRO_WDA_SNAPSHOT_MAX_DEPTH", "70")
 	if got := connectCapturingSettings(t, "iOS")["snapshotMaxDepth"]; got != float64(70) {

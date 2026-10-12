@@ -975,13 +975,14 @@ func isUUIDFormat(s string) bool {
 }
 
 // iosSnapshotMaxDepth is the accessibility-snapshot depth cap for XCUITest
-// sessions: 100 by default, overridable with MAESTRO_WDA_SNAPSHOT_MAX_DEPTH,
-// the same knob the WDA driver reads.
+// sessions: 62 by default, as for the WDA driver (above 62, XCTest returns no
+// elements at all for a screen nested deeper than 62 levels, #171), and
+// overridable with MAESTRO_WDA_SNAPSHOT_MAX_DEPTH, the same knob WDA reads.
 func iosSnapshotMaxDepth() int {
 	if v := os.Getenv("MAESTRO_WDA_SNAPSHOT_MAX_DEPTH"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
 	}
-	return 100
+	return 62
 }
