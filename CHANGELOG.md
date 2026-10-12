@@ -47,7 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Web: waiting for a page's load event after `launchApp`, `openLink` or `openBrowser` gives up after 30 s.** A page with a resource that never finished held the step with no end.
 - **The screenshot and hierarchy saved for a failed step wait at most 10 s each.** With a hung agent each one waited out the driver's own timeouts, up to about 90 s per failing step.
 - **`checked:` selectors work on DeviceLab Android.** The agent reported no checked state, so `checked: true` never matched a switch that was on and `checked: false` always did ([#205](https://github.com/devicelab-dev/maestro-runner/issues/205)).
-- **`setLocation` moves the device on Android.** Both Android drivers sent a broadcast nothing on the device receives: the step passed and the location never changed. DeviceLab puts test providers in place of gps, network and fused through its agent; UIAutomator2 starts the bundled Appium settings app's location service, installing the app on first use. The mock ends with the run. Coordinates out of range or not numbers fail the step.
+- **`setLocation` moves the device on Android.** Both Android drivers sent a broadcast nothing on the device receives: the step passed and the location never changed. DeviceLab puts test providers in place of gps, network and fused through its agent; UIAutomator2 starts the bundled Appium settings app's location service, installing the app on first use, with `am startservice` on Android 7 and older. The mock ends with the run. Coordinates out of range or not numbers fail the step.
 - **Text selectors no longer match the soft keyboard's keys (DeviceLab Android).** With the keyboard up, `assertVisible: "q"` passed on the keyboard's key.
 - **DeviceLab Android relative, `index:` and count lookups read every window.** They read only the active window, with a walk that can cut deep subtrees short, so `below:`, `index:` and counts missed elements in sheets, dialogs and popups that a plain text selector found.
 - **DeviceLab Android types characters that have no key on the keyboard** (accents, CJK, emoji) by pasting them. They were dropped, and the runner then retyped the whole field by setting it.
@@ -117,6 +117,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 2. DeviceLab iOS `launchApp` keeps permission grants with the default `all: allow` ([#207](https://github.com/devicelab-dev/maestro-runner/pull/207))
 3. A flow with inline or conditional `runFlow` steps is not split into a suite ([#208](https://github.com/devicelab-dev/maestro-runner/pull/208))
 4. Reported `checked:` selectors failing on DeviceLab Android ([#205](https://github.com/devicelab-dev/maestro-runner/issues/205))
+
+[@tSquaredd](https://github.com/tSquaredd)
+1. Found `setLocation` and `travel` not moving the location on Android, with the Android 7 fallback and the `am` error checks we took from it ([#209](https://github.com/devicelab-dev/maestro-runner/pull/209))
 
 [@Lykhoyda](https://github.com/Lykhoyda)
 1. UIAutomator2 `hideKeyboard` confirms the keyboard hidden with two reads ([#193](https://github.com/devicelab-dev/maestro-runner/pull/193))

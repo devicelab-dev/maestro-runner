@@ -1100,6 +1100,33 @@ func TestSetLocationSuccess(t *testing.T) {
 	}
 }
 
+// Android 7 and older have no start-foreground-service: am says so and the
+// service is started with startservice instead.
+func TestSetLocationFallsBackToStartService(t *testing.T) {
+	mock := &androidSevenShell{}
+	driver := &Driver{device: mock}
+	if res := driver.setLocation(&flow.SetLocationStep{Latitude: "1.5", Longitude: "2.5"}); !res.Success {
+		t.Fatalf("setLocation on Android 7: %v", res.Error)
+	}
+	last := mock.commands[len(mock.commands)-1]
+	if !strings.HasPrefix(last, "am startservice --user 0 -n io.appium.settings/.LocationService") {
+		t.Errorf("last command %q, want the startservice fallback", last)
+	}
+}
+
+type androidSevenShell struct{ commands []string }
+
+func (s *androidSevenShell) Shell(cmd string) (string, error) {
+	s.commands = append(s.commands, cmd)
+	if strings.HasPrefix(cmd, "am start-foreground-service") {
+		return "Unknown command: start-foreground-service", nil
+	}
+	if strings.HasPrefix(cmd, "am startservice") {
+		return "Starting service: Intent { cmp=io.appium.settings/.LocationService }", nil
+	}
+	return "", nil
+}
+
 func TestSetLocationReportsFailures(t *testing.T) {
 	for name, tc := range map[string]struct {
 		lat, lon  string
@@ -1109,6 +1136,7 @@ func TestSetLocationReportsFailures(t *testing.T) {
 		"latitude out of range":  {lat: "91", lon: "0"},
 		"longitude not a number": {lat: "0", lon: "east"},
 		"service refused":        {lat: "1", lon: "2", response: "Error: Not allowed to start service Intent"},
+		"am lacks the command":   {lat: "1", lon: "2", response: "Unknown command: startservice"},
 		"app cannot install":     {lat: "1", lon: "2", provision: errors.New("no APK")},
 	} {
 		mock := &MockShellExecutor{response: tc.response}

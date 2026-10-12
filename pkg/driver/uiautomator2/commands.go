@@ -2059,17 +2059,28 @@ func (d *Driver) mockLocation(lat, lon float64) error {
 		}
 		d.locationReady = true
 	}
-	cmd := fmt.Sprintf("am start-foreground-service --user 0 -n %s/.LocationService --es latitude %s --es longitude %s",
+	args := fmt.Sprintf("--user 0 -n %s/.LocationService --es latitude %s --es longitude %s",
 		locationApp, strconv.FormatFloat(lat, 'f', -1, 64), strconv.FormatFloat(lon, 'f', -1, 64))
-	out, err := d.device.Shell(cmd)
+	out, err := d.device.Shell("am start-foreground-service " + args)
+	if err == nil && amFailed(out) {
+		// Android 7 and older have no start-foreground-service.
+		out, err = d.device.Shell("am startservice " + args)
+	}
 	if err != nil {
 		return fmt.Errorf("%v %s", err, strings.TrimSpace(out))
 	}
-	if strings.Contains(out, "Error") || strings.Contains(out, "Exception") {
+	if amFailed(out) {
 		return fmt.Errorf("%s did not start: %s", locationApp, strings.TrimSpace(out))
 	}
 	d.locationSet = true
 	return nil
+}
+
+// amFailed reports whether am printed an error: over adb shell it exits 0
+// on some Android versions, so its output is the only sign.
+func amFailed(out string) bool {
+	return strings.Contains(out, "Error") || strings.Contains(out, "Exception") ||
+		strings.Contains(out, "Unknown command")
 }
 
 // SetLocationProvisioner sets how the location app is installed when a flow
