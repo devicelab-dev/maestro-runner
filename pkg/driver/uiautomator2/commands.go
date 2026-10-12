@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
+	"github.com/devicelab-dev/maestro-runner/pkg/device"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
 	"github.com/devicelab-dev/maestro-runner/pkg/logger"
 	"github.com/devicelab-dev/maestro-runner/pkg/uiautomator2"
@@ -2006,10 +2007,7 @@ func (d *Driver) setLocation(step *flow.SetLocationStep) *core.CommandResult {
 		return errorResult(fmt.Errorf("latitude and longitude required"), "Missing coordinates")
 	}
 
-	// Enable mock locations and set location via appops
-	// Note: Requires mock location app or root access
-	cmd := fmt.Sprintf("am broadcast -a android.intent.action.MOCK_LOCATION --ef lat %s --ef lon %s", lat, lon)
-	if _, err := d.device.Shell(cmd); err != nil {
+	if err := device.SetMockLocation(d.device, lat, lon); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to set location: %v", err))
 	}
 
@@ -2099,8 +2097,7 @@ func (d *Driver) travel(step *flow.TravelStep) *core.CommandResult {
 		lat := strings.TrimSpace(parts[0])
 		lon := strings.TrimSpace(parts[1])
 
-		cmd := fmt.Sprintf("am broadcast -a android.intent.action.MOCK_LOCATION --ef lat %s --ef lon %s", lat, lon)
-		if _, err := d.device.Shell(cmd); err != nil {
+		if err := device.SetMockLocation(d.device, lat, lon); err != nil {
 			return errorResult(err, fmt.Sprintf("Failed to set location during travel: %v", err))
 		}
 

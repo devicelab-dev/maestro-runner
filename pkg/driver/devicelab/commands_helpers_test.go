@@ -1100,10 +1100,12 @@ func TestSetLocation(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("setLocation failed: %v", res.Error)
 	}
-	if !strings.Contains(shell.commands[0], "MOCK_LOCATION") ||
-		!strings.Contains(shell.commands[0], "37.7749") ||
-		!strings.Contains(shell.commands[0], "-122.4194") {
-		t.Errorf("unexpected setLocation command: %s", shell.commands[0])
+	if len(shell.commands) != 2 ||
+		shell.commands[0] != "appops set io.appium.settings android:mock_location allow" ||
+		!strings.Contains(shell.commands[1], "io.appium.settings/.LocationService") ||
+		!strings.Contains(shell.commands[1], "--es latitude 37.7749") ||
+		!strings.Contains(shell.commands[1], "--es longitude -122.4194") {
+		t.Errorf("unexpected setLocation commands: %v", shell.commands)
 	}
 
 	// Missing lat
@@ -2555,13 +2557,14 @@ func TestTravel_HappyPath(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("travel: %v", res.Error)
 	}
-	if len(shell.commands) != 2 {
-		t.Errorf("expected 2 MOCK_LOCATION broadcasts, got %d", len(shell.commands))
-	}
+	var starts int
 	for _, c := range shell.commands {
-		if !strings.Contains(c, "MOCK_LOCATION") {
-			t.Errorf("expected MOCK_LOCATION command, got %s", c)
+		if strings.Contains(c, "io.appium.settings/.LocationService") {
+			starts++
 		}
+	}
+	if starts != 2 {
+		t.Errorf("expected LocationService started once per point, got %d: %v", starts, shell.commands)
 	}
 }
 

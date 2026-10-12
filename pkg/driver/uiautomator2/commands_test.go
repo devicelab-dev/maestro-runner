@@ -1585,11 +1585,17 @@ func TestSetLocationShellCommand(t *testing.T) {
 		t.Errorf("expected success, got error: %v", result.Error)
 	}
 
-	if len(mock.commands) != 1 {
-		t.Fatalf("expected 1 command, got %d", len(mock.commands))
+	// Allow Appium Settings to mock the location, then start its LocationService.
+	if len(mock.commands) != 2 {
+		t.Fatalf("expected 2 commands, got %d: %v", len(mock.commands), mock.commands)
 	}
-	if !strings.Contains(mock.commands[0], "37.7749") || !strings.Contains(mock.commands[0], "-122.4194") {
-		t.Errorf("expected coordinates in command, got: %s", mock.commands[0])
+	if mock.commands[0] != "appops set io.appium.settings android:mock_location allow" {
+		t.Errorf("expected the mock_location appop first, got: %s", mock.commands[0])
+	}
+	if !strings.Contains(mock.commands[1], "io.appium.settings/.LocationService") ||
+		!strings.Contains(mock.commands[1], "--es latitude 37.7749") ||
+		!strings.Contains(mock.commands[1], "--es longitude -122.4194") {
+		t.Errorf("expected LocationService with the coordinates, got: %s", mock.commands[1])
 	}
 }
 
@@ -3262,15 +3268,15 @@ func TestTravelSuccess(t *testing.T) {
 	if !strings.Contains(result.Message, "2 points") {
 		t.Errorf("expected '2 points' in message, got: %s", result.Message)
 	}
-	// Should have issued 2 shell commands (one per point)
-	if len(shell.commands) != 2 {
-		t.Fatalf("expected 2 commands, got %d", len(shell.commands))
+	// Should have set the location twice (appop + LocationService per point)
+	if len(shell.commands) != 4 {
+		t.Fatalf("expected 4 commands, got %d: %v", len(shell.commands), shell.commands)
 	}
-	if !strings.Contains(shell.commands[0], "37.7749") {
-		t.Errorf("expected first point lat in command, got: %s", shell.commands[0])
+	if !strings.Contains(shell.commands[1], "--es latitude 37.7749") {
+		t.Errorf("expected first point lat in command, got: %s", shell.commands[1])
 	}
-	if !strings.Contains(shell.commands[1], "37.8049") {
-		t.Errorf("expected second point lat in command, got: %s", shell.commands[1])
+	if !strings.Contains(shell.commands[3], "--es latitude 37.8049") {
+		t.Errorf("expected second point lat in command, got: %s", shell.commands[3])
 	}
 }
 
