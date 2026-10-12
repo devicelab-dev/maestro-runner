@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -25,6 +26,35 @@ type Client struct {
 	baseURL    string
 	sessionID  string
 	httpClient *http.Client
+
+	// What the last page-source reads gave: when one last succeeded, and the
+	// error of the last that failed. A wait that never found its element can
+	// then say the screen could not be read at all.
+	sourceMu     sync.Mutex
+	sourceOKAt   time.Time
+	sourceErr    error
+	sourceErrsAt time.Time
+}
+
+// SourceUnreadableSince returns the last page-source error when no read
+// succeeded since t and at least one failed; nil otherwise.
+func (c *Client) SourceUnreadableSince(t time.Time) error {
+	c.sourceMu.Lock()
+	defer c.sourceMu.Unlock()
+	if c.sourceErr == nil || c.sourceErrsAt.Before(t) || !c.sourceOKAt.Before(t) {
+		return nil
+	}
+	return c.sourceErr
+}
+
+func (c *Client) noteSource(err error) {
+	c.sourceMu.Lock()
+	defer c.sourceMu.Unlock()
+	if err == nil {
+		c.sourceOKAt = time.Now()
+		return
+	}
+	c.sourceErr, c.sourceErrsAt = err, time.Now()
 }
 
 // NewClient creates a new WDA client.
@@ -359,6 +389,12 @@ func (c *Client) Screenshot() ([]byte, error) {
 
 // Source returns the UI hierarchy as XML.
 func (c *Client) Source() (string, error) {
+	source, err := c.source()
+	c.noteSource(err)
+	return source, err
+}
+
+func (c *Client) source() (string, error) {
 	resp, err := c.get(c.sessionPath("/source"))
 	if err != nil {
 		// A snapshot taken while the accessibility tree is mutating can fail
@@ -764,6 +800,13 @@ func (c *Client) parseResponse(resp *http.Response) (map[string]interface{}, err
 			if msg, ok := value["message"].(string); ok {
 				message = msg
 			}
+			// The status alone said nothing: a page source that failed on
+			// every read showed only "status: 404" in the log.
+			logged := message
+			if len(logged) > 300 {
+				logged = logged[:300] + "..."
+			}
+			logger.Debug("WDA error (HTTP %d, %s): %s", resp.StatusCode, errMsg, logged)
 			return nil, fmt.Errorf("WDA error: %s", message)
 		}
 	}

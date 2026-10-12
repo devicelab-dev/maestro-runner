@@ -1660,16 +1660,19 @@ func (d *Driver) waitUntil(step *flow.WaitUntilStep) *core.CommandResult {
 	// The last notVisible check that could not read the screen, if the last
 	// check was one.
 	var unreadable error
+	waitStart := time.Now()
 
 	for {
 		select {
 		case <-ctx.Done():
 			// Clean, clear error message with timeout value
 			if waitingForVisible {
-				return errorResult(
-					context.DeadlineExceeded,
-					fmt.Sprintf("Element '%s' not visible within %v", selector.Describe(), timeout),
-				)
+				msg := fmt.Sprintf("Element '%s' not visible within %v", selector.Describe(), timeout)
+				if srcErr := d.client.SourceUnreadableSince(waitStart); srcErr != nil {
+					// Not "missing": WDA could not read the screen to look.
+					msg += fmt.Sprintf("; WDA could not read the screen on any attempt (%v)", srcErr)
+				}
+				return errorResult(context.DeadlineExceeded, msg)
 			}
 			if unreadable != nil {
 				return errorResult(unreadable,

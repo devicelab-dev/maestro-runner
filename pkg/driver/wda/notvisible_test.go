@@ -129,3 +129,24 @@ func TestIsNotFound(t *testing.T) {
 		t.Error("a read error is not a lookup that found nothing")
 	}
 }
+
+// extendedWaitUntil visible that never could read the screen says so, rather
+// than only that the element was not visible.
+func TestWaitUntilVisibleSaysWhenScreenUnreadable(t *testing.T) {
+	server := unreadableScreenServer(t, -1)
+	defer server.Close()
+	d := createTestDriver(server)
+
+	sel := flow.Selector{Text: "quintePlusParieuse"}
+	res := d.waitUntil(&flow.WaitUntilStep{Visible: &sel, BaseStep: flow.BaseStep{TimeoutMs: 300}})
+	if res.Success || !strings.Contains(res.Message, "could not read the screen") {
+		t.Errorf("message should say WDA could not read the screen: %s", res.Message)
+	}
+
+	readable := mockWDAServerForWaitUntil(10000)
+	defer readable.Close()
+	d2 := createTestDriver(readable)
+	if res := d2.waitUntil(&flow.WaitUntilStep{Visible: &sel, BaseStep: flow.BaseStep{TimeoutMs: 200}}); strings.Contains(res.Message, "could not read") {
+		t.Errorf("a readable screen without the element must not blame the screen: %s", res.Message)
+	}
+}
