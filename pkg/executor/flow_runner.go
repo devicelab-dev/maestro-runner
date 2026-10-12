@@ -1697,7 +1697,10 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 	if fr.config.OnNestedStep != nil && fr.depth > 0 {
 		errMsg := ""
 		if !result.Success && result.Error != nil {
-			errMsg = result.Error.Error()
+			// The message and its cause, as for a top-level step: the raw
+			// error alone was often Go's "context deadline exceeded", which
+			// said nothing about what was waited for.
+			errMsg = commandResultToError(result).Message
 		}
 		fr.config.OnNestedStep(fr.depth, desc, result.Success, duration, errMsg)
 	}
@@ -1732,10 +1735,7 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 
 	// Add error info if failed
 	if !result.Success && result.Error != nil {
-		cmd.Error = &report.Error{
-			Type:    "execution",
-			Message: result.Error.Error(),
-		}
+		cmd.Error = commandResultToError(result)
 	}
 
 	// Add nested sub-commands for compound steps

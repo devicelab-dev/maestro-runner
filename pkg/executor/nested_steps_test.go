@@ -248,3 +248,59 @@ func TestRetryReevaluatesRunFlowCondition(t *testing.T) {
 		t.Errorf("condition rewritten in the flow: %q", cond.Script)
 	}
 }
+
+// A step inside a runFlow that times out shows what it waited for, as a
+// top-level step does, not Go's bare "context deadline exceeded".
+func TestNestedStepTimeoutReadsLikeTopLevel(t *testing.T) {
+	driver := &mockDriver{executeFunc: func(step flow.Step) *core.CommandResult {
+		if _, ok := step.(*flow.AssertVisibleStep); ok {
+			return &core.CommandResult{Success: false, Error: context.DeadlineExceeded,
+				Message: "Element 'quintePlusParieuse' not visible within 1m0s"}
+		}
+		return &core.CommandResult{Success: true}
+	}}
+	var nested []string
+	out := t.TempDir()
+	runner := New(driver, RunnerConfig{
+		OutputDir: out,
+		Artifacts: ArtifactNever,
+		Device:    report.Device{ID: "test", Platform: "ios"},
+		OnNestedStep: func(depth int, desc string, passed bool, durationMs int64, errMsg string) {
+			if !passed {
+				nested = append(nested, errMsg)
+			}
+		},
+	})
+	_, err := runner.Run(context.Background(), []flow.Flow{{
+		SourcePath: "test.yaml",
+		Config:     flow.Config{Name: "nested timeout"},
+		Steps: []flow.Step{&flow.RunFlowStep{
+			BaseStep: flow.BaseStep{StepType: flow.StepRunFlow},
+			Steps: []flow.Step{&flow.AssertVisibleStep{
+				BaseStep: flow.BaseStep{StepType: flow.StepAssertVisible},
+				Selector: flow.Selector{Text: "quintePlusParieuse"},
+			}},
+		}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "Element 'quintePlusParieuse' not visible within 1m0s (cause: timed out)"
+	if len(nested) != 1 || nested[0] != want {
+		t.Errorf("nested console line = %q, want %q", nested, want)
+	}
+	matches, _ := filepath.Glob(filepath.Join(out, "flows", "*.json"))
+	found := false
+	for _, m := range matches {
+		data, _ := os.ReadFile(m)
+		if strings.Contains(string(data), want) {
+			found = true
+		}
+		if strings.Contains(string(data), "context deadline exceeded") {
+			t.Errorf("%s still says context deadline exceeded", filepath.Base(m))
+		}
+	}
+	if !found {
+		t.Errorf("no flow report carries %q", want)
+	}
+}

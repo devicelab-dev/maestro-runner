@@ -33,18 +33,25 @@ func commandResultToElement(r *core.CommandResult) *report.Element {
 	return element
 }
 
+// plainTimeout says "timed out" where an error carries Go's "context deadline
+// exceeded".
+func plainTimeout(msg string) string {
+	return strings.ReplaceAll(msg, "context deadline exceeded", "timed out")
+}
+
 // commandResultToError converts core.CommandResult error to report.Error.
 func commandResultToError(r *core.CommandResult) *report.Error {
 	if r == nil || r.Error == nil {
 		return nil
 	}
 
-	message := r.Error.Error()
+	// Go's wording for a context that ran out says nothing to a flow author.
+	message := plainTimeout(r.Error.Error())
 
 	// Use message from result if available — but preserve the underlying cause
 	// so debugging can see why findElement actually rejected.
 	if r.Message != "" {
-		if causeMsg := r.Error.Error(); causeMsg != "" && causeMsg != r.Message {
+		if causeMsg := plainTimeout(r.Error.Error()); causeMsg != "" && causeMsg != r.Message {
 			message = fmt.Sprintf("%s (cause: %s)", r.Message, causeMsg)
 		} else {
 			message = r.Message

@@ -488,7 +488,8 @@ func (d *Driver) waitUntil(s *flow.WaitUntilStep) *core.CommandResult {
 	if s.Visible != nil {
 		node, _, err := d.findElement(*s.Visible, false, timeout)
 		if err != nil {
-			return core.ErrorResult(err, err.Error())
+			// Say how long it waited, as the other drivers do.
+			return core.ErrorResult(err, fmt.Sprintf("%v (waited %v)", err, time.Duration(timeout)*time.Millisecond))
 		}
 		return core.SuccessResult("visible", toElementInfo(node))
 	}
