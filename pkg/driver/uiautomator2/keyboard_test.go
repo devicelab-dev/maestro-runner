@@ -259,10 +259,10 @@ func TestExecuteFlagLifecycle(t *testing.T) {
 		mock := &MockUIA2Client{}
 		d := New(mock, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, nil)
 
-		step := &flow.InputTextStep{Text: ""}
+		step := &flow.InputTextStep{Text: "hello", Selector: flow.Selector{Text: "missing"}}
 		result := d.Execute(step)
 		if result.Success {
-			t.Fatal("expected failure for empty text")
+			t.Fatal("expected failure when the target field is not found")
 		}
 		if d.lastStepWasInput {
 			t.Error("expected lastStepWasInput to be false after failed inputText")

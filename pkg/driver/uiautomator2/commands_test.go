@@ -551,8 +551,8 @@ func TestInputTextNoText(t *testing.T) {
 
 	result := driver.inputText(step)
 
-	if result.Success {
-		t.Error("expected failure when text is empty")
+	if !result.Success {
+		t.Errorf("expected empty text to pass as a no-op, got %q", result.Message)
 	}
 }
 
@@ -3583,8 +3583,8 @@ func TestInputTextKeyPressEmptyText(t *testing.T) {
 	}
 	result := driver.inputText(step)
 
-	if result.Success {
-		t.Error("expected failure for empty text even with keyPress=true")
+	if !result.Success {
+		t.Errorf("expected empty text with keyPress=true to pass as a no-op, got %q", result.Message)
 	}
 }
 

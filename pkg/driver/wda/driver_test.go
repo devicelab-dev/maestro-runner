@@ -366,8 +366,8 @@ func TestExecuteInputTextEmpty(t *testing.T) {
 	}
 	result := driver.Execute(step)
 
-	if result.Success {
-		t.Error("Expected error for empty text")
+	if !result.Success {
+		t.Errorf("Expected empty text to pass as a no-op, got %q", result.Message)
 	}
 }
 
@@ -2095,9 +2095,9 @@ func TestInputTextEmptyText(t *testing.T) {
 	}
 
 	result := driver.inputText(step)
-	// Empty text should fail - WDA implementation rejects empty text
-	if result.Success {
-		t.Errorf("Expected failure for empty text, got success")
+	// Empty text types nothing and passes, as in Maestro.
+	if !result.Success {
+		t.Errorf("Expected empty text to pass as a no-op, got %q", result.Message)
 	}
 }
 

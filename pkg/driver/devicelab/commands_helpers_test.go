@@ -2298,8 +2298,8 @@ func TestInputText_KeyPress(t *testing.T) {
 func TestInputText_EmptyText(t *testing.T) {
 	client := &scriptedClient{trackingClient: newTrackingClient()}
 	driver := New(client, &core.PlatformInfo{}, &mockShell{})
-	if res := driver.inputText(&flow.InputTextStep{Text: ""}); res.Success {
-		t.Error("inputText with empty text should fail")
+	if res := driver.inputText(&flow.InputTextStep{Text: ""}); !res.Success {
+		t.Errorf("inputText with empty text should pass as a no-op, got %q", res.Message)
 	}
 }
 

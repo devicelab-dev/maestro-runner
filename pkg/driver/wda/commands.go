@@ -436,8 +436,10 @@ func (d *Driver) assertNotVisible(step *flow.AssertNotVisibleStep) *core.Command
 
 func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 	text := step.Text
+	// Empty text (often a blank line from a script-split value) types
+	// nothing and passes, as in Maestro.
 	if text == "" {
-		return errorResult(fmt.Errorf("no text specified"), "No text to input")
+		return successResult("Nothing to input (empty text)", nil)
 	}
 
 	// Check for non-ASCII characters (may cause input issues on some devices)

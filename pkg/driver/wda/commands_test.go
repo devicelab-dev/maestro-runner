@@ -2945,11 +2945,11 @@ func TestInputTextEmpty(t *testing.T) {
 	step := &flow.InputTextStep{Text: ""}
 	result := driver.inputText(step)
 
-	if result.Success {
-		t.Fatalf("Expected failure for empty text")
+	if !result.Success {
+		t.Fatalf("Expected empty text to pass as a no-op, got: %s", result.Message)
 	}
-	if !strings.Contains(result.Message, "No text") {
-		t.Errorf("Expected 'No text' in message, got: %s", result.Message)
+	if !strings.Contains(result.Message, "Nothing to input") {
+		t.Errorf("Expected 'Nothing to input' in message, got: %s", result.Message)
 	}
 }
 
