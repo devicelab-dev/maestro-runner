@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/devicelab-dev/maestro-runner/pkg/logger"
 	"github.com/devicelab-dev/maestro-runner/pkg/report"
 	"github.com/devicelab-dev/maestro-runner/pkg/simulator"
+	"github.com/devicelab-dev/maestro-runner/pkg/telemetry"
 	"github.com/devicelab-dev/maestro-runner/pkg/validator"
 	"github.com/urfave/cli/v2"
 )
@@ -648,6 +650,14 @@ type RunConfig struct {
 	// Cloud provider (detected from AppiumURL, nil if not a cloud provider)
 	CloudProvider cloud.Provider
 	CloudMeta     map[string]string
+
+	// TelemetryFlags are the names (never values) of the flags this run was
+	// given, for the anonymous usage event (pkg/telemetry).
+	TelemetryFlags []string
+	// TelemetryFlowPaths are the top-level flow files found (before tag
+	// filtering), relative to the paths given, for the event's one-way
+	// project id.
+	TelemetryFlowPaths []string
 }
 
 func hyperlink(url, text string) string {
@@ -911,6 +921,7 @@ func runTest(c *cli.Context) error {
 		}
 	}
 
+	cfg.TelemetryFlags = setFlagNames(c)
 	return executeTest(cfg)
 }
 
@@ -998,6 +1009,39 @@ func resolveOutputDir(output string, flatten bool) (string, error) {
 }
 
 func executeTest(cfg *RunConfig) error {
+	started := time.Now()
+	// The anonymous usage event (pkg/telemetry) goes out when the run ends,
+	// in the background, and is waited for at most its 2s timeout.
+	var telemetryDone chan struct{}
+	telemetryRun := func(outcome string, devices int) telemetry.Run {
+		return telemetry.Run{
+			Version: Version, Command: "test", FlagNames: cfg.TelemetryFlags,
+			Platform: telemetryPlatform(cfg), Driver: telemetryDriver(cfg), Cloud: cfg.CloudProvider != nil,
+			Devices: devices, FlowPaths: cfg.TelemetryFlowPaths, Outcome: outcome, Duration: time.Since(started),
+		}
+	}
+	// One event per run: whichever path claims telemetrySent first sends it
+	// (the end of the run, a failure, or Ctrl-C).
+	var telemetrySent atomic.Bool
+	sendTelemetry := func(outcome string, index *report.Index, devices int) {
+		if !telemetry.Enabled() || !telemetrySent.CompareAndSwap(false, true) {
+			return
+		}
+		ev := telemetry.Build(telemetryRun(outcome, devices), index, cfg.OutputDir)
+		telemetryDone = make(chan struct{})
+		go func() { defer close(telemetryDone); telemetry.Send(ev) }()
+	}
+	// Set once the run's own checks have passed (flows valid, flags and
+	// variables consistent): from then on a run that ends without reporting
+	// is sent as setup_failed (no flow ran) or crashed, and one stopped with
+	// Ctrl-C as interrupted. A user's configuration mistake sends nothing.
+	var telemetryArmed atomic.Bool
+	defer func() {
+		if telemetryDone != nil {
+			<-telemetryDone
+		}
+	}()
+
 	// 1. Create output directory
 	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
@@ -1047,6 +1091,9 @@ func executeTest(cfg *RunConfig) error {
 		sig := <-sigCh
 		logger.Info("Received signal %v, cleaning up...", sig)
 		fmt.Fprintf(os.Stderr, "\nReceived %v, cleaning up...\n", sig)
+		if telemetryArmed.Load() && telemetry.Enabled() && telemetrySent.CompareAndSwap(false, true) {
+			telemetry.SendWithin(telemetry.Build(telemetryRun("interrupted", 0), nil, ""), time.Second)
+		}
 
 		// Clean up driver resources (socket, adb forward, session)
 		cleanupMu.Lock()
@@ -1160,6 +1207,9 @@ func executeTest(cfg *RunConfig) error {
 	}
 	cfg.AppID = expandRunnerVars(cfg.AppID, cfg.Env)
 
+	telemetryArmed.Store(true)
+	defer sendTelemetry("setup_failed", nil, 0) // a no-op once an event went out
+
 	// 3.5. Handle device startup (emulator or simulator, if requested)
 	if err := handleDeviceStartup(cfg, emulatorMgr, simulatorMgr); err != nil {
 		logger.Error("Device startup failed: %v", err)
@@ -1184,6 +1234,16 @@ func executeTest(cfg *RunConfig) error {
 	result, err := executeFlowsWithMode(cfg, flows, needsParallel, deviceIDs)
 	if err != nil {
 		logger.Error("Flow execution failed: %v", err)
+		// crashed once a flow had started (the report shows it), otherwise
+		// the run never got going (driver or device setup): setup_failed.
+		// With --flatten the folder is reused, so a report.json older than
+		// this run is a previous run's and is ignored.
+		outcome := "setup_failed"
+		if index, ierr := report.ReadIndex(filepath.Join(cfg.OutputDir, "report.json")); ierr == nil &&
+			!index.StartTime.Before(started) && anyFlowStarted(index) {
+			outcome = "crashed"
+		}
+		sendTelemetry(outcome, nil, len(deviceIDs))
 		return err
 	}
 	logger.Info("Flow execution completed: %d passed, %d failed, %d skipped",
@@ -1287,10 +1347,20 @@ func executeTest(cfg *RunConfig) error {
 		fmt.Printf("    Allure: %s\n", allurePath)
 	}
 
-	// 7. Print update notice if available
-	printUpdateNotice()
+	// 7. Anonymous usage event (counts only; see pkg/telemetry)
+	if index, err := report.ReadIndex(jsonPath); err == nil {
+		sendTelemetry("completed", index, max(1, len(deviceIDs)))
+	} else {
+		sendTelemetry("completed", nil, max(1, len(deviceIDs)))
+	}
 
-	// 8. Print footer
+	// 8. Print update notice if available
+	printUpdateNotice()
+	if telemetry.Enabled() && telemetry.DetectCI() == "none" {
+		fmt.Printf("\n  %s%s%s\n", color(colorDim), telemetry.Notice(), color(colorReset))
+	}
+
+	// 9. Print footer
 	printFooter()
 
 	// Exit with code 1 if any flows failed (summary already printed)
@@ -1329,6 +1399,7 @@ func validateAndParseFlows(cfg *RunConfig) ([]flow.Flow, error) {
 		result := v.Validate(path)
 		allTestCases = append(allTestCases, result.TestCases...)
 		allErrors = append(allErrors, result.Errors...)
+		cfg.TelemetryFlowPaths = append(cfg.TelemetryFlowPaths, result.FlowPaths...)
 	}
 
 	if len(allErrors) > 0 {
@@ -3171,4 +3242,56 @@ func noIOSTargetMessage() string {
 	return "no iOS device found: nothing is booted and no device is connected\n" +
 		"Hint: boot a simulator (`xcrun simctl boot <udid>`), connect an iPhone, or pass --start-simulator <name>.\n" +
 		"      `maestro-runner devices` lists what this machine can see"
+}
+
+// telemetryPlatform is the run's platform for the usage event.
+func telemetryPlatform(cfg *RunConfig) string {
+	if cfg.Driver == "browser" || cfg.Platform == "web" {
+		return "web"
+	}
+	return cfg.Platform
+}
+
+// telemetryDriver is the run's driver name for the usage event.
+func telemetryDriver(cfg *RunConfig) string {
+	if telemetryPlatform(cfg) == "web" {
+		return "browser"
+	}
+	if cfg.Driver != "" {
+		return cfg.Driver
+	}
+	switch cfg.Platform {
+	case "android", "ios":
+		return "devicelab" // the default on both
+	}
+	return ""
+}
+
+// setFlagNames lists the flags this run was given, each once under its main
+// name (an alias like --udid for --device is not counted again).
+func setFlagNames(c *cli.Context) []string {
+	var defined []cli.Flag
+	if c.Command != nil {
+		defined = append(defined, c.Command.Flags...)
+	}
+	if c.App != nil {
+		defined = append(defined, c.App.Flags...)
+	}
+	var names []string
+	for _, f := range defined {
+		if n := f.Names(); len(n) > 0 && c.IsSet(n[0]) {
+			names = append(names, n[0])
+		}
+	}
+	return names
+}
+
+// anyFlowStarted reports whether a run's report shows a flow that began.
+func anyFlowStarted(index *report.Index) bool {
+	for _, f := range index.Flows {
+		if f.Status != report.StatusPending {
+			return true
+		}
+	}
+	return false
 }

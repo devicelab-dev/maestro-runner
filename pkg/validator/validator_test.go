@@ -3,6 +3,7 @@ package validator
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -1496,5 +1497,52 @@ func TestCollectByPatterns_OnlyNegationsIsAnError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no flows would match") {
 		t.Errorf("error should explain that nothing would match, got: %v", err)
+	}
+}
+
+// FlowPaths lists every top-level flow found, whatever the tag filter
+// keeps, relative to the folder and with "/" separators, so the same folder
+// gives the same list with or without tags and wherever it is checked out.
+// A subflow reached only through runFlow is not a top-level flow.
+func TestValidate_FlowPathsIgnoreTagsAndSubflows(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"smoke.yaml":           "appId: com.example\ntags:\n  - smoke\n---\n- runFlow: ../common/login.yaml\n",
+		"auth/regression.yaml": "appId: com.example\ntags:\n  - regression\n---\n- tapOn: \"R\"\n",
+		"config.yaml":          "flows:\n  - \"*\"\n  - \"auth/*\"\n",
+		"../common/login.yaml": "appId: com.example\n---\n- tapOn: \"Login\"\n",
+	}
+	for name, body := range files {
+		writeFile(t, filepath.Join(dir, name), body)
+	}
+
+	all := New(nil, nil).Validate(dir)
+	smoke := New([]string{"smoke"}, nil).Validate(dir)
+	if !all.IsValid() || !smoke.IsValid() {
+		t.Fatalf("errors: %v %v", all.Errors, smoke.Errors)
+	}
+	if len(smoke.TestCases) != 1 {
+		t.Fatalf("smoke test cases: %v", smoke.TestCases)
+	}
+	want := "auth/regression.yaml,smoke.yaml"
+	for name, r := range map[string]*Result{"all": all, "smoke": smoke} {
+		got := append([]string(nil), r.FlowPaths...)
+		sort.Strings(got)
+		if strings.Join(got, ",") != want {
+			t.Errorf("%s: flow paths %v, want %s", name, got, want)
+		}
+	}
+	if file := New(nil, nil).Validate(filepath.Join(dir, "smoke.yaml")); strings.Join(file.FlowPaths, ",") != "smoke.yaml" {
+		t.Errorf("a single file: %v, want its name", file.FlowPaths)
+	}
+}
+
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
