@@ -696,6 +696,10 @@ func (c *Client) post(path string, body interface{}) (map[string]interface{}, er
 		return bytes.NewReader(data)
 	}
 
+	isOpenURL := strings.HasSuffix(path, "/url")
+	if isOpenURL {
+		bodyStr = `{"url":"<redacted>"}`
+	}
 	logger.Debug("WDA POST %s body=%s", path, core.RedactTypedText(path, bodyStr))
 
 	resp, err := c.httpClient.Post(c.baseURL+path, "application/json", newBody())
@@ -718,7 +722,12 @@ func (c *Client) post(path string, body interface{}) (map[string]interface{}, er
 	}()
 
 	logger.Debug("WDA POST %s completed (%dms, status: %d)", path, duration, resp.StatusCode)
-	return c.parseResponse(resp)
+	result, err := c.parseResponse(resp)
+	if err != nil && isOpenURL {
+		// WDA error messages and malformed response bodies can echo the URL.
+		return nil, fmt.Errorf("WDA open URL failed (HTTP %d; response details redacted)", resp.StatusCode)
+	}
+	return result, err
 }
 
 func (c *Client) delete(path string) (map[string]interface{}, error) {

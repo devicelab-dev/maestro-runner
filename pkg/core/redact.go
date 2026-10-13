@@ -1,6 +1,9 @@
 package core
 
-import "strings"
+import (
+	"net/url"
+	"strings"
+)
 
 // RedactedBody is what a typing request's body is logged as.
 const RedactedBody = `{"text":"<redacted>"}`
@@ -24,4 +27,19 @@ func RedactTypedText(path, body string) string {
 		return RedactedBody
 	}
 	return body
+}
+
+// RedactURL keeps a URL's destination for diagnostics, excluding credentials,
+// query values and fragments. Malformed input is never echoed.
+func RedactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Opaque != "" {
+		return "<redacted-url>"
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.ForceQuery = false
+	u.Fragment = ""
+	u.RawFragment = ""
+	return u.String()
 }

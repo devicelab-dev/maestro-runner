@@ -1563,7 +1563,7 @@ func (d *Driver) openLink(step *flow.OpenLinkStep) *core.CommandResult {
 	}
 
 	if err := d.openURL(link); err != nil {
-		return errorResult(err, fmt.Sprintf("Failed to open link: %s", link))
+		return errorResult(err, fmt.Sprintf("Failed to open link: %s", core.RedactURL(link)))
 	}
 
 	// If autoVerify is enabled, wait briefly for page load
@@ -1571,7 +1571,7 @@ func (d *Driver) openLink(step *flow.OpenLinkStep) *core.CommandResult {
 		time.Sleep(2 * time.Second)
 	}
 
-	msg := fmt.Sprintf("Opened link: %s", link)
+	msg := fmt.Sprintf("Opened link: %s", core.RedactURL(link))
 	if step.Browser != nil && *step.Browser {
 		msg += " (browser flag set, but the system default handler is used)"
 	}
@@ -1591,9 +1591,16 @@ func (d *Driver) openLink(step *flow.OpenLinkStep) *core.CommandResult {
 //     deep-link delivery.
 func (d *Driver) openURL(url string) error {
 	if d.info != nil && d.info.IsSimulator && d.udid != "" {
-		cmd := exec.Command("xcrun", "simctl", "openurl", d.udid, url)
-		if output, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("simctl openurl: %w: %s", err, strings.TrimSpace(string(output)))
+		ctx, cancel := context.WithTimeout(d.parentContext(), 30*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "xcrun", "simctl", "openurl", d.udid, url)
+		// simctl stderr can echo the URL, including credentials. Keep only the
+		// exit status or context failure; never capture that output.
+		if err := cmd.Run(); err != nil {
+			if ctx.Err() != nil {
+				return fmt.Errorf("simctl openurl: %w", ctx.Err())
+			}
+			return fmt.Errorf("simctl openurl: %w", err)
 		}
 		return nil
 	}
@@ -1607,10 +1614,10 @@ func (d *Driver) openBrowser(step *flow.OpenBrowserStep) *core.CommandResult {
 	}
 
 	if err := d.openURL(url); err != nil {
-		return errorResult(err, fmt.Sprintf("Failed to open browser: %s", url))
+		return errorResult(err, fmt.Sprintf("Failed to open browser: %s", core.RedactURL(url)))
 	}
 
-	return successResult(fmt.Sprintf("Opened browser: %s", url), nil)
+	return successResult(fmt.Sprintf("Opened browser: %s", core.RedactURL(url)), nil)
 }
 
 // Wait commands
