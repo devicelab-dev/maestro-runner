@@ -23,10 +23,22 @@ func (w *WebElement) Input(text string) error { return w.elem.Input(text) }
 // Click performs a CDP click on the element (used for browser mode).
 func (w *WebElement) Click() error { return w.elem.Click(proto.InputMouseButtonLeft, 1) }
 
+// Clear empties the field through the prototype's native value setter and a
+// bubbling input event, as fillIframeInput does. Assigning this.value directly
+// goes past React's value tracker, so a controlled input kept its old value.
 func (w *WebElement) Clear() error {
-	_, err := w.elem.Eval(`() => { this.value = ''; this.dispatchEvent(new Event('input')); }`)
+	_, err := w.elem.Eval(jsClearValue)
 	return err
 }
+
+const jsClearValue = `function() {
+  var proto = this.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  var desc = Object.getOwnPropertyDescriptor(proto, 'value');
+  if (desc && desc.set && (this.tagName === 'INPUT' || this.tagName === 'TEXTAREA')) desc.set.call(this, '');
+  else this.value = '';
+  this.dispatchEvent(new Event('input', {bubbles: true}));
+  this.dispatchEvent(new Event('change', {bubbles: true}));
+}`
 
 // webElementInfo extracts ElementInfo from a Rod element.
 func webElementInfo(elem *rod.Element) *core.ElementInfo {
