@@ -148,6 +148,25 @@ func TestBuildFromReport(t *testing.T) {
 	}
 }
 
+// A run without --platform finds its platform from the device, after the run
+// config is made: the event takes the platform and driver from the report.
+func TestBuildPlatformFromReport(t *testing.T) {
+	clearEnv(t)
+	index, dir := writeReport(t)
+	index.Device = report.Device{ID: "11171JEC200939", Platform: "android", OSVersion: "33"}
+	index.MaestroRunner.Driver = "devicelab"
+	ev := Build(Run{Version: "1.1.29", Command: "test", Devices: 1, Outcome: "completed"}, index, dir)
+	if ev.Platform != "android" || ev.Driver != "devicelab" || ev.DeviceKind != "real" || ev.OSMajor != "android 33" {
+		t.Errorf("platform %q driver %q device %q os %q; want android, devicelab, real, android 33",
+			ev.Platform, ev.Driver, ev.DeviceKind, ev.OSMajor)
+	}
+	// A platform or driver the run config names is kept.
+	ev = Build(Run{Version: "1.1.29", Command: "test", Platform: "android", Driver: "uiautomator2", Outcome: "completed"}, index, dir)
+	if ev.Platform != "android" || ev.Driver != "uiautomator2" {
+		t.Errorf("platform %q driver %q; want android, uiautomator2", ev.Platform, ev.Driver)
+	}
+}
+
 // Nothing from the run's content reaches the payload: no flow, file, app or
 // device names, no error message, no ids.
 func TestPayloadCarriesNoContent(t *testing.T) {

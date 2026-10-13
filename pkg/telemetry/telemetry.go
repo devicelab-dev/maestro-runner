@@ -121,6 +121,21 @@ func Build(run Run, index *report.Index, reportDir string) Event {
 	if index == nil {
 		return ev
 	}
+	// Without --platform the platform is found from the device after the run
+	// starts, so the run config has none: take it, and the driver, from the
+	// report. Device kind and OS version depend on the platform.
+	if ev.Platform == "" {
+		p := index.Device.Platform
+		for i := range index.Flows {
+			if d := index.Flows[i].Device; p == "" && d != nil {
+				p = d.Platform
+			}
+		}
+		ev.Platform = oneOf(p, "android", "ios", "web")
+	}
+	if ev.Driver == "" {
+		ev.Driver = oneOf(index.MaestroRunner.Driver, "devicelab", "uiautomator2", "appium", "wda", "devicelab-legacy", "browser")
+	}
 	// A multi-device run (local --parallel, several --device, Appium cloud
 	// sessions) records the device of each flow: count those, and report a
 	// kind or OS version only when they all agree ("mixed" otherwise).
