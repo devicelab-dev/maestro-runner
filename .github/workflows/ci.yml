@@ -9,6 +9,10 @@ on:
   # Actions outage a push produced no run at all and there was nothing to retry.
   workflow_dispatch:
 
+# Tests run whole `test` commands; keep them from sending usage telemetry.
+env:
+  DO_NOT_TRACK: 1
+
 jobs:
   test:
     name: Test
