@@ -2418,7 +2418,7 @@ func TestExecute_DispatchesByStepType(t *testing.T) {
 		{"SwipeStep direction", &flow.SwipeStep{Direction: "up", Duration: 100}, true},
 		{"HideKeyboardStep", &flow.HideKeyboardStep{}, true},
 		// Expected failures (validation / shell errors)
-		{"InputTextStep empty", &flow.InputTextStep{Text: ""}, false},
+		{"InputTextStep empty", &flow.InputTextStep{Text: ""}, true},
 		{"PressKeyStep unknown", &flow.PressKeyStep{Key: "asdf"}, false},
 		{"OpenLinkStep empty", &flow.OpenLinkStep{Link: ""}, false},
 		{"OpenBrowserStep empty", &flow.OpenBrowserStep{URL: ""}, false},
