@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.29] - 2026-10-15
+
+This release adds **`--retries`**, which runs flaky flows again in the same run and marks them as flaky in JUnit and HTML. It also runs **Maestro's `test` command line unchanged**, so CI scripts written for Maestro work as they are. Most of the rest closes gaps with Maestro found by running real suites side by side (DuckDuckGo, RNTester, React Navigation, Expo, pager-view, react-native-enriched). Contributors sent a large share of it, as 17 pull requests and a stack of precise bug reports, credited at the end. The DeviceLab Android agent taps faster and recovers from a dropped connection, and the DeviceLab iOS agent reads screens deeper than 62 levels. `test` now sends one anonymous usage event per run; what it holds and how to turn it off are below and on the [telemetry page](https://open.devicelab.dev/maestro-runner/docs/telemetry).
+
 ### ⚠️ Behaviour changes
 
 **`inputText` types at the cursor into a field that already holds text, as Maestro does (DeviceLab Android).** It used to replace the field's whole value, so a rich-text editor typed "1", Enter, "2" kept only "2". An empty field is still set in one call. To replace a field's text, use `eraseText` first, as with Maestro ([#189](https://github.com/devicelab-dev/maestro-runner/issues/189)).
@@ -51,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **DeviceLab Android: `eraseText` clears React inputs in a WebView.** It set the field's value past React's value tracker, so a controlled input kept its old value and showed it again on the next render.
 - **A write to a WebView's or mobile browser's DevTools socket gives up after 10 s**, instead of holding the step forever when the device side stops reading.
 - **Web: waiting for a page's load event after `launchApp`, `openLink` or `openBrowser` gives up after 30 s.** A page with a resource that never finished held the step with no end.
+- **A step inside a `runFlow` that times out says what it waited for.** It printed only Go's "context deadline exceeded", in the console and the report; it now gives the same message as a top-level step, such as "Element 'Pay' not visible within 1m0s (cause: timed out)".
 - **The screenshot and hierarchy saved for a failed step wait at most 10 s each.** With a hung agent each one waited out the driver's own timeouts, up to about 90 s per failing step.
 - **`checked:` selectors work on DeviceLab Android.** The agent reported no checked state, so `checked: true` never matched a switch that was on and `checked: false` always did ([#205](https://github.com/devicelab-dev/maestro-runner/issues/205)).
 - **`setLocation` moves the device on Android.** Both Android drivers sent a broadcast nothing on the device receives: the step passed and the location never changed. DeviceLab puts test providers in place of gps, network and fused through its agent; UIAutomator2 starts the bundled Appium settings app's location service, installing the app on first use, with `am startservice` on Android 7 and older. The mock ends with the run. Coordinates out of range or not numbers fail the step.
@@ -78,7 +83,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **DeviceLab iOS waits for a simulator to finish booting** (`simctl bootstatus`) before installing the app, as WDA already did; a simulator listed as Booted can take minutes more on a CI runner.
 - **DeviceLab iOS: `addMedia` gives `simctl addmedia` a minute, then retries once**, and says simctl did not finish instead of "signal: killed".
 - **DeviceLab iOS keeps the last 5 `xcodebuild` logs** across agent restarts (`xcodebuild.log.1` … `.5`).
-- **A WebView whose DevTools never answers no longer hangs the run.** The whole CDP setup is bounded at 3 s; steps continue on native automation and the connection is retried later.
+- **A WebView whose DevTools never answers no longer hangs the run.** The whole CDP setup is bounded at 3 s; steps continue on native automation and the connection is retried later. This extends the 1.1.28 fix for [#190](https://github.com/devicelab-dev/maestro-runner/issues/190), which bounded only the WebSocket handshake.
 - **`--device` without `--platform` runs on the device's platform**, as in Maestro: an iOS simulator or connected iPhone id means iOS.
 - **A tag filter that leaves no flows says what Maestro says** ("Include / Exclude tags did not match any Flows:"), which scripts look for.
 - **JUnit testcases carry Maestro's `id`, `timestamp` and `status`** (SUCCESS, ERROR, …); harnesses that read `status` treated every testcase without it as failed.
@@ -87,7 +92,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The end-of-run summary shows steps that never ran as skipped**, not with a red ✗.
 - **The monkey launch fallback passes `--pct-syskeys 0`**, without which monkey refuses to start on an emulator with no hardware keyboard.
 - **A flow run directly is no longer split into a "suite" when it has inline or conditional `runFlow` steps.** A flow made only of `runFlow` steps, two or more of them with a file, was expanded into one flow per file. Inline `runFlow` blocks (`when:` + `commands:`) were dropped without a word, and a file's `when:` was ignored, so the file ran whatever the condition said. A reset flow such as "open the screen, `when` a menu shows close it, `when` items are selected clear them" ran only its file steps and still passed. Such a flow is now run as written; flows made only of unconditional file `runFlow` steps are still suites.
-- **DeviceLab iOS: `launchApp` with the default `all: allow` no longer resets the app's permissions on a simulator.** It reset every permission and then granted `all` with `simctl`, but simctl's contacts grant does not take (iOS 18.6 simulator) and it has no notifications service, so a grant made another way (the user's tap on the prompt, applesimutils, an earlier run) was lost on every launch and the app asked again: an app that shows a permission onboarding when a permission is undecided opened on it after every `launchApp`. An explicit `permissions:` map still resets first, so permissions it doesn't name stay undecided.
+- **DeviceLab iOS: `launchApp` with the default `all: allow` no longer resets the app's permissions on a simulator.** It reset every permission and then granted `all` with `simctl`, but simctl's contacts grant does not take (iOS 18.6 simulator) and it has no notifications service, so a grant made another way (the user's tap on the prompt, applesimutils, an earlier run) was lost on every launch and the app asked again: an app that shows a permission onboarding when a permission is undecided opened on it after every `launchApp`. An explicit `permissions:` map still resets first, so permissions it doesn't name stay undecided ([#204](https://github.com/devicelab-dev/maestro-runner/issues/204)).
 - **`childOf` and `containsChild` follow the element tree, as in Maestro, on DeviceLab, UIAutomator2, Appium and WDA.** They compared rectangles, so any element inside the anchor's bounds counted as its child. A list row behind an overlay that covers it (a search-results list drawn over the full list) "was in" the overlay, and `assertVisible: {id: title, childOf: {id: search_results}}` passed while the results list was empty. Both filters now walk the parent chain; an anchor without tree links (rebuilt from a relative selector) still uses bounds. The DeviceLab iOS driver already did this.
 - **UIAutomator2 `hideKeyboard` no longer trusts a single "keyboard hidden" read.** While the keyboard is still coming up, `dumpsys window InputMethod` can report it not shown and Appium's hide_keyboard can answer 404, so the step returned without pressing BACK and the keyboard stayed over the next target. The driver now treats the keyboard as hidden only when two reads 300 ms apart agree, both before and after Appium's call, and still presses BACK only while the keyboard is shown.
 - **WDA keeps enough idle connections for its own parallel reads.** The driver reads an element's name, rect, text and displayed at once, and a tap looks an element up four ways at once, but Go's default transport keeps two idle connections per host, so every burst closed two connections and opened two new ones. Through a forwarded port to a physical iPhone, new connections opened together fail with EOF and are sent again, which costs time on every step. The WDA client now keeps up to eight.
@@ -121,7 +126,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [@MxScripter](https://github.com/MxScripter)
 1. `childOf` and `containsChild` follow the element tree ([#203](https://github.com/devicelab-dev/maestro-runner/pull/203))
-2. DeviceLab iOS `launchApp` keeps permission grants with the default `all: allow` ([#207](https://github.com/devicelab-dev/maestro-runner/pull/207))
+2. DeviceLab iOS `launchApp` keeps permission grants with the default `all: allow` ([#204](https://github.com/devicelab-dev/maestro-runner/issues/204), [#207](https://github.com/devicelab-dev/maestro-runner/pull/207))
 3. A flow with inline or conditional `runFlow` steps is not split into a suite ([#208](https://github.com/devicelab-dev/maestro-runner/pull/208))
 4. Reported `checked:` selectors failing on DeviceLab Android ([#205](https://github.com/devicelab-dev/maestro-runner/issues/205))
 
@@ -133,6 +138,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [@aralshukaili](https://github.com/aralshukaili)
 1. Reported `inputText` replacing a field's text instead of typing at the cursor ([#189](https://github.com/devicelab-dev/maestro-runner/issues/189))
+2. Reported a WebView DevTools connect hanging a flow, which led to bounding the whole CDP setup ([#190](https://github.com/devicelab-dev/maestro-runner/issues/190))
 
 [@Cancercookie](https://github.com/Cancercookie)
 1. Asked for script output and step labels in reports ([#192](https://github.com/devicelab-dev/maestro-runner/issues/192))
