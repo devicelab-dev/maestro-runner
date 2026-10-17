@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
@@ -562,8 +563,9 @@ func (d *Driver) addMediaToPhotos(media []string) error {
 		len(addMediaWaits), addMediaWaits[len(addMediaWaits)-1], err)
 }
 
-// simPrefs are the settings Appium applies to a simulator for automation;
-// they stay in the simulator after the run.
+// simPrefs are the settings Appium applies to a simulator for automation.
+// RestoreSimulatorPrefs puts back what they replaced when the run ends, so
+// a simulator someone also uses by hand is left as it was (#214).
 var simPrefs = []struct{ domain, key, kind, value, why string }{
 	{"com.apple.Accessibility", "ReduceMotionEnabled", "-int", "1", "Reduce Motion on"},
 	// Appium's key; not yet checked on an iOS 26 simulator (an unknown key
@@ -571,21 +573,70 @@ var simPrefs = []struct{ domain, key, kind, value, why string }{
 	{"com.apple.WebUI", "AutoFillPasswords", "-int", "0", "password AutoFill off"},
 }
 
-// ApplySimulatorPrefs writes simPrefs into a booted simulator. Set
-// DEVICELAB_IOS_SIM_PREFS=0 to leave it as it is. Failures are logged.
+// prefsSimctl runs simctl for the simulator prefs; tests replace it.
+var prefsSimctl = func(args ...string) (string, error) {
+	return simctl(context.Background(), 30*time.Second, args...)
+}
+
+// savedPref is a pref's value before ApplySimulatorPrefs changed it; absent
+// means the key was not set, so restoring deletes it.
+type savedPref struct {
+	domain, key, kind, value string
+	absent                   bool
+}
+
+var (
+	savedPrefsMu sync.Mutex
+	savedPrefs   = map[string][]savedPref{}
+)
+
+// ApplySimulatorPrefs writes simPrefs into a booted simulator and remembers
+// the values they replace for RestoreSimulatorPrefs. A pref that already has
+// its value is left alone. Set DEVICELAB_IOS_SIM_PREFS=0 to leave the
+// simulator as it is. Failures are logged.
 func ApplySimulatorPrefs(udid string) {
 	if os.Getenv(SimPrefsEnv) == "0" || udid == "" {
 		return
 	}
 	var applied []string
+	var saved []savedPref
 	for _, p := range simPrefs {
-		if _, err := simctl(context.Background(), 30*time.Second, "spawn", udid, "defaults", "write", p.domain, p.key, p.kind, p.value); err != nil {
+		out, err := prefsSimctl("spawn", udid, "defaults", "read", p.domain, p.key)
+		old := strings.TrimSpace(out)
+		if err == nil && old == p.value {
+			continue
+		}
+		if _, err := prefsSimctl("spawn", udid, "defaults", "write", p.domain, p.key, p.kind, p.value); err != nil {
 			logger.Warn("simulator pref %s.%s not set: %v", p.domain, p.key, err)
 			continue
 		}
+		// `defaults read` fails when the key is not set.
+		saved = append(saved, savedPref{domain: p.domain, key: p.key, kind: p.kind, value: old, absent: err != nil})
 		applied = append(applied, p.why)
 	}
+	savedPrefsMu.Lock()
+	savedPrefs[udid] = append(savedPrefs[udid], saved...)
+	savedPrefsMu.Unlock()
 	if len(applied) > 0 {
-		logger.Info("Simulator prefs: %s (%s=0 to skip)", strings.Join(applied, ", "), SimPrefsEnv)
+		logger.Info("Simulator prefs for this run: %s (restored afterwards; %s=0 to skip)", strings.Join(applied, ", "), SimPrefsEnv)
+	}
+}
+
+// RestoreSimulatorPrefs puts back the values ApplySimulatorPrefs replaced on
+// this simulator. Failures are logged.
+func RestoreSimulatorPrefs(udid string) {
+	savedPrefsMu.Lock()
+	saved := savedPrefs[udid]
+	delete(savedPrefs, udid)
+	savedPrefsMu.Unlock()
+	for i := len(saved) - 1; i >= 0; i-- {
+		p := saved[i]
+		args := []string{"spawn", udid, "defaults", "write", p.domain, p.key, p.kind, p.value}
+		if p.absent {
+			args = []string{"spawn", udid, "defaults", "delete", p.domain, p.key}
+		}
+		if _, err := prefsSimctl(args...); err != nil {
+			logger.Warn("simulator pref %s.%s not restored: %v", p.domain, p.key, err)
+		}
 	}
 }

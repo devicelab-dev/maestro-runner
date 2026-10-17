@@ -50,13 +50,15 @@ func createDevicelabIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		printSetupSuccess("App installed")
 	}
 
-	// Before the agent and the app start, so both launch with them.
+	// Before the agent and the app start, so both launch with them. They
+	// are put back when the run ends (#214).
 	dlios.ApplySimulatorPrefs(udid)
 
 	ctx := context.Background()
 	printSetupStep("Starting devicelab iOS agent...")
 	agent, client, err := dlios.StartAgent(ctx, dlios.AgentOptions{UDID: udid, ReadyTimeout: 600 * time.Second})
 	if err != nil {
+		dlios.RestoreSimulatorPrefs(udid)
 		return nil, nil, fmt.Errorf("devicelab iOS agent: %w", err)
 	}
 	printSetupSuccess(fmt.Sprintf("Agent ready on port %d (%s)", agent.Port(), agent.Mode()))
@@ -64,6 +66,7 @@ func createDevicelabIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		agent.Release(stopCtx, client)
+		dlios.RestoreSimulatorPrefs(udid)
 	}
 
 	deviceInfo, err := getIOSDeviceInfo(udid)

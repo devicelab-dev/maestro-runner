@@ -2,6 +2,7 @@ package devicelab_ios
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -331,6 +332,58 @@ func TestApplySimulatorPrefsDisabled(t *testing.T) {
 	t.Setenv(SimPrefsEnv, "0")
 	ApplySimulatorPrefs("SIM-1") // must not run simctl
 	ApplySimulatorPrefs("")
+}
+
+// The prefs a run sets are put back when it ends (#214): a value the user
+// had is written back, a key that was not set is deleted, and a pref that
+// already had its value is neither written nor restored.
+func TestSimulatorPrefsAreRestored(t *testing.T) {
+	prefs := map[string]string{
+		"com.apple.Accessibility ReduceMotionEnabled": "0", // the user's own value
+		"com.apple.WebUI AutoFillPasswords":           "",  // not set
+	}
+	var writes []string
+	orig := prefsSimctl
+	t.Cleanup(func() { prefsSimctl = orig })
+	prefsSimctl = func(args ...string) (string, error) {
+		// spawn <udid> defaults <verb> <domain> <key> [kind value]
+		verb, k := args[3], args[4]+" "+args[5]
+		switch verb {
+		case "read":
+			if v := prefs[k]; v != "" {
+				return v + "\n", nil
+			}
+			return "", fmt.Errorf("does not exist")
+		case "write":
+			prefs[k] = args[7]
+		case "delete":
+			prefs[k] = ""
+		}
+		writes = append(writes, verb+" "+k)
+		return "", nil
+	}
+
+	ApplySimulatorPrefs("SIM-1")
+	if prefs["com.apple.Accessibility ReduceMotionEnabled"] != "1" || prefs["com.apple.WebUI AutoFillPasswords"] != "0" {
+		t.Fatalf("prefs not applied: %v", prefs)
+	}
+	RestoreSimulatorPrefs("SIM-1")
+	if got := prefs["com.apple.Accessibility ReduceMotionEnabled"]; got != "0" {
+		t.Errorf("Reduce Motion = %q after the run, want the user's 0", got)
+	}
+	if got := prefs["com.apple.WebUI AutoFillPasswords"]; got != "" {
+		t.Errorf("AutoFill = %q after the run, want the key deleted", got)
+	}
+
+	// Already at the run's values: nothing to write, nothing to put back.
+	prefs["com.apple.Accessibility ReduceMotionEnabled"] = "1"
+	prefs["com.apple.WebUI AutoFillPasswords"] = "0"
+	writes = nil
+	ApplySimulatorPrefs("SIM-1")
+	RestoreSimulatorPrefs("SIM-1")
+	if len(writes) != 0 {
+		t.Errorf("writes = %v, want none for prefs already set", writes)
+	}
 }
 
 func TestLaunchEnvAndArgs(t *testing.T) {
