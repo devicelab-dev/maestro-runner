@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -103,5 +104,23 @@ func TestConfirmTypedTextKeepsExistingText(t *testing.T) {
 				t.Errorf("field holds %q after the retry, want %q", f.value, tt.want)
 			}
 		})
+	}
+}
+
+// The retype warning goes to the console and the log, so it gives counts and
+// never the text: what was typed may be a password.
+func TestConfirmTypedTextWarningHidesText(t *testing.T) {
+	var logged []string
+	warn := func(format string, args ...interface{}) { logged = append(logged, fmt.Sprintf(format, args...)) }
+	f := &recordingField{value: "hunt"}
+	ConfirmTypedText(f, "hunter2", "", warn)
+	if len(logged) != 1 {
+		t.Fatalf("warnings = %v, want one", logged)
+	}
+	if strings.Contains(logged[0], "hunt") {
+		t.Errorf("warning shows the text: %q", logged[0])
+	}
+	if !strings.Contains(logged[0], "4 character(s) after typing 7") {
+		t.Errorf("warning = %q, want the counts", logged[0])
 	}
 }

@@ -1,6 +1,9 @@
 package core
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 // TextEntryVerdict is what a read-back of a text field after typing tells us.
 type TextEntryVerdict int
@@ -167,7 +170,9 @@ func ConfirmTypedText(field TextField, typed, before string, warn func(format st
 	}
 
 	if warn != nil {
-		warn("inputText: field holds %q after typing %q — retyping", after, typed)
+		// Counts, not the text: what was typed may be a password (#219).
+		warn("inputText: field holds %d character(s) after typing %d — retyping",
+			utf8.RuneCountInString(after), utf8.RuneCountInString(typed))
 	}
 	if clearErr := field.Clear(); clearErr != nil {
 		// Without the clear, retyping would append to the partial value and
