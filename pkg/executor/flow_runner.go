@@ -1040,40 +1040,59 @@ const maxPrepareScanDepth = 10
 // one reached first at runtime. runFlow wrappers are dropped and their children
 // inlined; file-based subflows are parsed best-effort (parse errors are ignored
 // here — they surface during execution). A visited set + depth cap guard cycles.
+//
+// retry and repeat are expanded the same way, and so is a runFlow's else
+// branch, since a launchApp inside them runs too: a flow whose only launchApp
+// sat in a retry got no alert handling. A file named inside a subflow file
+// resolves against the subflow file's own directory, as it does when it runs,
+// not against the top flow's.
 func (fr *FlowRunner) collectStepsForPrepare() []flow.Step {
 	var out []flow.Step
 	seen := make(map[string]bool)
 
-	var expand func(steps []flow.Step, depth int)
-	expand = func(steps []flow.Step, depth int) {
+	var expand func(steps []flow.Step, dir string, depth int)
+	// expandFile parses a flow file named by a flow in dir and expands its
+	// steps against the file's own directory.
+	expandFile := func(file, dir string, depth int) {
+		if file == "" {
+			return
+		}
+		path := file
+		if !filepath.IsAbs(path) && dir != "" {
+			path = filepath.Join(dir, path)
+		}
+		if seen[path] {
+			return
+		}
+		seen[path] = true
+		if sub, err := flow.ParseFile(path); err == nil {
+			expand(sub.Steps, filepath.Dir(path), depth+1)
+		}
+	}
+	expand = func(steps []flow.Step, dir string, depth int) {
 		if depth > maxPrepareScanDepth {
 			return
 		}
 		for _, s := range steps {
-			rf, ok := s.(*flow.RunFlowStep)
-			if !ok {
+			switch st := s.(type) {
+			case *flow.RunFlowStep:
+				expand(st.Steps, dir, depth+1)
+				expandFile(st.File, dir, depth)
+				expand(st.ElseSteps, dir, depth+1)
+				expandFile(st.ElseFile, dir, depth)
+			case *flow.RetryStep:
+				expand(st.Steps, dir, depth+1)
+				expandFile(st.File, dir, depth)
+			case *flow.RepeatStep:
+				expand(st.Steps, dir, depth+1)
+			default:
 				out = append(out, s)
-				continue
-			}
-			// Inline subflow steps are already parsed.
-			if len(rf.Steps) > 0 {
-				expand(rf.Steps, depth+1)
-			}
-			// File-based subflow: parse it to reach its launchApp.
-			if rf.File != "" {
-				path := fr.script.ResolvePath(rf.File)
-				if !seen[path] {
-					seen[path] = true
-					if sub, err := flow.ParseFile(path); err == nil {
-						expand(sub.Steps, depth+1)
-					}
-				}
 			}
 		}
 	}
 
-	expand(fr.flow.Config.OnFlowStart, 0)
-	expand(fr.flow.Steps, 0)
+	expand(fr.flow.Config.OnFlowStart, fr.script.FlowDir(), 0)
+	expand(fr.flow.Steps, fr.script.FlowDir(), 0)
 	return out
 }
 

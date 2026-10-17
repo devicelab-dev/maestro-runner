@@ -323,6 +323,20 @@ func matchesSelector(elem *ParsedElement, sel flow.Selector) bool {
 	return true
 }
 
+// elementText is the text Maestro's copyTextFrom takes from an element: its
+// value, else its placeholder, else its label (Orchestra.kt:1791-1804, with
+// IOSDriver.kt:212-216 naming the iOS attributes).
+func elementText(e *ParsedElement) string {
+	switch {
+	case e.Value != "":
+		return e.Value
+	case e.PlaceholderValue != "":
+		return e.PlaceholderValue
+	default:
+		return e.Label
+	}
+}
+
 // isCheckableType reports the element types Maestro reads checked from:
 // XCUIElementType CheckBox (12), Switch (40) and Toggle (41), in
 // IOSDriver.kt:680-690. For a Switch WDA reports the value as "1" or "0".
