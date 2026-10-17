@@ -1462,18 +1462,28 @@ func (d *Driver) resetKeychain() *core.CommandResult {
 }
 
 func (d *Driver) clearAppStateDevice(bundleID string) *core.CommandResult {
+	if !devicectlAvailable() {
+		// No Xcode on this host (a Linux machine the phone is plugged into): go-ios does both
+		// steps over usbmuxd.
+		if err := goiosUninstall(d.udid, bundleID); err != nil {
+			return errorResult(fmt.Errorf("go-ios uninstall failed: %w", err),
+				"Failed to uninstall app on device")
+		}
+		if err := goiosInstall(d.udid, d.appFile); err != nil {
+			return errorResult(fmt.Errorf("go-ios install failed: %w", err),
+				"Failed to reinstall app on device")
+		}
+		return successResult(fmt.Sprintf("Cleared state for %s (uninstall+reinstall, go-ios)", bundleID), nil)
+	}
+
 	// Uninstall via xcrun devicectl (uses remoted, doesn't disrupt usbmuxd port forwarding)
-	cmd := exec.Command("xcrun", "devicectl", "device", "uninstall", "app",
-		"--device", d.udid, bundleID)
-	if output, err := cmd.CombinedOutput(); err != nil {
+	if output, err := devicectlRun("device", "uninstall", "app", "--device", d.udid, bundleID); err != nil {
 		return errorResult(fmt.Errorf("devicectl uninstall failed: %w: %s", err, string(output)),
 			"Failed to uninstall app on device")
 	}
 
 	// Reinstall via xcrun devicectl
-	cmd = exec.Command("xcrun", "devicectl", "device", "install", "app",
-		"--device", d.udid, d.appFile)
-	if output, err := cmd.CombinedOutput(); err != nil {
+	if output, err := devicectlRun("device", "install", "app", "--device", d.udid, d.appFile); err != nil {
 		return errorResult(fmt.Errorf("devicectl install failed: %w: %s", err, string(output)),
 			"Failed to reinstall app on device")
 	}

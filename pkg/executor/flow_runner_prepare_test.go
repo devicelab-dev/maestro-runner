@@ -180,3 +180,66 @@ func TestCollectStepsForPrepare_CyclicRunFlowTerminates(t *testing.T) {
 		t.Errorf("expected 0 launchApps from cyclic subflows, got %d", n)
 	}
 }
+
+func writePrepareFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A launchApp inside a retry (commands or file), a repeat, or a runFlow's else
+// branch runs too, so the scan has to reach it: the WDA driver sets up alert
+// handling from the launchApp it finds.
+func TestCollectStepsForPrepare_RetryRepeatAndElse(t *testing.T) {
+	dir := t.TempDir()
+	writePrepareFile(t, filepath.Join(dir, "launch.yaml"), "- launchApp:\n    permissions:\n      all: allow\n")
+	launch := func() flow.Step {
+		return &flow.LaunchAppStep{AppID: "com.example", Permissions: map[string]string{"all": "allow"}}
+	}
+
+	for name, step := range map[string]flow.Step{
+		"retry commands":    &flow.RetryStep{Steps: []flow.Step{launch()}},
+		"retry file":        &flow.RetryStep{File: "launch.yaml"},
+		"repeat commands":   &flow.RepeatStep{Times: "2", Steps: []flow.Step{launch()}},
+		"runFlow else":      &flow.RunFlowStep{Steps: []flow.Step{&flow.TapOnStep{}}, ElseSteps: []flow.Step{launch()}},
+		"runFlow else file": &flow.RunFlowStep{Steps: []flow.Step{&flow.TapOnStep{}}, ElseFile: "launch.yaml"},
+		"retry in a repeat": &flow.RepeatStep{Steps: []flow.Step{&flow.RetryStep{File: "launch.yaml"}}},
+	} {
+		fr := newPrepareTestRunner(flow.Flow{SourcePath: filepath.Join(dir, "main.yaml"), Steps: []flow.Step{step}})
+		n, perms := countLaunchApps(fr.collectStepsForPrepare())
+		fr.script.Close()
+		if n != 1 || perms["all"] != "allow" {
+			t.Errorf("%s: got %d launchApps (first with %v), want the one inside it", name, n, perms)
+		}
+	}
+}
+
+// A file named inside a subflow file resolves against that subflow's
+// directory, as it does when the flow runs: the b.yaml that sub/a.yaml names
+// is sub/b.yaml. It was resolved against the top flow's directory.
+func TestCollectStepsForPrepare_NestedFileResolvesFromItsOwnDirectory(t *testing.T) {
+	for name, subflow := range map[string]string{
+		"runFlow": "- runFlow: b.yaml\n",
+		"retry":   "- retry:\n    file: b.yaml\n",
+	} {
+		dir := t.TempDir()
+		writePrepareFile(t, filepath.Join(dir, "sub", "a.yaml"), subflow)
+		writePrepareFile(t, filepath.Join(dir, "sub", "b.yaml"), "- launchApp:\n    permissions:\n      all: allow\n")
+		// Beside the top flow, a b.yaml the run never reaches.
+		writePrepareFile(t, filepath.Join(dir, "b.yaml"), "- launchApp:\n    permissions:\n      all: deny\n")
+
+		fr := newPrepareTestRunner(flow.Flow{
+			SourcePath: filepath.Join(dir, "main.yaml"),
+			Steps:      []flow.Step{&flow.RunFlowStep{File: "sub/a.yaml"}},
+		})
+		n, perms := countLaunchApps(fr.collectStepsForPrepare())
+		fr.script.Close()
+		if n != 1 || perms["all"] != "allow" {
+			t.Errorf("%s: got %d launchApps (first with %v), want only sub/b.yaml's {all: allow}", name, n, perms)
+		}
+	}
+}

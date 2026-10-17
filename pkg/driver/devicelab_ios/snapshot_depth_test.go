@@ -45,6 +45,10 @@ func TestRenderDeviceXctestrunSetsSnapshotDepth(t *testing.T) {
 }
 
 func TestSimulatorXctestrunSetsSnapshotDepth(t *testing.T) {
+	// xctestrunFor sets the port and the depth with plutil, which only macOS has.
+	if _, err := os.Stat("/usr/bin/plutil"); err != nil {
+		t.Skip("plutil not available")
+	}
 	t.Setenv(snapshotDepthVar, "")
 	t.Setenv("SIMCTL_CHILD_"+snapshotDepthVar, "")
 	// A built agent.xctestrun has both environment dictionaries; the sample

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A `launchApp` inside `retry`, `repeat` or a `runFlow` `else` branch now sets up the iOS session's permission alerts.** Before the session starts, the runner looks for the flow's first `launchApp`, and it looked only inside `runFlow`, so a flow whose only `launchApp` sat in a `retry` got no alert handling. A flow file named inside a subflow file is also found next to that file, as it is when the flow runs.
+- **WDA: `clearState` works on a physical iPhone from a host without Xcode.** It uninstalled and reinstalled the app with `xcrun devicectl`, so on Linux every `launchApp` with `clearState: true` failed. Without devicectl, go-ios does both over usbmuxd. A Mac with Xcode is unchanged.
+
 ## [1.1.29] - 2026-10-15
 
 This release adds **`--retries`**, which runs flaky flows again in the same run and marks them as flaky in JUnit and HTML. It also runs **Maestro's `test` command line unchanged**, so CI scripts written for Maestro work as they are. Most of the rest closes gaps with Maestro found by running real suites side by side (DuckDuckGo, RNTester, React Navigation, Expo, pager-view, react-native-enriched). Contributors sent a large share of it, as 17 pull requests and a stack of precise bug reports, credited at the end. The DeviceLab Android agent taps faster and recovers from a dropped connection, and the DeviceLab iOS agent reads screens deeper than 62 levels. `test` now sends one anonymous usage event per run; what it holds and how to turn it off are below and on the [telemetry page](https://open.devicelab.dev/maestro-runner/docs/telemetry).
