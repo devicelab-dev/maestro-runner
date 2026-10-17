@@ -200,6 +200,44 @@ func TestExecuteSettlesOnlyAfterMovingStep(t *testing.T) {
 	}
 }
 
+// A wait-for-idle timeout of 0 turns the settle off (#212): on a screen that
+// never stops changing, each action paid the full cap. Any other value keeps
+// it on.
+func TestExecuteDoesNotSettleWhenIdleTimeoutIsZero(t *testing.T) {
+	var mu sync.Mutex
+	shots := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/screenshot") {
+			mu.Lock()
+			shots++
+			mu.Unlock()
+			jsonResponse(w, map[string]interface{}{"value": base64.StdEncoding.EncodeToString([]byte("same"))})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	d := createTestDriver(server)
+
+	if err := d.SetWaitForIdleTimeout(0); err != nil {
+		t.Fatal(err)
+	}
+	d.Execute(&flow.SwipeStep{Direction: "up"})
+	d.Execute(&flow.SwipeStep{Direction: "up"})
+	if shots != 0 {
+		t.Fatalf("settled with the idle timeout at 0 (%d screenshots)", shots)
+	}
+
+	if err := d.SetWaitForIdleTimeout(200); err != nil {
+		t.Fatal(err)
+	}
+	d.Execute(&flow.SwipeStep{Direction: "up"})
+	if shots != 2 {
+		t.Errorf("screenshots = %d, want 2: the default timeout settles again", shots)
+	}
+}
+
 // A swipe is a touch that moves at once — no stationary hold at the start,
 // which iOS takes as a tap on the row under the finger.
 func TestSwipeHasNoHoldBeforeMove(t *testing.T) {
