@@ -71,7 +71,7 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 	if step.DurationMs > 0 || step.LongPress {
 		durationSec := float64(step.DurationMs) / 1000.0
 		if durationSec <= 0 {
-			durationSec = 1.0
+			durationSec = longPressSec
 		}
 		x := float64(info.Bounds.X + info.Bounds.Width/2)
 		y := float64(info.Bounds.Y + info.Bounds.Height/2)
@@ -137,6 +137,9 @@ const (
 	keyboardKeyProbeMs = 1
 	// staleRefindMs bounds the second lookup after a failed element click.
 	staleRefindMs = 2000
+	// longPressSec is how long a long press holds without a duration: 3 s,
+	// as Maestro's iOS driver holds one (IOSDriver.kt:158-162).
+	longPressSec = 3.0
 )
 
 // tapPoint is the centre of the part of b that is on screen, so a tap never
@@ -266,7 +269,7 @@ func (d *Driver) longPressOn(step *flow.LongPressOnStep) *core.CommandResult {
 
 	duration := float64(step.DurationMs) / 1000.0
 	if duration <= 0 {
-		duration = 1.0 // default 1 second
+		duration = longPressSec
 	}
 
 	if err := d.client.LongPress(x, y, duration); err != nil {
@@ -299,7 +302,7 @@ func (d *Driver) tapOnPoint(step *flow.TapOnPointStep) *core.CommandResult {
 	if step.DurationMs > 0 || step.LongPress {
 		durationSec := float64(step.DurationMs) / 1000.0
 		if durationSec <= 0 {
-			durationSec = 1.0
+			durationSec = longPressSec
 		}
 		if err := d.client.LongPress(x, y, durationSec); err != nil {
 			return errorResult(err, fmt.Sprintf("Press at point for %.2fs failed", durationSec))
@@ -1462,18 +1465,28 @@ func (d *Driver) resetKeychain() *core.CommandResult {
 }
 
 func (d *Driver) clearAppStateDevice(bundleID string) *core.CommandResult {
+	if !devicectlAvailable() {
+		// No Xcode on this host (a Linux machine the phone is plugged into): go-ios does both
+		// steps over usbmuxd.
+		if err := goiosUninstall(d.udid, bundleID); err != nil {
+			return errorResult(fmt.Errorf("go-ios uninstall failed: %w", err),
+				"Failed to uninstall app on device")
+		}
+		if err := goiosInstall(d.udid, d.appFile); err != nil {
+			return errorResult(fmt.Errorf("go-ios install failed: %w", err),
+				"Failed to reinstall app on device")
+		}
+		return successResult(fmt.Sprintf("Cleared state for %s (uninstall+reinstall, go-ios)", bundleID), nil)
+	}
+
 	// Uninstall via xcrun devicectl (uses remoted, doesn't disrupt usbmuxd port forwarding)
-	cmd := exec.Command("xcrun", "devicectl", "device", "uninstall", "app",
-		"--device", d.udid, bundleID)
-	if output, err := cmd.CombinedOutput(); err != nil {
+	if output, err := devicectlRun("device", "uninstall", "app", "--device", d.udid, bundleID); err != nil {
 		return errorResult(fmt.Errorf("devicectl uninstall failed: %w: %s", err, string(output)),
 			"Failed to uninstall app on device")
 	}
 
 	// Reinstall via xcrun devicectl
-	cmd = exec.Command("xcrun", "devicectl", "device", "install", "app",
-		"--device", d.udid, d.appFile)
-	if output, err := cmd.CombinedOutput(); err != nil {
+	if output, err := devicectlRun("device", "install", "app", "--device", d.udid, d.appFile); err != nil {
 		return errorResult(fmt.Errorf("devicectl install failed: %w: %s", err, string(output)),
 			"Failed to reinstall app on device")
 	}

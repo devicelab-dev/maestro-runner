@@ -1281,7 +1281,7 @@ func TestExecuteAllStepTypes(t *testing.T) {
 		{"TapOnPointStep", &flow.TapOnPointStep{X: 10, Y: 20}, false},
 		{"AssertVisibleStep", &flow.AssertVisibleStep{Selector: flow.Selector{Text: "btn"}}, true},
 		{"AssertNotVisibleStep", &flow.AssertNotVisibleStep{Selector: flow.Selector{Text: "btn"}}, false}, // Not found = success
-		{"InputTextStep_empty", &flow.InputTextStep{Text: ""}, false}, // types nothing, passes
+		{"InputTextStep_empty", &flow.InputTextStep{Text: ""}, false},                                     // types nothing, passes
 		{"EraseTextStep", &flow.EraseTextStep{Characters: 1}, false},
 		{"HideKeyboardStep", &flow.HideKeyboardStep{}, false},
 		{"InputRandomStep", &flow.InputRandomStep{Length: 5}, true},
