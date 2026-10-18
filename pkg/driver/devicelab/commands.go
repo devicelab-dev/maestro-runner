@@ -1460,36 +1460,35 @@ func (d *Driver) scroll(step *flow.ScrollStep) *core.CommandResult {
 	return successResult(fmt.Sprintf("Scrolled %s", direction), nil)
 }
 
-// atScrollContainerEdge reports whether the element occupying b ends exactly on
-// its nearest scrollable ancestor's leading edge — the shape of a rect the
-// hierarchy clipped rather than a whole element that happens to be visible
-// (#164).
+// scrollContainerOf returns the bounds of the nearest scrollable ancestor of
+// the element occupying b. scrollUntilVisible measures the element against it
+// as well as the screen: a part hanging past the container's edge isn't shown,
+// and a part flush with its leading edge may have been clipped (#164).
 //
-// Costs one page-source fetch, and is only consulted once the geometry check
-// has already passed, so a scroll that stops on an unambiguous match pays
-// nothing. Any failure to establish the ancestry answers false: an
-// unverifiable tree must not block a match that the geometry accepted.
-func (d *Driver) atScrollContainerEdge(b core.Bounds, direction string) bool {
+// Costs one page-source fetch for each match that passes the screen geometry
+// check. It answers false when the element has no scrollable ancestor, and on
+// any failure to establish the ancestry: an unverifiable tree must not block a
+// match that the geometry accepted.
+func (d *Driver) scrollContainerOf(b core.Bounds) (core.Bounds, bool) {
 	src, err := d.screenXML()
 	if err != nil {
-		return false
+		return core.Bounds{}, false
 	}
 	elems, err := ParsePageSource(src)
 	if err != nil {
-		return false
+		return core.Bounds{}, false
 	}
 	for _, e := range elems {
 		if e.Bounds != b {
 			continue
 		}
 		for p := e.Parent; p != nil; p = p.Parent {
-			if !p.Scrollable {
-				continue
+			if p.Scrollable {
+				return p.Bounds, true
 			}
-			return core.ClippedAtScrollEdge(b, p.Bounds, direction, scrollEdgeTolerancePx)
 		}
 	}
-	return false
+	return core.Bounds{}, false
 }
 
 // How far from the container edge still counts as flush. Rounding between the
@@ -1547,8 +1546,15 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	// enough, accepted if the list ends or the scrolls run out first.
 	var centering core.Centering
 	var shown *core.ElementInfo
+	// hanging is this pass's match if it is on screen but past its scroll
+	// container's leading edge, accepted if the list ends or the scrolls run
+	// out first; hangingScrolls counts the scrolls it has had in a row.
+	var hanging *core.ElementInfo
+	hangingScrolls := 0
 
 	for i := 0; i < maxScrolls && time.Now().Before(deadline); i++ {
+		wasHanging := hanging
+		hanging = nil
 		_, info, err := d.findElement(step.Element, true, 1000)
 		if err == nil && info != nil {
 			if decided, done := centering.Check(step.CenterElement, info.Bounds, direction, width, height); decided {
@@ -1565,20 +1571,34 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 				// follows lands wrong. Stop only when the element meets the flow's
 				// visibility requirement (default: fully inside the viewport, which
 				// here is the full physical display — see tappableScreenSize above).
-				//
+				scroller, inContainer := d.scrollContainerOf(info.Bounds)
+				switch {
+				case inContainer && core.HangsPastScrollEdge(info.Bounds, scroller, direction, step.VisibilityPercentage, scrollEdgeTolerancePx):
+					// On screen, but past its scroll container's leading edge, where
+					// the container doesn't show it: scroll it in. A scroll that
+					// leaves it where it was means the list has ended, and two that
+					// don't bring it in are enough: accept it as it is.
+					if wasHanging == nil {
+						hangingScrolls = 0
+					}
+					if wasHanging != nil && (wasHanging.Bounds == info.Bounds || hangingScrolls >= 2) {
+						return successResult(fmt.Sprintf("Element found after %d scrolls", i), info)
+					}
+					hanging = info
+					hangingScrolls++
 				// The geometry says fully visible, but it is computed from a
 				// rect the hierarchy may already have clipped to the scroll
 				// container — a sliver at the fold scores 100% (#164). A rect
 				// flush with the container's leading edge might be truncated,
 				// so scroll once and look again: a sliver grows, an element
 				// resting at the end of the list does not.
-				if pendingHeight >= 0 && info.Bounds.Height <= pendingHeight {
+				case pendingHeight >= 0 && info.Bounds.Height <= pendingHeight:
 					return successResult(fmt.Sprintf("Element found after %d scrolls", i), info)
-				}
-				if !d.atScrollContainerEdge(info.Bounds, direction) {
+				case !inContainer || !core.ClippedAtScrollEdge(info.Bounds, scroller, direction, scrollEdgeTolerancePx):
 					return successResult(fmt.Sprintf("Element found after %d scrolls", i), info)
+				default:
+					pendingHeight = info.Bounds.Height
 				}
-				pendingHeight = info.Bounds.Height
 			}
 		} else if err != nil && !isElementNotFoundError(err) {
 			// Infrastructure failure (dead session, connection refused, etc.):
@@ -1589,6 +1609,9 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 		if sig, ok := d.scrollSurfaceSignature(); ok && progress.Observe(sig) {
 			if shown != nil {
 				return successResult(fmt.Sprintf("Element visible after %d scrolls (end of content before centring)", i), shown)
+			}
+			if hanging != nil {
+				return successResult(fmt.Sprintf("Element visible after %d scrolls (end of content, partly past its scroll container)", i), hanging)
 			}
 			return errorResult(fmt.Errorf("element not found"), fmt.Sprintf("Element not found: scrolling %s made no progress after %d scrolls (end of content?)", direction, i))
 		}
@@ -1602,6 +1625,9 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 
 	if shown != nil {
 		return successResult("Element visible (scrolls ran out before centring)", shown)
+	}
+	if hanging != nil {
+		return successResult("Element visible (scrolls ran out, partly past its scroll container)", hanging)
 	}
 	return errorResult(fmt.Errorf("element not found"), fmt.Sprintf("Element not found after %d scrolls", maxScrolls))
 }
@@ -2066,6 +2092,7 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 
 	// 1. Clear state or force-stop via RPC (no USB round-trips)
 	if step.ClearState {
+		d.stopBeforeClear(appID)
 		if err := d.client.ClearAppData(appID); err != nil {
 			// RPC failed — fall back to shell
 			logger.Warn("launchApp: RPC clearAppData failed for %s: %v — falling back to shell", appID, err)
@@ -2073,6 +2100,7 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 				return errorResult(shellErr, fmt.Sprintf("launchApp: failed to clear app state for '%s' — is the app installed?", appID))
 			}
 		}
+		d.waitForTaskRemoved(appID)
 	} else if step.StopApp == nil || *step.StopApp {
 		if err := d.client.ForceStop(appID); err != nil {
 			logger.Warn("launchApp: RPC forceStop failed for %s: %v — falling back to shell", appID, err)
@@ -2467,6 +2495,30 @@ func (d *Driver) stopApp(step *flow.StopAppStep) *core.CommandResult {
 	return successResult(fmt.Sprintf("Stopped app: %s", appID), nil)
 }
 
+// stopBeforeClear force-stops the app and waits until its screens are gone, and
+// waitForTaskRemoved waits after the clear until its task is gone, so that the
+// clear doesn't make Android kill the next launch (see core/androidclear.go).
+// Best-effort: the clear and the launch go ahead either way.
+func (d *Driver) stopBeforeClear(appID string) {
+	logClearWait(core.AndroidStopBeforeClear(d.device, appID, core.StopBeforeClearTimeout, core.ClearPollInterval))
+}
+
+func (d *Driver) waitForTaskRemoved(appID string) {
+	logClearWait(core.AndroidWaitForTaskRemoved(d.device, appID, core.TaskRemovedTimeout, core.ClearPollInterval))
+}
+
+// logClearWait warns when a clear wait timed out, since the next launch may
+// then be killed, and notes a device it couldn't read at debug level.
+func logClearWait(err error) {
+	switch {
+	case err == nil:
+	case errors.Is(err, core.ErrClearWaitTimedOut):
+		logger.Warn("clearing app data: %v; going ahead, but the next launch may be killed", err)
+	default:
+		logger.Debug("clearing app data: could not check the app's screens and task: %v", err)
+	}
+}
+
 func (d *Driver) clearState(step *flow.ClearStateStep) *core.CommandResult {
 	appID := step.AppID
 	if appID == "" {
@@ -2477,9 +2529,11 @@ func (d *Driver) clearState(step *flow.ClearStateStep) *core.CommandResult {
 		return errorResult(fmt.Errorf("device not configured"), "clearState requires device access")
 	}
 
+	d.stopBeforeClear(appID)
 	if _, err := d.device.Shell("pm clear " + appID); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to clear state: %v", err))
 	}
+	d.waitForTaskRemoved(appID)
 
 	return successResult(fmt.Sprintf("Cleared state for: %s", appID), nil)
 }

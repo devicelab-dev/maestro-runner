@@ -410,8 +410,15 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	// enough, accepted if the list ends or the scrolls run out first.
 	var centering core.Centering
 	var shown *core.ElementInfo
+	// hanging is this pass's match if it is on screen but past its scroll
+	// container's leading edge, accepted if the list ends or the scrolls run
+	// out first; hangingScrolls counts the scrolls it has had in a row.
+	var hanging *core.ElementInfo
+	hangingScrolls := 0
 
 	for i := 0; i < maxScrolls && time.Now().Before(deadline); i++ {
+		wasHanging := hanging
+		hanging = nil
 		if err := d.parentContext().Err(); err != nil {
 			return errorResult(fmt.Errorf("scroll cancelled: %w", err), "")
 		}
@@ -436,6 +443,21 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 					shown = info
 				}
 			} else if core.MeetsVisibility(info.Bounds, w, h, step.VisibilityPercentage) {
+				scroller, inContainer := d.scrollContainerOf(info.Bounds)
+				switch {
+				case inContainer && core.HangsPastScrollEdge(info.Bounds, scroller, direction, step.VisibilityPercentage, scrollEdgeTolerancePx):
+					// On screen, but past its scroll container's leading edge, where
+					// the container doesn't show it: scroll it in. A scroll that
+					// leaves it where it was means the list has ended, and two that
+					// don't bring it in are enough: accept it as it is.
+					if wasHanging == nil {
+						hangingScrolls = 0
+					}
+					if wasHanging != nil && (wasHanging.Bounds == info.Bounds || hangingScrolls >= 2) {
+						return successResult("Element found", info)
+					}
+					hanging = info
+					hangingScrolls++
 				// Computed from a rect the hierarchy may already have clipped
 				// to the scroll container, where a sliver at the fold scores
 				// 100% (#164). A rect flush with the container's leading edge
@@ -443,13 +465,13 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 				// resting at the end of the list does not. Same rule as the
 				// uiautomator2 and devicelab drivers; this one reaches the
 				// hierarchy through the Appium server instead.
-				if pendingHeight >= 0 && info.Bounds.Height <= pendingHeight {
+				case pendingHeight >= 0 && info.Bounds.Height <= pendingHeight:
 					return successResult("Element found", info)
-				}
-				if !d.atScrollContainerEdge(info.Bounds, direction) {
+				case !inContainer || !core.ClippedAtScrollEdge(info.Bounds, scroller, direction, scrollEdgeTolerancePx):
 					return successResult("Element found", info)
+				default:
+					pendingHeight = info.Bounds.Height
 				}
-				pendingHeight = info.Bounds.Height
 			} else {
 				partiallyVisible = true
 			}
@@ -458,6 +480,9 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 		if sig, ok := d.scrollSurfaceSignature(); ok && progress.Observe(sig) {
 			if shown != nil {
 				return successResult("Element visible (end of content before centring)", shown)
+			}
+			if hanging != nil {
+				return successResult("Element visible (end of content, partly past its scroll container)", hanging)
 			}
 			reason := fmt.Sprintf("scrolling %s made no progress after %d scrolls (end of content?)", direction, i)
 			if partiallyVisible {
@@ -477,6 +502,9 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	if shown != nil {
 		return successResult("Element visible (scrolls ran out before centring)", shown)
 	}
+	if hanging != nil {
+		return successResult("Element visible (scrolls ran out, partly past its scroll container)", hanging)
+	}
 	if partiallyVisible {
 		return errorResult(fmt.Errorf("element found but never sufficiently visible after scrolling"), "")
 	}
@@ -494,32 +522,35 @@ func (d *Driver) scrollSurfaceSignature() (string, bool) {
 	return core.ScrollSignature(source), true
 }
 
-// atScrollContainerEdge reports whether the element with bounds b sits flush
-// against its nearest scrollable ancestor's leading edge for direction. It
-// re-reads the page source to find the ancestor; a fetch or parse failure
-// answers false, which keeps the pre-#164 behaviour (stop on the sliver)
-// rather than scrolling forever.
-func (d *Driver) atScrollContainerEdge(b core.Bounds, direction string) bool {
+// scrollContainerOf returns the bounds of the nearest scrollable ancestor of
+// the element occupying b. scrollUntilVisible measures the element against it
+// as well as the screen: a part hanging past the container's edge isn't shown,
+// and a part flush with its leading edge may have been clipped (#164).
+//
+// Costs one page-source fetch for each match that passes the screen geometry
+// check. It answers false when the element has no scrollable ancestor, and on
+// any failure to establish the ancestry: an unverifiable tree must not block a
+// match that the geometry accepted.
+func (d *Driver) scrollContainerOf(b core.Bounds) (core.Bounds, bool) {
 	src, err := d.client.Source()
 	if err != nil {
-		return false
+		return core.Bounds{}, false
 	}
 	elems, _, err := ParsePageSource(src)
 	if err != nil {
-		return false
+		return core.Bounds{}, false
 	}
 	for _, e := range elems {
 		if e.Bounds != b {
 			continue
 		}
 		for p := e.Parent; p != nil; p = p.Parent {
-			if !p.Scrollable {
-				continue
+			if p.Scrollable {
+				return p.Bounds, true
 			}
-			return core.ClippedAtScrollEdge(b, p.Bounds, direction, scrollEdgeTolerancePx)
 		}
 	}
-	return false
+	return core.Bounds{}, false
 }
 
 // How far from the container edge still counts as flush. Rounding between the

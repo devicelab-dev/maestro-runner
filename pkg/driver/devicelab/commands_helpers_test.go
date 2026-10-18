@@ -173,8 +173,16 @@ func TestClearState_HappyPath(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("clearState failed: %v", res.Error)
 	}
-	if len(shell.commands) != 1 || shell.commands[0] != "pm clear com.test.app" {
-		t.Errorf("expected pm clear command, got %v", shell.commands)
+	// Stopped and its screens waited out, cleared, then its task waited out
+	// (core/androidclear.go).
+	want := []string{"am force-stop 'com.test.app'", "dumpsys activity activities | grep -cE 'Hist", "pm clear com.test.app", "dumpsys activity activities | grep -cE '^ *\\* Task"}
+	if len(shell.commands) != len(want) {
+		t.Fatalf("expected %d commands, got %q", len(want), shell.commands)
+	}
+	for i, w := range want {
+		if !strings.HasPrefix(shell.commands[i], w) {
+			t.Errorf("command %d = %q, want it to start with %q", i, shell.commands[i], w)
+		}
 	}
 }
 
@@ -2525,7 +2533,8 @@ func TestLaunchApp_HappyPath_NoClearState(t *testing.T) {
 
 func TestLaunchApp_ClearState_UsesClearAppDataRPC(t *testing.T) {
 	client := &appLifecycleClient{scriptedClient: &scriptedClient{trackingClient: newTrackingClient()}}
-	driver := New(client, &core.PlatformInfo{}, &mockShell{})
+	shell := &mockShell{}
+	driver := New(client, &core.PlatformInfo{}, shell)
 
 	res := driver.launchApp(&flow.LaunchAppStep{AppID: "com.test.app", ClearState: true})
 	if !res.Success {
@@ -2534,9 +2543,19 @@ func TestLaunchApp_ClearState_UsesClearAppDataRPC(t *testing.T) {
 	if len(client.clearAppDatas) != 1 || client.clearAppDatas[0] != "com.test.app" {
 		t.Errorf("expected ClearAppData com.test.app, got %v", client.clearAppDatas)
 	}
-	// clearState path should NOT also force-stop (the else-if).
+	// clearState path should NOT also force-stop over RPC (the else-if): it
+	// stops the app over the shell, waits out its screens, and after the clear
+	// waits out its task (core/androidclear.go).
 	if len(client.forceStops) != 0 {
-		t.Errorf("expected no ForceStop when clearState=true, got %v", client.forceStops)
+		t.Errorf("expected no ForceStop RPC when clearState=true, got %v", client.forceStops)
+	}
+	var stopped, waitedForTask bool
+	for _, cmd := range shell.commands {
+		stopped = stopped || cmd == "am force-stop 'com.test.app'"
+		waitedForTask = waitedForTask || strings.Contains(cmd, "* Task")
+	}
+	if !stopped || !waitedForTask {
+		t.Errorf("expected the shell force-stop and the task wait, got %q", shell.commands)
 	}
 }
 

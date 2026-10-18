@@ -2,6 +2,7 @@ package appium
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -279,6 +280,58 @@ func TestScrollUntilVisible_FlushRowAtListEndIsAcceptedAfterOneScroll(t *testing
 	}
 	if *swipes != 1 {
 		t.Errorf("expected exactly one confirming scroll, got %d", *swipes)
+	}
+}
+
+// sheetRowPageSource is a bottom sheet whose list ends at 2277, above the
+// gesture bar of the test driver's 2340px screen, with its last row at
+// rowTop..rowBottom. The row isn't clipped to the list: at [2235,2340] it runs
+// 63px past it.
+func sheetRowPageSource(rowTop, rowBottom int) string {
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <android.widget.FrameLayout bounds="[0,0][1080,2340]" class="android.widget.FrameLayout" enabled="true" displayed="true">
+    <android.view.View scrollable="true" bounds="[63,63][1017,2277]" enabled="true" displayed="true">
+      <android.widget.TextView text="Target" bounds="[63,%d][1017,%d]" enabled="true" displayed="true" />
+    </android.view.View>
+  </android.widget.FrameLayout>
+</hierarchy>`, rowTop, rowBottom)
+}
+
+// A row on screen but past its list's leading edge is scrolled into the list.
+func TestScrollUntilVisible_RowHangingPastContainerIsScrolledIn(t *testing.T) {
+	d, swipes, closeFn := newFlushRowTestDriver(sheetRowPageSource(2235, 2340), sheetRowPageSource(1899, 2214))
+	defer closeFn()
+
+	step := &flow.ScrollUntilVisibleStep{Element: flow.Selector{Text: "Target"}, MaxScrolls: 3}
+	step.TimeoutMs = 5000
+
+	result := d.scrollUntilVisible(step)
+	if !result.Success {
+		t.Fatalf("expected the row once inside its list, got: %v - %s", result.Error, result.Message)
+	}
+	if *swipes != 1 {
+		t.Errorf("expected 1 scroll, got %d", *swipes)
+	}
+	if result.Element == nil || result.Element.Bounds.Y != 1899 {
+		t.Errorf("result should carry the row inside its list (y 1899), got %+v", result.Element)
+	}
+}
+
+// A row the list can't move any further is accepted after one scroll.
+func TestScrollUntilVisible_HangingRowAtListEndIsAcceptedAfterOneScroll(t *testing.T) {
+	d, swipes, closeFn := newFlushRowTestDriver(sheetRowPageSource(2235, 2340), sheetRowPageSource(2235, 2340))
+	defer closeFn()
+
+	step := &flow.ScrollUntilVisibleStep{Element: flow.Selector{Text: "Target"}, MaxScrolls: 5}
+	step.TimeoutMs = 5000
+
+	result := d.scrollUntilVisible(step)
+	if !result.Success {
+		t.Fatalf("a row the list can't move must still be accepted, got: %v - %s", result.Error, result.Message)
+	}
+	if *swipes != 1 {
+		t.Errorf("expected 1 scroll, got %d", *swipes)
 	}
 }
 
