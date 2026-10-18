@@ -14,6 +14,7 @@ import (
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
+	"github.com/devicelab-dev/maestro-runner/pkg/iosinstall"
 	"github.com/devicelab-dev/maestro-runner/pkg/logger"
 )
 
@@ -1464,24 +1465,25 @@ func (d *Driver) resetKeychain() *core.CommandResult {
 	return successResult("Simulator keychain reset", nil)
 }
 
+// A real device's app is removed and put back through iosinstall: devicectl
+// on a Mac, go-ios over usbmuxd when devicectl is missing or fails. Variables
+// so tests can replace them.
+var (
+	deviceUninstall = iosinstall.Uninstall
+	deviceInstall   = iosinstall.Install
+)
+
 func (d *Driver) clearAppStateDevice(bundleID string) *core.CommandResult {
-	// Uninstall via xcrun devicectl (uses remoted, doesn't disrupt usbmuxd port forwarding)
-	cmd := exec.Command("xcrun", "devicectl", "device", "uninstall", "app",
-		"--device", d.udid, bundleID)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return errorResult(fmt.Errorf("devicectl uninstall failed: %w: %s", err, string(output)),
-			"Failed to uninstall app on device")
+	uninstalledWith, err := deviceUninstall(d.udid, bundleID)
+	if err != nil {
+		return errorResult(err, "Failed to uninstall app on device")
 	}
-
-	// Reinstall via xcrun devicectl
-	cmd = exec.Command("xcrun", "devicectl", "device", "install", "app",
-		"--device", d.udid, d.appFile)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return errorResult(fmt.Errorf("devicectl install failed: %w: %s", err, string(output)),
-			"Failed to reinstall app on device")
+	installedWith, err := deviceInstall(d.udid, d.appFile)
+	if err != nil {
+		return errorResult(err, "Failed to reinstall app on device")
 	}
-
-	return successResult(fmt.Sprintf("Cleared state for %s (uninstall+reinstall)", bundleID), nil)
+	logger.Info("clearState: uninstalled %s with %s and reinstalled it with %s", bundleID, uninstalledWith, installedWith)
+	return successResult(fmt.Sprintf("Cleared state for %s (uninstall with %s, reinstall with %s)", bundleID, uninstalledWith, installedWith), nil)
 }
 
 // Clipboard
