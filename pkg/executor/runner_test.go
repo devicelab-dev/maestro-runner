@@ -1472,10 +1472,16 @@ func TestRunner_RepeatStep_ContextCancellation(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	execCount := 0
+	// The run is cancelled from inside the first step, so the flow has
+	// started whatever the machine's speed: a wall-clock timeout could expire
+	// before the flow began, leaving it skipped and the run passed.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	driver := &mockDriver{
 		executeFunc: func(step flow.Step) *core.CommandResult {
 			execCount++
-			time.Sleep(50 * time.Millisecond)
+			cancel()
 			return &core.CommandResult{Success: true}
 		},
 	}
@@ -1503,9 +1509,6 @@ func TestRunner_RepeatStep_ContextCancellation(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
 	result, err := runner.Run(ctx, flows)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -1515,9 +1518,10 @@ func TestRunner_RepeatStep_ContextCancellation(t *testing.T) {
 	if result.Status == report.StatusPassed {
 		t.Errorf("Status should not be passed after cancellation")
 	}
-	// Should have executed less than 100 times
-	if execCount >= 100 {
-		t.Errorf("execCount = %d, should be less than 100", execCount)
+	// The loop checks the context before each pass, so nothing runs after
+	// the cancelled step.
+	if execCount != 1 {
+		t.Errorf("execCount = %d, want 1", execCount)
 	}
 }
 
@@ -1766,10 +1770,16 @@ func TestRunner_RetryStep_ContextCancellation(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	execCount := 0
+	// The run is cancelled from inside the first step, so the flow has
+	// started whatever the machine's speed: a wall-clock timeout could expire
+	// before the flow began, leaving it skipped and the run passed.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	driver := &mockDriver{
 		executeFunc: func(step flow.Step) *core.CommandResult {
 			execCount++
-			time.Sleep(50 * time.Millisecond)
+			cancel()
 			return &core.CommandResult{Success: false, Error: &testError{msg: "fail"}}
 		},
 	}
@@ -1797,9 +1807,6 @@ func TestRunner_RetryStep_ContextCancellation(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
 	result, err := runner.Run(ctx, flows)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -1809,9 +1816,10 @@ func TestRunner_RetryStep_ContextCancellation(t *testing.T) {
 	if result.Status == report.StatusPassed {
 		t.Errorf("Status should not be passed after cancellation")
 	}
-	// Should have executed less than 100 times
-	if execCount >= 100 {
-		t.Errorf("execCount = %d, should be less than 100", execCount)
+	// The loop checks the context before each pass, so nothing runs after
+	// the cancelled step.
+	if execCount != 1 {
+		t.Errorf("execCount = %d, want 1", execCount)
 	}
 }
 
@@ -2200,9 +2208,17 @@ name: Sub Flow
 		t.Fatalf("Failed to write subflow: %v", err)
 	}
 
+	// The run is cancelled from inside the first step, so the flow has
+	// started whatever the machine's speed: a wall-clock timeout could expire
+	// before the flow began, leaving it skipped and the run passed.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	execCount := 0
 	driver := &mockDriver{
 		executeFunc: func(step flow.Step) *core.CommandResult {
-			time.Sleep(50 * time.Millisecond)
+			execCount++
+			cancel()
 			return &core.CommandResult{Success: false, Error: &testError{msg: "fails"}}
 		},
 	}
@@ -2228,9 +2244,6 @@ name: Sub Flow
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
 	result, err := runner.Run(ctx, flows)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -2239,6 +2252,9 @@ name: Sub Flow
 	// Should fail due to cancellation
 	if result.Status == report.StatusPassed {
 		t.Errorf("Status should not be passed after cancellation")
+	}
+	if execCount != 1 {
+		t.Errorf("execCount = %d, want 1: no attempt after the cancelled one", execCount)
 	}
 }
 
