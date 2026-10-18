@@ -11,20 +11,27 @@ import "strings"
 // lands wrong. A zero-area element reports 0 — there is nothing visible to
 // stop for.
 func VisibleFraction(b Bounds, screenW, screenH int) float64 {
-	area := b.Width * b.Height
-	if area <= 0 || screenW <= 0 || screenH <= 0 {
+	return VisibleFractionWithin(b, Bounds{Width: screenW, Height: screenH})
+}
+
+// VisibleFractionWithin reports how much of the element's area lies inside
+// area, as a fraction in [0, 1]. VisibleFraction is the case where area is the
+// screen.
+func VisibleFractionWithin(b, area Bounds) float64 {
+	size := b.Width * b.Height
+	if size <= 0 || area.Width <= 0 || area.Height <= 0 {
 		return 0
 	}
 
-	left := max(b.X, 0)
-	top := max(b.Y, 0)
-	right := min(b.X+b.Width, screenW)
-	bottom := min(b.Y+b.Height, screenH)
+	left := max(b.X, area.X)
+	top := max(b.Y, area.Y)
+	right := min(b.X+b.Width, area.X+area.Width)
+	bottom := min(b.Y+b.Height, area.Y+area.Height)
 
 	if right <= left || bottom <= top {
 		return 0
 	}
-	return float64((right-left)*(bottom-top)) / float64(area)
+	return float64((right-left)*(bottom-top)) / float64(size)
 }
 
 // MeetsVisibility reports whether the element satisfies a visibilityPercentage
@@ -33,11 +40,16 @@ func VisibleFraction(b Bounds, screenW, screenH int) float64 {
 // it is what scrollUntilVisible's contract promises, and a partially covered
 // element is exactly the case the check exists to reject.
 func MeetsVisibility(b Bounds, screenW, screenH, percentage int) bool {
+	return MeetsVisibilityWithin(b, Bounds{Width: screenW, Height: screenH}, percentage)
+}
+
+// MeetsVisibilityWithin is MeetsVisibility against area instead of the screen.
+func MeetsVisibilityWithin(b, area Bounds, percentage int) bool {
 	if percentage < 1 || percentage > 100 {
 		percentage = 100
 	}
 	// Compare in integer percent to avoid 0.999999… missing 100 on floats.
-	return int(VisibleFraction(b, screenW, screenH)*100+0.5) >= percentage
+	return int(VisibleFractionWithin(b, area)*100+0.5) >= percentage
 }
 
 // ClippedAtScrollEdge reports whether b's leading edge in the scroll direction
@@ -87,6 +99,63 @@ func ClippedAtScrollEdge(b, container Bounds, direction string, tolerance int) b
 	default:
 		return false
 	}
+}
+
+// HangsPastScrollEdge reports whether b runs past container's leading edge in
+// the scroll direction (the bottom when scrolling down, the top when scrolling
+// up), by more than tolerance pixels and more than the visibility percentage
+// allows.
+//
+// VisibleFraction measures against the screen, and the hierarchy doesn't
+// always clip a child to its scroll container: a bottom sheet's last row was
+// reported at [63,2295][1017,2400] on a 2400px screen while the sheet's list
+// ended at 2337, above the gesture bar. Against the screen the row is wholly
+// visible; inside the list 40% of it shows, and a tap on its centre (y 2347)
+// lands on the gesture bar. Scrolling on in the same direction brings it in.
+//
+// Only the leading edge counts, as in ClippedAtScrollEdge: a scroll can't
+// fix an overhang on any other side, and scrolling the other way would move
+// the element further out. An element longer than its container along the
+// scroll axis never fits, and a container with no area, or one b doesn't
+// overlap across the scroll axis, isn't measured; those report false, as
+// before this check. A match wholly past the leading edge is measured: it is
+// the same bug at its worst.
+func HangsPastScrollEdge(b, container Bounds, direction string, percentage, tolerance int) bool {
+	if container.Width <= 0 || container.Height <= 0 {
+		return false
+	}
+	acrossX := b.X < container.X+container.Width && b.X+b.Width > container.X
+	acrossY := b.Y < container.Y+container.Height && b.Y+b.Height > container.Y
+	// The part of the screen before the container's leading edge, widened by
+	// tolerance: the element is measured against that edge alone.
+	before := b
+	switch direction {
+	case "down":
+		if !acrossX || b.Height > container.Height {
+			return false
+		}
+		before.Height = container.Y + container.Height + tolerance - b.Y
+	case "up":
+		if !acrossX || b.Height > container.Height {
+			return false
+		}
+		before.Y = container.Y - tolerance
+		before.Height = b.Y + b.Height - before.Y
+	case "right":
+		if !acrossY || b.Width > container.Width {
+			return false
+		}
+		before.Width = container.X + container.Width + tolerance - b.X
+	case "left":
+		if !acrossY || b.Width > container.Width {
+			return false
+		}
+		before.X = container.X - tolerance
+		before.Width = b.X + b.Width - before.X
+	default:
+		return false
+	}
+	return !MeetsVisibilityWithin(b, before, percentage)
 }
 
 // ScrollSpeedToDurationMs converts a Maestro `speed:` value into the swipe
