@@ -1145,8 +1145,8 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 	// found later belongs to the app this launch started.
 	d.clearExitHistory(appID)
 
-	// Stop app first if requested (default: true)
-	if step.StopApp == nil || *step.StopApp {
+	// Stop app first if requested (default: true). A clear stops it itself.
+	if !step.ClearState && (step.StopApp == nil || *step.StopApp) {
 		if _, err := d.device.Shell("am force-stop " + appID); err != nil {
 			logger.Warn("failed to force-stop app %s before launch: %v", appID, err)
 		}
@@ -1154,9 +1154,11 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 
 	// Clear state if requested
 	if step.ClearState {
+		d.stopBeforeClear(appID)
 		if _, err := d.device.Shell("pm clear " + appID); err != nil {
 			return errorResult(err, fmt.Sprintf("launchApp: failed to clear app state for '%s' — is the app installed?", appID))
 		}
+		d.waitForTaskRemoved(appID)
 	}
 
 	// Apply permissions (default: all allow, like Maestro)
@@ -1422,6 +1424,30 @@ func (d *Driver) stopApp(step *flow.StopAppStep) *core.CommandResult {
 	return successResult(fmt.Sprintf("Stopped app: %s", appID), nil)
 }
 
+// stopBeforeClear force-stops the app and waits until its screens are gone, and
+// waitForTaskRemoved waits after the clear until its task is gone, so that the
+// clear doesn't make Android kill the next launch (see core/androidclear.go).
+// Best-effort: the clear and the launch go ahead either way.
+func (d *Driver) stopBeforeClear(appID string) {
+	logClearWait(core.AndroidStopBeforeClear(d.device, appID, core.StopBeforeClearTimeout, core.ClearPollInterval))
+}
+
+func (d *Driver) waitForTaskRemoved(appID string) {
+	logClearWait(core.AndroidWaitForTaskRemoved(d.device, appID, core.TaskRemovedTimeout, core.ClearPollInterval))
+}
+
+// logClearWait warns when a clear wait timed out, since the next launch may
+// then be killed, and notes a device it couldn't read at debug level.
+func logClearWait(err error) {
+	switch {
+	case err == nil:
+	case errors.Is(err, core.ErrClearWaitTimedOut):
+		logger.Warn("clearing app data: %v; going ahead, but the next launch may be killed", err)
+	default:
+		logger.Debug("clearing app data: could not check the app's screens and task: %v", err)
+	}
+}
+
 func (d *Driver) clearState(step *flow.ClearStateStep) *core.CommandResult {
 	appID := step.AppID
 	if appID == "" {
@@ -1432,9 +1458,11 @@ func (d *Driver) clearState(step *flow.ClearStateStep) *core.CommandResult {
 		return errorResult(fmt.Errorf("device not configured"), "clearState requires device access")
 	}
 
+	d.stopBeforeClear(appID)
 	if _, err := d.device.Shell("pm clear " + appID); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to clear state: %v", err))
 	}
+	d.waitForTaskRemoved(appID)
 
 	return successResult(fmt.Sprintf("Cleared state for: %s", appID), nil)
 }
