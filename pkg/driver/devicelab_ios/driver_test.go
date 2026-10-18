@@ -36,6 +36,28 @@ func TestExecuteSettlesOnlyAfterMovingSteps(t *testing.T) {
 	}
 }
 
+// A wait-for-idle timeout of 0 turns the settle off (#212); any other value
+// keeps it.
+func TestExecuteDoesNotSettleWhenIdleTimeoutIsZero(t *testing.T) {
+	d, fa, _ := newTestDriver(t, screenOf(node(1, "Button", "Go", 0, 0, 100, 40)))
+	if err := d.SetWaitForIdleTimeout(0); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		d.Execute(&flow.TapOnStep{Selector: flow.Selector{Text: "Go"}})
+	}
+	if n := len(fa.sent("settle")); n != 0 {
+		t.Fatalf("settles = %d, want 0 with the idle timeout at 0", n)
+	}
+	if err := d.SetWaitForIdleTimeout(200); err != nil {
+		t.Fatal(err)
+	}
+	d.Execute(&flow.TapOnStep{Selector: flow.Selector{Text: "Go"}})
+	if n := len(fa.sent("settle")); n != 1 {
+		t.Fatalf("settles = %d, want 1: the default timeout settles again", n)
+	}
+}
+
 func TestExecuteUnsupported(t *testing.T) {
 	d, _, _ := newTestDriver(t, nil)
 	for _, s := range []flow.Step{&flow.SetAirplaneModeStep{}, &flow.ToggleAirplaneModeStep{}, &flow.EvalScriptStep{}} {

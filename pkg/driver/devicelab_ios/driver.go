@@ -45,6 +45,10 @@ type Driver struct {
 	// settles first (asserts poll on their own and do not).
 	screenMayMove bool
 
+	// settleOff is set by a wait-for-idle timeout of 0: steps no longer wait
+	// for the screen to stop changing (#212).
+	settleOff bool
+
 	// lastTap is where this step tapped; prevTap is where the step before
 	// it did, so inputText can re-tap a field whose focus did not take.
 	lastTap, prevTap *tapAt
@@ -126,8 +130,13 @@ func (d *Driver) SetOptionalFindTimeout(ms int) {
 }
 
 // SetWaitForIdleTimeout implements core.Driver. Settling is the agent's own
-// (screen at rest), so there is nothing to configure.
-func (d *Driver) SetWaitForIdleTimeout(int) error { return nil }
+// (screen at rest), so the only setting is 0, documented as "disabled": it
+// turns the settle off. On a screen that never stops changing (a looping
+// Rive or Lottie view) every settle ran to its cap (#212).
+func (d *Driver) SetWaitForIdleTimeout(ms int) error {
+	d.settleOff = ms <= 0
+	return nil
+}
 
 // SetTypingFrequency implements core.TypingFrequencyConfigurer.
 func (d *Driver) SetTypingFrequency(freq int) error {
@@ -416,6 +425,9 @@ func movesScreen(step flow.Step) bool {
 // error: the next step polls anyway.
 func (d *Driver) settle(timeout time.Duration) {
 	d.waitForWebLoad()
+	if d.settleOff {
+		return
+	}
 	resp, err := d.call("settle", &Args{TimeoutMs: float64(timeout.Milliseconds()), Quiescence: quiescenceMode()})
 	if err == nil {
 		// Settles decided on the tree and frames are the rule; log the rest

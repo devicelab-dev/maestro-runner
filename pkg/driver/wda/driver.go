@@ -59,6 +59,10 @@ type Driver struct {
 	// The last step could have set the screen moving (a tap, a swipe, a
 	// scroll), so the next action waits for it to settle first
 	screenMayMove bool
+
+	// settleOff is set by a wait-for-idle timeout of 0: actions no longer
+	// wait for the screen to settle first (#212).
+	settleOff bool
 }
 
 // Crash-loop detection thresholds.
@@ -204,7 +208,12 @@ func (d *Driver) SetAppFile(path string) {
 // sets a timeout > 200ms (the CLI default), indicating they want idle waiting.
 // Negative values and 0 disable quiescence. Values 1-200 are a no-op (keep session default).
 // Values > 200 enable quiescence — minimum effective value is 200ms.
+//
+// 0 also turns off the settle before an action (#212): on a screen that never
+// stops changing (a looping Rive or Lottie view) it cost its full 3s cap on
+// every action, and 0 is documented as "disabled".
 func (d *Driver) SetWaitForIdleTimeout(ms int) error {
+	d.settleOff = ms <= 0
 	if ms > 200 {
 		return d.client.UpdateSettings(map[string]interface{}{
 			"shouldWaitForQuiescence": true,
@@ -260,7 +269,7 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	// scroll (iOS takes that tap as "stop scrolling"), or while a menu was
 	// still animating in — and WDA reported success for a tap that did
 	// nothing. Maestro settles before every tap in the same way.
-	if d.screenMayMove && actsOnScreen(step) && !flow.RepeatTapAfterFirst(step) {
+	if d.screenMayMove && !d.settleOff && actsOnScreen(step) && !flow.RepeatTapAfterFirst(step) {
 		d.settleScreen()
 	}
 	d.screenMayMove = movesScreen(step)
