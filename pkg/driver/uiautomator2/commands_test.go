@@ -540,8 +540,16 @@ func TestClearStateSuccess(t *testing.T) {
 		t.Errorf("expected success, got error: %v", result.Error)
 	}
 
-	if len(mock.commands) != 1 || mock.commands[0] != "pm clear com.example.app" {
-		t.Errorf("expected pm clear command, got %v", mock.commands)
+	// Stopped and its screens waited out, cleared, then its task waited out
+	// (core/androidclear.go).
+	want := []string{"am force-stop 'com.example.app'", "dumpsys activity activities | grep -cE 'Hist", "pm clear com.example.app", "dumpsys activity activities | grep -cE '^ *\\* Task"}
+	if len(mock.commands) != len(want) {
+		t.Fatalf("expected %d commands, got %q", len(want), mock.commands)
+	}
+	for i, w := range want {
+		if !strings.HasPrefix(mock.commands[i], w) {
+			t.Errorf("command %d = %q, want it to start with %q", i, mock.commands[i], w)
+		}
 	}
 }
 
