@@ -43,6 +43,7 @@ maestro-runner replaces the execution engine with a single Go binary and fixes a
 - Free local reports: HTML, JUnit XML, Allure — no cloud account needed
 - Configurable timeouts per flow and per command
 - CI/CD: GitHub Actions, GitLab CI, Jenkins, CircleCI
+- REST API server (`maestro-runner server`) for driving devices from any language with JSON steps — see docs/rest-api.md
 
 ## What it does not support (yet)
 

@@ -4,6 +4,8 @@ maestro-runner is a Go module, not only a CLI. You can import it and drive a dev
 
 Use this when you are building a service, a test orchestrator, or a tool that needs to run flows itself: a device farm scheduler, a CI runner, a dashboard that executes flows on demand.
 
+For clients that are not written in Go, drive the same device runner over HTTP instead: `maestro-runner server` exposes sessions, JSON steps, screenshots, and the UI hierarchy with no Go dependency — see [rest-api.md](rest-api.md).
+
 ## Install
 
 ```bash

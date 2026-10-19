@@ -96,6 +96,7 @@ maestro-runner test --parallel 3 flows/                                 # Parall
 - **JavaScript scripting** — Embedded JS runtime with HTTP client for dynamic test logic, no external dependencies
 - **Configurable timeouts** — Per-command and per-flow timeouts, `--wait-for-idle-timeout 0` to disable
 - **Lightweight** — Single binary, no JVM required
+- **REST API server** — `maestro-runner server` exposes session-based endpoints and a JSON step protocol so non-Go clients can drive a device [Reference →](docs/rest-api.md)
 
 ## Supported Platforms & Drivers
 
