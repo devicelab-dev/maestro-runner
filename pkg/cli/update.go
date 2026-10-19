@@ -23,12 +23,14 @@ type updateResponse struct {
 
 // startUpdateCheck kicks off a background update check.
 // Call printUpdateNotice() later to print the result.
-// MAESTRO_RUNNER_NO_UPDATE_CHECK skips it, and so does CI: a CI job installs
-// whatever version its script pins, and no one reads the notice there.
+// MAESTRO_RUNNER_NO_UPDATE_CHECK skips it. On CI the check still runs but
+// prints nothing: a CI job installs whatever version its script pins, and no
+// one reads the notice there.
 func startUpdateCheck() {
 	if updateCheckOff(os.LookupEnv) {
 		return
 	}
+	quiet := envOn(os.LookupEnv, "CI")
 	exe, _ := os.Executable()
 	ch := updateNotice
 	go func() {
@@ -60,7 +62,7 @@ func startUpdateCheck() {
 			return
 		}
 
-		if isNewerRelease(result.LatestVersion, Version) {
+		if !quiet && isNewerRelease(result.LatestVersion, Version) {
 			ch <- fmt.Sprintf("\n  Update available: %s → %s\n  Run: %s\n", Version, result.LatestVersion, upgradeCommand(exe))
 		} else {
 			ch <- ""
@@ -80,17 +82,18 @@ func printUpdateNotice() {
 	}
 }
 
-// updateCheckOff reports whether MAESTRO_RUNNER_NO_UPDATE_CHECK or CI is set
-// to anything but "0" or "false", as telemetry reads its own opt-outs.
+// updateCheckOff reports whether MAESTRO_RUNNER_NO_UPDATE_CHECK turns the
+// update check off.
 func updateCheckOff(lookup func(string) (string, bool)) bool {
-	for _, name := range []string{"MAESTRO_RUNNER_NO_UPDATE_CHECK", "CI"} {
-		v, ok := lookup(name)
-		v = strings.ToLower(strings.TrimSpace(v))
-		if ok && v != "0" && v != "false" {
-			return true
-		}
-	}
-	return false
+	return envOn(lookup, "MAESTRO_RUNNER_NO_UPDATE_CHECK")
+}
+
+// envOn reports whether name is set to anything but "0" or "false", as
+// telemetry reads its own opt-outs.
+func envOn(lookup func(string) (string, bool), name string) bool {
+	v, ok := lookup(name)
+	v = strings.ToLower(strings.TrimSpace(v))
+	return ok && v != "0" && v != "false"
 }
 
 // npmPlatformDir is part of the path every npm install of the binary has:

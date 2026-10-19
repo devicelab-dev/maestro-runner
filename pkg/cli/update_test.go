@@ -46,14 +46,34 @@ func TestUpdateCheckOff(t *testing.T) {
 		{"opt-out true", map[string]string{"MAESTRO_RUNNER_NO_UPDATE_CHECK": "true"}, true},
 		{"opt-out 0", map[string]string{"MAESTRO_RUNNER_NO_UPDATE_CHECK": "0"}, false},
 		{"opt-out false", map[string]string{"MAESTRO_RUNNER_NO_UPDATE_CHECK": " FALSE "}, false},
-		{"CI", map[string]string{"CI": "true"}, true},
-		{"CI empty", map[string]string{"CI": ""}, true},
-		{"CI false", map[string]string{"CI": "false"}, false},
+		// CI only quiets the notice; the check itself still runs.
+		{"CI", map[string]string{"CI": "true"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			lookup := func(k string) (string, bool) { v, ok := tc.env[k]; return v, ok }
 			if got := updateCheckOff(lookup); got != tc.want {
 				t.Errorf("updateCheckOff(%v) = %v, want %v", tc.env, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEnvOn(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		want bool
+	}{
+		{"unset", map[string]string{}, false},
+		{"true", map[string]string{"CI": "true"}, true},
+		{"empty", map[string]string{"CI": ""}, true},
+		{"false", map[string]string{"CI": "false"}, false},
+		{"0", map[string]string{"CI": " 0 "}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lookup := func(k string) (string, bool) { v, ok := tc.env[k]; return v, ok }
+			if got := envOn(lookup, "CI"); got != tc.want {
+				t.Errorf("envOn(%v, CI) = %v, want %v", tc.env, got, tc.want)
 			}
 		})
 	}
