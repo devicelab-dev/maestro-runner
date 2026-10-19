@@ -193,6 +193,7 @@ Examples:
 			devicesCommand,
 			doctorCommand,
 			screenshotCommand,
+				serverCommand,
 		},
 	}
 
