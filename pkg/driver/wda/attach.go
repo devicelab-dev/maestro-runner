@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// AttachTimeout is how long --wda-attach waits for the running WebDriverAgent
+// AttachTimeout is how long --wda-url waits for the running WebDriverAgent
 // to answer. A variable so tests can shorten it.
 var AttachTimeout = 30 * time.Second
 

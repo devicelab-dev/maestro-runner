@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,10 +40,35 @@ type iosDeviceInfo struct {
 	IsSimulator bool
 }
 
-// wdaAttach reports whether the run attaches to a running WebDriverAgent:
-// --wda-attach with --driver wda. Other drivers ignore the flag.
-func wdaAttach(cfg *RunConfig) bool {
-	return cfg.WDAAttach && iosDriverName(cfg.Driver) == "wda"
+// sessionEndTimeout bounds ending the session on a WDA the run did not start,
+// so stopping a run (Ctrl-C included) cannot wait the client's full minute on
+// a WDA that no longer answers. A variable so tests can shorten it.
+var sessionEndTimeout = 5 * time.Second
+
+// urlIsLocalPort reports whether rawURL is a WDA on this machine at port: a
+// loopback host with that port.
+func urlIsLocalPort(rawURL string, port uint16) bool {
+	if rawURL == "" {
+		return false
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	switch u.Hostname() {
+	case "127.0.0.1", "localhost", "::1":
+		return u.Port() == strconv.Itoa(int(port))
+	}
+	return false
+}
+
+// wdaURL is the URL of the running WebDriverAgent the run drives (--wda-url),
+// or "" when the run builds and starts its own. Only --driver wda reads it.
+func wdaURL(cfg *RunConfig) string {
+	if iosDriverName(cfg.Driver) != "wda" {
+		return ""
+	}
+	return strings.TrimSpace(cfg.WDAURL)
 }
 
 // getIOSDeviceInfoFn is getIOSDeviceInfo, as a variable so tests can run
@@ -67,8 +94,8 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 
 	// Auto-detection skips a device whose WDA port is bound, and an attached
 	// WDA binds it, so attaching names its device.
-	if udid == "" && wdaAttach(cfg) {
-		return nil, nil, fmt.Errorf("--wda-attach needs the device named with --device <UDID>")
+	if udid == "" && wdaURL(cfg) != "" {
+		return nil, nil, fmt.Errorf("--wda-url needs the device named with --device <UDID>")
 	}
 
 	if udid == "" {
@@ -89,9 +116,9 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	}
 
 	// Check if device port is already in use (another instance using this device).
-	// With --wda-attach it is bound on purpose, by the WDA the run attaches to.
+	// A --wda-url on this device's own port binds it on purpose.
 	port := wdadriver.PortFromUDID(udid)
-	if !wdaAttach(cfg) && isPortInUse(port) {
+	if !urlIsLocalPort(wdaURL(cfg), port) && isPortInUse(port) {
 		return nil, nil, fmt.Errorf("device %s is in use (port %d already bound)\n"+
 			"Another maestro-runner instance may be using this device.\n"+
 			"Hint: Wait for it to finish or use a different device with --device <UDID>", udid, port)
@@ -117,16 +144,21 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		printSetupSuccess("App installed")
 	}
 
-	// 2-4. Attach to the WDA already running on the device's port, or install,
-	// build and start our own.
+	// 2-4. Drive the WDA already running at --wda-url, or install, build and
+	// start our own.
 	var runner *wdadriver.Runner
-	wdaPort := port
-	if wdaAttach(cfg) {
-		printSetupStep(fmt.Sprintf("Attaching to the running WDA on port %d...", port))
-		if err := wdadriver.WaitForRunning(wdadriver.NewClient(port), wdadriver.AttachTimeout); err != nil {
-			return nil, nil, fmt.Errorf("--wda-attach: %w", err)
+	var client *wdadriver.Client
+	if url := wdaURL(cfg); url != "" {
+		attached, err := wdadriver.NewClientURL(url)
+		if err != nil {
+			return nil, nil, fmt.Errorf("--wda-url: %w", err)
 		}
-		printSetupSuccess("WDA attached")
+		printSetupStep(fmt.Sprintf("Connecting to the running WDA at %s...", url))
+		if err := wdadriver.WaitForRunning(attached, wdadriver.AttachTimeout); err != nil {
+			return nil, nil, fmt.Errorf("--wda-url: %w", err)
+		}
+		printSetupSuccess("WDA connected")
+		client = attached
 	} else {
 		// 2. Verify bundled WDA is present (no auto-download — releases ship WDA)
 		if !cfg.NoDriverInstall {
@@ -160,12 +192,9 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		}
 		logger.Info("WDA started successfully on port %d", runner.Port())
 		printSetupSuccess("WDA started")
-		wdaPort = runner.Port()
+		printSetupSuccess(fmt.Sprintf("WDA port: %d", runner.Port()))
+		client = wdadriver.NewClient(runner.Port())
 	}
-
-	// 5. Create WDA client
-	printSetupSuccess(fmt.Sprintf("WDA port: %d", wdaPort))
-	client := wdadriver.NewClient(wdaPort)
 
 	// stopWDA stops the WDA this run started. An attached WDA belongs to
 	// whatever started it, so only this run's session is ended and the WDA is
@@ -175,7 +204,7 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 			runner.Cleanup()
 			return
 		}
-		if err := client.DeleteSession(); err != nil {
+		if err := client.DeleteSessionWithin(sessionEndTimeout); err != nil {
 			logger.Debug("ending the session on the attached WDA: %v", err)
 		}
 	}

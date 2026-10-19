@@ -96,10 +96,10 @@ var GlobalFlags = []cli.Flag{
 		Usage:   "Custom WDA bundle identifier for code signing (iOS)",
 		EnvVars: []string{"MAESTRO_WDA_BUNDLE_ID"},
 	},
-	&cli.BoolFlag{
-		Name:    "wda-attach",
-		Usage:   "Use the WebDriverAgent already running on the device's WDA port instead of building and starting one; it is left running (iOS, --driver wda)",
-		EnvVars: []string{"MAESTRO_WDA_ATTACH"},
+	&cli.StringFlag{
+		Name:    "wda-url",
+		Usage:   "URL of a WebDriverAgent that is already running for the --device, such as http://127.0.0.1:8100: drive it instead of building and starting one, and leave it running (iOS, --driver wda)",
+		EnvVars: []string{"MAESTRO_WDA_URL"},
 	},
 	&cli.StringFlag{
 		Name:    "start-emulator",

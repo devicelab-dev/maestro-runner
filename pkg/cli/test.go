@@ -609,7 +609,7 @@ type RunConfig struct {
 	TypingFrequency    int    // WDA typing frequency in keys/sec (0 = use WDA default of 60)
 	TeamID             string // Apple Development Team ID for WDA code signing
 	WDABundleID        string // Custom WDA bundle identifier
-	WDAAttach          bool   // Use the WDA already running on the device's port (--wda-attach)
+	WDAURL             string // URL of a WDA that is already running (--wda-url)
 
 	// Emulator/Simulator management
 	StartEmulator     string // AVD name to start (e.g., Pixel_7_API_33)
@@ -872,7 +872,7 @@ func runTest(c *cli.Context) error {
 		TypingFrequency:    getInt("typing-frequency"),
 		TeamID:             getString("team-id"),
 		WDABundleID:        getString("wda-bundle-id"),
-		WDAAttach:          getBool("wda-attach"),
+		WDAURL:             getString("wda-url"),
 		StartEmulator:      getString("start-emulator"),
 		StartSimulator:     getString("start-simulator"),
 		AutoStartEmulator:  getBool("auto-start-emulator"),
@@ -2498,13 +2498,12 @@ func isPortInUse(port uint16) bool {
 }
 
 // checkDeviceAvailable checks if a device is available and not in use.
-// Returns error if device is busy or not found. With wdaAttach the iOS WDA
-// port is bound on purpose, by the WebDriverAgent the run attaches to.
-func checkDeviceAvailable(deviceID, platform string, wdaAttach bool) error {
+// Returns error if device is busy or not found.
+func checkDeviceAvailable(deviceID, platform string) error {
 	if platform == "ios" {
 		// Check iOS device/simulator availability via port
 		port := wdadriver.PortFromUDID(deviceID)
-		if !wdaAttach && isPortInUse(port) {
+		if isPortInUse(port) {
 			return fmt.Errorf("device is in use (port %d already bound)", port)
 		}
 	} else {
@@ -2804,7 +2803,7 @@ func executeParallel(cfg *RunConfig, deviceIDs []string, flows []flow.Flow) (*ex
 
 	// 1. Validate devices (skip for web — no physical devices)
 	if platform != "web" {
-		if err := validateDevicesAvailable(deviceIDs, platform, wdaAttach(cfg)); err != nil {
+		if err := validateDevicesAvailable(deviceIDs, platform); err != nil {
 			return nil, err
 		}
 	}
@@ -2842,12 +2841,12 @@ func executeParallel(cfg *RunConfig, deviceIDs []string, flows []flow.Flow) (*ex
 }
 
 // validateDevicesAvailable checks all devices before starting initialization.
-func validateDevicesAvailable(deviceIDs []string, platform string, wdaAttach bool) error {
+func validateDevicesAvailable(deviceIDs []string, platform string) error {
 	printSetupStep(fmt.Sprintf("Checking availability of %d device(s)...", len(deviceIDs)))
 
 	var unavailableDevices []string
 	for i, deviceID := range deviceIDs {
-		if err := checkDeviceAvailable(deviceID, platform, wdaAttach); err != nil {
+		if err := checkDeviceAvailable(deviceID, platform); err != nil {
 			unavailableDevices = append(unavailableDevices,
 				fmt.Sprintf("  Device %d/%d (%s): %v", i+1, len(deviceIDs), deviceID, err))
 		}
@@ -3223,16 +3222,20 @@ func resolveVideoMode(video string, record bool) string {
 }
 
 // checkIOSSigning checks what a direct iOS driver needs to sign its runner. A
-// real device needs --team-id. Attaching to a running WDA (--wda-attach) signs
-// nothing, since whatever started that WDA signed it, but it needs the device
-// named: auto-detection skips a device whose WDA port is bound, and the
-// attached WDA binds it.
+// real device needs --team-id. Driving a running WDA (--wda-url) signs
+// nothing, since whatever started that WDA signed it. It needs exactly one
+// device named: auto-detection skips a device whose WDA port is bound, which
+// that WDA may bind, and one URL is one WDA, which drives one device.
 func checkIOSSigning(cfg *RunConfig, isSimTarget bool) error {
-	if wdaAttach(cfg) {
-		if len(cfg.Devices) == 0 {
-			return errors.New("--wda-attach needs the device named with --device <UDID>")
+	if wdaURL(cfg) != "" {
+		switch len(cfg.Devices) {
+		case 0:
+			return errors.New("--wda-url needs the device named with --device <UDID>")
+		case 1:
+			return nil
+		default:
+			return errors.New("--wda-url drives one WebDriverAgent, so it takes one --device")
 		}
-		return nil
 	}
 	if cfg.TeamID == "" && !isSimTarget {
 		return fmt.Errorf("iOS on a real device requires --team-id to code-sign the runner\n" +

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -70,6 +71,36 @@ func NewClient(port uint16) *Client {
 			Transport: newWDATransport(),
 		},
 	}
+}
+
+// NewClientURL creates a client for a WebDriverAgent at rawURL, such as
+// http://127.0.0.1:8100, for one that something else started.
+func NewClientURL(rawURL string) (*Client, error) {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return nil, fmt.Errorf("invalid WDA URL %q (want http://host:port): %w", rawURL, err)
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+		return nil, fmt.Errorf("invalid WDA URL %q: want http://host:port", rawURL)
+	}
+	if p := u.Port(); p != "" {
+		if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
+			return nil, fmt.Errorf("invalid WDA URL %q: port %s is out of range", rawURL, p)
+		}
+	}
+	if u.User != nil {
+		return nil, fmt.Errorf("invalid WDA URL: WDA takes no user or password")
+	}
+	if strings.Trim(u.Path, "/") != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return nil, fmt.Errorf("invalid WDA URL %q: want http://host:port, with no path, query or fragment", rawURL)
+	}
+	return &Client{
+		baseURL: strings.TrimRight(u.String(), "/"),
+		httpClient: &http.Client{
+			Timeout:   60 * time.Second,
+			Transport: newWDATransport(),
+		},
+	}, nil
 }
 
 // wdaIdleConnsPerHost is how many idle connections the client keeps open to WebDriverAgent.
@@ -183,6 +214,18 @@ func (c *Client) DeleteSession() error {
 		return nil
 	}
 	_, err := c.delete(fmt.Sprintf("/session/%s", c.sessionID))
+	c.sessionID = ""
+	return err
+}
+
+// DeleteSessionWithin ends the current session, giving WDA at most d to
+// answer.
+func (c *Client) DeleteSessionWithin(d time.Duration) error {
+	if c.sessionID == "" {
+		return nil
+	}
+	short := &Client{baseURL: c.baseURL, sessionID: c.sessionID, httpClient: &http.Client{Timeout: d, Transport: c.httpClient.Transport}}
+	err := short.DeleteSession()
 	c.sessionID = ""
 	return err
 }
