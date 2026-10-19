@@ -169,7 +169,9 @@ func TestCreateSession(t *testing.T) {
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	var body map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&body)
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
 	if body["sessions"].(float64) != 1 {
 		t.Errorf("expected 1 session, got %v", body["sessions"])
 	}
