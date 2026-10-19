@@ -14,109 +14,109 @@ import (
 // Pure data structure - executor decides how to use it.
 type Selector struct {
 	// Primary selectors
-	Text string `yaml:"text"` // Text to match
-	ID   string `yaml:"id"`   // Resource ID or accessibility ID
+	Text string `yaml:"text" json:"text"` // Text to match
+	ID   string `yaml:"id" json:"id"`     // Resource ID or accessibility ID
 
 	// Size matching
-	Width     int `yaml:"width"`
-	Height    int `yaml:"height"`
-	Tolerance int `yaml:"tolerance"`
+	Width     int `yaml:"width" json:"width"`
+	Height    int `yaml:"height" json:"height"`
+	Tolerance int `yaml:"tolerance" json:"tolerance"`
 
 	// State filters
-	Enabled  *bool `yaml:"enabled"`
-	Selected *bool `yaml:"selected"`
-	Checked  *bool `yaml:"checked"`
-	Focused  *bool `yaml:"focused"`
+	Enabled  *bool `yaml:"enabled" json:"enabled"`
+	Selected *bool `yaml:"selected" json:"selected"`
+	Checked  *bool `yaml:"checked" json:"checked"`
+	Focused  *bool `yaml:"focused" json:"focused"`
 
 	// Index for multiple matches (string for variable support)
-	Index string `yaml:"index"`
+	Index string `yaml:"index" json:"index"`
 
 	// Traits (comma-separated string, e.g., "button,heading")
-	Traits string `yaml:"traits"`
+	Traits string `yaml:"traits" json:"traits"`
 
 	// CSS selector for web views
-	CSS string `yaml:"css"`
+	CSS string `yaml:"css" json:"css"`
 
 	// Web-specific selectors
-	Placeholder  string `yaml:"placeholder"`  // Match by HTML placeholder attribute
-	Role         string `yaml:"role"`         // Match by ARIA role (button, link, tab, etc.)
-	TextContains string `yaml:"textContains"` // Partial text match (contains)
-	Href         string `yaml:"href"`         // Match links by href attribute
-	Alt          string `yaml:"alt"`          // Match by alt attribute (images)
-	Title        string `yaml:"title"`        // Match by title attribute (tooltips)
-	Name         string `yaml:"name"`         // Match by form field name attribute
-	TestID       string `yaml:"testId"`       // Match by data-testid attribute
-	TextRegex    string `yaml:"textRegex"`    // Match text by regex pattern
-	Nth          int    `yaml:"nth"`          // Pick Nth match (0-based) when multiple elements match
+	Placeholder  string `yaml:"placeholder" json:"placeholder"`   // Match by HTML placeholder attribute
+	Role         string `yaml:"role" json:"role"`                 // Match by ARIA role (button, link, tab, etc.)
+	TextContains string `yaml:"textContains" json:"textContains"` // Partial text match (contains)
+	Href         string `yaml:"href" json:"href"`                 // Match links by href attribute
+	Alt          string `yaml:"alt" json:"alt"`                   // Match by alt attribute (images)
+	Title        string `yaml:"title" json:"title"`               // Match by title attribute (tooltips)
+	Name         string `yaml:"name" json:"name"`                 // Match by form field name attribute
+	TestID       string `yaml:"testId" json:"testId"`             // Match by data-testid attribute
+	TextRegex    string `yaml:"textRegex" json:"textRegex"`       // Match text by regex pattern
+	Nth          int    `yaml:"nth" json:"nth"`                   // Pick Nth match (0-based) when multiple elements match
 
 	// Relative selectors
-	ChildOf             *Selector   `yaml:"childOf"`
-	Below               *Selector   `yaml:"below"`
-	Above               *Selector   `yaml:"above"`
-	LeftOf              *Selector   `yaml:"leftOf"`
-	RightOf             *Selector   `yaml:"rightOf"`
-	ContainsChild       *Selector   `yaml:"containsChild"`
-	ContainsDescendants []*Selector `yaml:"containsDescendants"`
-	InsideOf            *Selector   `yaml:"insideOf"` // Visual containment (center point inside anchor bounds)
+	ChildOf             *Selector   `yaml:"childOf" json:"childOf"`
+	Below               *Selector   `yaml:"below" json:"below"`
+	Above               *Selector   `yaml:"above" json:"above"`
+	LeftOf              *Selector   `yaml:"leftOf" json:"leftOf"`
+	RightOf             *Selector   `yaml:"rightOf" json:"rightOf"`
+	ContainsChild       *Selector   `yaml:"containsChild" json:"containsChild"`
+	ContainsDescendants []*Selector `yaml:"containsDescendants" json:"containsDescendants"`
+	InsideOf            *Selector   `yaml:"insideOf" json:"insideOf"` // Visual containment (center point inside anchor bounds)
 
 	// Inline step properties (parsed with selector for YAML convenience)
-	Optional              *bool  `yaml:"optional"`
-	RetryTapIfNoChange    *bool  `yaml:"retryTapIfNoChange"`
-	WaitUntilVisible      *bool  `yaml:"waitUntilVisible"`
-	Point                 string `yaml:"point"`                 // Tap point "x%, y%"
-	Start                 string `yaml:"start"`                 // Swipe start "x%, y%"
-	End                   string `yaml:"end"`                   // Swipe end "x%, y%"
-	Repeat                int    `yaml:"repeat"`                // Tap repeat count
-	Delay                 int    `yaml:"delay"`                 // Delay between repeats (ms)
-	WaitToSettleTimeoutMs int    `yaml:"waitToSettleTimeoutMs"` // Wait for UI settle (ms)
-	Timeout               int    `yaml:"timeout"`               // Timeout in ms for element finding
-	Label                 string `yaml:"label"`                 // Step label
+	Optional              *bool  `yaml:"optional" json:"optional"`
+	RetryTapIfNoChange    *bool  `yaml:"retryTapIfNoChange" json:"retryTapIfNoChange"`
+	WaitUntilVisible      *bool  `yaml:"waitUntilVisible" json:"waitUntilVisible"`
+	Point                 string `yaml:"point" json:"point"`                                 // Tap point "x%, y%"
+	Start                 string `yaml:"start" json:"start"`                                 // Swipe start "x%, y%"
+	End                   string `yaml:"end" json:"end"`                                     // Swipe end "x%, y%"
+	Repeat                int    `yaml:"repeat" json:"repeat"`                               // Tap repeat count
+	Delay                 int    `yaml:"delay" json:"delay"`                                 // Delay between repeats (ms)
+	WaitToSettleTimeoutMs int    `yaml:"waitToSettleTimeoutMs" json:"waitToSettleTimeoutMs"` // Wait for UI settle (ms)
+	Timeout               int    `yaml:"timeout" json:"timeout"`                             // Timeout in ms for element finding
+	Label                 string `yaml:"label" json:"label"`                                 // Step label
 }
 
 // selectorRaw is used for YAML parsing to capture the "element" field.
 type selectorRaw struct {
-	Text                  string      `yaml:"text"`
-	Element               string      `yaml:"element"` // Shorthand for text (used in scrollUntilVisible, etc.)
-	ID                    string      `yaml:"id"`
-	Width                 int         `yaml:"width"`
-	Height                int         `yaml:"height"`
-	Tolerance             int         `yaml:"tolerance"`
-	Enabled               *bool       `yaml:"enabled"`
-	Selected              *bool       `yaml:"selected"`
-	Checked               *bool       `yaml:"checked"`
-	Focused               *bool       `yaml:"focused"`
-	Index                 string      `yaml:"index"`
-	Traits                string      `yaml:"traits"`
-	CSS                   string      `yaml:"css"`
-	Placeholder           string      `yaml:"placeholder"`
-	Role                  string      `yaml:"role"`
-	TextContains          string      `yaml:"textContains"`
-	Href                  string      `yaml:"href"`
-	Alt                   string      `yaml:"alt"`
-	Title                 string      `yaml:"title"`
-	Name                  string      `yaml:"name"`
-	TestID                string      `yaml:"testId"`
-	TextRegex             string      `yaml:"textRegex"`
-	Nth                   int         `yaml:"nth"`
-	ChildOf               *Selector   `yaml:"childOf"`
-	Below                 *Selector   `yaml:"below"`
-	Above                 *Selector   `yaml:"above"`
-	LeftOf                *Selector   `yaml:"leftOf"`
-	RightOf               *Selector   `yaml:"rightOf"`
-	ContainsChild         *Selector   `yaml:"containsChild"`
-	ContainsDescendants   []*Selector `yaml:"containsDescendants"`
-	InsideOf              *Selector   `yaml:"insideOf"`
-	Optional              *bool       `yaml:"optional"`
-	RetryTapIfNoChange    *bool       `yaml:"retryTapIfNoChange"`
-	WaitUntilVisible      *bool       `yaml:"waitUntilVisible"`
-	Point                 string      `yaml:"point"`
-	Start                 string      `yaml:"start"`
-	End                   string      `yaml:"end"`
-	Repeat                int         `yaml:"repeat"`
-	Delay                 int         `yaml:"delay"`
-	WaitToSettleTimeoutMs int         `yaml:"waitToSettleTimeoutMs"`
-	Timeout               int         `yaml:"timeout"`
-	Label                 string      `yaml:"label"`
+	Text                  string      `yaml:"text" json:"text"`
+	Element               string      `yaml:"element" json:"element"` // Shorthand for text (used in scrollUntilVisible, etc.)
+	ID                    string      `yaml:"id" json:"id"`
+	Width                 int         `yaml:"width" json:"width"`
+	Height                int         `yaml:"height" json:"height"`
+	Tolerance             int         `yaml:"tolerance" json:"tolerance"`
+	Enabled               *bool       `yaml:"enabled" json:"enabled"`
+	Selected              *bool       `yaml:"selected" json:"selected"`
+	Checked               *bool       `yaml:"checked" json:"checked"`
+	Focused               *bool       `yaml:"focused" json:"focused"`
+	Index                 string      `yaml:"index" json:"index"`
+	Traits                string      `yaml:"traits" json:"traits"`
+	CSS                   string      `yaml:"css" json:"css"`
+	Placeholder           string      `yaml:"placeholder" json:"placeholder"`
+	Role                  string      `yaml:"role" json:"role"`
+	TextContains          string      `yaml:"textContains" json:"textContains"`
+	Href                  string      `yaml:"href" json:"href"`
+	Alt                   string      `yaml:"alt" json:"alt"`
+	Title                 string      `yaml:"title" json:"title"`
+	Name                  string      `yaml:"name" json:"name"`
+	TestID                string      `yaml:"testId" json:"testId"`
+	TextRegex             string      `yaml:"textRegex" json:"textRegex"`
+	Nth                   int         `yaml:"nth" json:"nth"`
+	ChildOf               *Selector   `yaml:"childOf" json:"childOf"`
+	Below                 *Selector   `yaml:"below" json:"below"`
+	Above                 *Selector   `yaml:"above" json:"above"`
+	LeftOf                *Selector   `yaml:"leftOf" json:"leftOf"`
+	RightOf               *Selector   `yaml:"rightOf" json:"rightOf"`
+	ContainsChild         *Selector   `yaml:"containsChild" json:"containsChild"`
+	ContainsDescendants   []*Selector `yaml:"containsDescendants" json:"containsDescendants"`
+	InsideOf              *Selector   `yaml:"insideOf" json:"insideOf"`
+	Optional              *bool       `yaml:"optional" json:"optional"`
+	RetryTapIfNoChange    *bool       `yaml:"retryTapIfNoChange" json:"retryTapIfNoChange"`
+	WaitUntilVisible      *bool       `yaml:"waitUntilVisible" json:"waitUntilVisible"`
+	Point                 string      `yaml:"point" json:"point"`
+	Start                 string      `yaml:"start" json:"start"`
+	End                   string      `yaml:"end" json:"end"`
+	Repeat                int         `yaml:"repeat" json:"repeat"`
+	Delay                 int         `yaml:"delay" json:"delay"`
+	WaitToSettleTimeoutMs int         `yaml:"waitToSettleTimeoutMs" json:"waitToSettleTimeoutMs"`
+	Timeout               int         `yaml:"timeout" json:"timeout"`
+	Label                 string      `yaml:"label" json:"label"`
 }
 
 // UnmarshalYAML allows Selector to be unmarshaled from string or struct.
