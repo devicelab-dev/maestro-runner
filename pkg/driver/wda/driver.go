@@ -677,11 +677,17 @@ func (d *Driver) findElementForTapWithContext(ctx context.Context, sel flow.Sele
 			// NSPredicate does have MATCHES, but its ICU dialect is not Go's,
 			// and having two matchers disagree about what a pattern means is
 			// the bug underneath this one. One matcher decides.
-			if looksLikeRegex(sel.Text) {
-				if info, err := d.findElementByPageSourceOnce(sel); err == nil {
+			//
+			// With MAESTRO_WDA_HOSTED_FRAMES the page source is the only
+			// source of frames too: WDA's own queries return rects it does not
+			// correct (hosted_frames.go).
+			if looksLikeRegex(sel.Text) || hostedFrames() {
+				info, err := d.findElementByPageSourceOnce(sel)
+				if err == nil {
 					return info, nil
 				}
-				lastErr = fmt.Errorf("regex selector %q not found in page source", sel.Text)
+				lastErr = fmt.Errorf("selector %q not found in page source: %w", sel.Text, err)
+				time.Sleep(50 * time.Millisecond)
 				continue
 			}
 
@@ -944,6 +950,11 @@ func (d *Driver) findElementByWDA(sel flow.Selector) (*core.ElementInfo, error) 
 	// below would match a switch in either state.
 	if sel.Checked != nil {
 		return nil, fmt.Errorf("checked selector requires page-source matching")
+	}
+	// With MAESTRO_WDA_HOSTED_FRAMES only the page source has corrected
+	// frames; a rect from a WDA query would land a hosted view's tap too high.
+	if hostedFrames() {
+		return nil, fmt.Errorf("MAESTRO_WDA_HOSTED_FRAMES: lookups read the page source")
 	}
 
 	// Try class chain for accessibility ID
