@@ -63,7 +63,7 @@ func ParsePageSource(xmlData string) ([]*ParsedElement, error) {
 						if err != nil || child == nil {
 							break
 						}
-						elements = append(elements, flattenElement(child, 0)...)
+						elements = append(elements, finishElementTree(child)...)
 					}
 					continue
 				}
@@ -145,7 +145,7 @@ func ParsePageSource(xmlData string) ([]*ParsedElement, error) {
 			break
 		}
 		if elem != nil {
-			elements = append(elements, flattenElement(elem, 0)...)
+			elements = append(elements, finishElementTree(elem)...)
 		}
 	}
 
@@ -158,6 +158,15 @@ func ParsePageSource(xmlData string) ([]*ParsedElement, error) {
 	}
 
 	return elements, nil
+}
+
+// finishElementTree corrects a parsed tree's hosted frames when MAESTRO_WDA_HOSTED_FRAMES is
+// set (hosted_frames.go) and flattens it.
+func finishElementTree(root *ParsedElement) []*ParsedElement {
+	if hostedFrames() {
+		rebaseHostedFrames(root, 0, 0)
+	}
+	return flattenElement(root, 0)
 }
 
 // flattenElement flattens a tree of elements into a list, setting depth.
