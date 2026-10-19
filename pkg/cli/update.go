@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -21,7 +23,13 @@ type updateResponse struct {
 
 // startUpdateCheck kicks off a background update check.
 // Call printUpdateNotice() later to print the result.
+// MAESTRO_RUNNER_NO_UPDATE_CHECK skips it, and so does CI: a CI job installs
+// whatever version its script pins, and no one reads the notice there.
 func startUpdateCheck() {
+	if updateCheckOff(os.LookupEnv) {
+		return
+	}
+	exe, _ := os.Executable()
 	ch := updateNotice
 	go func() {
 		client := &http.Client{Timeout: 3 * time.Second}
@@ -53,7 +61,7 @@ func startUpdateCheck() {
 		}
 
 		if isNewerRelease(result.LatestVersion, Version) {
-			ch <- fmt.Sprintf("\n  Update available: %s → %s\n  Run: curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash\n", Version, result.LatestVersion)
+			ch <- fmt.Sprintf("\n  Update available: %s → %s\n  Run: %s\n", Version, result.LatestVersion, upgradeCommand(exe))
 		} else {
 			ch <- ""
 		}
@@ -70,6 +78,36 @@ func printUpdateNotice() {
 	default:
 		// Check not finished yet, don't block
 	}
+}
+
+// updateCheckOff reports whether MAESTRO_RUNNER_NO_UPDATE_CHECK or CI is set
+// to anything but "0" or "false", as telemetry reads its own opt-outs.
+func updateCheckOff(lookup func(string) (string, bool)) bool {
+	for _, name := range []string{"MAESTRO_RUNNER_NO_UPDATE_CHECK", "CI"} {
+		v, ok := lookup(name)
+		v = strings.ToLower(strings.TrimSpace(v))
+		if ok && v != "0" && v != "false" {
+			return true
+		}
+	}
+	return false
+}
+
+// npmPlatformDir is part of the path every npm install of the binary has:
+// npm/build-npm.sh ships it in @devicelab/maestro-runner-<os>-<arch>, under
+// node_modules wherever npm, npx or a project install puts it.
+const npmPlatformDir = "/node_modules/@devicelab/maestro-runner-"
+
+// upgradeCommand is the command that updates the install the binary at exe
+// came from: npm's for an npm install, the install script's otherwise.
+func upgradeCommand(exe string) string {
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	if strings.Contains(filepath.ToSlash(exe), npmPlatformDir) {
+		return "npm i -g maestro-runner@latest"
+	}
+	return "curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash"
 }
 
 var (

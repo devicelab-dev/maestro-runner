@@ -71,7 +71,10 @@ Examples:
   maestro-runner --driver appium --appium-url "https://hub.provider.com/wd/hub" --caps cloud.json test flow.yaml
 
   # Custom output directory
-  maestro-runner test --output ./my-reports --flatten flows/`,
+  maestro-runner test --output ./my-reports --flatten flows/
+
+A run checks for a newer release and prints a notice at the end. Set
+MAESTRO_RUNNER_NO_UPDATE_CHECK=1 to skip the check; it is skipped when CI is set.`,
 	Flags: []cli.Flag{
 		// Configuration
 		&cli.StringFlag{

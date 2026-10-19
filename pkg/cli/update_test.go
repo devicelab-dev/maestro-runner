@@ -34,3 +34,44 @@ func TestIsNewerRelease(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateCheckOff(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		want bool
+	}{
+		{"nothing set", map[string]string{}, false},
+		{"opt-out", map[string]string{"MAESTRO_RUNNER_NO_UPDATE_CHECK": "1"}, true},
+		{"opt-out true", map[string]string{"MAESTRO_RUNNER_NO_UPDATE_CHECK": "true"}, true},
+		{"opt-out 0", map[string]string{"MAESTRO_RUNNER_NO_UPDATE_CHECK": "0"}, false},
+		{"opt-out false", map[string]string{"MAESTRO_RUNNER_NO_UPDATE_CHECK": " FALSE "}, false},
+		{"CI", map[string]string{"CI": "true"}, true},
+		{"CI empty", map[string]string{"CI": ""}, true},
+		{"CI false", map[string]string{"CI": "false"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lookup := func(k string) (string, bool) { v, ok := tc.env[k]; return v, ok }
+			if got := updateCheckOff(lookup); got != tc.want {
+				t.Errorf("updateCheckOff(%v) = %v, want %v", tc.env, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestUpgradeCommand(t *testing.T) {
+	const npm = "npm i -g maestro-runner@latest"
+	const curl = "curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash"
+	for _, tc := range []struct{ exe, want string }{
+		{"/usr/local/lib/node_modules/maestro-runner/node_modules/@devicelab/maestro-runner-darwin-arm64/bin/maestro-runner", npm},
+		{"/home/ci/.npm/_npx/abc123/node_modules/@devicelab/maestro-runner-linux-x64/bin/maestro-runner", npm},
+		{"/work/app/node_modules/@devicelab/maestro-runner-linux-arm64/bin/maestro-runner", npm},
+		{"/Users/me/.maestro-runner/bin/maestro-runner", curl},
+		{"/work/node_modules/maestro-runner-fork/bin/maestro-runner", curl},
+		{"", curl},
+	} {
+		if got := upgradeCommand(tc.exe); got != tc.want {
+			t.Errorf("upgradeCommand(%q) = %q, want %q", tc.exe, got, tc.want)
+		}
+	}
+}
