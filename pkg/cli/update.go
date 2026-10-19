@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -49,7 +52,7 @@ func startUpdateCheck() {
 			return
 		}
 
-		if result.LatestVersion != "" && result.LatestVersion != Version {
+		if isNewerRelease(result.LatestVersion, Version) {
 			ch <- fmt.Sprintf("\n  Update available: %s → %s\n  Run: curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash\n", Version, result.LatestVersion)
 		} else {
 			ch <- ""
@@ -67,4 +70,57 @@ func printUpdateNotice() {
 	default:
 		// Check not finished yet, don't block
 	}
+}
+
+var (
+	releaseVersion = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(-.*)?$`)
+	// describeSuffix is what `git describe --tags` adds to a build made
+	// commits after a tag: -22-gf72df97.
+	describeSuffix = regexp.MustCompile(`^-\d+-g[0-9a-f]+$`)
+)
+
+// releaseOrder places a version among releases: major, minor, patch, then -1
+// for a pre-release (1.1.30-rc.1 comes before 1.1.30), 0 for the release
+// itself, 1 for a `git describe` build of commits after it. A -dirty suffix
+// is ignored. ok is false for anything else ("dev", a bare commit hash).
+func releaseOrder(v string) (order [4]int, ok bool) {
+	m := releaseVersion.FindStringSubmatch(strings.TrimSuffix(strings.TrimSpace(v), "-dirty"))
+	if m == nil {
+		return order, false
+	}
+	for i := 0; i < 3; i++ {
+		n, err := strconv.Atoi(m[i+1])
+		if err != nil {
+			return order, false
+		}
+		order[i] = n
+	}
+	switch {
+	case m[4] == "":
+	case describeSuffix.MatchString(m[4]):
+		order[3] = 1
+	default:
+		order[3] = -1
+	}
+	return order, true
+}
+
+// isNewerRelease reports whether latest is strictly newer than current, the
+// only case worth an update notice. A build ahead of the latest release, or
+// a version either side can't read, gets none: that would advise going back.
+func isNewerRelease(latest, current string) bool {
+	l, ok := releaseOrder(latest)
+	if !ok {
+		return false
+	}
+	c, ok := releaseOrder(current)
+	if !ok {
+		return false
+	}
+	for i := range l {
+		if l[i] != c[i] {
+			return l[i] > c[i]
+		}
+	}
+	return false
 }
