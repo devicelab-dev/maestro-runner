@@ -3,6 +3,8 @@ package simulator
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -201,13 +203,30 @@ func BootSimulator(udid string, timeout time.Duration) error {
 		return err
 	}
 
-	// Open the Simulator UI
-	openCmd := execCommand("open", "-a", "Simulator")
-	if err := openCmd.Run(); err != nil {
-		logger.Debug("Failed to open Simulator app: %v", err)
-	}
+	openSimulatorUI()
 
 	return nil
+}
+
+// deviceHubBundleID is the app that shows simulators from Xcode 27, which
+// has no Simulator.app.
+const deviceHubBundleID = "com.apple.dt.Devices"
+
+// openSimulatorUI opens the app that shows the booted simulator: Simulator
+// where the selected Xcode has it (<developer dir>/Applications/Simulator.app,
+// Xcode 26 and older), DeviceHub by bundle id otherwise. The run never
+// depends on it, so a failure is only logged.
+func openSimulatorUI() {
+	args := []string{"-a", "Simulator"}
+	if out, err := execCommand("xcode-select", "-p").Output(); err == nil {
+		dev := strings.TrimSpace(string(out))
+		if _, err := os.Stat(filepath.Join(dev, "Applications", "Simulator.app")); err != nil {
+			args = []string{"-b", deviceHubBundleID}
+		}
+	}
+	if err := execCommand("open", args...).Run(); err != nil {
+		logger.Debug("Failed to open the simulator app (open %s): %v", strings.Join(args, " "), err)
+	}
 }
 
 // ShutdownSimulator gracefully shuts down a simulator.
