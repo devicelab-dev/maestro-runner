@@ -5317,3 +5317,101 @@ func TestScrollUntilVisibleStopsWhenScreenStopsMoving(t *testing.T) {
 		t.Errorf("message should name the reason, got %q", result.Message)
 	}
 }
+
+// =============================================================================
+// autoClickAlertSelector: permission prompts only, not the app's own alerts
+// =============================================================================
+
+// alertSettingsServer records the autoClickAlertSelector of every settings
+// update that sets one.
+func alertSettingsServer(t *testing.T, got *[]string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/session" && r.Method == "POST" {
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"sessionId": "new-session"},
+			})
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/appium/settings") && r.Method == "POST" {
+			var body struct {
+				Settings map[string]interface{} `json:"settings"`
+			}
+			raw, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(raw, &body)
+			if v, ok := body.Settings["autoClickAlertSelector"]; ok {
+				*got = append(*got, fmt.Sprint(v))
+			}
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+}
+
+func TestLaunchAppSetsAutoClickAlertSelector(t *testing.T) {
+	cases := []struct {
+		name        string
+		permissions map[string]string
+		want        string
+	}{
+		{"default all allow", nil, autoAcceptAlertSelector},
+		{"all deny", map[string]string{"all": "deny"}, autoDismissAlertSelector},
+		{"mixed", map[string]string{"camera": "allow", "location": "deny"}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []string
+			server := alertSettingsServer(t, &got)
+			defer server.Close()
+			driver := &Driver{
+				client: &Client{baseURL: server.URL, httpClient: http.DefaultClient},
+				info:   &core.PlatformInfo{Platform: "ios", IsSimulator: false},
+				udid:   "REAL-DEVICE-UDID",
+			}
+			result := driver.launchApp(&flow.LaunchAppStep{AppID: "com.test.app", Permissions: tc.permissions})
+			if !result.Success {
+				t.Fatalf("launchApp failed: %s", result.Message)
+			}
+			if len(got) != 1 || got[0] != tc.want {
+				t.Errorf("autoClickAlertSelector = %q, want [%q]", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEnsureSessionSetsAutoClickAlertSelector(t *testing.T) {
+	var got []string
+	server := alertSettingsServer(t, &got)
+	defer server.Close()
+	driver := NewDriver(&Client{baseURL: server.URL, httpClient: http.DefaultClient},
+		&core.PlatformInfo{Platform: "ios"}, "")
+	driver.alertAction = "accept"
+
+	if err := driver.EnsureSession("com.test.app"); err != nil {
+		t.Fatalf("EnsureSession: %v", err)
+	}
+	if len(got) != 1 || got[0] != autoAcceptAlertSelector {
+		t.Errorf("autoClickAlertSelector = %q, want [%q]", got, autoAcceptAlertSelector)
+	}
+}
+
+// The auto selectors must not match an app's own "OK"/"Cancel" alert, and
+// must be valid WDA class chains: WDA rejects the whole settings update on an
+// invalid autoClickAlertSelector, and a straight apostrophe inside a quoted
+// predicate string (as in 'Don't Allow') ends the string early.
+func TestAutoClickAlertSelectors(t *testing.T) {
+	if got := autoClickAlertSelector(""); got != "" {
+		t.Errorf("no action: got %q, want \"\" (monitor off)", got)
+	}
+	for _, sel := range []string{autoClickAlertSelector("accept"), autoClickAlertSelector("dismiss")} {
+		if sel == "" {
+			t.Fatal("accept/dismiss must have a selector")
+		}
+		if strings.Contains(strings.ToUpper(sel), "'OK'") || strings.Contains(sel, "Cancel") {
+			t.Errorf("%q would match an app's own alert button", sel)
+		}
+		if strings.Count(sel, "'")%2 != 0 || strings.Count(sel, "`") != 2 {
+			t.Errorf("%q: unbalanced quotes", sel)
+		}
+	}
+}

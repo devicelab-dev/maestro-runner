@@ -143,6 +143,9 @@ func (d *Driver) EnsureSession(appID string) error {
 		"shouldWaitForQuiescence": false,
 		"waitForIdleTimeout":      0,
 		"animationCoolOffTimeout": 0,
+		// Permission prompts only: without it the monitor the session's
+		// defaultAlertAction starts also taps the app's own alerts.
+		"autoClickAlertSelector": autoClickAlertSelector(d.alertAction),
 	})
 	return nil
 }
