@@ -2367,8 +2367,10 @@ func printSetupWarning(msg string) {
 // createAppiumDriver creates a driver that connects to an external Appium server.
 // Uses capabilities from --caps file, with CLI flags taking precedence.
 func createAppiumDriver(cfg *RunConfig) (core.Driver, func(), error) {
-	printSetupStep(fmt.Sprintf("Connecting to Appium server: %s", cfg.AppiumURL))
-	logger.Info("Creating Appium driver, server URL: %s", cfg.AppiumURL)
+	// A cloud hub's URL carries the account's access key (Sauce Labs:
+	// https://user:key@ondemand...); the console and the log get it without.
+	printSetupStep(fmt.Sprintf("Connecting to Appium server: %s", redactURL(cfg.AppiumURL)))
+	logger.Info("Creating Appium driver, server URL: %s", redactURL(cfg.AppiumURL))
 
 	// Start with capabilities from file (or empty map)
 	caps := cfg.Capabilities

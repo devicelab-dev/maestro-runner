@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A character XML forbids in an app's text no longer breaks every lookup on the screen (UIAutomator2, Appium).** One U+0000 or control character in any label made the page source unparseable, so every selector on that screen failed. Such characters now read as U+FFFD, which no selector text matches by accident.
 - **The update notice appears only when the latest release is newer than the one running.** It announced any latest version that differed from the running one, so a build newer than the latest release, a source build such as `v1.1.29-22-gf72df97` among them, was told to "update" to an older one. A build made after a release tag now counts as newer than that release.
 - **WDA: a failed session no longer holds xcodebuild for ten minutes collecting diagnostics.** On Xcode 26 and later, xcodebuild could run `simctl diagnose` after a failure; WDA now starts with `-collect-test-diagnostics never` on Xcode 15 and later, as DeviceLab iOS does.
+- **The Appium server URL is shown without its credentials.** The console and `maestro-runner.log` printed `--appium-url` as given, so a Sauce Labs URL showed the account's access key; they now show it without the user, password and query. The `--appium-session-file` keeps the full URL, since tools attach to the session with it.
 
 ## [1.1.29] - 2026-10-15
 
