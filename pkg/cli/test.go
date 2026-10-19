@@ -701,6 +701,10 @@ func runTest(c *cli.Context) error {
 	// Check for updates in background (prints at end)
 	startUpdateCheck()
 
+	// Open the usage event's connection now, in the background, so the send
+	// at the end of the run doesn't pay for it (off with the opt-outs).
+	telemetry.Warm()
+
 	// Helper to get flag value from current or parent context
 	// When run as subcommand, global flags are in parent context
 	getString := func(name string) string {

@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **WDA: a failed session no longer holds xcodebuild for ten minutes collecting diagnostics.** On Xcode 26 and later, xcodebuild could run `simctl diagnose` after a failure; WDA now starts with `-collect-test-diagnostics never` on Xcode 15 and later, as DeviceLab iOS does.
 - **The Appium server URL is shown without its credentials.** The console and `maestro-runner.log` printed `--appium-url` as given, so a Sauce Labs URL showed the account's access key; they now show it without the user, password and query. The `--appium-session-file` keeps the full URL, since tools attach to the session with it.
 - **A simulator the runner boots opens in DeviceHub on Xcode 27.** Xcode 27 has no Simulator.app, so `open -a Simulator` opened nothing. Where the selected Xcode has no Simulator.app, the runner opens DeviceHub (`com.apple.dt.Devices`); older Xcode still opens Simulator. The run continues if neither opens.
+- **Sending the usage event takes less of the end of each run.** It took about 0.45 s, most of it opening the connection; `test` now opens it in the background when the run starts, and the event, unchanged, is sent over it at the end. A connection the server has closed in between is replaced. Nothing is opened when telemetry is off, and behind a proxy the send works as before. A harness that starts one process per flow paid this per flow.
 
 ## [1.1.29] - 2026-10-15
 

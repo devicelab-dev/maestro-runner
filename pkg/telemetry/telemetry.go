@@ -7,7 +7,7 @@
 // MAESTRO_RUNNER_TELEMETRY_DEBUG the event is printed instead of sent. See
 // docs: https://open.devicelab.dev/maestro-runner/docs/telemetry
 //
-// It is separate from the update check, which is unchanged.
+// It is separate from the update check.
 package telemetry
 
 import (
@@ -196,24 +196,32 @@ func SendWithin(ev Event, limit time.Duration) {
 		fmt.Fprintf(os.Stderr, "telemetry (debug, not sent): %s\n", body)
 		return
 	}
-	url := endpoint
-	if u := os.Getenv("MAESTRO_RUNNER_TELEMETRY_URL"); u != "" {
-		url = u
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL(), bytes.NewReader(body))
 	if err != nil {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "maestro-runner")
-	resp, err := http.DefaultClient.Do(req)
+	client := http.DefaultClient
+	if c := warmClient(); c != nil {
+		client = c
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
 	_ = resp.Body.Close()
+}
+
+// endpointURL is where the event goes.
+func endpointURL() string {
+	if u := os.Getenv("MAESTRO_RUNNER_TELEMETRY_URL"); u != "" {
+		return u
+	}
+	return endpoint
 }
 
 // Notice is the line printed after a local run while telemetry is on. It is
