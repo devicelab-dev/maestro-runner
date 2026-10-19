@@ -68,7 +68,7 @@ func ParsePageSource(xmlData string) ([]*ParsedElement, string, error) {
 
 // parseAndroidPageSource parses Android UI hierarchy XML.
 func parseAndroidPageSource(xmlData string) ([]*ParsedElement, error) {
-	decoder := xml.NewDecoder(strings.NewReader(xmlData))
+	decoder := xml.NewDecoder(strings.NewReader(core.SanitizeXML(xmlData)))
 
 	var elements []*ParsedElement
 	foundHierarchy := false
@@ -170,7 +170,7 @@ func parseAndroidPageSource(xmlData string) ([]*ParsedElement, error) {
 
 // parseIOSPageSource parses iOS UI hierarchy XML.
 func parseIOSPageSource(xmlData string) ([]*ParsedElement, error) {
-	decoder := xml.NewDecoder(strings.NewReader(xmlData))
+	decoder := xml.NewDecoder(strings.NewReader(core.SanitizeXML(xmlData)))
 
 	var elements []*ParsedElement
 	var parseElement func() (*ParsedElement, error)

@@ -42,7 +42,7 @@ type ParsedElement struct {
 // - Appium format: uses <node> elements
 func ParsePageSource(xmlData string) ([]*ParsedElement, error) {
 	// Use a flexible decoder that handles any element names
-	decoder := xml.NewDecoder(strings.NewReader(xmlData))
+	decoder := xml.NewDecoder(strings.NewReader(core.SanitizeXML(xmlData)))
 
 	var elements []*ParsedElement
 	foundHierarchy := false

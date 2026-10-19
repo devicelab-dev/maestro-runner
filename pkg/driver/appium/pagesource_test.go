@@ -110,6 +110,39 @@ func TestFilterBySelector_AndroidCheckedState(t *testing.T) {
 	}
 }
 
+// One forbidden character in any app text must not take the whole screen down.
+func TestParsePageSourceInvalidXMLChars(t *testing.T) {
+	for _, tc := range []struct{ name, src, platform string }{
+		{"android", `<hierarchy rotation="0">
+  <android.widget.TextView text="bad` + "\x00" + `" bounds="[0,0][10,10]"/>
+  <android.widget.Button text="Login" bounds="[0,10][10,20]"/>
+</hierarchy>`, "android"},
+		{"ios", `<AppiumAUT>
+  <XCUIElementTypeStaticText label="bad&#x1B;" x="0" y="0" width="10" height="10"/>
+  <XCUIElementTypeButton label="Login" x="0" y="10" width="10" height="10"/>
+</AppiumAUT>`, "ios"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			elements, platform, err := ParsePageSource(tc.src)
+			if err != nil {
+				t.Fatalf("ParsePageSource failed: %v", err)
+			}
+			if platform != tc.platform {
+				t.Errorf("expected platform %s, got %s", tc.platform, platform)
+			}
+			if len(elements) != 2 {
+				t.Fatalf("expected 2 elements, got %d", len(elements))
+			}
+			if got := elements[0].Text + elements[0].Label; got != "bad�" {
+				t.Errorf("forbidden character should read as U+FFFD, got %q", got)
+			}
+			if got := elements[1].Text + elements[1].Label; got != "Login" {
+				t.Errorf("expected Login, got %q", got)
+			}
+		})
+	}
+}
+
 func TestParseIOSPageSource(t *testing.T) {
 	xml := `<?xml version="1.0" encoding="UTF-8"?>
 <AppiumAUT>
