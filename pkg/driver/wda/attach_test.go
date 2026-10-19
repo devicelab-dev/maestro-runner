@@ -88,3 +88,55 @@ func TestWaitForRunningBoundsAProbeThatNeverAnswers(t *testing.T) {
 		t.Fatalf("gave up after %v, want about the 300ms timeout", took)
 	}
 }
+
+func TestNewClientURL(t *testing.T) {
+	for raw, want := range map[string]string{
+		"http://127.0.0.1:8100":   "http://127.0.0.1:8100",
+		"http://127.0.0.1:8100/":  "http://127.0.0.1:8100",
+		" http://10.0.0.5:8200 ":  "http://10.0.0.5:8200",
+		"https://wda.example:443": "https://wda.example:443",
+		"http://[::1]:8100":       "http://[::1]:8100",
+	} {
+		c, err := NewClientURL(raw)
+		if err != nil {
+			t.Errorf("NewClientURL(%q): %v", raw, err)
+			continue
+		}
+		if c.baseURL != want {
+			t.Errorf("NewClientURL(%q) base = %q, want %q", raw, c.baseURL, want)
+		}
+	}
+	for _, raw := range []string{"", "127.0.0.1:8100", "ftp://127.0.0.1:8100", "http://", "http://127.0.0.1:8100/?x=1",
+		"http://127.0.0.1:8100?", "http://:8100", "http://127.0.0.1:99999", "http://127.0.0.1:0", "http://user:pw@127.0.0.1:8100",
+		"http://127.0.0.1:8100/wd/hub", "http://127.0.0.1:8100#x"} {
+		if _, err := NewClientURL(raw); err == nil {
+			t.Errorf("NewClientURL(%q) accepted a bad URL", raw)
+		}
+	}
+}
+
+// Ending the session on a WDA that never answers gives up at its limit.
+func TestDeleteSessionWithinGivesUp(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	}))
+	defer server.Close()
+	defer close(release)
+	c, err := NewClientURL(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.sessionID = "s1"
+
+	start := time.Now()
+	if err := c.DeleteSessionWithin(100 * time.Millisecond); err == nil {
+		t.Fatal("DeleteSessionWithin passed with a WDA that never answers")
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("gave up after %v, want about 100ms", took)
+	}
+	if c.HasSession() {
+		t.Error("the session is still recorded after ending it")
+	}
+}
