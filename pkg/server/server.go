@@ -234,9 +234,11 @@ func (s *Server) handleSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Detect content type from the hierarchy bytes
+	// Detect content type from the hierarchy bytes. Android drivers return XML;
+	// the browser driver returns a JSON array of accessibility nodes, and some
+	// agents return a JSON object.
 	contentType := "application/xml"
-	if len(hierarchy) > 0 && hierarchy[0] == '{' {
+	if len(hierarchy) > 0 && (hierarchy[0] == '{' || hierarchy[0] == '[') {
 		contentType = "application/json"
 	}
 	w.Header().Set("Content-Type", contentType)

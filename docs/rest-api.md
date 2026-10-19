@@ -2,6 +2,8 @@
 
 `maestro-runner server` exposes the runner over HTTP so any language can drive a device: create a session, send Maestro steps as JSON, read screenshots and the UI hierarchy, then tear the session down. It is the transport behind the Python/TypeScript bindings and is intended for localhost or CI use.
 
+A session can drive Android (`devicelab`, `uiautomator2`, `appium`), iOS (`devicelab`, `wda`, `devicelab-legacy`, `appium`), or a desktop Chrome/Chromium browser over CDP (`web`).
+
 If you are writing a Go program instead, the in-process API in [go-library.md](go-library.md) is the better fit — no server, no HTTP.
 
 ## Start the server
@@ -31,6 +33,10 @@ The server inherits these global flags so every session it creates is configured
 | `--appium-url` | Appium server URL for the `appium` driver (default `http://127.0.0.1:4723`) |
 | `--caps` | Appium capabilities JSON file |
 | `--team-id` | Apple Development Team ID (iOS) |
+| `--browser` | Browser for `web` sessions: `chrome`, `chromium`, or a binary path (default `chromium`; `chrome` uses installed Chrome) |
+| `--headed` | Show the browser window for `web` sessions (default is headless) |
+| `--window-size` | Browser viewport for `web` sessions, `WxH` (default `1280x800`) |
+| `--user-data-dir` | Persistent Chrome profile directory for `web` sessions |
 
 `SIGINT`/`SIGTERM` shuts the server down gracefully — every live session is cleaned up.
 
@@ -59,9 +65,9 @@ The server inherits these global flags so every session it creates is configured
 
 | Field | Required | Notes |
 |---|---|---|
-| `platformName` | yes | `android` or `ios` |
-| `deviceId` | no | Device serial/UDID; the runner picks a device when omitted |
-| `appId` | no | Bundle id / package; used by `launchApp` and returned by device info |
+| `platformName` | yes | `android`, `ios`, or `web` |
+| `deviceId` | no | Device serial/UDID; the runner picks a device when omitted. Ignored for `web` |
+| `appId` | no | Bundle id / package; used by `launchApp` and returned by device info. For `web` it is the **URL to open** |
 | `driver` | no | Per-session driver override; see [Choosing a driver](#choosing-a-driver) |
 
 Response:
@@ -78,6 +84,15 @@ Sessions are independent: one server can hold sessions on different devices and 
 |---|---|
 | Android | `devicelab` (default), `uiautomator2`, `appium` |
 | iOS | `devicelab` (default), `wda`, `devicelab-legacy`, `appium` |
+| Web | `cdp` (default; the only browser driver) |
+
+For `web`, the runner launches the browser itself — pass the start page as `appId`:
+
+```json
+{ "platformName": "web", "appId": "https://example.com" }
+```
+
+Start the server with `--browser chrome` to use installed Chrome instead of the bundled Chromium, and `--headed` to watch the run. Steps then work the same way as on a device, with CSS/`id`/`text` selectors (`{"type":"tapOn","selector":{"css":"#submit"}}`).
 
 The `appium` driver talks to an **already-running** Appium server (`--appium-url`, default `http://127.0.0.1:4723`); the runner never starts Appium for you. `uiautomator2` starts its own on-device server — no external process.
 
@@ -209,4 +224,5 @@ curl -s -X DELETE $BASE/session/$SID -o /dev/null -w '%{http_code}\n'   # 204
 - Sessions are **in-memory**: restarting the server drops every session. Recreate after a reconnect.
 - No authentication layer — bind to localhost or a trusted CI network.
 - Steps are executed **one at a time**; flow-level constructs (`repeat`, `retry`, `runFlow`, `runScript`) are not part of the JSON protocol, so compose them in your client.
-- `platformName` other than `android`/`ios` is rejected (`web` is not served by the REST API).
+- Only `android`, `ios`, and `web` are served; any other `platformName` fails before a driver is created.
+- For `web`, the browser driver also supports steps the JSON protocol does not expose yet (`evalBrowserScript`, `getConsoleLogs`, cookies/auth state); they return `400` like any other unlisted type.

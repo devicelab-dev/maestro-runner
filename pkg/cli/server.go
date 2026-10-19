@@ -32,6 +32,26 @@ Examples:
 			Value:   9999,
 			EnvVars: []string{"MAESTRO_SERVER_PORT"},
 		},
+		&cli.BoolFlag{
+			Name:  "headed",
+			Usage: "Show the browser window for web sessions (default is headless)",
+		},
+		&cli.StringFlag{
+			Name:    "browser",
+			Usage:   "Browser for web sessions: chrome, chromium, or path to binary",
+			EnvVars: []string{"MAESTRO_BROWSER"},
+		},
+		&cli.StringFlag{
+			Name:    "window-size",
+			Aliases: []string{"screen-size"},
+			Usage:   "Browser viewport for web sessions as WxH, e.g. 390x844 (default 1280x800)",
+			EnvVars: []string{"MAESTRO_WINDOW_SIZE"},
+		},
+		&cli.StringFlag{
+			Name:    "user-data-dir",
+			Usage:   "Chrome user-data-dir for a persistent profile across web sessions",
+			EnvVars: []string{"MAESTRO_USER_DATA_DIR"},
+		},
 	},
 	Action: runServer,
 }
@@ -67,34 +87,10 @@ func runServer(c *cli.Context) error {
 	}
 	defer logger.Close()
 
-	// Create server with driver factory
-	srv := server.New(func(req server.SessionRequest) (core.Driver, func(), error) {
-		platform := strings.ToLower(req.PlatformName)
-
-		cfg := &RunConfig{
-			Platform: platform,
-			Driver:   req.Driver,
-			AppID:    req.AppID,
-		}
-		if req.DeviceID != "" {
-			cfg.Devices = []string{req.DeviceID}
-		}
-
-		// Inherit global flags
-		cfg.AppFile = getString("app-file")
-		cfg.AppiumURL = getString("appium-url")
-		cfg.CapsFile = getString("caps")
-		cfg.TeamID = getString("team-id")
-
-		switch platform {
-		case "android":
-			return CreateAndroidDriver(cfg)
-		case "ios":
-			return CreateIOSDriver(cfg)
-		default:
-			return nil, nil, fmt.Errorf("unsupported platform: %s", req.PlatformName)
-		}
-	})
+	// Create server with a per-session driver factory. The factory closes over
+	// the flag readers so an appium/browser flag on the command line (or in the
+	// environment) configures every session it creates.
+	srv := server.New(newSessionDriverFactory(getString, getBool))
 
 	// Create HTTP server
 	addr := fmt.Sprintf(":%d", port)
@@ -131,4 +127,48 @@ func runServer(c *cli.Context) error {
 	}
 
 	return nil
+}
+
+// newSessionDriverFactory builds the driver factory the REST server calls for
+// every POST /session. getString and getBool read the server command's flags
+// (and the inherited global flags), so an operator starts one server with
+// --appium-url/--browser once and every session it hands out uses it.
+//
+// Platform dispatch mirrors cli.CreateDriver: the JSON step protocol reuses the
+// same drivers, so a session behaves like a `test` run on that platform.
+func newSessionDriverFactory(getString func(string) string, getBool func(string) bool) func(server.SessionRequest) (core.Driver, func(), error) {
+	return func(req server.SessionRequest) (core.Driver, func(), error) {
+		platform := strings.ToLower(req.PlatformName)
+
+		cfg := &RunConfig{
+			Platform: platform,
+			Driver:   req.Driver,
+			// For web sessions appId is the URL to open — the same field the
+			// CLI fills from a flow's `url:` header.
+			AppID: req.AppID,
+			// Inherit server-level flags.
+			AppFile:     getString("app-file"),
+			AppiumURL:   getString("appium-url"),
+			CapsFile:    getString("caps"),
+			TeamID:      getString("team-id"),
+			Browser:     getString("browser"),
+			Headed:      getBool("headed"),
+			WindowSize:  getString("window-size"),
+			UserDataDir: getString("user-data-dir"),
+		}
+		if req.DeviceID != "" {
+			cfg.Devices = []string{req.DeviceID}
+		}
+
+		switch platform {
+		case "android":
+			return CreateAndroidDriver(cfg)
+		case "ios":
+			return CreateIOSDriver(cfg)
+		case "web":
+			return CreateWebDriver(cfg)
+		default:
+			return nil, nil, fmt.Errorf("unsupported platform: %s", req.PlatformName)
+		}
+	}
 }

@@ -335,6 +335,7 @@ func TestScreenshot_DriverError(t *testing.T) {
 func TestSource_ContentType(t *testing.T) {
 	xmlHierarchy := []byte(`<?xml version="1.0" encoding="UTF-8"?><hierarchy><node/></hierarchy>`)
 	jsonHierarchy := []byte(`{"type":"View","children":[]}`)
+	jsonArrayHierarchy := []byte(`[{"nodeId":"3","role":{"value":"RootWebArea"}}]`)
 
 	tests := []struct {
 		name        string
@@ -343,7 +344,8 @@ func TestSource_ContentType(t *testing.T) {
 		wantBodyStr string
 	}{
 		{"xml hierarchy", xmlHierarchy, "application/xml", string(xmlHierarchy)},
-		{"json hierarchy", jsonHierarchy, "application/json", string(jsonHierarchy)},
+		{"json object hierarchy", jsonHierarchy, "application/json", string(jsonHierarchy)},
+		{"json array hierarchy (browser)", jsonArrayHierarchy, "application/json", string(jsonArrayHierarchy)},
 	}
 
 	for _, tt := range tests {
