@@ -71,7 +71,10 @@ Examples:
   maestro-runner --driver appium --appium-url "https://hub.provider.com/wd/hub" --caps cloud.json test flow.yaml
 
   # Custom output directory
-  maestro-runner test --output ./my-reports --flatten flows/`,
+  maestro-runner test --output ./my-reports --flatten flows/
+
+A run checks for a newer release and prints a notice at the end. Set
+MAESTRO_RUNNER_NO_UPDATE_CHECK=1 to skip the check; on CI the notice is not printed.`,
 	Flags: []cli.Flag{
 		// Configuration
 		&cli.StringFlag{
@@ -697,6 +700,10 @@ func runTest(c *cli.Context) error {
 
 	// Check for updates in background (prints at end)
 	startUpdateCheck()
+
+	// Open the usage event's connection now, in the background, so the send
+	// at the end of the run doesn't pay for it (off with the opt-outs).
+	telemetry.Warm()
 
 	// Helper to get flag value from current or parent context
 	// When run as subcommand, global flags are in parent context
@@ -2364,8 +2371,10 @@ func printSetupWarning(msg string) {
 // createAppiumDriver creates a driver that connects to an external Appium server.
 // Uses capabilities from --caps file, with CLI flags taking precedence.
 func createAppiumDriver(cfg *RunConfig) (core.Driver, func(), error) {
-	printSetupStep(fmt.Sprintf("Connecting to Appium server: %s", cfg.AppiumURL))
-	logger.Info("Creating Appium driver, server URL: %s", cfg.AppiumURL)
+	// A cloud hub's URL carries the account's access key (Sauce Labs:
+	// https://user:key@ondemand...); the console and the log get it without.
+	printSetupStep(fmt.Sprintf("Connecting to Appium server: %s", redactURL(cfg.AppiumURL)))
+	logger.Info("Creating Appium driver, server URL: %s", redactURL(cfg.AppiumURL))
 
 	// Start with capabilities from file (or empty map)
 	caps := cfg.Capabilities

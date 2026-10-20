@@ -9,9 +9,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	goios "github.com/danielpaulus/go-ios/ios"
@@ -298,11 +300,7 @@ func (r *Runner) startOnce(ctx context.Context, xctestrun, logPath string, attem
 	r.logFile = logFile
 
 	r.cmd = exec.CommandContext(ctx, "xcodebuild",
-		"test-without-building",
-		"-xctestrun", xctestrun,
-		"-destination", r.destination(),
-		"-derivedDataPath", r.derivedDataPath(),
-	)
+		testWithoutBuildingArgs(xctestrun, r.destination(), r.derivedDataPath(), xcodeMajorVersion())...)
 	r.cmd.Stdout = r.logFile
 	r.cmd.Stderr = r.logFile
 
@@ -327,6 +325,50 @@ func (r *Runner) startOnce(ctx context.Context, xctestrun, logPath string, attem
 		return err
 	}
 	return nil
+}
+
+// testWithoutBuildingArgs are xcodebuild's arguments to start WDA.
+// Diagnostics collection is off from Xcode 15, where the flag exists, as on
+// DeviceLab iOS: on Xcode 26 and later a failed session can otherwise hold
+// xcodebuild in `simctl diagnose` for ten minutes.
+func testWithoutBuildingArgs(xctestrun, destination, derivedData string, xcodeMajor int) []string {
+	args := []string{
+		"test-without-building",
+		"-xctestrun", xctestrun,
+		"-destination", destination,
+		"-derivedDataPath", derivedData,
+	}
+	if xcodeMajor >= 15 {
+		args = append(args, "-collect-test-diagnostics", "never")
+	}
+	return args
+}
+
+var (
+	xcodeMajorOnce sync.Once
+	xcodeMajor     int
+)
+
+// xcodeMajorVersion is the selected Xcode's major version, 0 if unknown.
+func xcodeMajorVersion() int {
+	xcodeMajorOnce.Do(func() {
+		out, err := execCommand("xcodebuild", "-version").Output()
+		if err == nil {
+			xcodeMajor = parseXcodeMajor(string(out))
+		}
+	})
+	return xcodeMajor
+}
+
+var xcodeVersionPattern = regexp.MustCompile(`Xcode (\d+)`)
+
+func parseXcodeMajor(versionOutput string) int {
+	m := xcodeVersionPattern.FindStringSubmatch(versionOutput)
+	if len(m) != 2 {
+		return 0
+	}
+	n, _ := strconv.Atoi(m[1])
+	return n
 }
 
 // startPortForward uses go-ios to forward the WDA port from a physical device to localhost.

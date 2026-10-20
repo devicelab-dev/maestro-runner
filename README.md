@@ -195,7 +195,8 @@ Turn it off with `MAESTRO_RUNNER_NO_TELEMETRY=1` or `DO_NOT_TRACK=1`. Set
 `MAESTRO_RUNNER_TELEMETRY_DEBUG=1` to print the event instead of sending it.
 [Telemetry](https://open.devicelab.dev/maestro-runner/docs/telemetry) lists every field.
 
-The update check is separate and unchanged.
+The update check is separate: `MAESTRO_RUNNER_NO_UPDATE_CHECK=1` turns it off,
+and on CI the notice is not printed.
 
 ## Contributing
 

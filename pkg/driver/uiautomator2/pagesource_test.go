@@ -53,6 +53,27 @@ func TestParsePageSource(t *testing.T) {
 	}
 }
 
+// One forbidden character in any app text must not take the whole screen down.
+func TestParsePageSourceInvalidXMLChars(t *testing.T) {
+	src := `<hierarchy rotation="0">
+  <node text="bad` + "\x00\x1b" + `text" class="android.widget.TextView" bounds="[0,0][10,10]"/>
+  <node text="Login" class="android.widget.Button" bounds="[0,10][10,20]"/>
+</hierarchy>`
+	elements, err := ParsePageSource(src)
+	if err != nil {
+		t.Fatalf("ParsePageSource failed: %v", err)
+	}
+	if len(elements) != 2 {
+		t.Fatalf("expected 2 elements, got %d", len(elements))
+	}
+	if elements[0].Text != "bad��text" {
+		t.Errorf("forbidden characters should read as U+FFFD, got %q", elements[0].Text)
+	}
+	if elements[1].Text != "Login" {
+		t.Errorf("expected Login, got %q", elements[1].Text)
+	}
+}
+
 func TestParsePageSourceInvalidXML(t *testing.T) {
 	_, err := ParsePageSource("not xml")
 	if err == nil {

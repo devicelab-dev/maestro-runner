@@ -339,3 +339,32 @@ func TestDestinationArchOverride(t *testing.T) {
 		t.Errorf("expected the unpinned destination, got %q", got)
 	}
 }
+
+func TestParseXcodeMajor(t *testing.T) {
+	cases := map[string]int{
+		"Xcode 26.2\nBuild version 17C52\n": 26,
+		"Xcode 14.3.1\n":                    14,
+		"garbage":                           0,
+	}
+	for in, want := range cases {
+		if got := parseXcodeMajor(in); got != want {
+			t.Errorf("parseXcodeMajor(%q) = %d, want %d", in, got, want)
+		}
+	}
+}
+
+// Diagnostics collection is off where xcodebuild has the flag, and the flag
+// is left out where it doesn't (Xcode 14 and older, or a version unread).
+func TestTestWithoutBuildingArgs(t *testing.T) {
+	want := "test-without-building -xctestrun r.xctestrun -destination dest -derivedDataPath dd -collect-test-diagnostics never"
+	for _, major := range []int{15, 26, 27} {
+		if got := strings.Join(testWithoutBuildingArgs("r.xctestrun", "dest", "dd", major), " "); got != want {
+			t.Errorf("Xcode %d args = %q, want %q", major, got, want)
+		}
+	}
+	for _, major := range []int{0, 14} {
+		if got := strings.Join(testWithoutBuildingArgs("r.xctestrun", "dest", "dd", major), " "); strings.Contains(got, "diagnostics") {
+			t.Errorf("Xcode %d has no diagnostics flag, args = %q", major, got)
+		}
+	}
+}
