@@ -148,12 +148,12 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	// start our own.
 	var runner *wdadriver.Runner
 	var client *wdadriver.Client
-	if url := wdaURL(cfg); url != "" {
-		attached, err := wdadriver.NewClientURL(url)
+	if rawURL := wdaURL(cfg); rawURL != "" {
+		attached, err := wdadriver.NewClientURL(rawURL)
 		if err != nil {
 			return nil, nil, fmt.Errorf("--wda-url: %w", err)
 		}
-		printSetupStep(fmt.Sprintf("Connecting to the running WDA at %s...", url))
+		printSetupStep(fmt.Sprintf("Connecting to the running WDA at %s...", rawURL))
 		if err := wdadriver.WaitForRunning(attached, wdadriver.AttachTimeout); err != nil {
 			return nil, nil, fmt.Errorf("--wda-url: %w", err)
 		}
