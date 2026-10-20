@@ -280,3 +280,17 @@ func PointInBounds(point string, b Bounds) (x, y int, err error) {
 	}
 	return b.X + dx, b.Y + dy, nil
 }
+
+// DefaultLongPressMs is how long a long press holds when the flow gives no
+// duration: 3 s, as Maestro holds one on every platform (Android
+// `input swipe x y x y 3000`, iOS 3000 ms, web clickAndHold).
+const DefaultLongPressMs = 3000
+
+// LongPressMs is the hold for a long press: the flow's duration when it set
+// one, else DefaultLongPressMs.
+func LongPressMs(durationMs int) int {
+	if durationMs > 0 {
+		return durationMs
+	}
+	return DefaultLongPressMs
+}

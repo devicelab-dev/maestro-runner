@@ -2,6 +2,14 @@ package core
 
 import "testing"
 
+func TestLongPressMs(t *testing.T) {
+	for _, c := range []struct{ in, want int }{{0, 3000}, {-5, 3000}, {500, 500}, {3000, 3000}, {10000, 10000}} {
+		if got := LongPressMs(c.in); got != c.want {
+			t.Errorf("LongPressMs(%d) = %d, want %d", c.in, got, c.want)
+		}
+	}
+}
+
 // TestSwipeCoordsInBounds locks in the element-anchored swipe coordinates
 // (start inside the element, end past the opposite edge, clamped to the
 // screen). These feed the drivers' absolute-coordinate swipe paths so a

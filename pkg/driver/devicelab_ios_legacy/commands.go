@@ -1045,10 +1045,7 @@ func (d *Driver) handleLongPress(s *flow.LongPressOnStep) *core.CommandResult {
 	if perr != nil {
 		return core.ErrorResult(perr, "longPress: "+perr.Error())
 	}
-	durationMs := 800.0
-	if s.DurationMs > 0 {
-		durationMs = float64(s.DurationMs)
-	}
+	durationMs := float64(core.LongPressMs(s.DurationMs))
 	ctx, cancel := d.callTimeout()
 	defer cancel()
 	if _, err := d.client.Call(ctx, Command{

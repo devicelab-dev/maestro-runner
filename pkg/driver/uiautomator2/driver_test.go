@@ -894,8 +894,8 @@ func TestExecuteTapOnPointWithLongPress(t *testing.T) {
 	if len(client.longClickCalls) != 1 {
 		t.Fatalf("expected 1 LongClick call, got %d", len(client.longClickCalls))
 	}
-	if client.longClickCalls[0].Duration != 1000 {
-		t.Errorf("default longPress duration = %d, want 1000", client.longClickCalls[0].Duration)
+	if client.longClickCalls[0].Duration != 3000 {
+		t.Errorf("default longPress duration = %d, want 3000", client.longClickCalls[0].Duration)
 	}
 }
 

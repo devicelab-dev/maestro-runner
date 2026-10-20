@@ -1618,11 +1618,11 @@ func TestTapOnPoint_LongPress(t *testing.T) {
 		t.Errorf("expected LongClick(50,50,2000), got %v", client.longClicks)
 	}
 
-	// LongPress flag with no duration → default 1000
+	// LongPress flag with no duration → default 3000, as Maestro
 	client.longClicks = nil
 	driver.tapOnPoint(&flow.TapOnPointStep{X: 10, Y: 20, LongPress: true})
-	if len(client.longClicks) != 1 || client.longClicks[0].Duration != 1000 {
-		t.Errorf("LongPress should default to 1000ms; got %v", client.longClicks)
+	if len(client.longClicks) != 1 || client.longClicks[0].Duration != 3000 {
+		t.Errorf("LongPress should default to 3000ms; got %v", client.longClicks)
 	}
 }
 
@@ -2136,9 +2136,9 @@ func TestLongPressOn_DefaultDuration(t *testing.T) {
 	if len(client.longClicks) != 1 {
 		t.Fatalf("expected 1 LongClick, got %d", len(client.longClicks))
 	}
-	// Default duration = 1000 ms
-	if client.longClicks[0].Duration != 1000 {
-		t.Errorf("default duration: got %d, want 1000", client.longClicks[0].Duration)
+	// Default duration = 3000 ms, as Maestro
+	if client.longClicks[0].Duration != 3000 {
+		t.Errorf("default duration: got %d, want 3000", client.longClicks[0].Duration)
 	}
 }
 
