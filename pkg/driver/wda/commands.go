@@ -1223,6 +1223,7 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 		// driver settles on screenshots itself.
 		"animationCoolOffTimeout": 0,
 		"defaultAlertAction":      d.alertAction,
+		"autoClickAlertSelector":  autoClickAlertSelector(d.alertAction),
 	}
 	if d.alertAction == "accept" {
 		sessionSettings["acceptAlertButtonSelector"] = "**/XCUIElementTypeButton[`label BEGINSWITH[c] 'Allow' OR label ==[c] 'OK'`]"
@@ -2086,6 +2087,34 @@ func (d *Driver) resetIOSPermission(appID, permission string) error {
 		return fmt.Errorf("%s: %s", err, string(output))
 	}
 	return nil
+}
+
+// Selectors for WDA's autoClickAlertSelector setting, which is how the runner
+// answers permission prompts. The alert monitor reports the first alert of ANY
+// active app, the app under test included, and defaultAlertAction taps a
+// button on it even when acceptAlertButtonSelector matches nothing (the last
+// button of an alert, so the "OK" of an app's own "Invalid Credentials"
+// alert). autoClickAlertSelector takes priority over defaultAlertAction and
+// taps only a match, so an alert with no "Allow…" (or "Don't Allow…" / "Ask
+// App Not to Track") button is left for the flow. Setting it to "" turns the
+// monitor off. A permission prompt answered "OK" (Face ID on a device) or
+// "Continue" (contacts, iOS 18+) is not auto-accepted.
+const (
+	autoAcceptAlertSelector  = "**/XCUIElementTypeButton[`label BEGINSWITH[c] 'Allow'`]"
+	autoDismissAlertSelector = "**/XCUIElementTypeButton[`(label BEGINSWITH[c] 'Don' AND label CONTAINS[c] 'Allow') OR label BEGINSWITH[c] 'Ask App Not'`]"
+)
+
+// autoClickAlertSelector returns the autoClickAlertSelector for an alert
+// action from resolveAlertAction: "" (monitor off) when there is none.
+func autoClickAlertSelector(alertAction string) string {
+	switch alertAction {
+	case "accept":
+		return autoAcceptAlertSelector
+	case "dismiss":
+		return autoDismissAlertSelector
+	default:
+		return ""
+	}
 }
 
 // resolveAlertAction determines the WDA defaultAlertAction from a permission map.
