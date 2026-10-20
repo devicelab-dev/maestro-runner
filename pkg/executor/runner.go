@@ -179,10 +179,34 @@ func (r *Runner) Run(ctx context.Context, flows []flow.Flow) (*RunResult, error)
 	}
 
 	// Mark run as complete
-	indexWriter.End()
+	cancelled := endRun(ctx, indexWriter)
 
 	// Build result
-	return r.buildRunResult(results), nil
+	result := r.buildRunResult(results)
+	if cancelled {
+		failCancelledRun(result)
+	}
+	return result, nil
+}
+
+// endRun marks the run complete in the index, as cancelled when ctx was, and
+// reports whether it was.
+func endRun(ctx context.Context, indexWriter *report.IndexWriter) bool {
+	if ctx.Err() != nil {
+		indexWriter.EndCancelled()
+		return true
+	}
+	indexWriter.End()
+	return false
+}
+
+// failCancelledRun fails a cancelled run unless every flow passed. Flows the
+// cancellation stopped stay skipped, and a run of skipped flows otherwise
+// passes; one cancelled before its flows ran must not report "passed".
+func failCancelledRun(result *RunResult) {
+	if result.PassedFlows < result.TotalFlows {
+		result.Status = report.StatusFailed
+	}
 }
 
 // executeFlows runs flows either sequentially or in parallel.
@@ -199,7 +223,7 @@ func (r *Runner) executeFlows(ctx context.Context, flows []flow.Flow, flowDetail
 					ID:     flowDetails[i].ID,
 					Name:   flowDetails[i].Name,
 					Status: report.StatusSkipped,
-					Error:  "run cancelled",
+					Error:  report.RunCancelledError,
 				}
 				continue
 			}

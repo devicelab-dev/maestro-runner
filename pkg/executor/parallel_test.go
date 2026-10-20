@@ -11,6 +11,38 @@ import (
 	"github.com/devicelab-dev/maestro-runner/pkg/report"
 )
 
+// A multi-device run cancelled before its flows start fails, as a
+// single-device one does.
+func TestParallelRunner_CancelledBeforeStart_Fails(t *testing.T) {
+	tmpDir := t.TempDir()
+	drv := &mockDriver{
+		executeFunc:  func(step flow.Step) *core.CommandResult { return &core.CommandResult{Success: true} },
+		platformFunc: func() *core.PlatformInfo { return &core.PlatformInfo{Platform: "android", DeviceID: "dev-a"} },
+	}
+	pr := NewParallelRunner([]DeviceWorker{{ID: 0, DeviceID: "dev-a", Driver: drv, Cleanup: func() {}}}, RunnerConfig{
+		OutputDir:     tmpDir,
+		Artifacts:     ArtifactNever,
+		Device:        report.Device{Name: "1 device", Platform: "android"},
+		App:           report.App{ID: "com.test"},
+		RunnerVersion: "test",
+		DriverName:    "mock",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result, err := pr.Run(ctx, cancelTestFlows(2))
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Status != report.StatusFailed {
+		t.Errorf("run status = %v, want failed", result.Status)
+	}
+	if result.PassedFlows != 0 || result.FailedFlows != 0 {
+		t.Errorf("passed/failed = %d/%d, want 0/0", result.PassedFlows, result.FailedFlows)
+	}
+}
+
 func TestColor(t *testing.T) {
 	tests := []struct {
 		name  string

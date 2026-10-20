@@ -88,6 +88,51 @@ func (w *IndexWriter) End() {
 	w.flushLocked()
 }
 
+// RunCancelledError is the error of a flow the run was cancelled before.
+const RunCancelledError = "run cancelled"
+
+// EndCancelled marks a run that was cancelled as complete. A flow that never
+// got to finish is marked skipped with RunCancelledError, as the runner
+// reports it, and the run fails unless every flow passed: a run stopped
+// before its flows ran did not pass, though none of them failed.
+func (w *IndexWriter) EndCancelled() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	for flowID, update := range w.pending {
+		w.applyUpdate(flowID, update)
+	}
+	w.pending = make(map[string]*FlowUpdate)
+
+	now := time.Now()
+	allPassed := true
+	for i := range w.index.Flows {
+		f := &w.index.Flows[i]
+		if !f.Status.IsTerminal() {
+			f.Status = StatusSkipped
+			if f.Error == nil {
+				msg := RunCancelledError
+				f.Error = &msg
+			}
+			f.UpdateSeq++
+			f.LastUpdated = &now
+		}
+		if f.Status != StatusPassed {
+			allPassed = false
+		}
+	}
+
+	w.index.EndTime = &now
+	w.index.LastUpdated = now
+	w.index.Status = StatusPassed
+	if !allPassed {
+		w.index.Status = StatusFailed
+	}
+	w.index.UpdateSeq++
+
+	w.flushLocked()
+}
+
 // Close shuts down the IndexWriter and flushes any pending updates.
 func (w *IndexWriter) Close() {
 	close(w.done)

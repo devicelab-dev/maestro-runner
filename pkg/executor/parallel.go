@@ -269,10 +269,14 @@ func (pr *ParallelRunner) Run(ctx context.Context, flows []flow.Flow) (*RunResul
 	wallClockDuration := time.Since(startTime).Milliseconds()
 
 	// Mark run as complete
-	indexWriter.End()
+	cancelled := endRun(ctx, indexWriter)
 
 	// Build result using the same logic as single-device runner
-	return pr.buildRunResult(results, wallClockDuration), nil
+	result := pr.buildRunResult(results, wallClockDuration)
+	if cancelled {
+		failCancelledRun(result)
+	}
+	return result, nil
 }
 
 // buildRunResult aggregates flow results into a run result.
