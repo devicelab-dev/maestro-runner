@@ -101,6 +101,11 @@ var GlobalFlags = []cli.Flag{
 		Usage:   "URL of a WebDriverAgent that is already running for the --device, such as http://127.0.0.1:8100: drive it instead of building and starting one, and leave it running (iOS, --driver wda)",
 		EnvVars: []string{"MAESTRO_WDA_URL"},
 	},
+	&cli.BoolFlag{
+		Name:    "reuse-wda",
+		Usage:   "Leave WebDriverAgent running when the run ends, and drive the one an earlier run left on the same device when it is the same build and ready, with a new session, instead of starting one (iOS, --driver wda)",
+		EnvVars: []string{"MAESTRO_REUSE_WDA"},
+	},
 	&cli.StringFlag{
 		Name:    "start-emulator",
 		Usage:   "Start Android emulator with AVD name (e.g., Pixel_7_API_33)",

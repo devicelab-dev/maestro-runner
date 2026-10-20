@@ -104,7 +104,7 @@ maestro-runner test --parallel 3 flows/                                 # Parall
 | **DeviceLab** | Android | Default since v1.1.28. On-device WebSocket driver, ~2x faster than UIAutomator2. |
 | **UIAutomator2** | Android | `--driver uiautomator2`. Direct connection to the device, no external server needed. |
 | **DeviceLab** | iOS | Default since v1.1.28. The DeviceLab iOS agent, on simulators and real iPhones (real iPhones need `--team-id`). `--driver devicelab-legacy` keeps the previous runner. |
-| **WDA (WebDriverAgent)** | iOS | `--driver wda`. Supports simulators and physical devices. |
+| **WDA (WebDriverAgent)** | iOS | `--driver wda`. Supports simulators and physical devices. `--reuse-wda` leaves WebDriverAgent running between runs and reuses it. |
 | **Browser (CDP)** | Web | `--platform web`. Chrome/Chromium automation via Chrome DevTools Protocol. |
 | **Appium** | Android & iOS | `--driver appium`. For cloud testing providers and existing Appium infrastructure. |
 

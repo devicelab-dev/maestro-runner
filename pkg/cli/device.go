@@ -291,6 +291,7 @@ func buildDeviceRunConfig(c *cli.Context) (*RunConfig, error) {
 		TeamID:             getString("team-id"),
 		WDABundleID:        getString("wda-bundle-id"),
 		WDAURL:             getString("wda-url"),
+		ReuseWDA:           getBool("reuse-wda"),
 		StartEmulator:      getString("start-emulator"),
 		StartSimulator:     getString("start-simulator"),
 		AutoStartEmulator:  getBool("auto-start-emulator"),

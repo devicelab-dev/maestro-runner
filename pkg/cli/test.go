@@ -613,6 +613,7 @@ type RunConfig struct {
 	TeamID             string // Apple Development Team ID for WDA code signing
 	WDABundleID        string // Custom WDA bundle identifier
 	WDAURL             string // URL of a WDA that is already running (--wda-url)
+	ReuseWDA           bool   // Keep WDA running between runs and reuse it (--reuse-wda)
 
 	// Emulator/Simulator management
 	StartEmulator     string // AVD name to start (e.g., Pixel_7_API_33)
@@ -880,6 +881,7 @@ func runTest(c *cli.Context) error {
 		TeamID:             getString("team-id"),
 		WDABundleID:        getString("wda-bundle-id"),
 		WDAURL:             getString("wda-url"),
+		ReuseWDA:           getBool("reuse-wda"),
 		StartEmulator:      getString("start-emulator"),
 		StartSimulator:     getString("start-simulator"),
 		AutoStartEmulator:  getBool("auto-start-emulator"),
@@ -2511,9 +2513,8 @@ func isPortInUse(port uint16) bool {
 func checkDeviceAvailable(deviceID, platform string) error {
 	if platform == "ios" {
 		// Check iOS device/simulator availability via port
-		port := wdadriver.PortFromUDID(deviceID)
-		if isPortInUse(port) {
-			return fmt.Errorf("device is in use (port %d already bound)", port)
+		if wdaPortBusy(deviceID) {
+			return fmt.Errorf("device is in use (port %d already bound)", wdadriver.PortFromUDID(deviceID))
 		}
 	} else {
 		// Check Android device availability via socket
