@@ -164,7 +164,7 @@ func ParsePageSource(xmlData string) ([]*ParsedElement, error) {
 // set (hosted_frames.go) and flattens it.
 func finishElementTree(root *ParsedElement) []*ParsedElement {
 	if hostedFrames() {
-		rebaseHostedFrames(root, 0, 0)
+		rebaseHostedFrames(root, 0, 0, false)
 	}
 	return flattenElement(root, 0)
 }

@@ -1,8 +1,14 @@
 package wda
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/devicelab-dev/maestro-runner/pkg/core"
+	"github.com/devicelab-dev/maestro-runner/pkg/flow"
 )
 
 // hostedSheetSource is shaped like Apple Health's authorization sheet on an iPhone 11 running
@@ -212,5 +218,202 @@ func TestHostedFrames_LeavesAWebViewAlone(t *testing.T) {
 		if got := byName[name].Bounds.Y; got != y {
 			t.Errorf("%s y=%d, want %d (a web view's content is in screen coordinates already)", name, got, y)
 		}
+	}
+}
+
+// A web view wrapped in more views (SFSafariViewController) is still a web
+// view: no space starts anywhere under it.
+func TestHostedFrames_LeavesAWrappedWebViewAlone(t *testing.T) {
+	t.Setenv("MAESTRO_WDA_HOSTED_FRAMES", "1")
+	source := `<XCUIElementTypeApplication type="XCUIElementTypeApplication" name="app" x="0" y="0" width="414" height="896">
+  <XCUIElementTypeWebView type="XCUIElementTypeWebView" name="web" x="0" y="48" width="414" height="848">
+    <XCUIElementTypeScrollView type="XCUIElementTypeScrollView" name="scroll" x="0" y="48" width="414" height="848">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" name="content" x="0" y="0" width="414" height="848">
+        <XCUIElementTypeLink type="XCUIElementTypeLink" name="account" label="Tester" x="64" y="339" width="71" height="22"/>
+      </XCUIElementTypeOther>
+    </XCUIElementTypeScrollView>
+  </XCUIElementTypeWebView>
+</XCUIElementTypeApplication>`
+	if got := parsedByName(t, source)["account"].Bounds.Y; got != 339 {
+		t.Fatalf("a link under a wrapped web view moved: y=%d, want 339", got)
+	}
+}
+
+// A hosted space that does not start at x 0 (an iPad form sheet) moves its
+// content right as well as down.
+func TestHostedFrames_ASpaceAwayFromTheLeftEdge(t *testing.T) {
+	t.Setenv("MAESTRO_WDA_HOSTED_FRAMES", "1")
+	source := `<XCUIElementTypeApplication type="XCUIElementTypeApplication" name="app" x="0" y="0" width="1024" height="1366">
+  <XCUIElementTypeOther type="XCUIElementTypeOther" name="sheet" x="212" y="183" width="600" height="1000">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" name="hosted" x="0" y="0" width="600" height="1000">
+      <XCUIElementTypeButton type="XCUIElementTypeButton" name="allow" label="Allow" x="40" y="900" width="520" height="50"/>
+    </XCUIElementTypeOther>
+  </XCUIElementTypeOther>
+</XCUIElementTypeApplication>`
+	b := parsedByName(t, source)["allow"].Bounds
+	if b.X != 252 || b.Y != 1083 {
+		t.Fatalf("Allow at (%d,%d), want (252,1083): the sheet's origin added to both", b.X, b.Y)
+	}
+}
+
+// hostedLookupServer answers /source with the Health-shaped sheet and every
+// WDA element query with an element at the frame WDA reports, uncorrected.
+// It counts the element queries.
+type hostedLookupServer struct {
+	mu      sync.Mutex
+	queries int
+	// textFails makes every element text read fail, as a dropped read does.
+	textFails bool
+}
+
+func (s *hostedLookupServer) start(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		p := r.URL.Path
+		switch {
+		case strings.HasSuffix(p, "/source"):
+			jsonResponse(w, map[string]interface{}{"value": hostedSheetSource})
+		case r.Method == http.MethodPost && (strings.HasSuffix(p, "/element") || strings.HasSuffix(p, "/elements")):
+			s.mu.Lock()
+			s.queries++
+			s.mu.Unlock()
+			if strings.HasSuffix(p, "/elements") {
+				jsonResponse(w, map[string]interface{}{"value": []map[string]interface{}{{"ELEMENT": "el"}}})
+				return
+			}
+			jsonResponse(w, map[string]interface{}{"value": map[string]interface{}{"ELEMENT": "el"}})
+		case strings.HasSuffix(p, "/rect"):
+			jsonResponse(w, map[string]interface{}{"value": map[string]interface{}{"x": 42, "y": 348, "width": 330, "height": 52}})
+		case strings.HasSuffix(p, "/text"):
+			if s.textFails {
+				w.WriteHeader(http.StatusInternalServerError)
+				jsonResponse(w, map[string]interface{}{"value": map[string]interface{}{"error": "stale element reference", "message": "stale"}})
+				return
+			}
+			jsonResponse(w, map[string]interface{}{"value": "Select All 12 Topics"})
+		case strings.HasSuffix(p, "/displayed"):
+			jsonResponse(w, map[string]interface{}{"value": true})
+		default:
+			jsonResponse(w, map[string]interface{}{"status": 0})
+		}
+	}))
+}
+
+// With the switch on, text and id lookups read the page source and get the
+// corrected frame; WDA's own queries, whose rect is not corrected, are not
+// asked. Without it they are, and the frame is WDA's.
+func TestHostedFrames_LookupsReadThePageSource(t *testing.T) {
+	text := flow.Selector{Text: "Select All 12 Topics"}
+	id := flow.Selector{ID: "AllCategoryButton"}
+	for _, tc := range []struct {
+		name string
+		find func(d *Driver) (*core.ElementInfo, error)
+	}{
+		{"text", func(d *Driver) (*core.ElementInfo, error) { return d.findElement(text, false, 2000) }},
+		{"id", func(d *Driver) (*core.ElementInfo, error) { return d.findElement(id, false, 2000) }},
+		{"text for a tap", func(d *Driver) (*core.ElementInfo, error) { return d.findElementForTap(text, false, 2000) }},
+		{"id, once", func(d *Driver) (*core.ElementInfo, error) { return d.findElementOnce(id) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("MAESTRO_WDA_HOSTED_FRAMES", "1")
+			s := &hostedLookupServer{}
+			server := s.start(t)
+			defer server.Close()
+			info, err := tc.find(createTestDriver(server))
+			if err != nil {
+				t.Fatalf("lookup: %v", err)
+			}
+			if info.Bounds.Y != 396 {
+				t.Errorf("y=%d, want 396 (348 corrected by the sheet's 48)", info.Bounds.Y)
+			}
+			if s.queries != 0 {
+				t.Errorf("asked WDA %d element queries; with the switch on only the page source counts", s.queries)
+			}
+		})
+	}
+
+	t.Setenv("MAESTRO_WDA_HOSTED_FRAMES", "")
+	s := &hostedLookupServer{}
+	server := s.start(t)
+	defer server.Close()
+	info, err := createTestDriver(server).findElement(text, false, 2000)
+	if err != nil || info.Bounds.Y != 348 || s.queries == 0 {
+		t.Fatalf("without the switch: info %+v, err %v, %d queries; want WDA's y=348 from a WDA query", info, err, s.queries)
+	}
+}
+
+// copyTextFrom on a hosted sheet copies the element's text with the switch on,
+// even when WDA's text read fails: the page source has it. Through WDA, the
+// fallback compared the corrected page-source frame with WDA's uncorrected
+// rect and failed.
+func TestHostedFrames_CopyTextFrom(t *testing.T) {
+	t.Setenv("MAESTRO_WDA_HOSTED_FRAMES", "1")
+	s := &hostedLookupServer{textFails: true}
+	server := s.start(t)
+	defer server.Close()
+	res := createTestDriver(server).copyTextFrom(&flow.CopyTextFromStep{Selector: flow.Selector{Text: "Select All 12 Topics"}})
+	if !res.Success || res.Data != "Select All 12 Topics" {
+		t.Fatalf("copied %q (success=%v): %s", res.Data, res.Success, res.Message)
+	}
+	if s.queries != 0 {
+		t.Errorf("asked WDA %d element queries; with the switch on only the page source counts", s.queries)
+	}
+}
+
+// A failing page source does not spin: the tap lookup pauses between reads
+// and reports why the page source failed.
+func TestHostedFrames_TapLookupPausesAndKeepsTheError(t *testing.T) {
+	t.Setenv("MAESTRO_WDA_HOSTED_FRAMES", "1")
+	var reads int
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/source") {
+			mu.Lock()
+			reads++
+			mu.Unlock()
+			w.WriteHeader(http.StatusInternalServerError)
+			jsonResponse(w, map[string]interface{}{"value": map[string]interface{}{"error": "unknown error", "message": "kAXErrorIllegalArgument"}})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	_, err := createTestDriver(server).findElementForTap(flow.Selector{Text: "Allow"}, false, 500)
+	if err == nil {
+		t.Fatal("found an element with no page source")
+	}
+	if !strings.Contains(err.Error(), "kAXErrorIllegalArgument") {
+		t.Errorf("err = %v; want the page source's own error", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if reads > 50 {
+		t.Errorf("read the page source %d times in 500 ms; want a pause between reads", reads)
+	}
+}
+
+// scrollUntilVisible judges the element by the same corrected frame: with the
+// switch on it never takes WDA's rect.
+func TestHostedFrames_ScrollUntilVisible(t *testing.T) {
+	t.Setenv("MAESTRO_WDA_HOSTED_FRAMES", "1")
+	s := &hostedLookupServer{}
+	server := s.start(t)
+	defer server.Close()
+	d := createTestDriver(server)
+	d.info.ScreenWidth, d.info.ScreenHeight = 414, 896 // the fixture's iPhone 11
+	res := d.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:   flow.Selector{Text: "Select All 12 Topics"},
+		Direction: "DOWN",
+	})
+	if !res.Success {
+		t.Fatalf("scrollUntilVisible: %s", res.Message)
+	}
+	if s.queries != 0 {
+		t.Errorf("asked WDA %d element queries; with the switch on only the page source counts", s.queries)
+	}
+	if res.Element == nil || res.Element.Bounds.Y != 396 {
+		t.Errorf("element %+v, want the corrected y=396", res.Element)
 	}
 }
