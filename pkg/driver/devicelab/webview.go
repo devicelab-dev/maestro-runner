@@ -825,7 +825,7 @@ func (m *webViewManager) typeIntoIframeInput(label, text string) (bool, error) {
 		if terr := (proto.InputInsertText{Text: text}).Call(page.Timeout(iframeEvalTimeout)); terr != nil {
 			return false, terr
 		}
-		logger.Info("[cdp:iframe] typed %q into input (label=%q -> %q)", text, label, res.Result.Value.Str())
+		logger.Info("[cdp:iframe] typed %d character(s) into input (label=%q -> %q)", len([]rune(text)), label, res.Result.Value.Str())
 		return true, nil
 	}
 	m.pruneContexts(dead)
