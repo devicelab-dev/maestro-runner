@@ -496,17 +496,96 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 	// anyway is how text ends up somewhere other than the field the flow named
 	// while the step still reports success — the failure #139 chased on
 	// Android. Fail here instead, where the cause is still legible.
-	if ok, observed := d.waitForTypingTarget(); !ok {
+	focusedID, ok, observed := d.waitForTypingTarget()
+	if !ok {
 		err := fmt.Errorf("no keyboard appeared and no element took keyboard focus within 1s (%s)", observed)
 		return errorResult(err, "inputText: "+err.Error()+
 			" — the text would have been typed with nothing focused; check that the preceding tap focused a text field")
+	}
+
+	// Read the focused field first, as the element-scoped path above does, so
+	// what typing did to it can be checked afterwards (see focusedReadBack).
+	before := ""
+	if focusedID != "" {
+		before, _ = d.client.ElementText(focusedID)
 	}
 
 	if err := d.client.SendKeys(text, d.typingFrequency); err != nil {
 		return errorResult(err, "Input text failed")
 	}
 
-	return successResult(fmt.Sprintf("Entered text: %s%s", text, unicodeWarning), nil)
+	note := d.focusedReadBack(focusedID, text, before)
+	return successResult(fmt.Sprintf("Entered text: %s%s%s", text, unicodeWarning, note), nil)
+}
+
+// focusedReadBack reads the field that had focus before typing and retypes
+// characters that went missing, through the same check as typing into an
+// element (core.ConfirmTypedText). It returns the note for the step result.
+//
+// It reads nothing back, and so never retypes, when what the field holds is
+// not expected to be what was typed:
+//
+//   - The text has a newline or a tab. A single-line field takes "\n" as
+//     submit and "\t" as next, so "query\n" leaves "query" behind, and
+//     retyping would submit a second time.
+//   - Focus has moved to another element. A field that hands focus on as it
+//     fills (one-digit code boxes, split date or card fields) holds only its
+//     own part of the text; the rest went to the fields after it.
+//   - The field gained a character that was not typed. A mask or a formatter
+//     inserted it ("12/20" after "122025" in a MM/YY field, a smart dash),
+//     and retyping gives the same result. Only a field that holds what was
+//     typed with characters missing, wherever they went missing, is retyped.
+//     A max length that cuts the text short looks the same, and gets one
+//     retype that leaves the same value and a warning in the step's message.
+func (d *Driver) focusedReadBack(focusedID, text, before string) string {
+	if focusedID == "" || strings.ContainsAny(text, "\n\t") {
+		return ""
+	}
+	if afterID, err := d.client.GetActiveElement(); err != nil || afterID != focusedID {
+		return ""
+	}
+	after, err := d.client.ElementText(focusedID)
+	if err != nil || !onlyDropped(text, before, after) {
+		return ""
+	}
+	read := false
+	field := core.TextFieldFuncs(
+		func() (string, error) {
+			// The first read is the one just taken; later ones, after a
+			// retype, go to the device.
+			if !read {
+				read = true
+				return after, nil
+			}
+			return d.client.ElementText(focusedID)
+		},
+		func(s string) error { return d.client.ElementSendKeys(focusedID, s, d.typingFrequency) },
+		func() error { return d.client.ElementClear(focusedID) },
+	)
+	return core.ConfirmTypedText(field, text, before, logger.Warn)
+}
+
+// onlyDropped reports whether typing text into a field that held before left
+// it holding text with characters missing and nothing added: every character
+// the field gained appears in text, in order. Typing appends, so text the
+// field held before stays in front of what was typed.
+func onlyDropped(text, before, after string) bool {
+	gained := after
+	if before != "" && strings.HasPrefix(after, before) {
+		gained = strings.TrimPrefix(after, before)
+	}
+	rest := []rune(text)
+	for _, r := range gained {
+		i := 0
+		for i < len(rest) && rest[i] != r {
+			i++
+		}
+		if i == len(rest) {
+			return false
+		}
+		rest = rest[i+1:]
+	}
+	return true
 }
 
 // waitForTypingTarget polls up to about a second for evidence that typed keys
@@ -528,12 +607,13 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 // therefore rejected flows that had always worked (#143); requiring only that
 // *something* can receive the keys keeps the #139 protection without depending
 // on the field being individually addressable.
-// It also returns a short description of what it last observed when it finds
-// nothing. Both signals failing is ambiguous from the outside — a query that
+// It returns the id of the element holding keyboard focus, or "" when only the
+// keyboard was seen, and a short description of what it last observed when it
+// finds nothing. Both signals failing is ambiguous from the outside — a query that
 // errored looks exactly like one that legitimately reported nothing focused —
 // and that ambiguity is what made the original report of #143 hard to act on.
 // Saying which happened, and why, turns the next such report into a diagnosis.
-func (d *Driver) waitForTypingTarget() (bool, string) {
+func (d *Driver) waitForTypingTarget() (string, bool, string) {
 	var observed string
 	for i := 0; i < 5; i++ {
 		if i > 0 {
@@ -546,7 +626,7 @@ func (d *Driver) waitForTypingTarget() (bool, string) {
 		elemID, err := d.client.GetActiveElement()
 		switch {
 		case err == nil && elemID != "":
-			return true, ""
+			return elemID, true, ""
 		case err != nil:
 			observed = fmt.Sprintf("active element unavailable (%v)", err)
 		default:
@@ -555,7 +635,7 @@ func (d *Driver) waitForTypingTarget() (bool, string) {
 
 		visible, kbErr := d.keyboardVisible()
 		if visible {
-			return true, ""
+			return "", true, ""
 		}
 		if kbErr != nil {
 			observed += fmt.Sprintf("; keyboard query failed (%v)", kbErr)
@@ -563,7 +643,7 @@ func (d *Driver) waitForTypingTarget() (bool, string) {
 			observed += "; keyboard not on screen"
 		}
 	}
-	return false, observed
+	return "", false, observed
 }
 
 // keyboardVisible reports whether the software keyboard is on screen.
