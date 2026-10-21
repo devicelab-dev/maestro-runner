@@ -24,16 +24,18 @@ func TestMarkInteraction(t *testing.T) {
 		{"retry", &flow.RetryStep{}, false, false},
 		{"runFlow ran", &flow.RunFlowStep{}, false, true},
 		{"runFlow skipped", &flow.RunFlowStep{}, true, false},
+		{"runScript ran", &flow.RunScriptStep{}, false, true},
+		{"runScript skipped", &flow.RunScriptStep{}, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fr := &FlowRunner{script: NewScriptEngine(), runFlowSkipped: tc.skipped}
+			fr := &FlowRunner{script: NewScriptEngine(), conditionSkipped: tc.skipped}
 			fr.script.lastInteraction = past
 			fr.markInteraction(tc.step)
 			if marked := fr.script.lastInteraction.After(past); marked != tc.marks {
 				t.Errorf("marked = %v, want %v", marked, tc.marks)
 			}
-			if fr.runFlowSkipped {
-				t.Error("runFlowSkipped not consumed")
+			if fr.conditionSkipped {
+				t.Error("conditionSkipped not consumed")
 			}
 		})
 	}
