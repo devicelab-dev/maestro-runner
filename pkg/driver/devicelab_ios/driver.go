@@ -68,6 +68,11 @@ type Driver struct {
 	realDevice bool
 	appFile    string
 
+	// promptAction answers a system permission prompt that covers the app
+	// ("accept", "dismiss" or "" to leave it), from the last launchApp's
+	// permissions (prompts.go).
+	promptAction string
+
 	// runSimctl runs `xcrun simctl args…`; tests replace it.
 	runSimctl func(args ...string) (string, error)
 	// runSimctlWithin runs `xcrun simctl args…` with its own time limit;

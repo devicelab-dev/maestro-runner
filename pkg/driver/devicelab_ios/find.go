@@ -90,6 +90,11 @@ func (d *Driver) findElement(sel flow.Selector, optional bool, timeoutMs int) (*
 			}
 			return nil, nil, fmt.Errorf("%s: %w", describe(sel), lastErr)
 		}
+		// A permission prompt may be what hides the element: look for one
+		// after the first miss and then about once a second.
+		if attempt%7 == 0 && d.answerPermissionPrompt() {
+			continue
+		}
 		time.Sleep(pollInterval)
 	}
 }
