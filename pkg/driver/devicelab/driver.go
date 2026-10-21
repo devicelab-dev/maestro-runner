@@ -1585,7 +1585,7 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector) (*core.ElementInfo, 
 	}
 
 	var candidates []*ParsedElement
-	if baseSel.Text != "" || baseSel.ID != "" || baseSel.Width > 0 || baseSel.Height > 0 {
+	if baseSel.HasElementCriteria() {
 		candidates = FilterBySelector(allElements, baseSel)
 	} else {
 		candidates = allElements
@@ -1665,7 +1665,7 @@ func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements 
 	}
 
 	var candidates []*ParsedElement
-	if baseSel.Text != "" || baseSel.ID != "" || baseSel.Width > 0 || baseSel.Height > 0 {
+	if baseSel.HasElementCriteria() {
 		candidates = FilterBySelector(allElements, baseSel)
 	} else {
 		candidates = allElements
