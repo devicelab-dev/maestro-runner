@@ -75,7 +75,7 @@ func TestTapVariants(t *testing.T) {
 	if len(acts) != 4 {
 		t.Fatalf("acts = %d", len(acts))
 	}
-	if acts[0].Kind != "longPress" || *acts[0].HoldMs != 1000 {
+	if acts[0].Kind != "longPress" || *acts[0].HoldMs != 3000 {
 		t.Errorf("longPress = %+v", acts[0])
 	}
 	if acts[1].Kind != "doubleTap" {
@@ -86,6 +86,24 @@ func TestTapVariants(t *testing.T) {
 	}
 	if acts[3].Kind != "longPress" {
 		t.Errorf("tapOn longPress = %+v", acts[3])
+	}
+}
+
+// An explicit duration is held as given, not floored to a second.
+func TestLongPressHonoursShortDuration(t *testing.T) {
+	d, fa, _ := newTestDriver(t, screenOf(node(1, "Cell", "Row", 0, 100, 400, 50)))
+	d.Execute(&flow.LongPressOnStep{Selector: flow.Selector{Text: "Row"}, DurationMs: 500})
+	d.Execute(&flow.TapOnStep{Selector: flow.Selector{Text: "Row"}, Point: "10%, 50%", DurationMs: 500})
+	d.Execute(&flow.TapOnPointStep{X: 10, Y: 20, DurationMs: 500})
+	d.Execute(&flow.TapOnPointStep{X: 10, Y: 20, LongPress: true})
+	acts := fa.sent("act")
+	if len(acts) != 4 {
+		t.Fatalf("acts = %d", len(acts))
+	}
+	for i, want := range []float64{500, 500, 500, 3000} {
+		if acts[i].Kind != "longPress" || acts[i].HoldMs == nil || *acts[i].HoldMs != want {
+			t.Errorf("act %d = %+v, want longPress hold %v", i, acts[i], want)
+		}
 	}
 }
 

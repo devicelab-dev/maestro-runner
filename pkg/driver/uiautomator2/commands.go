@@ -58,10 +58,7 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 
 	// If duration is set, hold the press for that long (also covers longPress: true via tapOn).
 	if step.DurationMs > 0 || step.LongPress {
-		duration := step.DurationMs
-		if duration <= 0 {
-			duration = 1000
-		}
+		duration := core.LongPressMs(step.DurationMs)
 		x, y := info.Bounds.Center()
 		if err := d.client.LongClick(x, y, duration); err != nil {
 			return errorResult(err, fmt.Sprintf("Failed to press for %dms: %v", duration, err))
@@ -191,10 +188,7 @@ func (d *Driver) longPressOn(step *flow.LongPressOnStep) *core.CommandResult {
 		return errorResult(err, fmt.Sprintf("Element not found: %v", err))
 	}
 
-	duration := step.DurationMs
-	if duration <= 0 {
-		duration = 1000 // default 1 second
-	}
+	duration := core.LongPressMs(step.DurationMs)
 
 	// For relative selectors elem is nil but we have bounds; an explicit
 	// `point:` likewise needs coordinates rather than the element-scoped press.
@@ -236,10 +230,7 @@ func (d *Driver) tapOnPoint(step *flow.TapOnPointStep) *core.CommandResult {
 	}
 
 	if step.DurationMs > 0 || step.LongPress {
-		duration := step.DurationMs
-		if duration <= 0 {
-			duration = 1000
-		}
+		duration := core.LongPressMs(step.DurationMs)
 		if err := d.client.LongClick(x, y, duration); err != nil {
 			return errorResult(err, fmt.Sprintf("Failed to press at point for %dms: %v", duration, err))
 		}

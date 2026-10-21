@@ -353,6 +353,120 @@ func TestRunner_Run_ContextCancellation(t *testing.T) {
 	if result.FlowResults[0].Status != report.StatusSkipped {
 		t.Errorf("Flow status = %v, want %v", result.FlowResults[0].Status, report.StatusSkipped)
 	}
+	if result.Status != report.StatusFailed {
+		t.Errorf("run status = %v, want failed", result.Status)
+	}
+}
+
+func cancelTestFlows(n int) []flow.Flow {
+	flows := make([]flow.Flow, n)
+	for i := range flows {
+		flows[i] = flow.Flow{
+			SourcePath: fmt.Sprintf("f%d.yaml", i),
+			Config:     flow.Config{Name: fmt.Sprintf("Flow %d", i)},
+			Steps: []flow.Step{
+				&flow.LaunchAppStep{BaseStep: flow.BaseStep{StepType: flow.StepLaunchApp}},
+			},
+		}
+	}
+	return flows
+}
+
+// A run cancelled before its flows start keeps them skipped but fails, in
+// the result and in report.json, sequential and --parallel alike.
+func TestRunner_Run_CancelledBeforeStart_Fails(t *testing.T) {
+	for _, parallelism := range []int{0, 2} {
+		t.Run(fmt.Sprintf("parallelism=%d", parallelism), func(t *testing.T) {
+			tmpDir := t.TempDir()
+			steps := 0
+			driver := &mockDriver{
+				executeFunc: func(step flow.Step) *core.CommandResult {
+					steps++
+					return &core.CommandResult{Success: true}
+				},
+			}
+			runner := New(driver, RunnerConfig{
+				OutputDir:     tmpDir,
+				Parallelism:   parallelism,
+				Artifacts:     ArtifactNever,
+				Device:        report.Device{ID: "test"},
+				App:           report.App{ID: "com.test"},
+				RunnerVersion: "1.0.0",
+				DriverName:    "mock",
+			})
+
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			result, err := runner.Run(ctx, cancelTestFlows(2))
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if steps != 0 {
+				t.Errorf("%d steps ran, want 0", steps)
+			}
+			if result.Status != report.StatusFailed {
+				t.Errorf("run status = %v, want failed", result.Status)
+			}
+			if result.SkippedFlows != 2 || result.FailedFlows != 0 {
+				t.Errorf("skipped/failed = %d/%d, want 2/0", result.SkippedFlows, result.FailedFlows)
+			}
+			for _, fr := range result.FlowResults {
+				if fr.Status != report.StatusSkipped {
+					t.Errorf("flow %q status = %v, want skipped", fr.Name, fr.Status)
+				}
+			}
+
+			index, err := report.ReadIndex(filepath.Join(tmpDir, "report.json"))
+			if err != nil {
+				t.Fatalf("ReadIndex: %v", err)
+			}
+			if index.Status != report.StatusFailed {
+				t.Errorf("report.json status = %v, want failed", index.Status)
+			}
+			for _, f := range index.Flows {
+				if f.Status != report.StatusSkipped {
+					t.Errorf("report.json flow %s status = %v, want skipped", f.ID, f.Status)
+				}
+			}
+		})
+	}
+}
+
+// Cancelled once every flow has passed, the run still passed.
+func TestRunner_Run_CancelledAfterAllPassed_Passes(t *testing.T) {
+	tmpDir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			cancel() // the only step of the only flow
+			return &core.CommandResult{Success: true}
+		},
+	}
+	runner := New(driver, RunnerConfig{
+		OutputDir:     tmpDir,
+		Artifacts:     ArtifactNever,
+		Device:        report.Device{ID: "test"},
+		App:           report.App{ID: "com.test"},
+		RunnerVersion: "1.0.0",
+		DriverName:    "mock",
+	})
+
+	result, err := runner.Run(ctx, cancelTestFlows(1))
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Status != report.StatusPassed {
+		t.Errorf("run status = %v, want passed", result.Status)
+	}
+	index, err := report.ReadIndex(filepath.Join(tmpDir, "report.json"))
+	if err != nil {
+		t.Fatalf("ReadIndex: %v", err)
+	}
+	if index.Status != report.StatusPassed {
+		t.Errorf("report.json status = %v, want passed", index.Status)
+	}
 }
 
 // testError implements error interface for testing.

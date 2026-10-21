@@ -424,7 +424,7 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 	stepStart := time.Now()
 	defer fr.markInteraction(step)
 
-	logger.Debug("Executing step %d: %s", idx, step.Describe())
+	logger.Debug("Executing step %d: %s", idx, fr.maskTypedName(step, step.Describe()))
 
 	// Mark step as started
 	fr.flowWriter.CommandStart(idx)
@@ -636,6 +636,7 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 	default:
 		result = fr.driver.Execute(step)
 	}
+	result = fr.maskTypedResult(step, result)
 
 	stepDuration := time.Since(stepStart).Milliseconds()
 
@@ -646,7 +647,7 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 
 	if result.Success {
 		status = report.StatusPassed
-		logger.Debug("Step %d completed successfully (%dms): %s", idx, stepDuration, step.Describe())
+		logger.Debug("Step %d completed successfully (%dms): %s", idx, stepDuration, fr.maskTypedName(step, step.Describe()))
 	} else {
 		status = report.StatusFailed
 		errorInfo = commandResultToError(result)
@@ -672,7 +673,7 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 				}
 			}
 		}
-		logger.Error("Step %d failed (%dms): %s - Error: %s", idx, stepDuration, step.Describe(), errorMsg)
+		logger.Error("Step %d failed (%dms): %s - Error: %s", idx, stepDuration, fr.maskTypedName(step, step.Describe()), errorMsg)
 	}
 
 	// Capture after screenshot (on failure or always). The view hierarchy is
@@ -1695,6 +1696,7 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 		fr.script.ExpandStep(step)
 		result = fr.driver.Execute(step)
 	}
+	result = fr.maskTypedResult(step, result)
 
 	duration := time.Since(start).Milliseconds()
 
@@ -1811,7 +1813,7 @@ func (fr *FlowRunner) executeSubFlow(subFlow flow.Flow) *core.CommandResult {
 				Message: msg,
 			}
 		}
-		lastStepDesc = step.Describe()
+		lastStepDesc = fr.maskTypedName(step, step.Describe())
 
 		// Inject subflow's appId/url into app lifecycle steps (same as executeStep does for main flow)
 		switch s := step.(type) {
@@ -2065,9 +2067,9 @@ func (fr *FlowRunner) deviceID() string {
 // description. Both fill in the ${NAME}s defined in the flow files, never
 // the ones given from outside (see ScriptEngine.DisplayText).
 func (fr *FlowRunner) stepNames(step flow.Step) (describe, title string) {
-	describe = fr.script.DisplayText(step.Describe())
+	describe = fr.maskTypedName(step, fr.script.DisplayText(step.Describe()))
 	if label := step.Label(); label != "" {
-		return describe, fr.script.DisplayText(label)
+		return describe, fr.maskTypedName(step, fr.script.DisplayText(label))
 	}
 	return describe, describe
 }

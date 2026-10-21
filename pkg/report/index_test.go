@@ -187,6 +187,75 @@ func TestIndexWriter_End_WithFailure(t *testing.T) {
 	}
 }
 
+// A run cancelled before its flows ran fails, its unfinished flows read
+// skipped with "run cancelled", and report.json says so on disk.
+func TestIndexWriter_EndCancelled(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	earlier := "execution cancelled"
+	index := &Index{
+		Version:   Version,
+		Status:    StatusRunning,
+		StartTime: time.Now(),
+		Flows: []FlowEntry{
+			{ID: "flow-000", Status: StatusSkipped, Error: &earlier},
+			{ID: "flow-001", Status: StatusPending},
+			{ID: "flow-002", Status: StatusRunning},
+		},
+	}
+
+	w := NewIndexWriter(tmpDir, index)
+	defer w.Close()
+
+	w.EndCancelled()
+
+	if index.Status != StatusFailed {
+		t.Errorf("Status = %q, want %q", index.Status, StatusFailed)
+	}
+	if index.EndTime == nil {
+		t.Error("EndTime not set")
+	}
+	for i, f := range index.Flows {
+		if f.Status != StatusSkipped {
+			t.Errorf("flow %d status = %q, want skipped", i, f.Status)
+		}
+	}
+	if *index.Flows[0].Error != earlier {
+		t.Errorf("flow 0 error = %q, want its own kept", *index.Flows[0].Error)
+	}
+	if index.Flows[1].Error == nil || *index.Flows[1].Error != RunCancelledError {
+		t.Errorf("flow 1 error = %v, want %q", index.Flows[1].Error, RunCancelledError)
+	}
+	if index.Summary.Skipped != 3 {
+		t.Errorf("summary skipped = %d, want 3", index.Summary.Skipped)
+	}
+
+	onDisk, err := ReadIndex(filepath.Join(tmpDir, "report.json"))
+	if err != nil {
+		t.Fatalf("ReadIndex: %v", err)
+	}
+	if onDisk.Status != StatusFailed {
+		t.Errorf("report.json status = %q, want failed", onDisk.Status)
+	}
+}
+
+// Cancelled after every flow passed, the run still passed.
+func TestIndexWriter_EndCancelled_AllPassed(t *testing.T) {
+	index := &Index{
+		Version: Version,
+		Status:  StatusRunning,
+		Flows:   []FlowEntry{{ID: "flow-000", Status: StatusPassed}},
+	}
+	w := NewIndexWriter(t.TempDir(), index)
+	defer w.Close()
+
+	w.EndCancelled()
+
+	if index.Status != StatusPassed {
+		t.Errorf("Status = %q, want passed", index.Status)
+	}
+}
+
 func TestIndexWriter_GetIndex(t *testing.T) {
 	tmpDir := t.TempDir()
 

@@ -95,11 +95,7 @@ func (d *Driver) tapSelector(sel flow.Selector, optional bool, timeoutMs int, ki
 	}
 	var extra *Args
 	if kind == "longPress" {
-		ms := float64(holdMs)
-		if ms <= 0 {
-			ms = 1000
-		}
-		extra = &Args{HoldMs: f64(ms)}
+		extra = &Args{HoldMs: f64(float64(core.LongPressMs(holdMs)))}
 	}
 	logger.Debug("[devicelab-ios] %s %s → %s %q at (%.0f,%.0f) bounds %v", kind, describe(sel),
 		node.Type, firstNonEmpty(node.Label, node.Value, node.Placeholder, node.ID), x, y, bounds(*node))
@@ -130,7 +126,7 @@ func (d *Driver) tapRelative(sel flow.Selector, point string, optional bool, tim
 	}
 	var extra *Args
 	if kind == "longPress" {
-		extra = &Args{HoldMs: f64(math.Max(float64(holdMs), 1000))}
+		extra = &Args{HoldMs: f64(float64(core.LongPressMs(holdMs)))}
 	}
 	if err := d.act(kind, float64(x), float64(y), extra); err != nil {
 		return core.ErrorResult(err, err.Error())
@@ -152,7 +148,7 @@ func (d *Driver) tapOnPoint(s *flow.TapOnPointStep) *core.CommandResult {
 	var extra *Args
 	if s.LongPress || s.DurationMs > 0 {
 		kind = "longPress"
-		extra = &Args{HoldMs: f64(math.Max(float64(s.DurationMs), 1000))}
+		extra = &Args{HoldMs: f64(float64(core.LongPressMs(s.DurationMs)))}
 	}
 	if err := d.act(kind, x, y, extra); err != nil {
 		return core.ErrorResult(err, err.Error())

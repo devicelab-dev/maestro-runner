@@ -268,13 +268,11 @@ func (d *Driver) doubleTapOn(step *flow.DoubleTapOnStep) *core.CommandResult {
 }
 
 // longPressDuration returns the press duration for a long press, defaulting to
-// a second when the flow does not say. The step has always carried
-// `duration:`; the mouse paths used to hardcode the default and drop it.
+// 3 s (Maestro's web clickAndHold) when the flow does not say. The step has
+// always carried `duration:`; the mouse paths used to hardcode the default and
+// drop it.
 func longPressDuration(step *flow.LongPressOnStep) time.Duration {
-	if step.DurationMs > 0 {
-		return time.Duration(step.DurationMs) * time.Millisecond
-	}
-	return time.Second
+	return time.Duration(core.LongPressMs(step.DurationMs)) * time.Millisecond
 }
 
 // longPressOn performs a long press (mouse down, hold, mouse up).
