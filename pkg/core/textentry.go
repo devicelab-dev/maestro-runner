@@ -1,6 +1,8 @@
 package core
 
 import (
+	"fmt"
+	"os"
 	"strings"
 	"unicode/utf8"
 )
@@ -169,6 +171,14 @@ func ConfirmTypedText(field TextField, typed, before string, warn func(format st
 		return ""
 	}
 
+	// A field that cuts what is typed (a stake field dropping decimals past
+	// the second, or leading zeros) reads back shorter too, and retyping it
+	// changes what the app holds. MAESTRO_RUNNER_NO_RETYPE=1 keeps the field as
+	// typed and only notes the difference, as Maestro does.
+	if os.Getenv("MAESTRO_RUNNER_NO_RETYPE") != "" {
+		return fmt.Sprintf(" (field holds %d of the %d characters typed; not retyped)",
+			utf8.RuneCountInString(after), utf8.RuneCountInString(typed))
+	}
 	if warn != nil {
 		// Counts, not the text: what was typed may be a password (#219).
 		warn("inputText: field holds %d character(s) after typing %d — retyping",
