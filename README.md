@@ -20,7 +20,9 @@
 [![npm](https://img.shields.io/npm/v/maestro-runner?label=npm&color=cb3837)](https://www.npmjs.com/package/maestro-runner)
 [![CI](https://github.com/devicelab-dev/maestro-runner/actions/workflows/ci.yml/badge.svg)](https://github.com/devicelab-dev/maestro-runner/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/devicelab-dev/maestro-runner/branch/main/graph/badge.svg)](https://codecov.io/gh/devicelab-dev/maestro-runner)
-[![Go Report Card](https://goreportcard.com/badge/github.com/devicelab-dev/maestro-runner?v=2)](https://goreportcard.com/report/github.com/devicelab-dev/maestro-runner)
+[![last release](https://img.shields.io/github/release-date/devicelab-dev/maestro-runner?label=last%20release)](https://github.com/devicelab-dev/maestro-runner/releases)
+[![platforms](https://img.shields.io/badge/platforms-Android%20%7C%20iOS%20%7C%20Web-3a9d5c)](https://open.devicelab.dev/maestro-runner/docs/getting-started)
+[![docs](https://img.shields.io/badge/docs-open.devicelab.dev-17a2b8)](https://open.devicelab.dev/maestro-runner/docs/getting-started)
 
 <b><a href="https://open.devicelab.dev/maestro-runner">Documentation</a></b> | <b><a href="#install">Get Started</a></b> | <b><a href="https://open.devicelab.dev/maestro-runner/docs/cli-reference">CLI Reference</a></b> | <b><a href="https://open.devicelab.dev/maestro-runner/docs/flow-commands">Flow Commands</a></b> | <b><a href="CONTRIBUTING.md">Contributing</a></b>
 
