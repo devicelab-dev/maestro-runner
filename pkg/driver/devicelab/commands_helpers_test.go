@@ -2630,9 +2630,9 @@ func TestCopyTextFrom_Success(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("copyTextFrom: %v", res.Error)
 	}
-	// Clipboard should have been set.
-	if client.clipboardText != "Hello World" {
-		t.Errorf("clipboard text: got %q, want %q", client.clipboardText, "Hello World")
+	// The device clipboard is left alone: the executor keeps the text.
+	if client.clipboardText != "" {
+		t.Errorf("clipboard text: got %q, want it untouched", client.clipboardText)
 	}
 	if text, ok := res.Data.(string); !ok || text != "Hello World" {
 		t.Errorf("result Data: got %v, want \"Hello World\"", res.Data)
