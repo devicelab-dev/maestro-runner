@@ -1,8 +1,9 @@
 // Package telemetry sends one anonymous usage event per maestro-runner run.
 //
-// The event holds counts, versions and fixed-list values only: no machine or
-// user id, no flow or file names, selectors, app ids, URLs, environment
-// values or error messages. Nothing is written on the user's machine.
+// The event holds counts, versions and fixed-list values (an Appium run's
+// server is one of them: a known cloud's name, "local" or "other"): no machine
+// or user id, no flow or file names, selectors, app ids, URLs, credentials,
+// environment values or error messages. Nothing is written on the user's machine.
 // DO_NOT_TRACK or MAESTRO_RUNNER_NO_TELEMETRY turn it off; with
 // MAESTRO_RUNNER_TELEMETRY_DEBUG the event is printed instead of sent. See
 // docs: https://open.devicelab.dev/maestro-runner/docs/telemetry
@@ -54,6 +55,7 @@ type Event struct {
 	Platform           string         `json:"platform,omitempty"`
 	Driver             string         `json:"driver,omitempty"`
 	DeviceKind         string         `json:"device_kind,omitempty"`
+	AppiumVendor       string         `json:"appium_vendor,omitempty"`
 	OSMajor            string         `json:"os_major"`
 	Devices            int            `json:"devices"`
 	FlowsTotal         int            `json:"flows_total"`
@@ -89,6 +91,7 @@ type Run struct {
 	Platform  string   // android, ios, web
 	Driver    string
 	Cloud     bool     // an Appium cloud provider ran it
+	AppiumURL string   // only its vendor is sent (AppiumVendor)
 	Devices   int      // devices used
 	FlowPaths []string // top-level flow files, relative to the folder given (for the project id)
 	Outcome   string   // completed, setup_failed, crashed, interrupted
@@ -112,6 +115,9 @@ func Build(run Run, index *report.Index, reportDir string) Event {
 		FailureKinds:  map[string]int{},
 		RunOutcome:    oneOf(run.Outcome, "completed", "setup_failed", "crashed", "interrupted"),
 		DurationS:     int(run.Duration.Round(time.Second) / time.Second),
+	}
+	if ev.Driver == "appium" {
+		ev.AppiumVendor = AppiumVendor(run.AppiumURL)
 	}
 	if ev.Platform == "web" {
 		ev.DeviceKind = "browser"

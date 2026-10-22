@@ -1027,7 +1027,7 @@ func executeTest(cfg *RunConfig) error {
 	telemetryRun := func(outcome string, devices int) telemetry.Run {
 		return telemetry.Run{
 			Version: Version, Command: "test", FlagNames: cfg.TelemetryFlags,
-			Platform: telemetryPlatform(cfg), Driver: telemetryDriver(cfg), Cloud: cfg.CloudProvider != nil,
+			Platform: telemetryPlatform(cfg), Driver: telemetryDriver(cfg), Cloud: cfg.CloudProvider != nil, AppiumURL: cfg.AppiumURL,
 			Devices: devices, FlowPaths: cfg.TelemetryFlowPaths, Outcome: outcome, Duration: time.Since(started),
 		}
 	}
