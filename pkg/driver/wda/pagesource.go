@@ -89,7 +89,16 @@ func ParsePageSource(xmlData string) ([]*ParsedElement, error) {
 					case "visible":
 						elem.Displayed = attr.Value == "true"
 					case "selected":
-						elem.Selected = attr.Value == "true"
+						// Either source marking it selected counts, whatever
+						// the attribute order.
+						elem.Selected = elem.Selected || attr.Value == "true"
+					case "traits":
+						// WDA's source has no selected attribute: a selected
+						// tab or segment shows it only in its traits
+						// ("Selected, Button").
+						if hasTrait(attr.Value, "Selected") {
+							elem.Selected = true
+						}
 					case "focused":
 						elem.Focused = attr.Value == "true"
 					case "placeholderValue":
@@ -917,4 +926,15 @@ func anyMatches(re *regexp.Regexp, texts []string) bool {
 // regexTextsOf lists the attributes a text selector is matched against.
 func regexTextsOf(e *ParsedElement) []string {
 	return []string{e.Label, e.Name, e.Value, e.PlaceholderValue}
+}
+
+// hasTrait reports whether WDA's comma-separated traits attribute
+// ("Selected, Button") holds trait as a whole entry.
+func hasTrait(traits, trait string) bool {
+	for _, t := range strings.Split(traits, ",") {
+		if strings.TrimSpace(t) == trait {
+			return true
+		}
+	}
+	return false
 }
