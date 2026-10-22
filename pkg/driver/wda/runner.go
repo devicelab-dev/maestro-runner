@@ -654,10 +654,12 @@ func (r *Runner) destination() string {
 	// the x86_64 variant leaves testmanagerd never spawning the test
 	// bundle and `xcodebuild test-without-building` stalls past 90s
 	// without ever emitting ServerURLHere. Pin platform + arch explicitly
-	// so the resolver gets a single concrete destination.
+	// so the resolver gets a single concrete destination. Xcode before 26
+	// rejects the arch key on a simulator destination, so it is pinned only
+	// where xcodebuild takes it (see simulatorDestination).
 	isSim, _ := r.isSimulator()
 	if isSim {
-		return fmt.Sprintf("platform=iOS Simulator,arch=%s,id=%s", simulator.XcodebuildArch(runtime.GOARCH), r.deviceUDID)
+		return simulatorDestination(r.deviceUDID, runtime.GOARCH, xcodeMajorVersion())
 	}
 	// A physical device is selected by its unique id alone. xcodebuild rejects
 	// arch= (and OS=) on a device destination — "Please supply only supported
@@ -673,6 +675,20 @@ func (r *Runner) destination() string {
 		return fmt.Sprintf("platform=iOS,id=%s", r.deviceUDID)
 	}
 	return fmt.Sprintf("platform=iOS,arch=%s,id=%s", arch, r.deviceUDID)
+}
+
+// simulatorDestination is the -destination for a simulator.
+//
+// The arch pin exists for Xcode 26, whose resolver lists a simulator under
+// both arm64 and x86_64 and can stall on the wrong one. Xcode before 26 does
+// not take arch= on a simulator destination and fails the run on it, and its
+// resolver had no such ambiguity, so there the id alone is the destination.
+// An unread version (0) keeps the pin, the behaviour before this gate.
+func simulatorDestination(udid, goarch string, xcodeMajor int) string {
+	if xcodeMajor > 0 && xcodeMajor < 26 {
+		return fmt.Sprintf("platform=iOS Simulator,id=%s", udid)
+	}
+	return fmt.Sprintf("platform=iOS Simulator,arch=%s,id=%s", simulator.XcodebuildArch(goarch), udid)
 }
 
 // terminateDeviceWDA kills a WebDriverAgentRunner left running on a physical

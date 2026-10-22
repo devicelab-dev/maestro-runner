@@ -349,11 +349,9 @@ func startOnce(ctx context.Context, opts SetupOptions, xctestrun, logPath string
 	// entries for the same UDID and warns "Using the first of multiple
 	// matching destinations". When the resolver picks ambiguously it can
 	// hang for minutes — observed as ~40% startup-fail rate on CI before
-	// this pin (same root cause as the WDA fix in 822a511).
-	destination := fmt.Sprintf(
-		"platform=iOS Simulator,arch=%s,id=%s",
-		simulator.XcodebuildArch(runtime.GOARCH), opts.SimulatorUDID,
-	)
+	// this pin (same root cause as the WDA fix in 822a511). Xcode before 26
+	// rejects arch= here, so the pin is gated on the version.
+	destination := simulatorDestination(opts.SimulatorUDID, runtime.GOARCH, xcodeMajorVersion())
 	cmd := exec.Command("xcodebuild", testWithoutBuildingArgs(simXctestrun, destination, xcodeMajorVersion())...)
 	cmd.Stdout = opts.Stdout
 	cmd.Stderr = opts.Stderr
@@ -455,6 +453,18 @@ func testWithoutBuildingArgs(xctestrun, destination string, xcodeMajor int) []st
 		args = append(args, "-collect-test-diagnostics", "never")
 	}
 	return args
+}
+
+// simulatorDestination is the -destination for the runner's simulator. The
+// arch pin is for Xcode 26's resolver, which lists a simulator under both
+// arm64 and x86_64; Xcode before 26 fails on arch= in a simulator destination
+// and has no such ambiguity, so it gets the id alone. An unread version (0)
+// keeps the pin.
+func simulatorDestination(udid, goarch string, xcodeMajor int) string {
+	if xcodeMajor > 0 && xcodeMajor < 26 {
+		return fmt.Sprintf("platform=iOS Simulator,id=%s", udid)
+	}
+	return fmt.Sprintf("platform=iOS Simulator,arch=%s,id=%s", simulator.XcodebuildArch(goarch), udid)
 }
 
 var (
