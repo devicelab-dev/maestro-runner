@@ -71,6 +71,21 @@ func wdaURL(cfg *RunConfig) string {
 	return strings.TrimSpace(cfg.WDAURL)
 }
 
+// reuseWDA reports whether the run keeps its WebDriverAgent running for the
+// next run and reuses one an earlier run kept (--reuse-wda). Only --driver
+// wda reads it, and --wda-url, which drives a WDA something else started,
+// takes precedence.
+func reuseWDA(cfg *RunConfig) bool {
+	return cfg.ReuseWDA && iosDriverName(cfg.Driver) == "wda" && wdaURL(cfg) == ""
+}
+
+// wdaPortBusy reports whether the iOS device udid is in use by another run:
+// its WDA port is bound, and not by a WDA an earlier --reuse-wda run kept
+// that no run holds now, which this run reuses or stops.
+func wdaPortBusy(udid string) bool {
+	return isPortInUse(wdadriver.PortFromUDID(udid)) && !wdadriver.KeptIdle(udid)
+}
+
 // getIOSDeviceInfoFn is getIOSDeviceInfo, as a variable so tests can run
 // CreateIOSDriver without a device.
 var getIOSDeviceInfoFn = getIOSDeviceInfo
@@ -115,10 +130,31 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		logger.Info("Using specified iOS device: %s", udid)
 	}
 
-	// Check if device port is already in use (another instance using this device).
-	// A --wda-url on this device's own port binds it on purpose.
+	// --reuse-wda takes the device's run lock now, so two runs never drive
+	// one kept WDA. Without it, a WDA an earlier --reuse-wda run kept, and
+	// no run holds, is stopped: such a run starts and stops its own.
 	port := wdadriver.PortFromUDID(udid)
-	if !urlIsLocalPort(wdaURL(cfg), port) && isPortInUse(port) {
+	reuse := reuseWDA(cfg)
+	var runner *wdadriver.Runner
+	if reuse {
+		runner = wdadriver.NewRunner(udid, cfg.TeamID, cfg.WDABundleID)
+		if err := runner.KeepRunning(); err != nil {
+			return nil, nil, fmt.Errorf("device %s is in use: %w", udid, err)
+		}
+	} else if wdaURL(cfg) == "" && wdadriver.KeptIdle(udid) {
+		wdadriver.StopKept(udid)
+	}
+	started := false
+	defer func() {
+		if reuse && !started {
+			runner.Release() // lets go of the lock; a reused WDA stays up
+		}
+	}()
+
+	// Check if device port is already in use (another instance using this device).
+	// A --wda-url on this device's own port binds it on purpose, and a WDA
+	// kept for --reuse-wda is checked once it is known not to be reused.
+	if !reuse && !urlIsLocalPort(wdaURL(cfg), port) && isPortInUse(port) {
 		return nil, nil, fmt.Errorf("device %s is in use (port %d already bound)\n"+
 			"Another maestro-runner instance may be using this device.\n"+
 			"Hint: Wait for it to finish or use a different device with --device <UDID>", udid, port)
@@ -145,8 +181,8 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	}
 
 	// 2-4. Drive the WDA already running at --wda-url, or install, build and
-	// start our own.
-	var runner *wdadriver.Runner
+	// start our own (with --reuse-wda, the one an earlier run kept, if it
+	// can be reused).
 	var client *wdadriver.Client
 	if rawURL := wdaURL(cfg); rawURL != "" {
 		attached, err := wdadriver.NewClientURL(rawURL)
@@ -172,7 +208,9 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		// 3. Create WDA runner
 		printSetupStep("Building WDA...")
 		logger.Info("Building WDA for device %s (team ID: %s)", udid, cfg.TeamID)
-		runner = wdadriver.NewRunner(udid, cfg.TeamID, cfg.WDABundleID)
+		if runner == nil {
+			runner = wdadriver.NewRunner(udid, cfg.TeamID, cfg.WDABundleID)
+		}
 		ctx := context.Background()
 
 		if err := runner.Build(ctx); err != nil {
@@ -182,27 +220,47 @@ func CreateIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 		logger.Info("WDA build completed successfully")
 		printSetupSuccess("WDA built")
 
-		// 4. Start WDA
-		printSetupStep("Starting WDA...")
-		logger.Info("Starting WDA on device %s (port: %d)", udid, runner.Port())
-		if err := runner.Start(ctx); err != nil {
-			logger.Error("WDA start failed: %v", err)
-			runner.Cleanup()
-			return nil, nil, fmt.Errorf("WDA start failed: %w", err)
+		reused := false
+		if reuse {
+			if err := runner.Reattach(ctx); err != nil {
+				logger.Info("--reuse-wda: starting a new WDA: %v", err)
+			} else {
+				reused = true
+				printSetupSuccess(fmt.Sprintf("Reusing the running WDA on port %d", runner.Port()))
+			}
 		}
-		logger.Info("WDA started successfully on port %d", runner.Port())
-		printSetupSuccess("WDA started")
-		printSetupSuccess(fmt.Sprintf("WDA port: %d", runner.Port()))
+
+		// 4. Start WDA
+		if !reused {
+			if reuse && isPortInUse(port) {
+				return nil, nil, fmt.Errorf("device %s is in use (port %d already bound)\n"+
+					"Hint: Wait for whatever uses the port to finish or use a different device with --device <UDID>", udid, port)
+			}
+			printSetupStep("Starting WDA...")
+			logger.Info("Starting WDA on device %s (port: %d)", udid, runner.Port())
+			if err := runner.Start(ctx); err != nil {
+				logger.Error("WDA start failed: %v", err)
+				runner.Cleanup()
+				return nil, nil, fmt.Errorf("WDA start failed: %w", err)
+			}
+			logger.Info("WDA started successfully on port %d", runner.Port())
+			printSetupSuccess("WDA started")
+			printSetupSuccess(fmt.Sprintf("WDA port: %d", runner.Port()))
+		}
 		client = wdadriver.NewClient(runner.Port())
 	}
+	started = true
 
 	// stopWDA stops the WDA this run started. An attached WDA belongs to
-	// whatever started it, so only this run's session is ended and the WDA is
-	// left running for the next run.
+	// whatever started it, and one kept for --reuse-wda to the next run, so
+	// for those only this run's session is ended and the WDA is left running.
 	stopWDA := func() {
-		if runner != nil {
+		if runner != nil && !reuse {
 			runner.Cleanup()
 			return
+		}
+		if runner != nil {
+			defer runner.Release()
 		}
 		if err := client.DeleteSessionWithin(sessionEndTimeout); err != nil {
 			logger.Debug("ending the session on the attached WDA: %v", err)
@@ -347,9 +405,8 @@ func findBootedSimulator() (string, error) {
 				if deviceMap, ok := device.(map[string]interface{}); ok {
 					if udid, ok := deviceMap["udid"].(string); ok && udid != "" {
 						// Skip simulators whose WDA port is already in use
-						port := wdadriver.PortFromUDID(udid)
-						if isPortInUse(port) {
-							logger.Info("Skipping booted simulator %s: port %d in use", udid, port)
+						if wdaPortBusy(udid) {
+							logger.Info("Skipping booted simulator %s: port %d in use", udid, wdadriver.PortFromUDID(udid))
 							continue
 						}
 						return udid, nil
@@ -622,9 +679,8 @@ func autoDetectIOSDevices(count int) ([]string, error) {
 				continue
 			}
 			// Skip simulators whose WDA port is already in use
-			port := wdadriver.PortFromUDID(dev.UDID)
-			if isPortInUse(port) {
-				logger.Info("Skipping booted simulator %s: port %d in use", dev.UDID, port)
+			if wdaPortBusy(dev.UDID) {
+				logger.Info("Skipping booted simulator %s: port %d in use", dev.UDID, wdadriver.PortFromUDID(dev.UDID))
 				continue
 			}
 			devices = append(devices, dev.UDID)

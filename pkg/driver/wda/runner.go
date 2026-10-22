@@ -69,6 +69,12 @@ type Runner struct {
 	logFile             *os.File
 	portForwardListener io.Closer // Port forwarding for physical devices (go-ios)
 	isSimulatorCache    bool      // Cached device type
+
+	// keep is set by KeepRunning (--reuse-wda): WDA is started in its own
+	// process group and recorded for the next run, and unlock lets go of
+	// the device's run lock.
+	keep   bool
+	unlock func()
 }
 
 // NewRunner creates a new WDA runner.
@@ -256,6 +262,9 @@ func (r *Runner) Start(ctx context.Context) error {
 					return fmt.Errorf("failed to start port forwarding: %w", pferr)
 				}
 			}
+			if r.keep {
+				r.recordKept()
+			}
 			fmt.Println("WebDriverAgent started")
 			return nil
 		}
@@ -303,6 +312,9 @@ func (r *Runner) startOnce(ctx context.Context, xctestrun, logPath string, attem
 		testWithoutBuildingArgs(xctestrun, r.destination(), r.derivedDataPath(), xcodeMajorVersion())...)
 	r.cmd.Stdout = r.logFile
 	r.cmd.Stderr = r.logFile
+	if r.keep {
+		setProcessGroup(r.cmd)
+	}
 
 	if attempt == 1 {
 		fmt.Println("Starting WebDriverAgent...")
@@ -461,14 +473,13 @@ func setPortEnv(target interface{}, portStr string) {
 // Stop terminates the running WDA.
 func (r *Runner) Stop() {
 	// Stop port forwarding if running (for physical devices)
-	if r.portForwardListener != nil {
-		if err := r.portForwardListener.Close(); err != nil {
-			logger.Warn("failed to close port forward listener: %v", err)
-		}
-		r.portForwardListener = nil
-	}
+	r.closePortForward()
 	if r.cmd != nil && r.cmd.Process != nil {
-		if err := r.cmd.Process.Kill(); err != nil {
+		if r.keep {
+			// Its own process group: end what xcodebuild spawned too.
+			killPidGroup(r.cmd.Process.Pid)
+		}
+		if err := r.cmd.Process.Kill(); err != nil && !r.keep {
 			logger.Warn("failed to kill WDA process: %v", err)
 		}
 		r.cmd = nil
@@ -485,6 +496,10 @@ func (r *Runner) Stop() {
 // Note: Build directory is now persistent and not removed to enable build reuse.
 func (r *Runner) Cleanup() {
 	r.Stop()
+	if r.keep {
+		removeKept(r.deviceUDID)
+		r.releaseLock()
+	}
 	// Build directory is persistent (in cache), don't remove it
 }
 
