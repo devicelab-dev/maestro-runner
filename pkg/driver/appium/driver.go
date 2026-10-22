@@ -914,7 +914,7 @@ func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements 
 
 	// Get candidates
 	var candidates []*ParsedElement
-	if baseSel.Text != "" || baseSel.ID != "" || baseSel.Width > 0 || baseSel.Height > 0 {
+	if baseSel.HasElementCriteria() {
 		candidates = FilterBySelector(allElements, baseSel, platform)
 	} else {
 		candidates = allElements

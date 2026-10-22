@@ -237,6 +237,16 @@ func (s *Selector) IsEmpty() bool {
 		s.InsideOf == nil
 }
 
+// HasElementCriteria reports whether the selector says anything about the
+// element itself (text, id, size or state) rather than only where it is
+// (childOf, below, ...). A relative lookup narrows its candidates by these
+// before the relative filter; `childOf: X, focused: true` must look only at
+// the focused elements inside X, as Maestro does.
+func (s *Selector) HasElementCriteria() bool {
+	return s.Text != "" || s.ID != "" || s.Width > 0 || s.Height > 0 ||
+		s.Enabled != nil || s.Selected != nil || s.Focused != nil || s.Checked != nil
+}
+
 // HasRelativeSelector returns true if any relative selector is set.
 func (s *Selector) HasRelativeSelector() bool {
 	return s.ChildOf != nil ||

@@ -1230,7 +1230,7 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector, allElements []*Parse
 
 	// Get candidates
 	var candidates []*ParsedElement
-	if baseSel.Text != "" || baseSel.ID != "" || baseSel.Width > 0 || baseSel.Height > 0 || baseSel.Checked != nil {
+	if baseSel.HasElementCriteria() {
 		candidates = FilterBySelector(allElements, baseSel)
 	} else {
 		candidates = allElements
