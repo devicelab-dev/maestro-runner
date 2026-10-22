@@ -2079,7 +2079,9 @@ func TestCopyTextFromTextError(t *testing.T) {
 	}
 }
 
-func TestCopyTextFromClipboardError(t *testing.T) {
+// copyTextFrom never writes the device clipboard: a set_clipboard call fails
+// the test.
+func TestCopyTextFromLeavesClipboard(t *testing.T) {
 	server := setupMockServer(t, map[string]func(w http.ResponseWriter, r *http.Request){
 		"POST /element": func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]interface{}{
@@ -2101,8 +2103,8 @@ func TestCopyTextFromClipboardError(t *testing.T) {
 			writeJSON(w, map[string]interface{}{"value": "true"})
 		},
 		"POST /appium/device/set_clipboard": func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusInternalServerError)
-			writeJSON(w, map[string]interface{}{"value": "clipboard error"})
+			t.Error("copyTextFrom wrote the device clipboard")
+			writeJSON(w, map[string]interface{}{"value": nil})
 		},
 	})
 	defer server.Close()
@@ -2113,8 +2115,8 @@ func TestCopyTextFromClipboardError(t *testing.T) {
 	step := &flow.CopyTextFromStep{Selector: flow.Selector{Text: "Label"}}
 	result := driver.Execute(step)
 
-	if result.Success {
-		t.Error("expected failure on SetClipboard error")
+	if !result.Success || result.Data != "Copied text" {
+		t.Errorf("copyTextFrom = %+v, want success with the text", result)
 	}
 }
 

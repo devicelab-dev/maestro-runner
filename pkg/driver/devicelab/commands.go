@@ -2670,10 +2670,10 @@ func (d *Driver) copyTextFrom(step *flow.CopyTextFromStep) *core.CommandResult {
 		}
 	}
 
-	if err := d.client.SetClipboard(text); err != nil {
-		return errorResult(err, fmt.Sprintf("Failed to copy to clipboard: %v", err))
-	}
-
+	// The text is kept by the executor (maestro.copiedText, pasteText), as
+	// Maestro does; the device clipboard is left alone, as the Appium and iOS
+	// drivers leave it. Writing it put the driver's clipboard helper screen
+	// over the app on Android 10+, and the next tapOn landed on that screen.
 	return &core.CommandResult{
 		Success: true,
 		Message: fmt.Sprintf("Copied text: %s", text),
