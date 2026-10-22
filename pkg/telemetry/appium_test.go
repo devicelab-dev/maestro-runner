@@ -17,20 +17,20 @@ func TestAppiumVendor(t *testing.T) {
 		{"https://key:secret@hub.testingbot.com/wd/hub", "testingbot"},
 		{"https://cloud.seetest.io/wd/hub", "digitalai"},
 		{"https://acme.experitest.com/wd/hub", "digitalai"},
-		{"https://cloud.bitbar.com/wd/hub", "bitbar"},
-		{"https://device.pcloudy.com/appiumcloud/wd/hub", "pcloudy"},
-		{"https://ind-west.pcloudy.com/appiumcloud/wd/hub", "pcloudy"},
-		{"https://acme.testgrid.io/quantumgrid/wd/hub", "testgrid"},
+		{"https://cloud.bitbar.com/wd/hub", "other"},
+		{"https://device.pcloudy.com/appiumcloud/wd/hub", "other"},
+		{"https://ind-west.pcloudy.com/appiumcloud/wd/hub", "other"},
+		{"https://acme.testgrid.io/quantumgrid/wd/hub", "other"},
 		{"https://devicefarm-interactive-global.us-west-2.api.aws/remote-endpoint/ABCD", "aws"},
 		{"http://localhost:4723", "local"},
 		{"http://127.0.0.1:4723/wd/hub", "local"},
 		{"http://[::1]:4723", "local"},
 		{"http://10.0.0.5:4723", "local"},
 		{"http://52.12.34.56:4723", "local"},
-		{"http://ec2-1-2-3-4.compute-1.amazonaws.com:4723", "ec2-1-2-3-4.compute-1.amazonaws.com"},
-		{"https://user:key@appium.acme-corp.internal:4723/wd/hub?x=1", "appium.acme-corp.internal"},
-		{"https://saucelabs.com.evil.example/wd/hub", "saucelabs.com.evil.example"},
-		{"https://notsaucelabs.com/wd/hub", "notsaucelabs.com"},
+		{"http://ec2-1-2-3-4.compute-1.amazonaws.com:4723", "other"},
+		{"https://user:key@appium.acme-corp.internal:4723/wd/hub?x=1", "other"},
+		{"https://saucelabs.com.evil.example/wd/hub", "other"},
+		{"https://notsaucelabs.com/wd/hub", "other"},
 		{"http://under_score.example.com", "other"},
 		{"::not a url", "other"},
 	}
@@ -48,5 +48,19 @@ func TestBuild_AppiumVendorOnlyForAppium(t *testing.T) {
 	}
 	if got := Build(Run{Command: "test", Driver: "devicelab", AppiumURL: url}, nil, "").AppiumVendor; got != "" {
 		t.Errorf("devicelab run: AppiumVendor = %q, want empty", got)
+	}
+}
+
+// The telemetry Worker rejects an event whose appium_vendor is not on its
+// list (maestro-runner-telemetry src/event.js), so every name sent must be.
+func TestAppiumVendor_OnlyWorkerValues(t *testing.T) {
+	worker := map[string]bool{
+		"saucelabs": true, "browserstack": true, "lambdatest": true, "perfecto": true, "kobiton": true,
+		"headspin": true, "testingbot": true, "digitalai": true, "aws": true, "local": true, "other": true,
+	}
+	for _, v := range appiumVendors {
+		if !worker[v.vendor] {
+			t.Errorf("vendor %q (for %s) is not accepted by the Worker", v.vendor, v.domain)
+		}
 	}
 }
