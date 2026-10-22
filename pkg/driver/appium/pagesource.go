@@ -218,6 +218,13 @@ func parseIOSPageSource(xmlData string) ([]*ParsedElement, error) {
 						elem.Displayed = attr.Value == "true"
 					case "selected":
 						elem.Selected = attr.Value == "true"
+					case "traits":
+						// XCUITest's source carries a selected tab or segment
+						// only in its traits ("Selected, Button"), so
+						// `selected: true` never matched through Appium.
+						if strings.Contains(attr.Value, "Selected") {
+							elem.Selected = true
+						}
 					case "focused":
 						elem.Focused = attr.Value == "true"
 					case "placeholderValue":
