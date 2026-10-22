@@ -33,8 +33,9 @@ type FlowRunner struct {
 	stepsFailed  int
 	stepsSkipped int
 
-	// Set when a runFlow's when: skipped it; markInteraction consumes it
-	runFlowSkipped bool
+	// Set when a runFlow's or runScript's when: skipped it; markInteraction
+	// consumes it
+	conditionSkipped bool
 	// Sub-command tracking for compound steps (runFlow, repeat, retry)
 	subCommands []report.Command
 	// nestedArtifactSeq numbers failure artifacts captured for nested steps
@@ -462,7 +463,7 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 	case *flow.DefineVariablesStep:
 		result = fr.script.ExecuteDefineVariables(s)
 	case *flow.RunScriptStep:
-		result = fr.script.ExecuteRunScript(s)
+		result = fr.executeRunScript(s)
 	case *flow.RunShellStep:
 		result = fr.executeRunShell(s)
 	case *flow.EvalScriptStep:
@@ -1257,6 +1258,19 @@ func (fr *FlowRunner) executeRetry(step *flow.RetryStep) *core.CommandResult {
 	return retryExhausted(lastErr, attempts)
 }
 
+// executeRunScript runs a runScript step unless its when: condition is false,
+// as Maestro does: an unmet condition skips the script.
+func (fr *FlowRunner) executeRunScript(step *flow.RunScriptStep) *core.CommandResult {
+	if step.When != nil && !fr.script.CheckCondition(fr.ctx, *step.When, fr.driver) {
+		fr.conditionSkipped = true
+		return &core.CommandResult{
+			Success: true,
+			Message: "Skipped (when condition not met)",
+		}
+	}
+	return fr.script.ExecuteRunScript(step)
+}
+
 // executeRunFlow handles runFlow step execution.
 func (fr *FlowRunner) executeRunFlow(step *flow.RunFlowStep) *core.CommandResult {
 	// Check when condition. When false, prefer the else branch over skipping
@@ -1266,7 +1280,7 @@ func (fr *FlowRunner) executeRunFlow(step *flow.RunFlowStep) *core.CommandResult
 			if step.ElseFile != "" || len(step.ElseSteps) > 0 {
 				return fr.executeRunFlowElse(step)
 			}
-			fr.runFlowSkipped = true
+			fr.conditionSkipped = true
 			return &core.CommandResult{
 				Success: true,
 				Message: "Skipped (when condition not met)",
@@ -1550,7 +1564,8 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 	case *flow.DefineVariablesStep:
 		result = fr.script.ExecuteDefineVariables(s)
 	case *flow.RunScriptStep:
-		result = fr.script.ExecuteRunScript(s)
+		fr.script.ExpandStep(step)
+		result = fr.executeRunScript(s)
 	case *flow.EvalScriptStep:
 		result = fr.script.ExecuteEvalScript(s)
 	case *flow.AssertTrueStep:
@@ -2017,9 +2032,12 @@ func (fr *FlowRunner) executeWait(step *flow.WaitStep) *core.CommandResult {
 // and a runFlow whose condition skipped it leave the clock alone: marking
 // them gave back-to-back checks for absent dialogs a fresh 7s each.
 func (fr *FlowRunner) markInteraction(step flow.Step) {
-	if _, ok := step.(*flow.RunFlowStep); ok && fr.runFlowSkipped {
-		fr.runFlowSkipped = false
-		return
+	switch step.(type) {
+	case *flow.RunFlowStep, *flow.RunScriptStep:
+		if fr.conditionSkipped {
+			fr.conditionSkipped = false
+			return
+		}
 	}
 	switch step.(type) {
 	case *flow.AssertVisibleStep, *flow.AssertNotVisibleStep, *flow.AssertTrueStep,

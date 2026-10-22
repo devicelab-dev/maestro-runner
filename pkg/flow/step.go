@@ -720,11 +720,15 @@ type RunFlowStep struct {
 }
 
 // RunScriptStep runs a script.
+//
+// When `when:` evaluates false the script does not run and the step is
+// skipped, as Maestro's runScript does.
 type RunScriptStep struct {
 	BaseStep `yaml:",inline"`
 	Script   string            `yaml:"script"` // Script content or filename (string form)
 	File     string            `yaml:"file"`   // Script filename (map form)
 	Env      map[string]string `yaml:"env"`
+	When     *Condition        `yaml:"when"`
 }
 
 // RunShellStep runs a command on the machine driving the test — the host, not

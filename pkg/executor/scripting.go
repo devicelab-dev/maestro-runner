@@ -916,6 +916,11 @@ func (se *ScriptEngine) ExpandStep(step flow.Step) {
 			se.ExpandCondition(s.When)
 		}
 		se.expandEnvMap(s.Env)
+	case *flow.RunScriptStep:
+		// Only the condition: the script's env is expanded when it runs.
+		if s.When != nil {
+			se.ExpandCondition(s.When)
+		}
 
 	// Every other step type carrying a YAML `env:` map. Without these, a
 	// value like `TOKEN: "${AUTH}"` reached the step verbatim: the `${AUTH}`
