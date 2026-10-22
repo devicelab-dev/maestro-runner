@@ -149,3 +149,32 @@ func TestApplySimulatorPrefs(t *testing.T) {
 		t.Errorf("opted out, still wrote %q", off.joined())
 	}
 }
+
+// Xcode before 26 rejects arch= on a simulator destination (EAS pinned
+// 1.1.15 on its Xcode 16 images for this), so the pin is gated on the version.
+// Xcode 26 and later, and an unread version, keep it: Xcode 26's resolver
+// lists a simulator under both arm64 and x86_64.
+func TestSimulatorDestination(t *testing.T) {
+	const udid = "SIM-UDID"
+	cases := []struct {
+		goarch string
+		major  int
+		want   string
+	}{
+		{"arm64", 14, "platform=iOS Simulator,id=SIM-UDID"},
+		{"arm64", 15, "platform=iOS Simulator,id=SIM-UDID"},
+		{"arm64", 16, "platform=iOS Simulator,id=SIM-UDID"},
+		{"amd64", 16, "platform=iOS Simulator,id=SIM-UDID"},
+		{"arm64", 25, "platform=iOS Simulator,id=SIM-UDID"},
+		{"arm64", 26, "platform=iOS Simulator,arch=arm64,id=SIM-UDID"},
+		{"amd64", 26, "platform=iOS Simulator,arch=x86_64,id=SIM-UDID"},
+		{"arm64", 27, "platform=iOS Simulator,arch=arm64,id=SIM-UDID"},
+		{"arm64", 0, "platform=iOS Simulator,arch=arm64,id=SIM-UDID"},
+		{"amd64", 0, "platform=iOS Simulator,arch=x86_64,id=SIM-UDID"},
+	}
+	for _, c := range cases {
+		if got := simulatorDestination(udid, c.goarch, c.major); got != c.want {
+			t.Errorf("simulatorDestination(%s, Xcode %d) = %q, want %q", c.goarch, c.major, got, c.want)
+		}
+	}
+}
