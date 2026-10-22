@@ -57,6 +57,14 @@ type Driver struct {
 	// changing (a web page still loading).
 	foundLate bool
 
+	// autoAlert answers a system permission prompt ("accept", "dismiss" or
+	// "" to leave it), from the last launchApp's permissions; alertWatchUntil
+	// ends the window after a launch in which every step asks first, and
+	// lastAlertCheck rate-limits the asking (autoalert.go).
+	autoAlert       string
+	alertWatchUntil time.Time
+	lastAlertCheck  time.Time
+
 	mu         sync.Mutex
 	stagedApps map[string]stagedApp
 	recording  *simulator.Recording
@@ -281,6 +289,7 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	if d.screenMayMove && actsOnScreen(step) && !flow.RepeatTapAfterFirst(step) {
 		d.settle(defaultSettleTimeout)
 	}
+	d.answerAlertsBeforeStep(step)
 	// Asserts and waits between an action and the next one neither settle
 	// nor move the screen, so they leave both records alone: an assert that
 	// passed early on a page still being pushed must not let the next tap
@@ -298,6 +307,11 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	result := d.execute(step)
 	if result == nil {
 		result = core.ErrorResult(fmt.Errorf("no result"), "step produced no result")
+	}
+	if _, launch := step.(*flow.LaunchAppStep); launch && result.Success && d.autoAlert != "" {
+		// The app asks for permissions as it starts: the next steps ask
+		// for a prompt first.
+		d.alertWatchUntil = time.Now().Add(autoAlertLaunchWindow)
 	}
 	result.Duration = time.Since(start)
 	return result

@@ -326,6 +326,13 @@ func (d *Driver) scrollUntilVisible(s *flow.ScrollUntilVisibleStep) *core.Comman
 		}
 		if resp, err := d.call("settle", &Args{TimeoutMs: float64(scrollSettleTimeout.Milliseconds())}); err == nil {
 			if sig := resp.payload().ScreenHash; sig != "" && progress.Observe(sig) {
+				// A permission prompt over the list takes the scrolls, so
+				// the list looks stuck: answer it and scroll on.
+				if d.answerSystemAlert() {
+					d.afterAlertTap()
+					progress = core.ScrollProgress{}
+					continue
+				}
 				if shown != nil {
 					return core.SuccessResult("element visible at the end of the content", toElementInfo(shown))
 				}

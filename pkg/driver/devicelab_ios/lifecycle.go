@@ -73,6 +73,7 @@ func (d *Driver) launchApp(s *flow.LaunchAppStep) *core.CommandResult {
 		return core.ErrorResult(err, err.Error())
 	}
 	d.appID = bid
+	d.autoAlert = autoAlertAction(s.Permissions)
 	if d.realDevice {
 		return d.launchAppOnDevice(s, bid)
 	}

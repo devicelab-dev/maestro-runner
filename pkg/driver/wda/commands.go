@@ -2198,40 +2198,10 @@ func autoClickAlertSelector(alertAction string) string {
 }
 
 // resolveAlertAction determines the WDA defaultAlertAction from a permission map.
-// Returns "accept" for all-allow, "dismiss" for all-deny, "" for mixed.
+// Returns "accept" for all-allow, "dismiss" for all-deny, "" for mixed. The
+// rule lives in core so the DeviceLab iOS driver answers prompts the same way.
 func resolveAlertAction(permissions map[string]string) string {
-	if len(permissions) == 0 {
-		return "accept"
-	}
-
-	// Check for "all" key
-	if val, ok := permissions["all"]; ok && len(permissions) == 1 {
-		switch strings.ToLower(val) {
-		case "allow":
-			return "accept"
-		case "deny":
-			return "dismiss"
-		}
-	}
-
-	// Check if all values are the same
-	var lastVal string
-	for _, v := range permissions {
-		lower := strings.ToLower(v)
-		if lastVal == "" {
-			lastVal = lower
-		} else if lastVal != lower {
-			return "" // Mixed permissions
-		}
-	}
-	switch lastVal {
-	case "allow":
-		return "accept"
-	case "deny":
-		return "dismiss"
-	default:
-		return ""
-	}
+	return core.IOSAlertAction(permissions)
 }
 
 // getIOSPermissions returns all common iOS privacy services.
