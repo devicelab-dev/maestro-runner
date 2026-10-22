@@ -329,7 +329,9 @@ func TestAimsAtAlert(t *testing.T) {
 		{"dismissAlert", &flow.DismissAlertStep{}, true},
 		{"tapOn button", &flow.TapOnStep{Selector: sel("Allow Once", "")}, true},
 		{"tapOn button any case", &flow.TapOnStep{Selector: sel("allow while using app", "")}, true},
-		{"tapOn straight apostrophe", &flow.TapOnStep{Selector: sel("Don't Allow", "")}, true},
+		{"tapOn typographic apostrophe", &flow.TapOnStep{Selector: sel("Don’t Allow", "")}, true},
+		// The lookup would not match it either (Maestro's rule): not aimed.
+		{"tapOn straight apostrophe", &flow.TapOnStep{Selector: sel("Don't Allow", "")}, false},
 		{"tapOn regex", &flow.TapOnStep{Selector: sel("Allow.*", "")}, true},
 		{"tapOn id", &flow.TapOnStep{Selector: sel("", "Allow Once")}, true},
 		{"assertVisible title", &flow.AssertVisibleStep{Selector: sel(title, "")}, true},

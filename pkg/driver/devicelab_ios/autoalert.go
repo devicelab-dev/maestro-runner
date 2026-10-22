@@ -169,7 +169,9 @@ func seesScreen(step flow.Step) bool {
 // aimsAtAlert reports whether step deals with the alert itself: acceptAlert
 // or dismissAlert, or a step whose selector (text or id) matches one of the
 // alert's buttons or its title, such as `tapOn: "Allow"` or an assertVisible
-// on the prompt's question. Flows written for Maestro, which answers nothing,
+// on the prompt's question, matched as the step's own lookup matches (so
+// "Don't Allow" typed with a straight apostrophe is not iOS's "Don’t Allow",
+// as in Maestro). Flows written for Maestro, which answers nothing,
 // tap "Allow" themselves; answering first would leave them nothing to tap.
 // The alert's message is not in the agent's read, so a selector on it alone
 // does not count. Only asked when a prompt is present.
@@ -178,31 +180,20 @@ func aimsAtAlert(step flow.Step, title string, buttons []string) bool {
 	case *flow.AcceptAlertStep, *flow.DismissAlertStep:
 		return true
 	}
-	values := make([]string, 0, len(buttons)+1)
-	for _, v := range append([]string{title}, buttons...) {
-		if v != "" {
-			values = append(values, plainApostrophes(v))
-		}
-	}
+	values := append([]string{title}, buttons...)
 	for _, sel := range stepSelectors(step) {
-		if sel.Text != "" && core.MatchSelectorText(plainApostrophes(sel.Text), values...) {
+		if sel.Text != "" && core.MatchSelectorText(sel.Text, values...) {
 			return true
 		}
 		if sel.ID != "" {
 			for _, v := range values {
-				if core.MatchSelectorID(plainApostrophes(sel.ID), v) {
+				if core.MatchSelectorID(sel.ID, v) {
 					return true
 				}
 			}
 		}
 	}
 	return false
-}
-
-// plainApostrophes writes iOS's typographic apostrophe (Don’t Allow) as the
-// one a flow is typed with.
-func plainApostrophes(s string) string {
-	return strings.ReplaceAll(s, "’", "'")
 }
 
 // stepSelectors are the selectors a step looks for on screen.
