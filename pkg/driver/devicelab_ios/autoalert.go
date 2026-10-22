@@ -92,6 +92,12 @@ func (d *Driver) answerSystemAlert() bool {
 		return false
 	}
 	p := resp.payload()
+	if aimsAtAlert(d.step, p.Title, p.Buttons) {
+		// The flow answers this prompt itself (`tapOn: "Allow"`, acceptAlert,
+		// an assert on its title), as a Maestro flow does: leave it.
+		logger.Debug("[devicelab-ios] system alert %q left to the step, which is aimed at it", p.Title)
+		return false
+	}
 	button := autoAlertButton(d.autoAlert, p.Buttons)
 	if button == "" {
 		logger.Debug("[devicelab-ios] system alert %q left to the flow: no button to %s in %q", p.Title, d.autoAlert, p.Buttons)
@@ -158,4 +164,78 @@ func seesScreen(step flow.Step) bool {
 		return true
 	}
 	return false
+}
+
+// aimsAtAlert reports whether step deals with the alert itself: acceptAlert
+// or dismissAlert, or a step whose selector (text or id) matches one of the
+// alert's buttons or its title, such as `tapOn: "Allow"` or an assertVisible
+// on the prompt's question. Flows written for Maestro, which answers nothing,
+// tap "Allow" themselves; answering first would leave them nothing to tap.
+// The alert's message is not in the agent's read, so a selector on it alone
+// does not count. Only asked when a prompt is present.
+func aimsAtAlert(step flow.Step, title string, buttons []string) bool {
+	switch step.(type) {
+	case *flow.AcceptAlertStep, *flow.DismissAlertStep:
+		return true
+	}
+	values := make([]string, 0, len(buttons)+1)
+	for _, v := range append([]string{title}, buttons...) {
+		if v != "" {
+			values = append(values, plainApostrophes(v))
+		}
+	}
+	for _, sel := range stepSelectors(step) {
+		if sel.Text != "" && core.MatchSelectorText(plainApostrophes(sel.Text), values...) {
+			return true
+		}
+		if sel.ID != "" {
+			for _, v := range values {
+				if core.MatchSelectorID(plainApostrophes(sel.ID), v) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// plainApostrophes writes iOS's typographic apostrophe (Don’t Allow) as the
+// one a flow is typed with.
+func plainApostrophes(s string) string {
+	return strings.ReplaceAll(s, "’", "'")
+}
+
+// stepSelectors are the selectors a step looks for on screen.
+func stepSelectors(step flow.Step) []flow.Selector {
+	var out []flow.Selector
+	add := func(sel *flow.Selector) {
+		if sel != nil {
+			out = append(out, *sel)
+		}
+	}
+	switch s := step.(type) {
+	case *flow.TapOnStep:
+		add(&s.Selector)
+	case *flow.DoubleTapOnStep:
+		add(&s.Selector)
+	case *flow.LongPressOnStep:
+		add(&s.Selector)
+	case *flow.AssertVisibleStep:
+		add(&s.Selector)
+	case *flow.AssertNotVisibleStep:
+		add(&s.Selector)
+	case *flow.CopyTextFromStep:
+		add(&s.Selector)
+	case *flow.ScrollUntilVisibleStep:
+		add(&s.Element)
+	case *flow.WaitUntilStep:
+		add(s.Visible)
+		add(s.NotVisible)
+	case *flow.SwipeStep:
+		add(s.Selector)
+	case *flow.DragAndDropStep:
+		add(&s.From)
+		add(&s.To)
+	}
+	return out
 }

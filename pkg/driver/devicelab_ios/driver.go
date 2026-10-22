@@ -64,6 +64,9 @@ type Driver struct {
 	autoAlert       string
 	alertWatchUntil time.Time
 	lastAlertCheck  time.Time
+	// step is the step Execute is running; a prompt it is aimed at
+	// (`tapOn: "Allow"`) is left to it.
+	step flow.Step
 
 	mu         sync.Mutex
 	stagedApps map[string]stagedApp
@@ -286,6 +289,7 @@ func (d *Driver) WaitsAroundTaps() bool { return true }
 // Execute implements core.Driver.
 func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	start := time.Now()
+	d.step = step
 	if d.screenMayMove && actsOnScreen(step) && !flow.RepeatTapAfterFirst(step) {
 		d.settle(defaultSettleTimeout)
 	}

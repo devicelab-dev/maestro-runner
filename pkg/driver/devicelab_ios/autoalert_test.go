@@ -315,3 +315,81 @@ func TestAutoAlertWhenScrollIsStuck(t *testing.T) {
 		t.Fatalf("alerts = %+v", taps)
 	}
 }
+
+func TestAimsAtAlert(t *testing.T) {
+	title := "Allow “PermLab” to use your location?"
+	buttons := []string{"Allow Once", "Allow While Using App", "Don’t Allow"}
+	sel := func(text, id string) flow.Selector { return flow.Selector{Text: text, ID: id} }
+	for _, tc := range []struct {
+		name string
+		step flow.Step
+		want bool
+	}{
+		{"acceptAlert", &flow.AcceptAlertStep{}, true},
+		{"dismissAlert", &flow.DismissAlertStep{}, true},
+		{"tapOn button", &flow.TapOnStep{Selector: sel("Allow Once", "")}, true},
+		{"tapOn button any case", &flow.TapOnStep{Selector: sel("allow while using app", "")}, true},
+		{"tapOn straight apostrophe", &flow.TapOnStep{Selector: sel("Don't Allow", "")}, true},
+		{"tapOn regex", &flow.TapOnStep{Selector: sel("Allow.*", "")}, true},
+		{"tapOn id", &flow.TapOnStep{Selector: sel("", "Allow Once")}, true},
+		{"assertVisible title", &flow.AssertVisibleStep{Selector: sel(title, "")}, true},
+		{"waitUntil visible", &flow.WaitUntilStep{Visible: &flow.Selector{Text: "Allow Once"}}, true},
+		{"scrollUntilVisible", &flow.ScrollUntilVisibleStep{Element: sel("Don’t Allow", "")}, true},
+		{"part of a label is not a match", &flow.TapOnStep{Selector: sel("Allow", "")}, false},
+		{"app element", &flow.TapOnStep{Selector: sel("Location", "")}, false},
+		{"app id", &flow.AssertVisibleStep{Selector: sel("", "status_location")}, false},
+		{"no selector", &flow.TapOnPointStep{}, false},
+		{"nil step", nil, false},
+	} {
+		if got := aimsAtAlert(tc.step, title, buttons); got != tc.want {
+			t.Errorf("%s: aimsAtAlert = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	if !aimsAtAlert(&flow.TapOnStep{Selector: sel("Allow", "")}, "“PermLab” Would Like to Send You Notifications", []string{"Don’t Allow", "Allow"}) {
+		t.Error(`tapOn "Allow" on a notifications prompt must count as aimed at it`)
+	}
+	if !aimsAtAlert(&flow.TapOnStep{Selector: sel("Ask App Not to Track", "")}, "Allow “PermLab” to track your activity?", []string{"Ask App Not to Track", "Allow"}) {
+		t.Error(`tapOn "Ask App Not to Track" must count as aimed at the ATT prompt`)
+	}
+}
+
+// A Maestro flow that taps "Allow" itself keeps working: the driver leaves
+// the prompt to the step, and the step's own lookup (which sees SpringBoard
+// alerts after the first miss) taps it.
+func TestAutoAlertLeavesPromptToStepAimedAtIt(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		step flow.Step
+	}{
+		{"tapOn Allow", &flow.TapOnStep{Selector: flow.Selector{Text: "Allow"}}},
+		{"assertVisible title", &flow.AssertVisibleStep{Selector: flow.Selector{Text: "“TestHive” Would Like to Send You Notifications"}}},
+		{"acceptAlert", &flow.AcceptAlertStep{BaseStep: flow.BaseStep{TimeoutMs: 300}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sb := &springboardAlert{buttons: []string{"Don’t Allow", "Allow"}}
+			d, _, _ := newTestDriver(t, sb.handle)
+			fakeLaunch(t, nil)
+			if res := d.Execute(&flow.LaunchAppStep{AppID: "com.example"}); !res.Success {
+				t.Fatal(res.Message)
+			}
+			d.SetFindTimeout(1500)
+			d.Execute(tc.step)
+			if taps := sb.taps(); len(taps) != 0 {
+				t.Fatalf("driver answered the prompt itself: %+v", taps)
+			}
+			// The next step is not aimed at the prompt: it is answered.
+			sb.mu.Lock()
+			sb.buttons = []string{"Don’t Allow", "Allow"}
+			sb.tapped = nil
+			sb.mu.Unlock()
+			d.lastAlertCheck = time.Time{}
+			d.alertWatchUntil = time.Now().Add(autoAlertLaunchWindow)
+			if res := d.Execute(&flow.TapOnStep{Selector: flow.Selector{Text: "Home"}}); !res.Success {
+				t.Fatal(res.Message)
+			}
+			if taps := sb.taps(); len(taps) != 1 || taps[0].Button != "Allow" {
+				t.Fatalf("taps after = %+v", taps)
+			}
+		})
+	}
+}
