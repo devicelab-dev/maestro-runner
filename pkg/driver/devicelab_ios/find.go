@@ -66,7 +66,8 @@ func (d *Driver) findElement(sel flow.Selector, optional bool, timeoutMs int) (*
 	if timeoutMs > 0 {
 		budget = time.Duration(timeoutMs) * time.Millisecond
 	}
-	deadline := time.Now().Add(budget)
+	start := time.Now()
+	deadline := start.Add(budget)
 	var lastErr error
 	for attempt := 0; ; attempt++ {
 		// A system alert (a permission prompt) belongs to SpringBoard, not the
@@ -89,6 +90,11 @@ func (d *Driver) findElement(sel flow.Selector, optional bool, timeoutMs int) (*
 				lastErr = errNotFound
 			}
 			return nil, nil, fmt.Errorf("%s: %w", describe(sel), lastErr)
+		}
+		// A permission prompt may be what hides the element.
+		if d.answerAlertOnMiss(start) {
+			d.afterAlertTap()
+			continue
 		}
 		time.Sleep(pollInterval)
 	}
