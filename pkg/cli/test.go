@@ -2443,6 +2443,7 @@ func createAppiumDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	info := driver.GetPlatformInfo()
 	logger.Info("Appium session created successfully: %s", info.DeviceID)
 	driver.SetAppInfo(resolveAppiumAppVersion(cfg, info))
+	driver.SetAppFile(cfg.AppFile)
 
 	// Build the provider chain: detected cloud provider (if any) + the session
 	// exporter (if --appium-session-file is set). Composite runs them all, so a

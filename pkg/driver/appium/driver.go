@@ -30,7 +30,12 @@ type Driver struct {
 	warnedFields              map[string]bool
 	appVersion                string // version name, supplied by the caller
 	appBuild                  string // build number, supplied by the caller
+	appFile                   string // --app-file: what clearState reinstalls on a real iPhone
 }
+
+// SetAppFile names the app file (--app-file) that clearState reinstalls on a
+// real iPhone, where XCUITest cannot clear an app's data.
+func (d *Driver) SetAppFile(path string) { d.appFile = path }
 
 // NewDriver creates a new Appium driver.
 func NewDriver(serverURL string, capabilities map[string]interface{}) (*Driver, error) {
