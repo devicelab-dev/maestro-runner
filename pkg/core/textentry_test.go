@@ -96,7 +96,7 @@ func TestConfirmTypedTextKeepsExistingText(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f := &recordingField{value: tt.after}
-			note := ConfirmTypedText(f, tt.typed, tt.before, nil)
+			note := ConfirmTypedText(f, tt.typed, tt.before, true, nil)
 			if !strings.Contains(note, "retyped") && !strings.Contains(note, "warning") {
 				t.Fatalf("no retry happened (note %q)", note)
 			}
@@ -113,7 +113,7 @@ func TestConfirmTypedTextWarningHidesText(t *testing.T) {
 	var logged []string
 	warn := func(format string, args ...interface{}) { logged = append(logged, fmt.Sprintf(format, args...)) }
 	f := &recordingField{value: "hunt"}
-	ConfirmTypedText(f, "hunter2", "", warn)
+	ConfirmTypedText(f, "hunter2", "", true, warn)
 	if len(logged) != 1 {
 		t.Fatalf("warnings = %v, want one", logged)
 	}
@@ -122,5 +122,17 @@ func TestConfirmTypedTextWarningHidesText(t *testing.T) {
 	}
 	if !strings.Contains(logged[0], "4 character(s) after typing 7") {
 		t.Errorf("warning = %q, want the counts", logged[0])
+	}
+}
+
+// With retype false a field that reads back short is noted, not typed again.
+func TestConfirmTypedTextWithoutRetype(t *testing.T) {
+	f := &recordingField{value: "3,23"}
+	note := ConfirmTypedText(f, "3,23999", "", false, nil)
+	if f.value != "3,23" || len(f.typed) != 0 {
+		t.Fatalf("field %q after typing %q, want it untouched", f.value, f.typed)
+	}
+	if note != " (field holds 4 of the 7 characters typed; not retyped)" {
+		t.Errorf("note = %q", note)
 	}
 }

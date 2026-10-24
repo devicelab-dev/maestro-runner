@@ -476,7 +476,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 					func(s string) error { return d.client.ElementSendKeys(info.ID, s, d.typingFrequency) },
 					func() error { return d.client.ElementClear(info.ID) },
 				)
-				note := core.ConfirmTypedText(field, text, before, logger.Warn)
+				note := core.ConfirmTypedText(field, text, before, step.Retypes(), logger.Warn)
 				return successResult(fmt.Sprintf("Entered text: %s%s%s", text, unicodeWarning, note), info)
 			}
 		}
@@ -514,7 +514,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		return errorResult(err, "Input text failed")
 	}
 
-	note := d.focusedReadBack(focusedID, text, before)
+	note := d.focusedReadBack(focusedID, text, before, step.Retypes())
 	return successResult(fmt.Sprintf("Entered text: %s%s%s", text, unicodeWarning, note), nil)
 }
 
@@ -537,7 +537,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 //     typed with characters missing, wherever they went missing, is retyped.
 //     A max length that cuts the text short looks the same, and gets one
 //     retype that leaves the same value and a warning in the step's message.
-func (d *Driver) focusedReadBack(focusedID, text, before string) string {
+func (d *Driver) focusedReadBack(focusedID, text, before string, retype bool) string {
 	if focusedID == "" || strings.ContainsAny(text, "\n\t") {
 		return ""
 	}
@@ -562,7 +562,7 @@ func (d *Driver) focusedReadBack(focusedID, text, before string) string {
 		func(s string) error { return d.client.ElementSendKeys(focusedID, s, d.typingFrequency) },
 		func() error { return d.client.ElementClear(focusedID) },
 	)
-	return core.ConfirmTypedText(field, text, before, logger.Warn)
+	return core.ConfirmTypedText(field, text, before, retype, logger.Warn)
 }
 
 // onlyDropped reports whether typing text into a field that held before left

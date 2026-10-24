@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"strings"
 	"unicode/utf8"
 )
@@ -158,8 +159,10 @@ func (f funcTextField) Clear() error          { return f.clear() }
 // one the app has reformatted, is left alone — and a field that still disagrees
 // after the retry is reported in the result rather than failed, because the
 // assertion that follows will describe the real problem better than a driver
-// can.
-func ConfirmTypedText(field TextField, typed, before string, warn func(format string, args ...interface{})) string {
+// can. With retype false (`inputText` with `retype: false`) a short field is
+// only noted: a field that cuts what it is given reads back short too, and
+// typing into it again changes what the app holds.
+func ConfirmTypedText(field TextField, typed, before string, retype bool, warn func(format string, args ...interface{})) string {
 	if field == nil {
 		return ""
 	}
@@ -167,6 +170,10 @@ func ConfirmTypedText(field TextField, typed, before string, warn func(format st
 	after, err := field.Text()
 	if VerifyTypedText(typed, before, after, err == nil) != TextEntryDropped {
 		return ""
+	}
+	if !retype {
+		return fmt.Sprintf(" (field holds %d of the %d characters typed; not retyped)",
+			utf8.RuneCountInString(after), utf8.RuneCountInString(typed))
 	}
 
 	if warn != nil {
