@@ -939,7 +939,11 @@ func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements 
 				}}
 			}
 		} else {
-			anchors = FilterBySelector(allElements, *anchorSelector, platform)
+			picked, err := core.PickAnchor(FilterBySelector(allElements, *anchorSelector, platform), anchorSelector.Index, elementBounds)
+			if err != nil {
+				return nil, err
+			}
+			anchors = picked
 		}
 	}
 
