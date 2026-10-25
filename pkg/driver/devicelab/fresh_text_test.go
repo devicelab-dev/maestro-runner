@@ -64,7 +64,8 @@ func TestInputText_RetypesDroppedCharacters(t *testing.T) {
 			})
 		}},
 		{"focused field", func(field *droppingField) *core.CommandResult {
-			client := &scriptedClient{trackingClient: newTrackingClient()}
+			// Short text goes into an empty field as key events.
+			client := &keyEventClient{scriptedClient: &scriptedClient{trackingClient: newTrackingClient()}, field: field}
 			client.activeElementReturn = field.element("Username")
 			return New(client, &core.PlatformInfo{}, &mockShell{}).inputText(&flow.InputTextStep{Text: "bob"})
 		}},
