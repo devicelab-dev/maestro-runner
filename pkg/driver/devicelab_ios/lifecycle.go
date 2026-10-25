@@ -88,15 +88,25 @@ func (d *Driver) launchApp(s *flow.LaunchAppStep) *core.CommandResult {
 			logger.Warn("launchApp: clearKeychain skipped: %v", err)
 		}
 	}
-	if s.StopApp == nil || *s.StopApp {
+	args := []string{"launch", "--terminate-running-process", d.udid, bid}
+	if keepsRunningApp(s) {
+		// Maestro's plain `simctl launch`: a running app comes to the front
+		// as it was, not restarted.
+		args = []string{"launch", d.udid, bid}
+	} else {
 		_ = d.terminate(bid)
 	}
-	args := []string{"launch", "--terminate-running-process", d.udid, bid}
 	args = append(args, flattenArguments(s.Arguments)...)
 	if _, err := simctlEnv(launchEnv(s.Environment), args...); err != nil {
 		return core.ErrorResult(err, fmt.Sprintf("launchApp failed: %v", err))
 	}
 	return core.SuccessResult("launched "+bid, nil)
+}
+
+// keepsRunningApp reports whether launchApp leaves a running app running
+// (`stopApp: false`): Maestro then only brings it to the front.
+func keepsRunningApp(s *flow.LaunchAppStep) bool {
+	return s.StopApp != nil && !*s.StopApp
 }
 
 // launchEnv is the host's environment (xcrun needs PATH, DEVELOPER_DIR) plus
