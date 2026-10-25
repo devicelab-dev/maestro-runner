@@ -1304,11 +1304,12 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 		"animationCoolOffTimeout": 0,
 		"defaultAlertAction":      d.alertAction,
 		"autoClickAlertSelector":  autoClickAlertSelector(d.alertAction),
-	}
-	if d.alertAction == "accept" {
-		sessionSettings["acceptAlertButtonSelector"] = "**/XCUIElementTypeButton[`label BEGINSWITH[c] 'Allow' OR label ==[c] 'OK'`]"
-	} else if d.alertAction == "dismiss" {
-		sessionSettings["dismissAlertButtonSelector"] = "**/XCUIElementTypeButton[`label CONTAINS[c] 'Don't Allow' OR label CONTAINS[c] 'Dont Allow'`]"
+		// acceptAlert and dismissAlert name their button whatever the
+		// permissions: without a match WDA taps by position (dismiss the
+		// first button, accept the last), which on a stacked alert is the
+		// wrong end: "Allow Once" for a dismiss.
+		"acceptAlertButtonSelector":  acceptAlertButtonSelector,
+		"dismissAlertButtonSelector": dismissAlertButtonSelector,
 	}
 	_ = d.client.UpdateSettings(sessionSettings)
 
@@ -2182,6 +2183,15 @@ func (d *Driver) resetIOSPermission(appID, permission string) error {
 const (
 	autoAcceptAlertSelector  = "**/XCUIElementTypeButton[`label BEGINSWITH[c] 'Allow'`]"
 	autoDismissAlertSelector = "**/XCUIElementTypeButton[`(label BEGINSWITH[c] 'Don' AND label CONTAINS[c] 'Allow') OR label BEGINSWITH[c] 'Ask App Not'`]"
+)
+
+// Selectors for the buttons acceptAlert and dismissAlert tap. Only a button
+// with no match falls back to WDA's positional pick. The apostrophe in
+// "Don't Allow" is matched as "Don…Allow": a quote inside the predicate ends
+// its string, and the selector that had one never matched.
+const (
+	acceptAlertButtonSelector  = "**/XCUIElementTypeButton[`label BEGINSWITH[c] 'Allow' OR label ==[c] 'OK' OR label ==[c] 'Continue' OR label ==[c] 'Open' OR label ==[c] 'Yes'`]"
+	dismissAlertButtonSelector = "**/XCUIElementTypeButton[`(label BEGINSWITH[c] 'Don' AND label CONTAINS[c] 'Allow') OR label BEGINSWITH[c] 'Ask App Not' OR label ==[c] 'Cancel' OR label ==[c] 'Not Now' OR label ==[c] 'Close' OR label ==[c] 'No' OR label ==[c] 'Dismiss'`]"
 )
 
 // autoClickAlertSelector returns the autoClickAlertSelector for an alert
