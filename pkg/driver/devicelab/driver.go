@@ -132,6 +132,10 @@ type Driver struct {
 	// Set after a successful tap; back/pressKey settle first when it is set
 	lastStepWasTap bool
 
+	// Set after a successful swipe or scroll and kept until the next step
+	// that acts on the screen, which settles first
+	swipeUnsettled bool
+
 	// The element the last step tapped, while the next inputText may be
 	// meant for it (nil after any other step)
 	lastTapped *core.ElementInfo
@@ -553,6 +557,12 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	// element on both screens is a correct pass either way.
 	if d.lastStepWasTap && actsOnScreen(step) && !flow.RepeatTapAfterFirst(step) {
 		d.settle(settleAfterTapTimeoutMs, "tap")
+	} else if d.swipeUnsettled && actsOnScreen(step) {
+		// The same after a swipe, as Maestro settles after every swipe, and
+		// across the checks in between: a swipe, an assertVisible that passed
+		// on the page still sliding in, then a swipe on that page went to the
+		// outer pager still animating (pager-view nested_pagerView_example).
+		d.settle(settleAfterTapTimeoutMs, "swipe")
 	}
 
 	// A tap returns only once the screen has started to react, or after
@@ -714,6 +724,14 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 		// tap's change had finished.
 	default:
 		d.lastStepWasTap = false
+	}
+	switch step.(type) {
+	case *flow.SwipeStep, *flow.ScrollStep:
+		d.swipeUnsettled = result.Success
+	default:
+		if actsOnScreen(step) {
+			d.swipeUnsettled = false
+		}
 	}
 	d.lastTapped = nil
 	if _, ok := step.(*flow.TapOnStep); ok && result.Success && result.Element != nil && result.Element.Bounds.Width > 0 {
