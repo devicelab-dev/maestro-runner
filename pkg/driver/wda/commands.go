@@ -667,6 +667,11 @@ func (d *Driver) eraseText(step *flow.EraseTextStep) *core.CommandResult {
 	if err == nil && elemID != "" {
 		// Got active element - try to read its text
 		currentText, textErr := d.client.ElementText(elemID)
+		if textErr == nil && chars < len([]rune(currentText)) && d.showsPlaceholder(elemID, currentText) {
+			// WDA reads an empty field's placeholder as its text: keeping
+			// "the rest" of it would type the placeholder into the field.
+			currentText = ""
+		}
 		if textErr == nil {
 			textLen := len([]rune(currentText)) // Use runes for proper Unicode handling
 
@@ -707,6 +712,13 @@ func (d *Driver) eraseText(step *flow.EraseTextStep) *core.CommandResult {
 	}
 
 	return successResult(fmt.Sprintf("Erased %d characters", chars), nil)
+}
+
+// showsPlaceholder reports whether text, read from an element, is its
+// placeholder: WDA's text of an empty text field is the placeholder.
+func (d *Driver) showsPlaceholder(elemID, text string) bool {
+	placeholder, err := d.client.ElementAttribute(elemID, "placeholderValue")
+	return err == nil && placeholder != "" && placeholder == text
 }
 
 func (d *Driver) hideKeyboard(step *flow.HideKeyboardStep) *core.CommandResult {
