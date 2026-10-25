@@ -722,8 +722,13 @@ func (d *Driver) showsPlaceholder(elemID, text string) bool {
 }
 
 func (d *Driver) hideKeyboard(step *flow.HideKeyboardStep) *core.CommandResult {
-	// iOS: tap outside to dismiss keyboard, or press Done button
-	// Try pressing the "return" key (ignore error - keyboard might not be visible)
+	// No keyboard, nothing to hide: the return key below still reaches a
+	// focused field (a simulator with the hardware keyboard connected shows
+	// none) and submits its form. Maestro's hideKeyboard does nothing then.
+	if visible, err := d.keyboardVisible(); err == nil && !visible {
+		return successResult("No keyboard to hide", nil)
+	}
+	// Press the "return" key (ignore error - keyboard might not be visible)
 	_ = d.client.SendKeys("\n", 0)
 
 	return successResult("Attempted to hide keyboard", nil)
