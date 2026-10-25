@@ -106,9 +106,10 @@ func (fr *FlowRunner) Run() FlowResult {
 		fr.script.SetVariable(k, fr.script.ExpandVariables(v))
 	}
 
-	// Apply commandTimeout if specified - overrides driver's default find timeout
-	if fr.flow.Config.CommandTimeout > 0 {
-		fr.driver.SetFindTimeout(fr.flow.Config.CommandTimeout)
+	// Default find timeout: the flow's commandTimeout, else --find-timeout,
+	// else the driver's own default (left untouched).
+	if findTimeout := effectiveFindTimeout(fr.flow.Config.CommandTimeout, fr.config.FindTimeout); findTimeout > 0 {
+		fr.driver.SetFindTimeout(findTimeout)
 	}
 
 	// Apply the global condition-check timeout for when:/while: checks. 0 keeps
@@ -2090,4 +2091,17 @@ func (fr *FlowRunner) stepNames(step flow.Step) (describe, title string) {
 		return describe, fr.maskTypedName(step, fr.script.DisplayText(label))
 	}
 	return describe, describe
+}
+
+// effectiveFindTimeout picks the default element lookup timeout (ms) for a
+// flow: its own commandTimeout wins over the run-wide --find-timeout. 0 means
+// neither is set and the driver keeps its default.
+func effectiveFindTimeout(flowCommandTimeout, runFindTimeout int) int {
+	if flowCommandTimeout > 0 {
+		return flowCommandTimeout
+	}
+	if runFindTimeout > 0 {
+		return runFindTimeout
+	}
+	return 0
 }

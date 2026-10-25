@@ -175,6 +175,11 @@ MAESTRO_RUNNER_NO_UPDATE_CHECK=1 to skip the check; on CI the notice is not prin
 			Usage:   "Fixed timeout in ms for when:/while: condition checks. Unset: as Maestro, 7s less the time since the last step (at least 1s). Override per condition with `timeout:`.",
 			EnvVars: []string{"MAESTRO_CONDITION_TIMEOUT"},
 		},
+		&cli.IntFlag{
+			Name:    "find-timeout",
+			Usage:   "Default timeout in ms to find an element, for steps without their own timeout (unset: the driver default, 17000 on most drivers, as Maestro). Lower it, e.g. 3000, to make a wrong selector fail fast while writing flows. A flow's commandTimeout overrides it.",
+			EnvVars: []string{"MAESTRO_FIND_TIMEOUT"},
+		},
 		&cli.BoolFlag{
 			Name:    "disable-animations",
 			Usage:   "Switch the device's system animations off for the run and restore them afterwards (Android). Same as Maestro's workspace `platform: android: disableAnimations: true`",
@@ -606,6 +611,7 @@ type RunConfig struct {
 	// Driver settings
 	WaitForIdleTimeout int    // Wait for device idle in ms (0 = disabled, default 200)
 	ConditionTimeout   int    // Default timeout (ms) for when:/while: condition checks (default 1000)
+	FindTimeout        int    // Default element find timeout (ms) for steps without one (0 = driver default)
 	DisableAnimations  bool   // Switch device animations off for the run (--disable-animations / workspace)
 	Insecure           bool   // Skip TLS verification for runScript http.* (--insecure)
 	StepDelay          int    // Pause between top-level steps in ms (0 = none)
@@ -874,6 +880,7 @@ func runTest(c *cli.Context) error {
 		NewCommandTimeout:  getInt("new-command-timeout"),
 		WaitForIdleTimeout: getInt("wait-for-idle-timeout"),
 		ConditionTimeout:   getInt("condition-timeout"),
+		FindTimeout:        getInt("find-timeout"),
 		DisableAnimations:  getBool("disable-animations"),
 		Insecure:           getBool("insecure"),
 		StepDelay:          getInt("step-delay"),
@@ -1790,6 +1797,7 @@ func executeSingleDevice(cfg *RunConfig, flows []flow.Flow) (*executor.RunResult
 		Env:                cfg.Env,
 		WaitForIdleTimeout: cfg.WaitForIdleTimeout,
 		ConditionTimeout:   cfg.ConditionTimeout,
+		FindTimeout:        cfg.FindTimeout,
 		DisableAnimations:  cfg.DisableAnimations,
 		Insecure:           cfg.Insecure,
 		StepDelay:          cfg.StepDelay,
@@ -1844,6 +1852,7 @@ func ExecuteFlowWithDriver(driver core.Driver, cfg *RunConfig, f flow.Flow) (*ex
 		Env:                cfg.Env,
 		WaitForIdleTimeout: cfg.WaitForIdleTimeout,
 		ConditionTimeout:   cfg.ConditionTimeout,
+		FindTimeout:        cfg.FindTimeout,
 		DisableAnimations:  cfg.DisableAnimations,
 		Insecure:           cfg.Insecure,
 		StepDelay:          cfg.StepDelay,
@@ -2225,6 +2234,7 @@ func executeAppiumSingleSession(cfg *RunConfig, flows []flow.Flow) (*executor.Ru
 		Env:                cfg.Env,
 		WaitForIdleTimeout: cfg.WaitForIdleTimeout,
 		ConditionTimeout:   cfg.ConditionTimeout,
+		FindTimeout:        cfg.FindTimeout,
 		DisableAnimations:  cfg.DisableAnimations,
 		Insecure:           cfg.Insecure,
 		StepDelay:          cfg.StepDelay,
@@ -3120,6 +3130,7 @@ func createParallelRunner(cfg *RunConfig, workers []executor.DeviceWorker, platf
 		Env:                cfg.Env,
 		WaitForIdleTimeout: cfg.WaitForIdleTimeout,
 		ConditionTimeout:   cfg.ConditionTimeout,
+		FindTimeout:        cfg.FindTimeout,
 		DisableAnimations:  cfg.DisableAnimations,
 		Insecure:           cfg.Insecure,
 		StepDelay:          cfg.StepDelay,
