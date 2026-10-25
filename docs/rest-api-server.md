@@ -152,7 +152,7 @@ The server uses the same driver factory as the CLI. Sessions behave like a `test
 | Platform | Drivers | Notes |
 |----------|---------|-------|
 | `android` | DeviceLab (default), `uiautomator2`, `appium` | Set `"driver": "uiautomator2"` or `"appium"` in the session request. Appium requires `--appium-url` on the server or appropriate configuration. |
-| `ios` | DeviceLab (default), `wda`, `appium` | Use `"driver": "wda"` for WebDriverAgent, or `"driver": "appium"`. WDA can be configured with flags like `--team-id`, `--wda-url`, `--reuse-wda` passed to `maestro-runner server`. |
+| `ios` | DeviceLab (default), `wda`, `devicelab-legacy`, `appium` | Use `"driver": "wda"` for WebDriverAgent, or `"driver": "appium"`. `devicelab-legacy` selects the previous runner. WDA can be configured with flags like `--team-id`, `--wda-url`, `--reuse-wda` passed to `maestro-runner server`. |
 | `web` | Chrome/Chromium via CDP | Use `--browser`, `--headed`, `--window-size`. `appId` should be the URL to navigate to. |
 
 ## Notes
