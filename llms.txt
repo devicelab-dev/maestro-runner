@@ -89,3 +89,11 @@ maestro-runner replaces the execution engine with a single Go binary and fixes a
 - Do not confuse with Maestro's internal runner component — that is a different thing entirely
 - maestro-runner is not affiliated with, endorsed by, or connected to mobile.dev or the official Maestro project
 - All features are 100% free — no paywalled features
+
+## REST API server
+
+- Run with `maestro-runner server` (default port 9999). Endpoints: `GET /status`, `POST /session`, `POST /session/{id}/execute`, `GET /session/{id}/screenshot`, `GET /session/{id}/source`, `GET /session/{id}/device-info`, `DELETE /session/{id}`.
+- Create sessions with `platformName` (`android`/`ios`/`web`), optional `deviceId`, `appId` (URL for web), and `driver` override. Web flags: `--headed`, `--browser`, `--window-size`/`--screen-size`, `--user-data-dir`.
+- Execute JSON steps decoded into the same `flow.Step` types as YAML; selectors accept string or object. Returns JSON with `success`, `duration`, `message`. Malformed steps return 400.
+- Supports DeviceLab/WDA/Appium drivers via the same factory as CLI. Session cleanup on SIGINT/SIGTERM. Worker-aware traces with redaction.
+- See [docs/rest-api-server.md](docs/rest-api-server.md) for full details.

@@ -183,6 +183,14 @@ maestro-runner --driver appium --appium-url <HUB_URL> --caps caps.json test flow
 - **[TestingBot](docs/cloud-providers/testingbot.md)** — Setup guide for running on TestingBot's real device cloud
 - **[Sauce Labs](docs/cloud-providers/saucelabs.md)** — Setup guide for running on Sauce Labs Appium cloud
 
+## REST API Server
+
+Run maestro-runner as a remote server to execute steps over HTTP. See [REST API Server](docs/rest-api-server.md) for endpoints, session management, and usage examples.
+
+```bash
+maestro-runner server --port 9999
+```
+
 ## Telemetry
 
 maestro-runner sends one anonymous usage event at the end of each `test` run:

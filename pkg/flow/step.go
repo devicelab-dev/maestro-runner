@@ -119,7 +119,11 @@ const (
 	StepAddMedia         StepType = "addMedia"
 	StepRemoveMedia      StepType = "removeMedia"
 
+	// Queries
+	StepIsKeyboardVisible StepType = "isKeyboardVisible"
+
 	// Other
+	StepSleep                 StepType = "sleep"
 	StepPressKey              StepType = "pressKey"
 	StepWaitForAnimationToEnd StepType = "waitForAnimationToEnd"
 	StepWait                  StepType = "wait"
@@ -139,13 +143,13 @@ type Step interface {
 
 // BaseStep contains common fields for all steps.
 type BaseStep struct {
-	StepType  StepType `yaml:"-"`
-	Optional  bool     `yaml:"optional"`
-	StepLabel string   `yaml:"label"`
-	TimeoutMs int      `yaml:"timeout"`
+	StepType  StepType `yaml:"-" json:"type"`
+	Optional  bool     `yaml:"optional" json:"optional,omitempty"`
+	StepLabel string   `yaml:"label" json:"label,omitempty"`
+	TimeoutMs int      `yaml:"timeout" json:"timeout,omitempty"`
 	// Platform restricts this step to a single platform; when set and it
 	// doesn't match the running driver, the step is skipped (Maestro #1353).
-	Platform string `yaml:"platform"`
+	Platform string `yaml:"platform" json:"platform,omitempty"`
 }
 
 // PlatformGate returns the step's platform restriction, lowercased, or "".
@@ -169,16 +173,16 @@ func (b *BaseStep) Describe() string { return string(b.StepType) }
 
 // TapOnStep taps on an element.
 type TapOnStep struct {
-	BaseStep              `yaml:",inline"`
-	Selector              Selector `yaml:",inline"`
-	LongPress             bool     `yaml:"longPress"`
-	Repeat                int      `yaml:"repeat"`
-	DelayMs               int      `yaml:"delay"`
-	DurationMs            int      `yaml:"duration"`
-	Point                 string   `yaml:"point"`
-	RetryTapIfNoChange    *bool    `yaml:"retryTapIfNoChange"`
-	WaitUntilVisible      *bool    `yaml:"waitUntilVisible"`
-	WaitToSettleTimeoutMs int      `yaml:"waitToSettleTimeoutMs"`
+	BaseStep              `yaml:",inline" json:",inline"`
+	Selector              Selector `yaml:",inline" json:"selector"`
+	LongPress             bool     `yaml:"longPress" json:"longPress,omitempty"`
+	Repeat                int      `yaml:"repeat" json:"repeat,omitempty"`
+	DelayMs               int      `yaml:"delay" json:"delay,omitempty"`
+	DurationMs            int      `yaml:"duration" json:"duration,omitempty"`
+	Point                 string   `yaml:"point" json:"point,omitempty"`
+	RetryTapIfNoChange    *bool    `yaml:"retryTapIfNoChange" json:"retryTapIfNoChange,omitempty"`
+	WaitUntilVisible      *bool    `yaml:"waitUntilVisible" json:"waitUntilVisible,omitempty"`
+	WaitToSettleTimeoutMs int      `yaml:"waitToSettleTimeoutMs" json:"waitToSettleTimeoutMs,omitempty"`
 
 	// Set by the executor, never by YAML: this tap is tap RepeatIndex (from
 	// 0) of RepeatCount in a tapOn with repeat:. See RepeatTapAfterFirst.
@@ -353,6 +357,11 @@ type HideKeyboardStep struct {
 	BaseStep `yaml:",inline"`
 }
 
+// IsKeyboardVisibleStep queries whether the soft keyboard is currently shown.
+type IsKeyboardVisibleStep struct {
+	BaseStep `yaml:",inline" json:",inline"`
+}
+
 // OpenNotificationsStep pulls down the Android notification shade.
 // Android-only (no-op on iOS).
 type OpenNotificationsStep struct {
@@ -416,14 +425,14 @@ type InputRandomStep struct {
 
 // EraseTextStep erases text.
 type EraseTextStep struct {
-	BaseStep   `yaml:",inline"`
-	Characters int `yaml:"characters"`
+	BaseStep   `yaml:",inline" json:",inline"`
+	Characters int `yaml:"characters" json:"charactersToErase,omitempty"`
 }
 
 // CopyTextFromStep copies text from element.
 type CopyTextFromStep struct {
 	BaseStep `yaml:",inline"`
-	Selector Selector `yaml:",inline"`
+	Selector Selector `yaml:",inline" json:"selector"`
 }
 
 // PasteTextStep pastes text.
@@ -1011,6 +1020,17 @@ type RemoveMediaStep struct {
 // ============================================
 // Other Steps
 // ============================================
+
+// SleepStep pauses execution for a given duration in milliseconds.
+type SleepStep struct {
+	BaseStep   `yaml:",inline" json:",inline"`
+	DurationMs int `yaml:"durationMs" json:"durationMs,omitempty"`
+}
+
+// Describe returns a human-readable description of the sleep step.
+func (s *SleepStep) Describe() string {
+	return fmt.Sprintf("sleep: %dms", s.DurationMs)
+}
 
 // PressKeyStep presses a key.
 type PressKeyStep struct {
