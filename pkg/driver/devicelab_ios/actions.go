@@ -48,8 +48,22 @@ func (d *Driver) act(kind string, x, y float64, extra *Args) error {
 	if extra != nil {
 		args.X2, args.Y2, args.HoldMs, args.MoveMs, args.RestMs = extra.X2, extra.Y2, extra.HoldMs, extra.MoveMs, extra.RestMs
 	}
-	_, err := d.call("act", args)
-	return err
+	// Only a retry waits on the log; a warning needs nothing from the step.
+	w := d.touchWatch()
+	if w == nil || !d.retryLostTouch || !redeliverable(kind) {
+		_, err := d.call("act", args)
+		return err
+	}
+	mark := w.mark()
+	if _, err := d.call("act", args); err != nil {
+		return err
+	}
+	if sender, lost := w.lostSince(mark, lostTouchWait); lost {
+		logger.Warn("[devicelab-ios] %s at (%.0f,%.0f) never reached the app (backboardd sender 0x%s); sending it again", kind, x, y, sender)
+		_, err := d.call("act", args)
+		return err
+	}
+	return nil
 }
 
 // ---------- taps ----------

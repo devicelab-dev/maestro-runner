@@ -83,6 +83,10 @@ type Driver struct {
 	mu         sync.Mutex
 	stagedApps map[string]stagedApp
 	recording  *simulator.Recording
+	// touch reads the simulator's log for lost touches (touchwatch.go);
+	// retryLostTouch sends a lost tap or long press once more.
+	touch          *touchWatch
+	retryLostTouch bool
 
 	// realDevice is set on a physical iPhone (SetRealDevice): what simctl
 	// does on a simulator goes through the agent or devicectl, or is
@@ -244,9 +248,10 @@ func (d *Driver) GetState() *core.StateSnapshot {
 	return state
 }
 
-// Close releases what the driver holds (staged app copies).
+// Close releases what the driver holds (staged app copies, the log stream).
 func (d *Driver) Close() {
 	d.removeStagedApps()
+	d.stopTouchWatch()
 	d.web.mu.Lock()
 	ready := d.web.ready
 	d.web.mu.Unlock()

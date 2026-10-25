@@ -109,6 +109,7 @@ func createDevicelabIOSDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	if cfg.TypingFrequency > 0 {
 		_ = drv.SetTypingFrequency(cfg.TypingFrequency)
 	}
+	drv.WatchLostTouches()
 	cleanup := func() {
 		drv.Close()
 		release()
