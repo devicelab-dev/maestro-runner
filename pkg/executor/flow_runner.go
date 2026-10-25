@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -910,6 +911,14 @@ func (fr *FlowRunner) executeAssertScreenshot(step *flow.AssertScreenshotStep, c
 		}
 		err = fmt.Errorf("compare screenshot with %q: %w", referencePath, err)
 		msg := err.Error()
+		if errors.Is(err, core.ErrScreenshotSizeMismatch) && step.CropOn == nil {
+			// A whole-screen baseline only changes size with the screen: it
+			// was recorded on another device, simulator or display scale.
+			msg += " — the baseline was recorded on a screen of another size" +
+				" (a different device, simulator or display scale); re-record it" +
+				" on this device with --update-screenshots, or keep one baseline" +
+				" per device"
+		}
 		if step.CropOn != nil {
 			// A cropped baseline is only ever as stable as the element's
 			// rendered size, so name that cause rather than leaving the user to
