@@ -386,6 +386,19 @@ func (d *Driver) findElementFast(sel flow.Selector, optional bool, stepTimeoutMs
 //
 // This handles React Native pattern where text nodes aren't clickable but parent containers are.
 func (d *Driver) findElementForTap(sel flow.Selector, optional bool, stepTimeoutMs int) (*uiautomator2.Element, *core.ElementInfo, error) {
+	elem, info, err := d.findTapCandidate(sel, optional, stepTimeoutMs)
+	// A native element with no area was already refused (tryFindTapTarget).
+	// One from the page source is dropped by FilterOutOfBounds when the
+	// screen size is known; this catches it when it is not.
+	if err == nil && elem == nil && info != nil && core.ZeroArea(info.Bounds) {
+		return nil, nil, core.ZeroAreaTapError(info.Bounds)
+	}
+	return elem, info, err
+}
+
+// findTapCandidate resolves the element a tap aims at, by the route that suits
+// the selector.
+func (d *Driver) findTapCandidate(sel flow.Selector, optional bool, stepTimeoutMs int) (*uiautomator2.Element, *core.ElementInfo, error) {
 	// For relative selectors (below, above, etc.), use page source which handles them correctly
 	if sel.HasRelativeSelector() {
 		timeout := d.calculateTimeout(optional, stepTimeoutMs)
@@ -442,7 +455,7 @@ func (d *Driver) findElementForTapWithContext(ctx context.Context, sel flow.Sele
 			return nil, nil, fmt.Errorf("element '%s' not found: %w", sel.Describe(), ctx.Err())
 		default:
 			// Step 1: Try clickable strategies first (fast path)
-			elem, info, err := d.tryFindElement(clickableStrategies)
+			elem, info, err := d.tryFindTapTarget(clickableStrategies)
 			if err == nil {
 				return elem, info, nil
 			}
@@ -560,9 +573,13 @@ func (d *Driver) findElementWithContext(ctx context.Context, sel flow.Selector, 
 			var elem *uiautomator2.Element
 			var info *core.ElementInfo
 			var err error
-			if fastMode {
+			switch {
+			case fastMode:
 				elem, info, err = d.tryFindElementFast(strategies)
-			} else {
+			case preferClickable:
+				// Only the tap lookups prefer clickable elements.
+				elem, info, err = d.tryFindTapTarget(strategies)
+			default:
 				elem, info, err = d.tryFindElement(strategies)
 			}
 			if err == nil {
@@ -671,9 +688,17 @@ func (d *Driver) tryFindElementFast(strategies []LocatorStrategy) (*uiautomator2
 // Returns full element info including text and bounds (3 HTTP calls total).
 // Use tryFindElementFast for visibility checks where details aren't needed.
 func (d *Driver) tryFindElement(strategies []LocatorStrategy) (*uiautomator2.Element, *core.ElementInfo, error) {
+	elem, info, _, err := d.tryFindElementWithRect(strategies)
+	return elem, info, err
+}
+
+// tryFindElementWithRect is tryFindElement that also reports whether the
+// element's rect was read, so a caller can tell a real 0x0 element from
+// bounds that are zero only because the read failed.
+func (d *Driver) tryFindElementWithRect(strategies []LocatorStrategy) (*uiautomator2.Element, *core.ElementInfo, bool, error) {
 	elem, info, err := d.tryFindElementFast(strategies)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 
 	// Fetch additional details (2 more HTTP calls)
@@ -681,6 +706,7 @@ func (d *Driver) tryFindElement(strategies []LocatorStrategy) (*uiautomator2.Ele
 		info.Text = text
 	}
 
+	rectOK := false
 	if rect, err := elem.Rect(); err == nil {
 		info.Bounds = core.Bounds{
 			X:      rect.X,
@@ -688,8 +714,25 @@ func (d *Driver) tryFindElement(strategies []LocatorStrategy) (*uiautomator2.Ele
 			Width:  rect.Width,
 			Height: rect.Height,
 		}
+		rectOK = true
 	}
 
+	return elem, info, rectOK, nil
+}
+
+// tryFindTapTarget is tryFindElement for a tap. An element with no area is
+// refused, so the caller keeps polling: UiAutomator taps the centre of its
+// visible bounds, which for a 0x0 node is its origin, a point on whatever is
+// drawn there. Maestro never finds such a node (filterOutOfBounds), and the
+// page-source paths here drop it the same way (FilterOutOfBounds).
+func (d *Driver) tryFindTapTarget(strategies []LocatorStrategy) (*uiautomator2.Element, *core.ElementInfo, error) {
+	elem, info, rectOK, err := d.tryFindElementWithRect(strategies)
+	if err != nil {
+		return nil, nil, err
+	}
+	if rectOK && core.ZeroArea(info.Bounds) {
+		return nil, nil, core.ZeroAreaTapError(info.Bounds)
+	}
 	return elem, info, nil
 }
 

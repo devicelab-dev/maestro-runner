@@ -627,6 +627,7 @@ func (d *Driver) findElementForTap(sel flow.Selector, timeout time.Duration) (*c
 	}
 
 	deadline := time.Now().Add(timeout)
+	var zeroAreaErr error
 
 	for {
 		if err := d.parentContext().Err(); err != nil {
@@ -653,11 +654,23 @@ func (d *Driver) findElementForTap(sel flow.Selector, timeout time.Duration) (*c
 			info, err = d.findElementDirect(sel)
 		}
 
+		// An element with no area has only its origin to tap, a point on
+		// whatever else is drawn there. Maestro never finds one
+		// (filterOutOfBounds); keep polling in case it is laid out yet.
+		// Android only: on iOS the tap goes to the element itself.
+		if err == nil && info != nil && d.platform != "ios" && core.ZeroArea(info.Bounds) {
+			zeroAreaErr = core.ZeroAreaTapError(info.Bounds)
+			err, info = zeroAreaErr, nil
+		}
+
 		if err == nil && info != nil {
 			return info, nil
 		}
 
 		if time.Now().After(deadline) {
+			if zeroAreaErr != nil {
+				return nil, fmt.Errorf("element not found: %s: %w", sel.Describe(), zeroAreaErr)
+			}
 			return nil, fmt.Errorf("element not found: %s", sel.Describe())
 		}
 		time.Sleep(200 * time.Millisecond)
