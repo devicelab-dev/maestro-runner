@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicelab-dev/maestro-runner/pkg/server"
 	"github.com/urfave/cli/v2"
 )
 
@@ -292,5 +293,26 @@ func TestServerCommand_ShutdownOnSignal(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("server did not exit after SIGTERM")
+	}
+}
+
+// TestNewSessionDriverFactory_UnsupportedPlatform pins the platform guard in
+// the session driver factory: a session may only be created for a platform the
+// factory knows how to drive. The android/ios/web constructors reach out to a
+// device or browser, so only the guard is asserted here.
+func TestNewSessionDriverFactory_UnsupportedPlatform(t *testing.T) {
+	factory := newSessionDriverFactory(
+		func(string) string { return "" },
+		func(string) bool { return false },
+	)
+
+	for _, platform := range []string{"linux", "windows", "apple-tv"} {
+		_, _, err := factory(server.SessionRequest{PlatformName: platform})
+		if err == nil {
+			t.Fatalf("platform %q: expected an error, got nil", platform)
+		}
+		if !strings.Contains(err.Error(), "unsupported platform") {
+			t.Errorf("platform %q: error = %v, want it to mention %q", platform, err, "unsupported platform")
+		}
 	}
 }

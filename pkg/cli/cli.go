@@ -198,7 +198,7 @@ Examples:
 			devicesCommand,
 			doctorCommand,
 			screenshotCommand,
-				serverCommand,
+			serverCommand,
 		},
 	}
 
