@@ -79,3 +79,64 @@ func TestLaunchAppArgumentsStillStopTheApp(t *testing.T) {
 		t.Fatalf("lifecycle calls %q, want terminate,launch", got)
 	}
 }
+
+// launchResumingFrom runs launchApp with stopApp: false on an app WDA reports
+// in the given state, and returns the lifecycle calls and screenshots in order.
+func launchResumingFrom(t *testing.T, state int) []string {
+	t.Helper()
+	var mu sync.Mutex
+	var calls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/wda/apps/state"):
+			calls = append(calls, "state")
+			jsonResponse(w, map[string]interface{}{"value": state})
+			return
+		case strings.HasSuffix(r.URL.Path, "/wda/apps/terminate"):
+			calls = append(calls, "terminate")
+		case strings.HasSuffix(r.URL.Path, "/wda/apps/launch"):
+			calls = append(calls, "launch")
+		case strings.HasSuffix(r.URL.Path, "/screenshot"):
+			calls = append(calls, "screenshot")
+			jsonResponse(w, map[string]interface{}{"value": "c3RpbGw="}) // a still screen
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"value": nil})
+	}))
+	defer server.Close()
+
+	client := &Client{baseURL: server.URL, httpClient: http.DefaultClient, sessionID: "test-session"}
+	driver := &Driver{client: client, info: &core.PlatformInfo{Platform: "ios"}}
+	stop := false
+	if result := driver.launchApp(&flow.LaunchAppStep{AppID: "com.test.app", StopApp: &stop}); !result.Success {
+		t.Fatalf("launchApp failed: %s", result.Message)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	return append([]string(nil), calls...)
+}
+
+// Bringing a backgrounded app back waits for the switch to finish on screen:
+// a tap sent while SpringBoard was still switching was reported as done and
+// never reached the app.
+func TestLaunchAppResumeWaitsForTheSwitch(t *testing.T) {
+	for _, state := range []int{2, 3} {
+		got := strings.Join(launchResumingFrom(t, state), ",")
+		if got != "state,launch,screenshot,screenshot" {
+			t.Errorf("state %d: calls %q, want state,launch,screenshot,screenshot", state, got)
+		}
+	}
+}
+
+// An app already in front, or not running, is not resumed: no wait.
+func TestLaunchAppNoResumeNoWait(t *testing.T) {
+	for _, state := range []int{1, 4} {
+		got := strings.Join(launchResumingFrom(t, state), ",")
+		if got != "state,launch" {
+			t.Errorf("state %d: calls %q, want state,launch", state, got)
+		}
+	}
+}

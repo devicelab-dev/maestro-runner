@@ -453,6 +453,11 @@ var screenSettleLimit = 3 * time.Second
 // returns the last screenshot's hash (empty when none could be taken), which
 // callers can compare to tell whether the screen moved at all.
 func (d *Driver) settleScreen() string {
+	return d.settleScreenWithin(screenSettleLimit)
+}
+
+// settleScreenWithin is settleScreen with its own cap.
+func (d *Driver) settleScreenWithin(limit time.Duration) string {
 	start := time.Now()
 	prev := ""
 	for {
@@ -466,11 +471,37 @@ func (d *Driver) settleScreen() string {
 			return cur
 		}
 		prev = cur
-		if time.Since(start) >= screenSettleLimit {
-			logger.Debug("[wda] screen still changing after %v — continuing", screenSettleLimit)
+		if time.Since(start) >= limit {
+			logger.Debug("[wda] screen still changing after %v — continuing", limit)
 			return cur
 		}
 	}
+}
+
+// resumeSettleLimit caps the wait after a backgrounded app is brought back.
+var resumeSettleLimit = 2 * time.Second
+
+// inBackground reports whether an app is running but not on screen, so
+// launching it resumes it rather than starting it.
+func (d *Driver) inBackground(bundleID string) bool {
+	state, err := d.client.AppState(bundleID)
+	return err == nil && (state == 2 || state == 3)
+}
+
+// waitAfterResume waits, at most resumeSettleLimit, for the screen to stop
+// changing after a backgrounded app was brought back. Right after a resume
+// the app can already be idle while SpringBoard is still switching to it,
+// and a tap sent then is reported as done but never reaches the app
+// (WebDriverAgent fixed this with a SpringBoard idle wait in
+// appium/appium-ios#82). The bundled WebDriverAgent has no endpoint for
+// SpringBoard's idle state, and this driver runs with
+// animationCoolOffTimeout 0, which turns that fix off anyway; the switch
+// is on screen, so two identical screenshots mark its end. This runs even
+// when the next step is an assert, which skips the settle before a tap.
+func (d *Driver) waitAfterResume() {
+	start := time.Now()
+	d.settleScreenWithin(resumeSettleLimit)
+	logger.Debug("[wda] waited %v for the resumed app to settle", time.Since(start).Round(time.Millisecond))
 }
 
 // trackCrashLoop counts consecutive "app died on launch" failures and trips a

@@ -72,6 +72,12 @@ The only intentional local edits are:
    snapshot reports `truncated`), and no longer treats a slider as a
    collapsed container. Candidate `hittable` comes from geometry instead of
    a per-element XCTest call.
+9. `RunnerTests+Lifecycle.swift` `activateTarget`: when the target app was
+   in the background, wait (at most 2 s) for SpringBoard to go quiescent
+   after `activate()`. The idea comes from WebDriverAgent's
+   `-[XCUIApplication fb_activate]` (appium/appium-ios PR #82, Apache License
+   2.0): after a resume the next tap could report success without reaching
+   the app.
 
 The wire-protocol contract (`RunnerTests+Models.swift` Command/Response shapes,
 HTTP/JSON transport in `RunnerTests+Transport.swift`, dispatch behaviour in

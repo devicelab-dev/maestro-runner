@@ -315,6 +315,23 @@ func (c *Client) TerminateApp(bundleID string) error {
 	return err
 }
 
+// AppState returns XCUIApplication.State for an app: 1 not running, 2
+// running in the background (suspended), 3 running in the background, 4
+// running in the foreground.
+func (c *Client) AppState(bundleID string) (int, error) {
+	resp, err := c.post(c.sessionPath("/wda/apps/state"), map[string]interface{}{
+		"bundleId": bundleID,
+	})
+	if err != nil {
+		return 0, err
+	}
+	state, ok := resp["value"].(float64)
+	if !ok {
+		return 0, fmt.Errorf("unexpected app state response: %v", resp["value"])
+	}
+	return int(state), nil
+}
+
 // ActivateApp brings an app to foreground.
 func (c *Client) ActivateApp(bundleID string) error {
 	_, err := c.post(c.sessionPath("/wda/apps/activate"), map[string]interface{}{

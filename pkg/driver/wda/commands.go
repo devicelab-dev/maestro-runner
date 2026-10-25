@@ -1520,13 +1520,19 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 	// before launching it unless the flow says `stopApp: false`. Without the stop,
 	// a relaunch only brought a running app to the front, still where it was, so
 	// a flow checking what survives a restart tested nothing.
+	resuming := false
 	if hasArgs || step.StopApp == nil || *step.StopApp {
 		_ = d.client.TerminateApp(bundleID)
+	} else {
+		resuming = d.inBackground(bundleID)
 	}
 
 	// Launch the app (with or without args)
 	if err := d.client.LaunchAppWithArgs(bundleID, launchArgs, launchEnv); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to launch app: %s", bundleID))
+	}
+	if resuming {
+		d.waitAfterResume()
 	}
 
 	return successResult(fmt.Sprintf("Launched app: %s", bundleID), nil)
