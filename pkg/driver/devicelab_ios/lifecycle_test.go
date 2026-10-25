@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
 )
@@ -198,11 +199,79 @@ func TestFastClearState(t *testing.T) {
 	if !sl.has("privacy SIM-1 reset all com.x") || sl.has("uninstall") {
 		t.Fatalf("calls = %v", sl.calls)
 	}
+	// The preferences daemon restarts after the app stops and before the
+	// wipe, or the app's UserDefaults survive in its cache.
+	kill := "spawn SIM-1 launchctl kill SIGKILL user/foreground/com.apple.cfprefsd.xpc.daemon"
+	if order := callOrder(sl, "terminate SIM-1 com.x", kill, "privacy SIM-1"); order != "" {
+		t.Fatalf("%s; calls = %v", order, sl.calls)
+	}
 	if res := d.Execute(&flow.ClearStateStep{AppID: "com.none"}); res.Success {
 		t.Fatal("missing container should fail")
 	}
 	if err := wipeDataContainer(filepath.Join(data, "missing")); err == nil {
 		t.Fatal("missing dir should fail")
+	}
+}
+
+// callOrder is "" when each prefix's first call comes after the previous
+// one's, else what went wrong.
+func callOrder(sl *simctlLog, prefixes ...string) string {
+	sl.mu.Lock()
+	defer sl.mu.Unlock()
+	last := -1
+	for _, p := range prefixes {
+		at := -1
+		for i, c := range sl.calls {
+			if strings.HasPrefix(c, p) {
+				at = i
+				break
+			}
+		}
+		if at < 0 {
+			return "no call " + p
+		}
+		if at < last {
+			return p + " came too early"
+		}
+		last = at
+	}
+	return ""
+}
+
+func TestRestartPrefsDaemon(t *testing.T) {
+	user := "spawn SIM-1 launchctl kill SIGKILL user/foreground/com.apple.cfprefsd.xpc.daemon"
+	system := "spawn SIM-1 launchctl kill SIGKILL system/com.apple.cfprefsd.xpc.daemon"
+
+	d, _, sl := newTestDriver(t, nil)
+	if err := d.restartPrefsDaemon(); err != nil || !sl.has(user) || sl.has(system) {
+		t.Fatalf("err = %v, calls = %v", err, sl.calls)
+	}
+
+	// A runtime without user/foreground falls back to the system domain.
+	d, _, sl = newTestDriver(t, nil)
+	sl.fail[user] = errBoom
+	if err := d.restartPrefsDaemon(); err != nil || !sl.has(system) {
+		t.Fatalf("err = %v, calls = %v", err, sl.calls)
+	}
+
+	// Neither works: the fast clear fails rather than keep the old values.
+	sl.fail[system] = errBoom
+	if err := d.restartPrefsDaemon(); err == nil || !strings.Contains(err.Error(), "UserDefaults") {
+		t.Fatalf("err = %v", err)
+	}
+	t.Setenv(fastClearStateEnv, "1")
+	sl.answers["get_app_container SIM-1 com.x data"] = t.TempDir()
+	if res := d.Execute(&flow.ClearStateStep{AppID: "com.x"}); res.Success {
+		t.Fatal("fast clearState passed without restarting cfprefsd")
+	}
+
+	// A daemon that is not running holds no cache.
+	d, _, _ = newTestDriver(t, nil)
+	d.runSimctlWithin = func(time.Duration, ...string) (string, error) {
+		return "Could not kill service: 3: No such process", errBoom
+	}
+	if err := d.restartPrefsDaemon(); err != nil {
+		t.Fatalf("not running should count as restarted: %v", err)
 	}
 }
 

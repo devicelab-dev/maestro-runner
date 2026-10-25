@@ -147,9 +147,10 @@ func (d *Driver) removeStagedApps() {
 // whose it is; it must survive a wipe.
 const containerMetadata = ".com.apple.mobile_container_manager.metadata.plist"
 
-// clearDataContainer is the fast clearState: stop the app, empty its data
-// container (keeping the container's own metadata), recreate the standard
-// directories, and reset its permissions — no uninstall, no reinstall.
+// clearDataContainer is the fast clearState: stop the app, restart the
+// preferences daemon, empty its data container (keeping the container's own
+// metadata), recreate the standard directories, and reset its permissions —
+// no uninstall, no reinstall.
 func (d *Driver) clearDataContainer(bundleID string) error {
 	_ = d.simctl("terminate", d.udid, bundleID).Run()
 	out, err := d.simctl("get_app_container", d.udid, bundleID, "data").Output()
@@ -159,6 +160,9 @@ func (d *Driver) clearDataContainer(bundleID string) error {
 	container := strings.TrimSpace(string(out))
 	if container == "" {
 		return fmt.Errorf("could not locate the data container for %s", bundleID)
+	}
+	if err := d.restartPrefsDaemon(); err != nil {
+		return err
 	}
 	if err := wipeDataContainer(container); err != nil {
 		return err
@@ -188,4 +192,43 @@ func wipeDataContainer(container string) error {
 		}
 	}
 	return nil
+}
+
+// cfprefsdServices name the simulator's preferences daemon for launchctl:
+// the user/foreground form current runtimes ask for, then the system form
+// for a runtime that does not know the first.
+var cfprefsdServices = []string{
+	"user/foreground/com.apple.cfprefsd.xpc.daemon",
+	"system/com.apple.cfprefsd.xpc.daemon",
+}
+
+// restartPrefsDaemon kills the simulator's cfprefsd; launchd starts it again
+// on demand with an empty cache. The daemon serves an app's UserDefaults from
+// memory and writes them to disk later, so emptying the container alone left
+// them in place for the next launch. SIGKILL, not a stop: a daemon on its way
+// out flushes its pending writes. Called with the app stopped and before the
+// wipe, so no deferred write can land in the emptied container. A preference
+// another app has not flushed yet is lost — the price of the fast path.
+func (d *Driver) restartPrefsDaemon() error {
+	var errs []string
+	for _, svc := range cfprefsdServices {
+		out, err := d.simctl(prefsKillArgs(d.udid, svc)...).CombinedOutput()
+		if err == nil || prefsDaemonNotRunning(string(out)) {
+			return nil
+		}
+		errs = append(errs, fmt.Sprintf("%v: %s", err, strings.TrimSpace(string(out))))
+	}
+	return fmt.Errorf("restart the simulator's preferences daemon (UserDefaults would survive the clear): %s",
+		strings.Join(errs, "; "))
+}
+
+// prefsKillArgs is the simctl command that SIGKILLs service in the simulator.
+func prefsKillArgs(udid, service string) []string {
+	return []string{"spawn", udid, "launchctl", "kill", "SIGKILL", service}
+}
+
+// prefsDaemonNotRunning reports launchctl refusing because the daemon is not
+// running: it caches nothing, which is all the restart is for.
+func prefsDaemonNotRunning(out string) bool {
+	return strings.Contains(strings.ToLower(out), "no such process")
 }
