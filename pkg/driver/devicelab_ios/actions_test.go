@@ -513,18 +513,70 @@ func TestScreenshotAndCrop(t *testing.T) {
 }
 
 func TestAlert(t *testing.T) {
-	d, fa, _ := newTestDriver(t, func(cmd string, _ Args) (*Response, error) {
-		return ok(&Payload{Present: true, Message: "Allow?"}), nil
+	d, fa, _ := newTestDriver(t, func(cmd string, a Args) (*Response, error) {
+		p := &Payload{Present: true, Title: "Allow?", Buttons: []string{"Don’t Allow", "Allow"}}
+		if a.Action != "read" {
+			p.Message = "tapped " + a.Button
+		}
+		return ok(p), nil
 	})
-	if res := d.Execute(&flow.AcceptAlertStep{}); !res.Success || !strings.Contains(res.Message, "Allow?") {
+	if res := d.Execute(&flow.AcceptAlertStep{}); !res.Success || !strings.Contains(res.Message, "tapped Allow") {
 		t.Fatalf("res = %+v", res)
 	}
-	if a := fa.sent("alert")[0]; a.Action != "accept" {
-		t.Fatalf("alert = %+v", a)
+	sent := fa.sent("alert")
+	if len(sent) != 2 || sent[0].Action != "read" || sent[1].Action != "accept" || sent[1].Button != "Allow" {
+		t.Fatalf("alert = %+v", sent)
 	}
 	d2, _, _ := newTestDriver(t, screenOf())
 	if res := d2.Execute(&flow.DismissAlertStep{BaseStep: flow.BaseStep{TimeoutMs: 50}}); !res.Success || !strings.Contains(res.Message, "no alert") {
 		t.Fatalf("res = %+v", res)
+	}
+}
+
+// An alert whose buttons cannot be named for the answer fails the step and
+// taps nothing: a dismiss never taps "Allow".
+func TestDismissAlertRefusesAffirmativeOnly(t *testing.T) {
+	d, fa, _ := newTestDriver(t, func(cmd string, a Args) (*Response, error) {
+		return ok(&Payload{Present: true, Title: "Track?", Buttons: []string{"Allow", "Allow Once"}}), nil
+	})
+	if res := d.Execute(&flow.DismissAlertStep{}); res.Success {
+		t.Fatalf("res = %+v", res)
+	}
+	for _, a := range fa.sent("alert") {
+		if a.Action != "read" {
+			t.Fatalf("tapped: %+v", a)
+		}
+	}
+}
+
+func TestAlertStepButton(t *testing.T) {
+	stacked := []string{"Einmal erlauben", "Beim Verwenden der App erlauben", "Nicht erlauben"}
+	for _, tc := range []struct {
+		action  string
+		buttons []string
+		want    string
+	}{
+		{"dismiss", []string{"Allow Once", "Allow While Using App", "Don’t Allow"}, "Don’t Allow"},
+		{"accept", []string{"Allow Once", "Allow While Using App", "Don’t Allow"}, "Allow Once"},
+		{"dismiss", []string{"Ask App Not to Track", "Allow"}, "Ask App Not to Track"},
+		{"dismiss", []string{"Delete", "Archive", "Cancel"}, "Cancel"},
+		// Unknown labels: by layout.
+		{"dismiss", stacked, "Nicht erlauben"},
+		{"accept", stacked, "Einmal erlauben"},
+		{"dismiss", []string{"Abbrechen", "Löschen"}, "Abbrechen"},
+		{"accept", []string{"Abbrechen", "Löschen"}, "Löschen"},
+		{"dismiss", []string{"Got it"}, "Got it"},
+		{"accept", []string{"Got it"}, "Got it"},
+		// The layout's pick reads as the other answer: refuse.
+		{"dismiss", []string{"Allow", "Später"}, "Später"},
+		{"dismiss", []string{"Allow", "Allow Once"}, ""},
+		{"accept", []string{"Später", "Cancel"}, "Später"},
+		{"accept", []string{"Cancel", "Not Now"}, ""},
+		{"accept", nil, ""},
+	} {
+		if got := alertStepButton(tc.action, tc.buttons); got != tc.want {
+			t.Errorf("%s %q = %q, want %q", tc.action, tc.buttons, got, tc.want)
+		}
 	}
 }
 
