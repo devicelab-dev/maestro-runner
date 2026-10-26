@@ -294,13 +294,29 @@ func (a *Adapter) Click(x, y int) error {
 // instead; "" when the tap reaches the target's window, or from an agent too
 // old to check. The tap goes out either way.
 func (a *Adapter) ClickChecked(x, y int, target core.Bounds) (string, error) {
-	resp, err := a.client.Call("Gesture.click", map[string]interface{}{
-		"x": x, "y": y,
-		"targetLeft":   target.X,
-		"targetTop":    target.Y,
-		"targetRight":  target.X + target.Width,
-		"targetBottom": target.Y + target.Height,
-	})
+	return a.touchChecked("Gesture.click", map[string]interface{}{"x": x, "y": y}, target)
+}
+
+// DoubleClickChecked double-taps at (x, y) like DoubleClick, reporting another
+// window over the point as ClickChecked does.
+func (a *Adapter) DoubleClickChecked(x, y int, target core.Bounds) (string, error) {
+	return a.touchChecked("Gesture.doubleClick", map[string]interface{}{"x": x, "y": y}, target)
+}
+
+// LongClickChecked long-presses at (x, y) like LongClick, reporting another
+// window over the point as ClickChecked does.
+func (a *Adapter) LongClickChecked(x, y, durationMs int, target core.Bounds) (string, error) {
+	return a.touchChecked("Gesture.longClick", map[string]interface{}{"x": x, "y": y, "durationMs": durationMs}, target)
+}
+
+// touchChecked sends a coordinate gesture with the target's bounds and returns
+// the agent's coveredBy ("" when absent).
+func (a *Adapter) touchChecked(method string, params map[string]interface{}, target core.Bounds) (string, error) {
+	params["targetLeft"] = target.X
+	params["targetTop"] = target.Y
+	params["targetRight"] = target.X + target.Width
+	params["targetBottom"] = target.Y + target.Height
+	resp, err := a.client.Call(method, params)
 	if err != nil {
 		return "", err
 	}

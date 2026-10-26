@@ -103,3 +103,49 @@ func TestTapOnWithPointChecksTheWindow(t *testing.T) {
 		t.Fatalf("checked %v, want one check with %v", client.checked, want)
 	}
 }
+
+// touchClient also checks double taps and long presses.
+type touchClient struct {
+	windowClient
+	doubleChecked []core.Bounds
+	longChecked   []int
+}
+
+func (c *touchClient) DoubleClickChecked(x, y int, target core.Bounds) (string, error) {
+	c.doubleChecked = append(c.doubleChecked, target)
+	return c.coveredBy, nil
+}
+
+func (c *touchClient) LongClickChecked(x, y, durationMs int, target core.Bounds) (string, error) {
+	c.longChecked = append(c.longChecked, durationMs)
+	return c.coveredBy, nil
+}
+
+// A double tap and a long press send the element's bounds too, and a
+// covered point is only a warning.
+func TestDoubleAndLongClickTargetCheckTheWindow(t *testing.T) {
+	client := &touchClient{windowClient: windowClient{mockDeviceLabClient: &mockDeviceLabClient{}, coveredBy: "keyboard"}}
+	d := New(client, &core.PlatformInfo{}, nil)
+	target := core.Bounds{X: 10, Y: 20, Width: 30, Height: 40}
+
+	if err := d.doubleClickTarget(25, 40, target, "x"); err != nil {
+		t.Fatalf("doubleClickTarget: %v", err)
+	}
+	if err := d.longClickTarget(25, 40, 900, target, "x"); err != nil {
+		t.Fatalf("longClickTarget: %v", err)
+	}
+	if len(client.doubleChecked) != 1 || client.doubleChecked[0] != target {
+		t.Errorf("double checked %v, want one check with %v", client.doubleChecked, target)
+	}
+	if len(client.longChecked) != 1 || client.longChecked[0] != 900 {
+		t.Errorf("long checked %v, want one 900 ms press", client.longChecked)
+	}
+
+	t.Setenv("MAESTRO_DISABLE_HIT_TEST", "1")
+	if err := d.doubleClickTarget(25, 40, target, "x"); err != nil {
+		t.Fatalf("doubleClickTarget: %v", err)
+	}
+	if len(client.doubleChecked) != 1 {
+		t.Errorf("checked with MAESTRO_DISABLE_HIT_TEST set")
+	}
+}

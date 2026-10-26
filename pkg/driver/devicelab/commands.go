@@ -282,6 +282,13 @@ type windowCheckingClicker interface {
 	ClickChecked(x, y int, target core.Bounds) (coveredBy string, err error)
 }
 
+// windowCheckingToucher adds the same report for a double tap and a long
+// press (maestro.Adapter).
+type windowCheckingToucher interface {
+	DoubleClickChecked(x, y int, target core.Bounds) (coveredBy string, err error)
+	LongClickChecked(x, y, durationMs int, target core.Bounds) (coveredBy string, err error)
+}
+
 // clickTarget taps (x, y) for the element at target and warns when the agent
 // finds another window over the point: Android sends a touch to the topmost
 // window there, so a keyboard, dialog or overlay would take the tap instead
@@ -294,10 +301,38 @@ func (d *Driver) clickTarget(x, y int, target core.Bounds, what string) error {
 		return d.client.Click(x, y)
 	}
 	coveredBy, err := c.ClickChecked(x, y, target)
-	if err == nil && coveredBy != "" {
-		logger.Warn("[devicelab] tap on %s at (%d,%d): the point is under %s, which may receive the tap instead of the element", what, x, y, coveredBy)
-	}
+	warnCovered("tap", what, x, y, coveredBy, err)
 	return err
+}
+
+// doubleClickTarget double-taps (x, y) for the element at target, warning as
+// clickTarget does.
+func (d *Driver) doubleClickTarget(x, y int, target core.Bounds, what string) error {
+	c, ok := d.client.(windowCheckingToucher)
+	if !ok || os.Getenv("MAESTRO_DISABLE_HIT_TEST") != "" {
+		return d.client.DoubleClick(x, y)
+	}
+	coveredBy, err := c.DoubleClickChecked(x, y, target)
+	warnCovered("double tap", what, x, y, coveredBy, err)
+	return err
+}
+
+// longClickTarget long-presses (x, y) for the element at target, warning as
+// clickTarget does.
+func (d *Driver) longClickTarget(x, y, durationMs int, target core.Bounds, what string) error {
+	c, ok := d.client.(windowCheckingToucher)
+	if !ok || os.Getenv("MAESTRO_DISABLE_HIT_TEST") != "" {
+		return d.client.LongClick(x, y, durationMs)
+	}
+	coveredBy, err := c.LongClickChecked(x, y, durationMs, target)
+	warnCovered("long press", what, x, y, coveredBy, err)
+	return err
+}
+
+func warnCovered(gesture, what string, x, y int, coveredBy string, err error) {
+	if err == nil && coveredBy != "" {
+		logger.Warn("[devicelab] %s on %s at (%d,%d): the point is under %s, which may receive the %s instead of the element", gesture, what, x, y, coveredBy, gesture)
+	}
 }
 
 // tapHit handles a find-and-click that found an element for step via s. It
@@ -562,7 +597,7 @@ func (d *Driver) doubleTapOn(step *flow.DoubleTapOnStep) *core.CommandResult {
 	if bad := d.guardTapInjection(step.Selector.Describe(), info.Bounds, x, y); bad != nil {
 		return bad
 	}
-	if err := d.client.DoubleClick(x, y); err != nil {
+	if err := d.doubleClickTarget(x, y, info.Bounds, step.Selector.Describe()); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to double tap at coordinates: %v", err))
 	}
 
@@ -591,7 +626,7 @@ func (d *Driver) longPressOn(step *flow.LongPressOnStep) *core.CommandResult {
 	if bad := d.guardTapInjection(step.Selector.Describe(), info.Bounds, x, y); bad != nil {
 		return bad
 	}
-	if err := d.client.LongClick(x, y, duration); err != nil {
+	if err := d.longClickTarget(x, y, duration, info.Bounds, step.Selector.Describe()); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to long press at coordinates: %v", err))
 	}
 

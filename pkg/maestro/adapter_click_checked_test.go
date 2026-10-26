@@ -49,3 +49,29 @@ func TestAdapterClickCheckedOlderAgent(t *testing.T) {
 		t.Errorf("got %q, %v; want empty, nil", got, err)
 	}
 }
+
+// DoubleClickChecked and LongClickChecked send the same bounds on their own
+// gestures, the long press with its duration.
+func TestAdapterDoubleAndLongClickChecked(t *testing.T) {
+	adapter, cleanup := adapterWithMock(t, func(req Request) interface{} {
+		raw, _ := json.Marshal(req.Params)
+		var p map[string]float64
+		_ = json.Unmarshal(raw, &p)
+		if p["targetRight"] != 110 || p["targetBottom"] != 220 {
+			t.Errorf("%s: target edges %v", req.Method, p)
+		}
+		if req.Method == "Gesture.longClick" && p["durationMs"] != 800 {
+			t.Errorf("durationMs = %v, want 800", p["durationMs"])
+		}
+		return map[string]interface{}{"coveredBy": req.Method}
+	})
+	defer cleanup()
+
+	target := core.Bounds{X: 10, Y: 20, Width: 100, Height: 200}
+	if got, err := adapter.DoubleClickChecked(50, 60, target); err != nil || got != "Gesture.doubleClick" {
+		t.Errorf("DoubleClickChecked = %q, %v", got, err)
+	}
+	if got, err := adapter.LongClickChecked(50, 60, 800, target); err != nil || got != "Gesture.longClick" {
+		t.Errorf("LongClickChecked = %q, %v", got, err)
+	}
+}
