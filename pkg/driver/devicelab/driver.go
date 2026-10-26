@@ -136,6 +136,11 @@ type Driver struct {
 	// that acts on the screen, which settles first
 	swipeUnsettled bool
 
+	// Content hash of the screen the last tap/swipe settle ran out on; the
+	// next settle on that screen uses the short stuckSettleCap
+	stuckScreen      uint64
+	stuckScreenKnown bool
+
 	// The element the last step tapped, while the next inputText may be
 	// meant for it (nil after any other step)
 	lastTapped *core.ElementInfo

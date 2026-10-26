@@ -1999,11 +1999,50 @@ const (
 	pageSettleQuietMs       = 500
 )
 
-// settle waits for the screen to stop changing after a tap, for at most
-// maxMs; it is off when waitForIdleTimeout is 0.
+// settle waits for the screen to stop changing after a tap or swipe, for at
+// most maxMs; it is off when waitForIdleTimeout is 0.
+//
+// A screen that never stops changing (a spinner, a looping Lottie view) would
+// cost every step the full maxMs. Once a settle has run out on a screen, the
+// next settle on that same screen waits at most stuckSettleCap instead. The
+// screen is the agent's content hash (text and content-desc, not bounds), so an
+// animation alone keeps it, and new text or a new screen resets the full cap.
+// The hash is read only while a screen is on record, so a run whose settles
+// all finish pays nothing for this.
 func (d *Driver) settle(maxMs int, what string) {
-	d.settleFor(maxMs, settleQuietMs, what)
+	if !d.settlingOn() {
+		return
+	}
+	limit := maxMs
+	if d.stuckScreenKnown {
+		if h, err := d.client.TreeHash(); err == nil && h != 0 && h == d.stuckScreen {
+			if capMs := int(stuckSettleCap.Milliseconds()); capMs < limit {
+				limit = capMs
+			}
+		} else {
+			d.stuckScreenKnown = false
+		}
+	}
+	if !d.settleFor(limit, settleQuietMs, what) {
+		d.stuckScreenKnown = false
+		return
+	}
+	// Ran out: remember the screen it ran out on, read now, after the wait,
+	// so a change that landed during it counts.
+	if h, err := d.client.TreeHash(); err == nil && h != 0 {
+		if !d.stuckScreenKnown {
+			logger.Debug("[devicelab] settle after %s: screen still changing after %dms; next settle here waits at most %v", what, limit, stuckSettleCap)
+		}
+		d.stuckScreen, d.stuckScreenKnown = h, true
+	} else {
+		d.stuckScreenKnown = false
+	}
 }
+
+// stuckSettleCap bounds a settle on a screen where the last settle ran out.
+// MAESTRO_DEVICELAB_STUCK_SETTLE_MS overrides it; a value at or above the
+// full cap (2000) turns the shortening off.
+var stuckSettleCap = durationFromEnvMs("MAESTRO_DEVICELAB_STUCK_SETTLE_MS", 500*time.Millisecond)
 
 // settlePage is settle for a page load (openLink, Enter): the screen must
 // stay still for the longer pageSettleQuietMs.
@@ -2049,15 +2088,21 @@ func durationFromEnvMs(name string, def time.Duration) time.Duration {
 	return def
 }
 
-func (d *Driver) settleFor(maxMs, quietMs int, what string) {
+// settleFor reports whether the wait ran out with the screen still changing;
+// false when it settled, when the agent could not say, or when settling is off.
+func (d *Driver) settleFor(maxMs, quietMs int, what string) (ranOut bool) {
 	if !d.settlingOn() {
-		return
+		return false
 	}
-	if settled, err := d.client.WaitForSettle(maxMs, quietMs); err != nil {
+	settled, err := d.client.WaitForSettle(maxMs, quietMs)
+	if err != nil {
 		logger.Debug("[devicelab] settle after %s: %v", what, err)
-	} else if !settled {
+		return false
+	}
+	if !settled {
 		logger.Debug("[devicelab] settle after %s: still changing after %dms", what, maxMs)
 	}
+	return !settled
 }
 
 func (d *Driver) back(_ *flow.BackStep) *core.CommandResult {
