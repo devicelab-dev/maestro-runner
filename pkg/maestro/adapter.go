@@ -288,6 +288,31 @@ func (a *Adapter) Click(x, y int) error {
 	return err
 }
 
+// ClickChecked taps at (x, y) like Click, aimed at the element with bounds
+// target, and returns the description of another window the agent found over
+// the point (the keyboard, a dialog, an overlay) that would receive the tap
+// instead; "" when the tap reaches the target's window, or from an agent too
+// old to check. The tap goes out either way.
+func (a *Adapter) ClickChecked(x, y int, target core.Bounds) (string, error) {
+	resp, err := a.client.Call("Gesture.click", map[string]interface{}{
+		"x": x, "y": y,
+		"targetLeft":   target.X,
+		"targetTop":    target.Y,
+		"targetRight":  target.X + target.Width,
+		"targetBottom": target.Y + target.Height,
+	})
+	if err != nil {
+		return "", err
+	}
+	var result struct {
+		CoveredBy string `json:"coveredBy"`
+	}
+	if len(resp.Result) > 0 {
+		_ = json.Unmarshal(resp.Result, &result)
+	}
+	return result.CoveredBy, nil
+}
+
 // DoubleClick double-taps at the given coordinates.
 func (a *Adapter) DoubleClick(x, y int) error {
 	_, err := a.client.Call("Gesture.doubleClick", map[string]interface{}{

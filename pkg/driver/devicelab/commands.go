@@ -245,7 +245,7 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		if bad := d.guardTapInjection(step.Selector.Describe(), info.Bounds, x, y); bad != nil {
 			return bad
 		}
-		if err := d.client.Click(x, y); err != nil {
+		if err := d.clickTarget(x, y, info.Bounds, step.Selector.Describe()); err != nil {
 			return errorResult(err, fmt.Sprintf("Failed to tap at relative point: %v", err))
 		}
 		return successResult(fmt.Sprintf("Tapped at relative point (%d, %d) on element", x, y), info)
@@ -268,11 +268,36 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 	// Always use coordinate-based tap (not accessibility performAction).
 	// Coordinate taps simulate real touch events, which work reliably for
 	// repeated taps on the same button and custom click handlers.
-	if err := d.client.Click(x, y); err != nil {
+	if err := d.clickTarget(x, y, info.Bounds, step.Selector.Describe()); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to tap at coordinates: %v", err))
 	}
 
 	return successResult("Tapped on element", info)
+}
+
+// windowCheckingClicker is a client whose coordinate tap can also report
+// another window over the tap point (maestro.Adapter). Optional, so the
+// DeviceLabClient interface and its fakes stay as they are.
+type windowCheckingClicker interface {
+	ClickChecked(x, y int, target core.Bounds) (coveredBy string, err error)
+}
+
+// clickTarget taps (x, y) for the element at target and warns when the agent
+// finds another window over the point: Android sends a touch to the topmost
+// window there, so a keyboard, dialog or overlay would take the tap instead
+// of the element. Only a warning: the tap has gone out, and the find-and-click
+// path, which can refuse or move a tap, has its own hit test.
+// MAESTRO_DISABLE_HIT_TEST turns the check off, as it does that one.
+func (d *Driver) clickTarget(x, y int, target core.Bounds, what string) error {
+	c, ok := d.client.(windowCheckingClicker)
+	if !ok || os.Getenv("MAESTRO_DISABLE_HIT_TEST") != "" {
+		return d.client.Click(x, y)
+	}
+	coveredBy, err := c.ClickChecked(x, y, target)
+	if err == nil && coveredBy != "" {
+		logger.Warn("[devicelab] tap on %s at (%d,%d): the point is under %s, which may receive the tap instead of the element", what, x, y, coveredBy)
+	}
+	return err
 }
 
 // tapHit handles a find-and-click that found an element for step via s. It
