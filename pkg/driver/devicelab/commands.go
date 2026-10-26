@@ -1192,9 +1192,9 @@ func fieldHoldsText(field core.Element, value string) bool {
 }
 
 // perKeyMaxChars is the longest text an empty field is typed into key by key.
-// One-time codes, PINs, masked dates and search terms fit; longer text is set
-// in one call.
-const perKeyMaxChars = 20
+// One-time codes, PINs and masked dates fit; longer text is set in one call,
+// since each key waits for the app (about 90 ms on a React Native field).
+const perKeyMaxChars = 8
 
 // typesPerKey reports whether text for an empty field goes in as key events.
 // Characters outside ASCII are set instead: key events cannot type them all.

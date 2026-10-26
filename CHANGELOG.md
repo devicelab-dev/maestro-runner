@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ⚠️ Behaviour changes
 
-**DeviceLab Android: `inputText` types short text into an empty field key by key, as Maestro does.** Text of up to 20 ASCII characters goes in as key events, so apps that react to each keystroke see every one: a one-time-code box that moves to the next box, an input mask, search as you type. The field was set in one call, which such apps saw as a single change. Longer or non-ASCII text is still set in one call, and a field that already holds text is still typed into at the cursor. When the app moves focus while the text goes in, the first field is no longer read back and retyped.
+**DeviceLab Android: `inputText` types short text into an empty field key by key, as Maestro does.** Text of up to 8 ASCII characters goes in as key events, so apps that react to each keystroke see every one: a one-time-code box that moves to the next box, a PIN, an input mask. The field was set in one call, which such apps saw as a single change. Longer or non-ASCII text is still set in one call, and a field that already holds text is still typed into at the cursor. When the app moves focus while the text goes in, the first field is no longer read back and retyped.
 
 **A long press with no duration holds 3 s on every driver, as Maestro's does on Android, iOS and web.** DeviceLab Android, UIAutomator2, Appium and DeviceLab iOS held 1 s, the old DeviceLab iOS driver 0.8 s and the browser driver 1 s (`longPressOn`, and `tapOn` or `tapOnPoint` with `longPress`). WDA already held 3 s. A flow that gives `duration:` is unchanged, except on DeviceLab iOS, which raised any duration under 1 s to 1 s: `duration: 500` now holds 500 ms.
 

@@ -3732,8 +3732,8 @@ func TestInputText_NoSelector_TypesShortTextPerKey(t *testing.T) {
 	}{
 		{"1234", true},
 		{"a@b.co", true},
-		{"12345678901234567890", true},
-		{"123456789012345678901", false},
+		{"12345678", true},
+		{"123456789", false},
 		{"héllo", false},
 	} {
 		t.Run(tc.text, func(t *testing.T) {
