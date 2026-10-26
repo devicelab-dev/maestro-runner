@@ -34,4 +34,16 @@ final class WDAAppLifecycleIntegrationTests: WDAWatchInProcessTestCase {
     app.activate()
     XCTAssertEqual(app.state, .runningForeground)
   }
+  func testHomeAndDeactivate() throws {
+    try XCUIDevice.shared.fb_goToHomescreen()
+    XCTAssertNotEqual(app.state, .runningForeground)
+    try XCUIDevice.shared.fb_goToHomescreen()
+    XCTAssertNotEqual(app.state, .runningForeground)
+    for duration in [0.0, 2.0] {
+      app.activate()
+      try app.fb_deactivate(withDuration: duration)
+      XCTAssertEqual(app.state, .runningForeground)
+    }
+  }
+
 }

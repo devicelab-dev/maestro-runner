@@ -233,4 +233,10 @@ typedef NS_ENUM(NSUInteger, FBUIInterfaceAppearance) {
 
 @end
 
+/**
+ Returns the map of lowercase button names to their XCTest enum values
+ supported on the current platform (cached after the first call).
+ */
+extern NSDictionary<NSString *, NSNumber *> *FBAvailableButtonNames(void);
+
 NS_ASSUME_NONNULL_END

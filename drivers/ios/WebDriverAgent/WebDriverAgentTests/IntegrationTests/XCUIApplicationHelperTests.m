@@ -9,15 +9,29 @@
 #import <XCTest/XCTest.h>
 
 #import <mach/mach_time.h>
+#import <math.h>
 
 #import "FBIntegrationTestCase.h"
 #import "FBElement.h"
+#import "FBSession.h"
+#import "FBSessionCommands.h"
 #import "FBMacros.h"
 #import "FBTestMacros.h"
 #import "XCUIApplication.h"
 #import "XCUIApplication+FBHelpers.h"
 #import "XCUIElement+FBIsVisible.h"
 #import "FBXCodeCompatibility.h"
+#import "FBConfiguration.h"
+#import "FBScreen.h"
+#import "FBRunLoopSpinner.h"
+#import "XCUIDevice+FBHinge.h"
+
+// Exercise the session-start resume path without creating a second session.
+@interface FBSessionCommands (FBActivationTests)
++ (id)activateBackgroundApplication:(XCUIApplication *)app
+                          bundleID:(NSString *)bundleID
+                        initialUrl:(nullable NSString *)initialUrl;
+@end
 
 void calculateMaxTreeDepth(NSDictionary *tree, NSNumber *currentDepth, NSNumber** maxDepth) {
   if (nil == maxDepth) {
@@ -81,6 +95,103 @@ void calculateMaxTreeDepth(NSDictionary *tree, NSNumber *currentDepth, NSNumber*
   XCTAssertNil(error);
   XCTAssertEqualWithAccuracy(timeElapsed, backgroundDuration, 3.0);
   XCTAssertTrue(self.testedApplication.buttons[@"Alerts"].exists);
+}
+
+- (void)testInputAfterDeactivate
+{
+  [self verifyInputAfterBackgroundWithMode:0];
+}
+
+- (void)testInputAfterSessionActivate
+{
+  [self verifyInputAfterBackgroundWithMode:1];
+}
+
+- (void)testInputAfterSessionLaunch
+{
+  [self verifyInputAfterBackgroundWithMode:2];
+}
+
+- (void)testInputAfterSessionStartActivate
+{
+  [self verifyInputAfterBackgroundWithMode:3];
+}
+
+- (void)verifyInputAfterBackgroundWithMode:(NSUInteger)mode
+{
+  XCTSkipIf(self.class.isRunningInCI, @"Immediate input after activation is unreliable on slow CI hosts");
+  XCUIDevice *device = XCUIDevice.sharedDevice;
+  BOOL canFold = NO;
+#if TARGET_OS_SIMULATOR
+  canFold = device.fb_canAttemptSimulatedHingeAngleInjection;
+#endif
+  NSNumber *originalAngle = canFold ? [device fb_getSimulatedHingeAngle:nil] : nil;
+  NSNumber *originalDisplay = FBConfiguration.sharedInstance.currentDisplayId;
+  if (canFold) {
+    XCTAssertNotNil(originalAngle);
+  }
+  BOOL (^setAngleAndWait)(NSNumber *) = ^BOOL(NSNumber *angle) {
+    if (![device fb_setSimulatedHingeAngle:angle.doubleValue error:nil]) {
+      return NO;
+    }
+    return [[[FBRunLoopSpinner new] timeout:5] spinUntilTrue:^BOOL{
+      NSNumber *reading = [device fb_getSimulatedHingeAngle:nil];
+      return nil != reading && fabs(reading.doubleValue - angle.doubleValue) < 1;
+    }];
+  };
+  FBSession *session = mode != 0 ? [FBSession initWithApplication:self.testedApplication] : nil;
+  @try {
+    for (NSNumber *angle in (canFold ? @[@0, @90, @180] : @[@0])) {
+      if (canFold) {
+        XCTAssertTrue(setAngleAndWait(angle), @"Hinge did not reach %@ degrees", angle);
+        for (NSDictionary *screen in [FBScreen screensWithError:nil]) {
+          if ([screen[@"isMain"] boolValue] == (angle.intValue == 0)) {
+            FBConfiguration.sharedInstance.currentDisplayId = screen[@"displayId"];
+          }
+        }
+      }
+      for (NSNumber *duration in @[@0, @2]) {
+        [self launchApplication];
+        NSError *error = nil;
+        if (mode != 0) {
+          XCTAssertTrue([device fb_goToHomescreenWithError:&error]);
+          XCTAssertTrue([[[FBRunLoopSpinner new] timeout:5] spinUntilTrue:^BOOL{
+            XCUIApplicationState state = self.testedApplication.state;
+            return state == XCUIApplicationStateRunningBackground
+              || state == XCUIApplicationStateRunningBackgroundSuspended;
+          }]);
+          [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:duration.doubleValue]];
+          XCUIApplicationState state = self.testedApplication.state;
+          XCTAssertTrue(state == XCUIApplicationStateRunningBackground
+                        || state == XCUIApplicationStateRunningBackgroundSuspended,
+                        @"Expected a background app before activation (angle %@, duration %@), got %lu",
+                        angle, duration, (unsigned long)state);
+          if (mode == 1) {
+            [session activateApplicationWithBundleId:self.testedApplication.bundleID];
+          } else if (mode == 2) {
+            [session launchApplicationWithBundleId:self.testedApplication.bundleID
+                          shouldWaitForQuiescence:nil arguments:nil environment:nil];
+          } else {
+            XCTAssertNil([FBSessionCommands activateBackgroundApplication:self.testedApplication
+                                                                bundleID:self.testedApplication.bundleID
+                                                              initialUrl:nil]);
+          }
+        } else {
+          XCTAssertTrue([self.testedApplication fb_deactivateWithDuration:duration.doubleValue error:&error]);
+        }
+        XCTAssertNil(error);
+        // Existence/foreground checks alone miss lost input. Do not add a
+        // delay or retry: this first tap must actually open the alerts page.
+        [self.testedApplication.buttons[@"Alerts"] tap];
+        XCTAssertTrue([self.testedApplication.buttons[FBShowAlertButtonName] waitForExistenceWithTimeout:2]);
+      }
+    }
+  } @finally {
+    [session kill];
+    BOOL restored = nil == originalAngle || setAngleAndWait(originalAngle);
+    FBConfiguration.sharedInstance.currentDisplayId = originalDisplay;
+    XCTAssertTrue(restored, @"Hinge did not return to %@ degrees", originalAngle);
+  }
 }
 
 - (void)testActiveApplication

@@ -9,6 +9,10 @@
 #import "ViewController.h"
 #import "FBCoordinateProbeViewController.h"
 
+#if !TARGET_OS_TV
+#import <WebKit/WebKit.h>
+#endif
+
 @interface ViewController ()
 @property (weak, nonatomic) IBOutlet UILabel *orentationLabel;
 @property (weak, nonatomic) IBOutlet UIButton *button;
@@ -19,6 +23,17 @@
 - (void)viewDidLoad
 {
   [super viewDidLoad];
+
+#if !TARGET_OS_TV
+  if ([NSProcessInfo.processInfo.arguments containsObject:@"--webview-fixture"]) {
+    WKWebView *webView = [[WKWebView alloc] initWithFrame:self.view.bounds];
+    webView.autoresizingMask = UIViewAutoresizingFlexibleWidth
+      | UIViewAutoresizingFlexibleHeight;
+    [self.view addSubview:webView];
+    [webView loadHTMLString:@"<!doctype html><html><body>"
+      "<p>WebContent snapshot fixture</p></body></html>" baseURL:nil];
+  }
+#endif
   
   UIAccessibilityCustomAction *action1 =
   [[UIAccessibilityCustomAction alloc] initWithName:@"Custom Action 1"
@@ -96,10 +111,20 @@
 }
 
 #if !TARGET_OS_TV
+- (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator
+{
+  [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
+  [coordinator animateAlongsideTransition:nil completion:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+    // A 180-degree rotation can leave bounds unchanged. Read the scene after
+    // the transition as well as during layout.
+    [self updateOrentationLabel];
+  }];
+}
+
 - (void)updateOrentationLabel
 {
   NSString *orientation = nil;
-  switch (UIDevice.currentDevice.orientation) {
+  switch (self.view.window.windowScene.interfaceOrientation) {
     case UIInterfaceOrientationPortrait:
       orientation = @"Portrait";
       break;
@@ -111,12 +136,6 @@
       break;
     case UIInterfaceOrientationLandscapeRight:
       orientation = @"LandscapeRight";
-      break;
-    case UIDeviceOrientationFaceUp:
-      orientation = @"FaceUp";
-      break;
-    case UIDeviceOrientationFaceDown:
-      orientation = @"FaceDown";
       break;
     case UIInterfaceOrientationUnknown:
       orientation = @"Unknown";
