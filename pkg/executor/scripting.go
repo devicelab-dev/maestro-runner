@@ -245,13 +245,20 @@ func (se *ScriptEngine) SyncOutputToVariables() {
 	}
 }
 
-// ExpandVariables expands ${expr} and $VAR syntax in text.
+// ExpandVariables expands ${expr} and $VAR syntax in text. A ${expr} that
+// throws is left as written; expand returns its error instead.
 func (se *ScriptEngine) ExpandVariables(text string) string {
+	text, _ = se.expand(text)
+	return text
+}
+
+// expand is ExpandVariables that also returns the error of the first ${expr}
+// that threw. A step fails with it: Maestro evaluates a command's scripts as
+// part of running it and fails the command with the JavaScript error
+// (Orchestra.kt executeCommands), even when the command is optional.
+func (se *ScriptEngine) expand(text string) (string, error) {
 	// First pass: JS engine for ${expression} syntax
-	result, err := se.js.ExpandVariables(text)
-	if err == nil {
-		text = result
-	}
+	text, err := se.js.ExpandVariables(text)
 
 	// Second pass: expand $VAR syntax (without braces)
 	// Sort by length (longest first) to avoid partial matches
@@ -268,7 +275,7 @@ func (se *ScriptEngine) ExpandVariables(text string) string {
 		text = expandDollarVar(text, name, value)
 	}
 
-	return text
+	return text, err
 }
 
 // expandDollarVar replaces $VAR with value, checking word boundaries.
@@ -322,8 +329,11 @@ func (se *ScriptEngine) RunScript(script string, env map[string]string) error {
 	// doesn't leak into later runScript calls — matching Maestro's per-script
 	// env scope (#109). restore() reverts each var to its prior value, or
 	// unsets it entirely if it didn't exist before this run.
-	restore := se.applyScopedEnv(env)
+	restore, err := se.applyScopedEnv(env)
 	defer restore()
+	if err != nil {
+		return err
+	}
 
 	// Pre-define any referenced-but-undeclared identifier as undefined so the
 	// script can use optional env vars via `someVar || default` or
@@ -349,19 +359,12 @@ func (se *ScriptEngine) RunScript(script string, env map[string]string) error {
 	return nil
 }
 
-// expandEnvMap expands `${VAR}` / `${VAR || "default"}` in every value of a
-// YAML `env:` map, in place.
-func (se *ScriptEngine) expandEnvMap(env map[string]string) {
-	for k, v := range env {
-		env[k] = se.ExpandVariables(v)
-	}
-}
-
 // applyScopedEnv sets env vars (with their values variable-expanded) for one
 // script run and returns a restore func. Each var is reverted to its prior
 // value afterward — or unset if it had none — so runScript env never persists
-// into a subsequent script.
-func (se *ScriptEngine) applyScopedEnv(env map[string]string) func() {
+// into a subsequent script. The error is the first value whose ${...} threw;
+// the restore func undoes the scope either way.
+func (se *ScriptEngine) applyScopedEnv(env map[string]string) (func(), error) {
 	type prev struct {
 		val     string
 		existed bool
@@ -371,8 +374,9 @@ func (se *ScriptEngine) applyScopedEnv(env map[string]string) func() {
 		v, ok := se.variables[k]
 		saved[k] = prev{val: v, existed: ok}
 	}
+	x := &expansion{se: se}
 	for k, v := range env {
-		se.SetVariable(k, se.ExpandVariables(v))
+		se.SetVariable(k, x.text(v))
 	}
 	return func() {
 		for k, p := range saved {
@@ -382,7 +386,7 @@ func (se *ScriptEngine) applyScopedEnv(env map[string]string) func() {
 				se.UnsetVariable(k)
 			}
 		}
-	}
+	}, x.err
 }
 
 // jsIdentifierPattern matches JavaScript identifiers. The scan is deliberately
@@ -701,13 +705,15 @@ func (se *ScriptEngine) ExecuteAssertCondition(ctx context.Context, step *flow.A
 	}
 }
 
-// CheckCondition evaluates a flow.Condition and returns true if met.
-func (se *ScriptEngine) CheckCondition(ctx context.Context, cond flow.Condition, driver core.Driver) bool {
+// CheckCondition evaluates a flow.Condition and returns true if met. The error
+// is a `true:` ${...} that threw: Maestro fails the command with it rather
+// than reading it as false.
+func (se *ScriptEngine) CheckCondition(ctx context.Context, cond flow.Condition, driver core.Driver) (bool, error) {
 	// Check platform (first — no device call needed)
 	if cond.Platform != "" {
 		if info := driver.GetPlatformInfo(); info != nil {
 			if !strings.EqualFold(cond.Platform, info.Platform) {
-				return false
+				return false, nil
 			}
 		}
 	}
@@ -720,7 +726,7 @@ func (se *ScriptEngine) CheckCondition(ctx context.Context, cond flow.Condition,
 		visibleStep.Optional = true
 		result := driver.Execute(visibleStep)
 		if !result.Success {
-			return false
+			return false, nil
 		}
 	}
 
@@ -731,19 +737,23 @@ func (se *ScriptEngine) CheckCondition(ctx context.Context, cond flow.Condition,
 		notVisibleStep.Optional = true
 		result := driver.Execute(notVisibleStep)
 		if !result.Success {
-			return false
+			return false, nil
 		}
 	}
 
-	// Check script condition
+	// Check script condition. A script with no ${...} is text Maestro never
+	// evaluates, so an error running it as JavaScript stays a false condition.
 	if cond.Script != "" {
 		result, err := se.EvalCondition(cond.Script)
+		if err != nil && isWholeExpression(cond.Script) {
+			return false, fmt.Errorf("%s: %w", strings.TrimSpace(cond.Script), err)
+		}
 		if err != nil || !result {
-			return false
+			return false, nil
 		}
 	}
 
-	return true
+	return true, nil
 }
 
 // conditionTimeout returns the timeout to use for a condition check.
@@ -766,8 +776,8 @@ func conditionTimeout(cond flow.Condition, sel *flow.Selector, fallback int) int
 // Values are expanded through ExpandVariables to support ${VAR || "default"} syntax.
 // The restore puts back what each key held and removes a key that was not set
 // before, as Maestro's leaveEnvScope does (GraalJsEngine.kt:223-238), rather
-// than leaving it set to "".
-func (se *ScriptEngine) withEnvVars(env map[string]string) func() {
+// than leaving it set to "". The error is the first value whose ${...} threw.
+func (se *ScriptEngine) withEnvVars(env map[string]string) (func(), error) {
 	return se.applyScopedEnv(env)
 }
 
@@ -796,7 +806,11 @@ func (se *ScriptEngine) ParseInt(s string, defaultVal int) int {
 // an error, so callers can surface a clear message instead of silently falling
 // back to the default.
 func (se *ScriptEngine) ParseIntStrict(s string, defaultVal int) (int, error) {
-	expanded := strings.ReplaceAll(se.ExpandVariables(s), "_", "")
+	expanded, err := se.expand(s)
+	if err != nil {
+		return defaultVal, err
+	}
+	expanded = strings.ReplaceAll(expanded, "_", "")
 	if strings.TrimSpace(expanded) == "" {
 		return defaultVal, nil
 	}
@@ -807,96 +821,123 @@ func (se *ScriptEngine) ParseIntStrict(s string, defaultVal int) (int, error) {
 	return val, nil
 }
 
-// ExpandStep expands variables in all string fields of a step.
-// Note: This modifies the step in place. For steps used in loops,
-// the parser creates fresh instances each iteration.
-// expandStringMap returns a copy of m with variables expanded in both keys and
+// expansion expands the fields of one step or condition and keeps the first
+// error, so a step whose ${...} threw fails with it, as in Maestro (see
+// expand). It goes on expanding after an error: the step keeps every field
+// that could be read, and the one that threw stays as written.
+type expansion struct {
+	se  *ScriptEngine
+	err error
+}
+
+func (x *expansion) text(s string) string {
+	out, err := x.se.expand(s)
+	if x.err == nil {
+		x.err = err
+	}
+	return out
+}
+
+// envMap expands `${VAR}` / `${VAR || "default"}` in every value of a YAML
+// `env:` map, in place.
+func (x *expansion) envMap(env map[string]string) {
+	for k, v := range env {
+		env[k] = x.text(v)
+	}
+}
+
+// stringMap returns a copy of m with variables expanded in both keys and
 // values. Keys are expanded too so a permission name can itself be `${VAR}`
 // (Maestro #3428). Returns m unchanged when empty.
-func (se *ScriptEngine) expandStringMap(m map[string]string) map[string]string {
+func (x *expansion) stringMap(m map[string]string) map[string]string {
 	if len(m) == 0 {
 		return m
 	}
 	out := make(map[string]string, len(m))
 	for k, v := range m {
-		out[se.ExpandVariables(k)] = se.ExpandVariables(v)
+		out[x.text(k)] = x.text(v)
 	}
 	return out
 }
 
-func (se *ScriptEngine) ExpandStep(step flow.Step) {
+// ExpandStep expands variables in all string fields of a step.
+// Note: This modifies the step in place. For steps used in loops,
+// the parser creates fresh instances each iteration. The error is the first
+// ${...} that threw: the step fails with it instead of running.
+func (se *ScriptEngine) ExpandStep(step flow.Step) error {
+	x := &expansion{se: se}
 	switch s := step.(type) {
 	case *flow.InputTextStep:
-		s.Text = se.ExpandVariables(s.Text)
-		s.Selector = *se.expandSelector(&s.Selector)
+		s.Text = x.text(s.Text)
+		s.Selector = *x.selector(&s.Selector)
 	case *flow.TapOnStep:
-		s.Selector = *se.expandSelector(&s.Selector)
+		s.Selector = *x.selector(&s.Selector)
 	case *flow.DoubleTapOnStep:
-		s.Selector = *se.expandSelector(&s.Selector)
+		s.Selector = *x.selector(&s.Selector)
 	case *flow.LongPressOnStep:
-		s.Selector = *se.expandSelector(&s.Selector)
+		s.Selector = *x.selector(&s.Selector)
 	case *flow.DragAndDropStep:
-		s.From = *se.expandSelector(&s.From)
-		s.To = *se.expandSelector(&s.To)
+		s.From = *x.selector(&s.From)
+		s.To = *x.selector(&s.To)
 	case *flow.AssertVisibleStep:
-		s.Selector = *se.expandSelector(&s.Selector)
-		s.Count = se.ExpandVariables(s.Count)
+		s.Selector = *x.selector(&s.Selector)
+		s.Count = x.text(s.Count)
 	case *flow.AssertNotVisibleStep:
-		s.Selector = *se.expandSelector(&s.Selector)
+		s.Selector = *x.selector(&s.Selector)
 	case *flow.WaitUntilStep:
 		if s.Visible != nil {
-			s.Visible = se.expandSelector(s.Visible)
+			s.Visible = x.selector(s.Visible)
 		}
 		if s.NotVisible != nil {
-			s.NotVisible = se.expandSelector(s.NotVisible)
+			s.NotVisible = x.selector(s.NotVisible)
 		}
 	case *flow.ScrollUntilVisibleStep:
-		s.Element = *se.expandSelector(&s.Element)
-		s.Direction = se.ExpandVariables(s.Direction)
+		s.Element = *x.selector(&s.Element)
+		s.Direction = x.text(s.Direction)
 	case *flow.SetAirplaneModeStep:
 		if str, ok := s.EnabledRaw.(string); ok {
-			s.Enabled = parseBoolExpr(se.ExpandVariables(str))
+			s.Enabled = parseBoolExpr(x.text(str))
 		}
 	case *flow.SetDarkModeStep:
 		if str, ok := s.EnabledRaw.(string); ok {
-			s.Enabled = parseBoolExpr(se.ExpandVariables(str))
+			s.Enabled = parseBoolExpr(x.text(str))
 		}
 	case *flow.CopyTextFromStep:
-		s.Selector = *se.expandSelector(&s.Selector)
+		s.Selector = *x.selector(&s.Selector)
 	case *flow.LaunchAppStep:
-		s.AppID = se.ExpandVariables(s.AppID)
+		s.AppID = x.text(s.AppID)
 		for k, v := range s.Arguments {
 			if str, ok := v.(string); ok {
-				s.Arguments[k] = se.ExpandVariables(str)
+				s.Arguments[k] = x.text(str)
 			}
 		}
 		for k, v := range s.Environment {
-			s.Environment[k] = se.ExpandVariables(v)
+			s.Environment[k] = x.text(v)
 		}
-		s.Permissions = se.expandStringMap(s.Permissions)
+		s.Permissions = x.stringMap(s.Permissions)
 	case *flow.SetPermissionsStep:
-		s.AppID = se.ExpandVariables(s.AppID)
-		s.Permissions = se.expandStringMap(s.Permissions)
+		s.AppID = x.text(s.AppID)
+		s.Permissions = x.stringMap(s.Permissions)
 	case *flow.StopAppStep:
-		s.AppID = se.ExpandVariables(s.AppID)
+		s.AppID = x.text(s.AppID)
 	case *flow.KillAppStep:
-		s.AppID = se.ExpandVariables(s.AppID)
+		s.AppID = x.text(s.AppID)
 	case *flow.ClearStateStep:
-		s.AppID = se.ExpandVariables(s.AppID)
+		s.AppID = x.text(s.AppID)
 	case *flow.OpenLinkStep:
-		s.Link = se.ExpandVariables(s.Link)
+		s.Link = x.text(s.Link)
 	case *flow.PressKeyStep:
-		s.Key = se.ExpandVariables(s.Key)
+		s.Key = x.text(s.Key)
 	case *flow.TakeScreenshotStep:
-		s.Path = se.ExpandVariables(s.Path)
-		s.CropOn = se.expandSelector(s.CropOn)
+		s.Path = x.text(s.Path)
+		s.CropOn = x.selector(s.CropOn)
 	case *flow.AssertScreenshotStep:
-		s.Path = se.ExpandVariables(s.Path)
-		s.CropOn = se.expandSelector(s.CropOn)
+		s.Path = x.text(s.Path)
+		s.CropOn = x.selector(s.CropOn)
 		// A string threshold (e.g. "${VAR}") is resolved here; a numeric
 		// literal was already resolved at parse time (Maestro #3444).
 		if str, ok := s.ThresholdRaw.(string); ok {
-			if f, ok := flow.ThresholdAsFloat(se.ExpandVariables(str)); ok && f != 0 {
+			if f, ok := flow.ThresholdAsFloat(x.text(str)); ok && f != 0 {
 				s.ThresholdPercentage = f
 			} else {
 				s.ThresholdPercentage = 95.0
@@ -907,19 +948,19 @@ func (se *ScriptEngine) ExpandStep(step flow.Step) {
 		// relative to the flow dir, so drivers receive host paths they can
 		// push to the device / feed to simctl.
 		for i, f := range s.Files {
-			s.Files[i] = se.ResolvePath(se.ExpandVariables(f))
+			s.Files[i] = se.ResolvePath(x.text(f))
 		}
 	case *flow.RunFlowStep:
-		s.File = se.ExpandVariables(s.File)
-		s.ElseFile = se.ExpandVariables(s.ElseFile)
+		s.File = x.text(s.File)
+		s.ElseFile = x.text(s.ElseFile)
 		if s.When != nil {
-			se.ExpandCondition(s.When)
+			x.condition(s.When)
 		}
-		se.expandEnvMap(s.Env)
+		x.envMap(s.Env)
 	case *flow.RunScriptStep:
 		// Only the condition: the script's env is expanded when it runs.
 		if s.When != nil {
-			se.ExpandCondition(s.When)
+			x.condition(s.When)
 		}
 
 	// Every other step type carrying a YAML `env:` map. Without these, a
@@ -927,13 +968,13 @@ func (se *ScriptEngine) ExpandStep(step flow.Step) {
 	// went through as six literal characters and whatever read it got nonsense
 	// rather than the token.
 	case *flow.RetryStep:
-		se.expandEnvMap(s.Env)
+		x.envMap(s.Env)
 	case *flow.RunBrowserScriptStep:
-		se.expandEnvMap(s.Env)
+		x.envMap(s.Env)
 	case *flow.RunWebViewScriptStep:
-		se.expandEnvMap(s.Env)
+		x.envMap(s.Env)
 	case *flow.DefineVariablesStep:
-		se.expandEnvMap(s.Env)
+		x.envMap(s.Env)
 	case *flow.RunShellStep:
 		// Only `env:`. The command itself is deliberately left alone so shell
 		// syntax stays shell syntax — `${VAR}` means the same thing in both
@@ -941,89 +982,97 @@ func (se *ScriptEngine) ExpandStep(step flow.Step) {
 		// step puts in the environment for the command to use. Flow variables
 		// are already exported into that environment, so `$MY_VAR` in a command
 		// resolves without any expansion happening first.
-		se.expandEnvMap(s.Env)
+		x.envMap(s.Env)
 
 	// Device-control / gesture steps: string value fields were missing from
 	// this allowlist, so `${VAR}` reached the driver verbatim (e.g.
 	// setOrientation: ${VAR} → "invalid orientation", #137).
 	case *flow.SetOrientationStep:
-		s.Orientation = se.ExpandVariables(s.Orientation)
+		s.Orientation = x.text(s.Orientation)
 	case *flow.SetLocationStep:
-		s.Latitude = se.ExpandVariables(s.Latitude)
-		s.Longitude = se.ExpandVariables(s.Longitude)
+		s.Latitude = x.text(s.Latitude)
+		s.Longitude = x.text(s.Longitude)
 	case *flow.SetClipboardStep:
-		s.Text = se.ExpandVariables(s.Text)
+		s.Text = x.text(s.Text)
 	case *flow.TravelStep:
 		for i, p := range s.Points {
-			s.Points[i] = se.ExpandVariables(p)
+			s.Points[i] = x.text(p)
 		}
 	case *flow.SwipeStep:
-		s.Direction = se.ExpandVariables(s.Direction)
-		s.Start = se.ExpandVariables(s.Start)
-		s.End = se.ExpandVariables(s.End)
+		s.Direction = x.text(s.Direction)
+		s.Start = x.text(s.Start)
+		s.End = x.text(s.End)
 		if s.Selector != nil {
-			s.Selector = se.expandSelector(s.Selector)
+			s.Selector = x.selector(s.Selector)
 		}
 	case *flow.ScrollStep:
-		s.Direction = se.ExpandVariables(s.Direction)
+		s.Direction = x.text(s.Direction)
 	case *flow.OpenBrowserStep:
-		s.URL = se.ExpandVariables(s.URL)
+		s.URL = x.text(s.URL)
 	}
+	return x.err
 }
 
 // ExpandCondition expands variables in a condition's selector and string
 // fields, in place. Used for `runFlow: when:` and `repeat: while:` — the
 // latter re-expands every iteration so a loop body that mutates an
 // interpolated variable (e.g. ${output.i}) is reflected in the next check.
-func (se *ScriptEngine) ExpandCondition(cond *flow.Condition) {
+// The error is the first ${...} that threw.
+func (se *ScriptEngine) ExpandCondition(cond *flow.Condition) error {
+	x := &expansion{se: se}
+	x.condition(cond)
+	return x.err
+}
+
+func (x *expansion) condition(cond *flow.Condition) {
 	if cond == nil {
 		return
 	}
 	if cond.Visible != nil {
-		cond.Visible = se.expandSelector(cond.Visible)
+		cond.Visible = x.selector(cond.Visible)
 	}
 	if cond.NotVisible != nil {
-		cond.NotVisible = se.expandSelector(cond.NotVisible)
+		cond.NotVisible = x.selector(cond.NotVisible)
 	}
 	// A script that is one ${...} is left for EvalCondition, which judges its
 	// value as Maestro does. Expanded here, the value was then run as JS
 	// itself: "abc" became a ReferenceError, and "" no condition at all.
 	if cond.Script != "" && !isWholeExpression(cond.Script) {
-		cond.Script = se.ExpandVariables(cond.Script)
+		cond.Script = x.text(cond.Script)
 	}
 	if cond.Platform != "" {
-		cond.Platform = se.ExpandVariables(cond.Platform)
+		cond.Platform = x.text(cond.Platform)
 	}
 }
 
-// expandSelector expands variables in selector fields and returns a copy.
-func (se *ScriptEngine) expandSelector(sel *flow.Selector) *flow.Selector {
+// selector expands variables in selector fields and returns a copy.
+func (x *expansion) selector(sel *flow.Selector) *flow.Selector {
 	if sel == nil {
 		return nil
 	}
 	// Create a copy to avoid modifying the original
 	expanded := *sel
-	expanded.Text = se.ExpandVariables(expanded.Text)
-	expanded.ID = se.ExpandVariables(expanded.ID)
-	expanded.CSS = se.ExpandVariables(expanded.CSS)
-	expanded.Index = se.ExpandVariables(expanded.Index)
-	expanded.Traits = se.ExpandVariables(expanded.Traits)
-	expanded.Point = se.ExpandVariables(expanded.Point)
-	expanded.Start = se.ExpandVariables(expanded.Start)
-	expanded.End = se.ExpandVariables(expanded.End)
-	expanded.Label = se.ExpandVariables(expanded.Label)
+	expanded.Text = x.text(expanded.Text)
+	expanded.ID = x.text(expanded.ID)
+	expanded.CSS = x.text(expanded.CSS)
+	expanded.Index = x.text(expanded.Index)
+	expanded.Traits = x.text(expanded.Traits)
+	expanded.Point = x.text(expanded.Point)
+	expanded.Start = x.text(expanded.Start)
+	expanded.End = x.text(expanded.End)
+	expanded.Label = x.text(expanded.Label)
 
 	// Expand relative selectors recursively
-	expanded.ChildOf = se.expandSelector(sel.ChildOf)
-	expanded.Below = se.expandSelector(sel.Below)
-	expanded.Above = se.expandSelector(sel.Above)
-	expanded.LeftOf = se.expandSelector(sel.LeftOf)
-	expanded.RightOf = se.expandSelector(sel.RightOf)
-	expanded.ContainsChild = se.expandSelector(sel.ContainsChild)
+	expanded.ChildOf = x.selector(sel.ChildOf)
+	expanded.Below = x.selector(sel.Below)
+	expanded.Above = x.selector(sel.Above)
+	expanded.LeftOf = x.selector(sel.LeftOf)
+	expanded.RightOf = x.selector(sel.RightOf)
+	expanded.ContainsChild = x.selector(sel.ContainsChild)
 	if len(sel.ContainsDescendants) > 0 {
 		expanded.ContainsDescendants = make([]*flow.Selector, len(sel.ContainsDescendants))
 		for i, child := range sel.ContainsDescendants {
-			expanded.ContainsDescendants[i] = se.expandSelector(child)
+			expanded.ContainsDescendants[i] = x.selector(child)
 		}
 	}
 	return &expanded

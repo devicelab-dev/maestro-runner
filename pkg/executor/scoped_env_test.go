@@ -15,7 +15,10 @@ func TestWithEnvVars_RestoreRemovesAddedKeys(t *testing.T) {
 	defer se.Close()
 	se.SetVariable("KEPT", "before")
 
-	restore := se.withEnvVars(map[string]string{"KEPT": "inside", "ADDED": "inside"})
+	restore, err := se.withEnvVars(map[string]string{"KEPT": "inside", "ADDED": "inside"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if se.GetVariable("ADDED") != "inside" || se.GetVariable("KEPT") != "inside" {
 		t.Fatalf("env not applied: ADDED=%q KEPT=%q", se.GetVariable("ADDED"), se.GetVariable("KEPT"))
 	}
