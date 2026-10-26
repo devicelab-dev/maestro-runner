@@ -709,17 +709,101 @@ func (d *Driver) eraseText(step *flow.EraseTextStep) *core.CommandResult {
 	return successResult(fmt.Sprintf("Erased %d characters", chars), nil)
 }
 
+// keyboardFrame returns the software keyboard's frame, nil when none is on
+// screen.
+func (d *Driver) keyboardFrame() (*core.Bounds, error) {
+	ids, err := d.client.FindElements("class chain", "**/XCUIElementTypeKeyboard")
+	if err != nil || len(ids) == 0 {
+		return nil, err
+	}
+	x, y, w, h, err := d.client.ElementRect(ids[0])
+	if err != nil {
+		return nil, err
+	}
+	if w <= 0 || h <= 0 {
+		return nil, nil
+	}
+	return &core.Bounds{X: x, Y: y, Width: w, Height: h}, nil
+}
+
+// hideKeyboard dismisses the software keyboard the way Maestro's iOS driver
+// does: two short drags (up, then left) that a scroll view turns into a
+// dismissal. It no longer presses return, which in a form submits it or
+// closes the screen. With no keyboard up it does nothing, as in Maestro. A
+// keyboard that will not go is left up, and the step still passes, as in
+// Maestro.
 func (d *Driver) hideKeyboard(step *flow.HideKeyboardStep) *core.CommandResult {
-	// No keyboard, nothing to hide: the return key below still reaches a
-	// focused field (a simulator with the hardware keyboard connected shows
-	// none) and submits its form. Maestro's hideKeyboard does nothing then.
-	if visible, err := d.keyboardVisible(); err == nil && !visible {
+	kb, err := d.keyboardFrame()
+	if err == nil && kb == nil {
 		return successResult("No keyboard to hide", nil)
 	}
-	// Press the "return" key (ignore error - keyboard might not be visible)
-	_ = d.client.SendKeys("\n", 0)
+	if d.dismissKeyboard(kb) {
+		return successResult("Keyboard hidden", nil)
+	}
+	logger.Info("[wda] hideKeyboard: the keyboard is still visible after the dismiss drags")
+	return successResult("Keyboard still visible (not dismissible here)", nil)
+}
 
-	return successResult("Attempted to hide keyboard", nil)
+const (
+	// keyboardDragMs is how long each dismissing drag moves: Maestro's 50 ms.
+	keyboardDragMs = 50
+	// keyboardDragFraction is each drag's length as a share of the screen:
+	// Maestro's 3%.
+	keyboardDragFraction = 0.03
+)
+
+// keyboardDragPause is how long the keyboard gets to go after each drag.
+var keyboardDragPause = 300 * time.Millisecond
+
+// dismissKeyboard makes Maestro's two keyboard-dismissing drags and reports
+// whether the keyboard went. kb is the keyboard's frame, nil when unknown.
+// Maestro starts them at the exact centre of the screen, where a 50 ms drag
+// still presses the control under it; they start at the point nearest the
+// centre that no control covers (core.KeyboardDragStart). With no such point
+// the keyboard stays. When the screen cannot be read, the centre is used, as
+// in Maestro.
+func (d *Driver) dismissKeyboard(kb *core.Bounds) bool {
+	w, h, err := d.screenSize()
+	if err != nil {
+		return false
+	}
+	keyboardTop := h
+	if kb != nil {
+		keyboardTop = kb.Y
+	}
+	sx, sy, ok := w/2, h/2, true
+	if src, err := d.client.Source(); err == nil {
+		if elems, err := ParsePageSource(src); err == nil {
+			elems = FilterOutOfBounds(elems, w, h)
+			nodes := make([]core.ScreenNode, 0, len(elems))
+			for _, e := range elems {
+				if kb == nil && e.Type == "XCUIElementTypeKeyboard" && e.Bounds.Height > 0 {
+					keyboardTop = e.Bounds.Y
+				}
+				nodes = append(nodes, core.ScreenNode{Type: e.Type, Bounds: e.Bounds, Leaf: len(e.Children) == 0})
+			}
+			sx, sy, ok = core.KeyboardDragStart(nodes, w, h, keyboardTop)
+		}
+	}
+	if !ok {
+		logger.Debug("[wda] hideKeyboard: no point clear of controls to start the dismiss drags")
+		return false
+	}
+	x, y := float64(sx), float64(sy)
+	ends := [][2]float64{
+		{x, y - float64(h)*keyboardDragFraction},
+		{x - float64(w)*keyboardDragFraction, y},
+	}
+	for _, end := range ends {
+		if err := d.client.Flick(x, y, end[0], end[1], keyboardDragMs); err != nil {
+			return false
+		}
+		time.Sleep(keyboardDragPause)
+		if visible, err := d.keyboardVisible(); err == nil && !visible {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *Driver) acceptAlert(step *flow.AcceptAlertStep) *core.CommandResult {

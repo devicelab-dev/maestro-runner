@@ -325,7 +325,18 @@ const swipeMoveMs = 100
 // a list iOS took that as a tap on the row (DDG Settings opened a link in
 // Safari mid-scroll).
 func (c *Client) Swipe(fromX, fromY, toX, toY float64, durationSec float64) error {
-	restMs := int(durationSec * 1000)
+	return c.pointerDrag(fromX, fromY, toX, toY, swipeMoveMs, int(durationSec*1000))
+}
+
+// Flick touches (fromX, fromY), moves to (toX, toY) in moveMs and lifts at
+// once: the short drag Maestro's iOS hideKeyboard makes.
+func (c *Client) Flick(fromX, fromY, toX, toY float64, moveMs int) error {
+	return c.pointerDrag(fromX, fromY, toX, toY, moveMs, 0)
+}
+
+// pointerDrag is one finger's W3C touch: down at the start, a move of moveMs
+// to the end, a rest of restMs there, up.
+func (c *Client) pointerDrag(fromX, fromY, toX, toY float64, moveMs, restMs int) error {
 	if restMs < 0 {
 		restMs = 0
 	}
@@ -338,7 +349,7 @@ func (c *Client) Swipe(fromX, fromY, toX, toY float64, durationSec float64) erro
 				"actions": []interface{}{
 					map[string]interface{}{"type": "pointerMove", "duration": 0, "x": fromX, "y": fromY},
 					map[string]interface{}{"type": "pointerDown", "button": 0},
-					map[string]interface{}{"type": "pointerMove", "duration": swipeMoveMs, "x": toX, "y": toY},
+					map[string]interface{}{"type": "pointerMove", "duration": moveMs, "x": toX, "y": toY},
 					map[string]interface{}{"type": "pause", "duration": restMs},
 					map[string]interface{}{"type": "pointerUp", "button": 0},
 				},

@@ -1218,46 +1218,6 @@ func TestGetIOSPermissions(t *testing.T) {
 }
 
 // =============================================================================
-// hideKeyboard test
-// =============================================================================
-
-// hideKeyboard presses return while a keyboard is up, and does nothing when
-// none is: return would still submit a focused field's form.
-func TestHideKeyboardSendsNewlineOnlyWithKeyboard(t *testing.T) {
-	for _, tc := range []struct {
-		keyboard bool
-		wantKeys bool
-	}{{true, true}, {false, false}} {
-		var keysSent string
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			if strings.Contains(r.URL.Path, "/wda/keys") {
-				body, _ := io.ReadAll(r.Body)
-				keysSent = string(body)
-			}
-			if strings.HasSuffix(r.URL.Path, "/elements") {
-				var found []interface{}
-				if tc.keyboard {
-					found = append(found, map[string]interface{}{"ELEMENT": "kb"})
-				}
-				jsonResponse(w, map[string]interface{}{"value": found})
-				return
-			}
-			jsonResponse(w, map[string]interface{}{"status": 0})
-		}))
-		driver := createTestDriver(server)
-		result := driver.hideKeyboard(&flow.HideKeyboardStep{})
-		server.Close()
-		if !result.Success {
-			t.Errorf("keyboard=%v: expected success, got: %s", tc.keyboard, result.Message)
-		}
-		if sent := strings.Contains(keysSent, "\\n"); sent != tc.wantKeys {
-			t.Errorf("keyboard=%v: return sent = %v (body %q)", tc.keyboard, sent, keysSent)
-		}
-	}
-}
-
-// =============================================================================
 // openBrowser tests
 // =============================================================================
 
