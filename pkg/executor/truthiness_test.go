@@ -1,7 +1,6 @@
 package executor
 
 import (
-	"context"
 	"testing"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
@@ -102,8 +101,8 @@ func TestWhenCondition_ValueIsReadAsInMaestro(t *testing.T) {
 		"${count} > 0":        true, // text around the ${...}: still run as JS, as before
 	} {
 		cond := flow.Condition{Script: script}
-		se.ExpandCondition(&cond)
-		if got := se.CheckCondition(context.Background(), cond, &mockDriver{}); got != want {
+		mustExpandCondition(t, se, &cond)
+		if got := conditionMet(t, se, cond, &mockDriver{}); got != want {
 			t.Errorf("when: true: %s = %v, want %v", script, got, want)
 		}
 	}

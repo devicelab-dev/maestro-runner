@@ -36,7 +36,7 @@ func TestExpandStepExpandsEveryEnvMap(t *testing.T) {
 			defer se.Close()
 			se.SetVariable("AUTH", "secret-token")
 
-			se.ExpandStep(tt.step)
+			mustExpandStep(t, se, tt.step)
 
 			if got := tt.read(tt.step)["TOKEN"]; got != "secret-token" {
 				t.Errorf("env value is %q, want the expanded variable", got)
@@ -54,7 +54,7 @@ func TestExpandStepLeavesRunShellCommandAlone(t *testing.T) {
 	se.SetVariable("AUTH", "secret-token")
 
 	step := &flow.RunShellStep{Command: "echo ${MAESTRO_DEVICE_ID} ${AUTH}"}
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.Command != "echo ${MAESTRO_DEVICE_ID} ${AUTH}" {
 		t.Errorf("command was rewritten to %q; it should reach the shell verbatim", step.Command)

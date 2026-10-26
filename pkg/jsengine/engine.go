@@ -516,11 +516,15 @@ func (e *Engine) DefineUndefinedIfMissing(name string) {
 	}
 }
 
-// ExpandVariables expands ${...} expressions in a string using JS evaluation
+// ExpandVariables expands ${...} expressions in a string using JS evaluation.
+// An expression that throws is left as written, and the first such error is
+// returned with the expanded text: Maestro fails the command with it
+// (GraalJsEngine's JsEvaluationException).
 func (e *Engine) ExpandVariables(text string) (string, error) {
 	// Find all ${...} patterns and evaluate them
 	result := text
 	start := 0
+	var firstErr error
 
 	for {
 		// Find ${
@@ -554,7 +558,9 @@ func (e *Engine) ExpandVariables(text string) (string, error) {
 		// Evaluate expression, auto-defining undefined variables on ReferenceError
 		value, err := e.evalWithUndefinedFallback(expr)
 		if err != nil {
-			// If evaluation fails, leave as-is or return error
+			if firstErr == nil {
+				firstErr = fmt.Errorf("${%s}: %w", expr, err)
+			}
 			start = end
 			continue
 		}
@@ -564,7 +570,7 @@ func (e *Engine) ExpandVariables(text string) (string, error) {
 		start = idx + len(value)
 	}
 
-	return result, nil
+	return result, firstErr
 }
 
 // evalWithUndefinedFallback evaluates a JS expression, automatically defining

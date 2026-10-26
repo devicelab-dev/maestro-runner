@@ -245,7 +245,7 @@ func captureVisibleTimeout(t *testing.T, se *ScriptEngine, cond flow.Condition) 
 			return &core.CommandResult{Success: false} // not visible → condition false
 		},
 	}
-	se.CheckCondition(context.Background(), cond, driver)
+	conditionMet(t, se, cond, driver)
 	return got
 }
 
@@ -668,10 +668,13 @@ func TestScriptEngine_withEnvVars(t *testing.T) {
 	se.SetVariable("VAR2", "original2")
 
 	// Apply env vars and check they're set
-	restore := se.withEnvVars(map[string]string{
+	restore, err := se.withEnvVars(map[string]string{
 		"VAR1": "new1",
 		"VAR3": "new3",
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if got := se.GetVariable("VAR1"); got != "new1" {
 		t.Errorf("VAR1 after apply = %q, want %q", got, "new1")
@@ -698,10 +701,13 @@ func TestScriptEngine_withEnvVars_DefaultValues(t *testing.T) {
 	se.SetVariable("CLI_VAR", "from_cli")
 
 	// withEnvVars should expand ${VAR || "default"} syntax
-	restore := se.withEnvVars(map[string]string{
+	restore, err := se.withEnvVars(map[string]string{
 		"APP_ID":  `${APP_ID || "com.example.default"}`,
 		"USER_ID": `${CLI_VAR || "fallback"}`,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// APP_ID was undefined, should get default
 	if got := se.GetVariable("APP_ID"); got != "com.example.default" {
@@ -1005,6 +1011,33 @@ func TestScriptEngine_ExecuteAssertCondition_VisibleFail(t *testing.T) {
 	}
 }
 
+// mustExpandStep is ExpandStep for a step whose ${...} must not throw.
+func mustExpandStep(t *testing.T, se *ScriptEngine, step flow.Step) {
+	t.Helper()
+	if err := se.ExpandStep(step); err != nil {
+		t.Fatalf("ExpandStep: %v", err)
+	}
+}
+
+// mustExpandCondition is ExpandCondition for a condition whose ${...} must
+// not throw.
+func mustExpandCondition(t *testing.T, se *ScriptEngine, cond *flow.Condition) {
+	t.Helper()
+	if err := se.ExpandCondition(cond); err != nil {
+		t.Fatalf("ExpandCondition: %v", err)
+	}
+}
+
+// conditionMet is CheckCondition for a condition whose check must not fail.
+func conditionMet(t *testing.T, se *ScriptEngine, cond flow.Condition, driver core.Driver) bool {
+	t.Helper()
+	met, err := se.CheckCondition(context.Background(), cond, driver)
+	if err != nil {
+		t.Fatalf("CheckCondition(%+v) failed: %v", cond, err)
+	}
+	return met
+}
+
 func TestScriptEngine_CheckCondition(t *testing.T) {
 	se := NewScriptEngine()
 	defer se.Close()
@@ -1019,19 +1052,19 @@ func TestScriptEngine_CheckCondition(t *testing.T) {
 
 	// Script condition
 	cond := flow.Condition{Script: "flag == 'true'"}
-	if !se.CheckCondition(context.Background(), cond, driver) {
+	if !conditionMet(t, se, cond, driver) {
 		t.Error("CheckCondition() with true script should return true")
 	}
 
 	// Visible condition
 	cond = flow.Condition{Visible: &flow.Selector{Text: "Test"}}
-	if !se.CheckCondition(context.Background(), cond, driver) {
+	if !conditionMet(t, se, cond, driver) {
 		t.Error("CheckCondition() with visible success should return true")
 	}
 
 	// Failed script condition
 	cond = flow.Condition{Script: "false"}
-	if se.CheckCondition(context.Background(), cond, driver) {
+	if conditionMet(t, se, cond, driver) {
 		t.Error("CheckCondition() with false script should return false")
 	}
 }
@@ -1241,7 +1274,7 @@ func TestScriptEngine_ExpandStep_InputTextStep(t *testing.T) {
 		Selector: flow.Selector{Text: "${USERNAME}", ID: "input_${USERNAME}"},
 	}
 
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.Text != "Hello john" {
 		t.Errorf("Text = %q, want %q", step.Text, "Hello john")
@@ -1271,8 +1304,8 @@ func TestScriptEngine_ExpandStep_ScreenshotSteps(t *testing.T) {
 		CropOn: &flow.Selector{ID: "${ELEMENT_ID}"},
 	}
 
-	se.ExpandStep(take)
-	se.ExpandStep(assert)
+	mustExpandStep(t, se, take)
+	mustExpandStep(t, se, assert)
 
 	for name, step := range map[string]struct {
 		path   string
@@ -1302,7 +1335,7 @@ func TestScriptEngine_ExpandStep_LaunchAppPermissions(t *testing.T) {
 		AppID:       "com.example",
 		Permissions: map[string]string{"${PERM}": "${STATE}", "camera": "deny"},
 	}
-	se.ExpandStep(s)
+	mustExpandStep(t, se, s)
 
 	if got := s.Permissions["location"]; got != "allow" {
 		t.Errorf("Permissions[location] = %q, want %q", got, "allow")
@@ -1324,7 +1357,7 @@ func TestScriptEngine_ExpandStep_SetPermissions(t *testing.T) {
 		AppID:       "com.example",
 		Permissions: map[string]string{"camera": "${STATE}"},
 	}
-	se.ExpandStep(s)
+	mustExpandStep(t, se, s)
 
 	if got := s.Permissions["camera"]; got != "deny" {
 		t.Errorf("Permissions[camera] = %q, want %q", got, "deny")
@@ -1338,7 +1371,7 @@ func TestScriptEngine_ExpandStep_AssertScreenshotThreshold(t *testing.T) {
 
 	t.Run("var resolves to float", func(t *testing.T) {
 		s := &flow.AssertScreenshotStep{Path: "b.png", ThresholdRaw: "${THRESH}"}
-		se.ExpandStep(s)
+		mustExpandStep(t, se, s)
 		if s.ThresholdPercentage != 87.5 {
 			t.Errorf("ThresholdPercentage = %v, want 87.5", s.ThresholdPercentage)
 		}
@@ -1346,7 +1379,7 @@ func TestScriptEngine_ExpandStep_AssertScreenshotThreshold(t *testing.T) {
 
 	t.Run("unresolvable var falls back to default", func(t *testing.T) {
 		s := &flow.AssertScreenshotStep{Path: "b.png", ThresholdRaw: "${MISSING}"}
-		se.ExpandStep(s)
+		mustExpandStep(t, se, s)
 		if s.ThresholdPercentage != 95.0 {
 			t.Errorf("ThresholdPercentage = %v, want 95.0 (default)", s.ThresholdPercentage)
 		}
@@ -1354,7 +1387,7 @@ func TestScriptEngine_ExpandStep_AssertScreenshotThreshold(t *testing.T) {
 
 	t.Run("numeric literal is untouched by expand", func(t *testing.T) {
 		s := &flow.AssertScreenshotStep{Path: "b.png", ThresholdPercentage: 92.0}
-		se.ExpandStep(s)
+		mustExpandStep(t, se, s)
 		if s.ThresholdPercentage != 92.0 {
 			t.Errorf("ThresholdPercentage = %v, want 92.0", s.ThresholdPercentage)
 		}
@@ -1372,7 +1405,7 @@ func TestScriptEngine_ExpandStep_ScrollUntilVisibleDirection(t *testing.T) {
 		Direction: "${DIR}",
 	}
 
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.Direction != "UP" {
 		t.Errorf("Direction = %q, want %q", step.Direction, "UP")
@@ -1403,7 +1436,7 @@ func TestScriptEngine_ExpandStep_SetAirplaneModeInterpolation(t *testing.T) {
 			se.SetVariable("OFFLINE", tc.offlineVar)
 			step := &flow.SetAirplaneModeStep{EnabledRaw: "${OFFLINE}"}
 
-			se.ExpandStep(step)
+			mustExpandStep(t, se, step)
 
 			if step.Enabled != tc.want {
 				t.Errorf("OFFLINE=%q → Enabled=%v, want %v", tc.offlineVar, step.Enabled, tc.want)
@@ -1422,7 +1455,7 @@ func TestScriptEngine_ExpandStep_TapOnStep(t *testing.T) {
 		Selector: flow.Selector{Text: "${BUTTON}"},
 	}
 
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.Selector.Text != "Login" {
 		t.Errorf("Selector.Text = %q, want %q", step.Selector.Text, "Login")
@@ -1439,7 +1472,7 @@ func TestScriptEngine_ExpandStep_DoubleTapOnStep(t *testing.T) {
 		Selector: flow.Selector{Text: "${ELEM}"},
 	}
 
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.Selector.Text != "icon" {
 		t.Errorf("Selector.Text = %q, want %q", step.Selector.Text, "icon")
@@ -1456,7 +1489,7 @@ func TestScriptEngine_ExpandStep_LongPressOnStep(t *testing.T) {
 		Selector: flow.Selector{Text: "${ITEM}"},
 	}
 
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.Selector.Text != "Delete" {
 		t.Errorf("Selector.Text = %q, want %q", step.Selector.Text, "Delete")
@@ -1473,7 +1506,7 @@ func TestScriptEngine_ExpandStep_AssertVisibleStep(t *testing.T) {
 		Selector: flow.Selector{Text: "${LABEL}"},
 	}
 
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.Selector.Text != "Welcome" {
 		t.Errorf("Selector.Text = %q, want %q", step.Selector.Text, "Welcome")
@@ -1490,7 +1523,7 @@ func TestScriptEngine_ExpandStep_AssertNotVisibleStep(t *testing.T) {
 		Selector: flow.Selector{Text: "${MSG}"},
 	}
 
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.Selector.Text != "Error" {
 		t.Errorf("Selector.Text = %q, want %q", step.Selector.Text, "Error")
@@ -1507,7 +1540,7 @@ func TestScriptEngine_ExpandStep_LaunchAppStep(t *testing.T) {
 		AppID: "${APP_ID}",
 	}
 
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.AppID != "com.example.app" {
 		t.Errorf("AppID = %q, want %q", step.AppID, "com.example.app")
@@ -1530,7 +1563,7 @@ func TestScriptEngine_ExpandStep_LaunchAppStep_Arguments(t *testing.T) {
 		},
 	}
 
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.Arguments["auth_token"] != "abc123" {
 		t.Errorf("Arguments[auth_token] = %v, want %q", step.Arguments["auth_token"], "abc123")
@@ -1558,7 +1591,7 @@ func TestScriptEngine_ExpandStep_LaunchAppStep_Environment(t *testing.T) {
 		},
 	}
 
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.Environment["API_URL"] != "https://api.example.com/v1" {
 		t.Errorf("Environment[API_URL] = %q, want %q", step.Environment["API_URL"], "https://api.example.com/v1")
@@ -1578,7 +1611,7 @@ func TestScriptEngine_ExpandStep_StopAppStep(t *testing.T) {
 		AppID: "${APP_ID}",
 	}
 
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.AppID != "com.example.app" {
 		t.Errorf("AppID = %q, want %q", step.AppID, "com.example.app")
@@ -1595,7 +1628,7 @@ func TestScriptEngine_ExpandStep_KillAppStep(t *testing.T) {
 		AppID: "${APP_ID}",
 	}
 
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.AppID != "com.example.app" {
 		t.Errorf("AppID = %q, want %q", step.AppID, "com.example.app")
@@ -1612,7 +1645,7 @@ func TestScriptEngine_ExpandStep_ClearStateStep(t *testing.T) {
 		AppID: "${APP_ID}",
 	}
 
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.AppID != "com.example.app" {
 		t.Errorf("AppID = %q, want %q", step.AppID, "com.example.app")
@@ -1646,7 +1679,7 @@ func TestScriptEngine_FlowConfigAppID_WithCLIEnv(t *testing.T) {
 	if step.AppID == "" {
 		step.AppID = expanded // this is what flow_runner does after the fix
 	}
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.AppID != "com.testhiveapp" {
 		t.Errorf("ClearStateStep.AppID = %q, want %q", step.AppID, "com.testhiveapp")
@@ -1688,7 +1721,7 @@ func TestScriptEngine_ExpandStep_OpenLinkStep(t *testing.T) {
 		Link: "${URL}/path",
 	}
 
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.Link != "https://example.com/path" {
 		t.Errorf("Link = %q, want %q", step.Link, "https://example.com/path")
@@ -1705,7 +1738,7 @@ func TestScriptEngine_ExpandStep_PressKeyStep(t *testing.T) {
 		Key: "${KEY_NAME}",
 	}
 
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.Key != "Enter" {
 		t.Errorf("Key = %q, want %q", step.Key, "Enter")
@@ -1723,7 +1756,7 @@ func TestScriptEngine_ExpandStep_WaitUntilStep(t *testing.T) {
 		NotVisible: &flow.Selector{Text: "Loading ${ELEM}"},
 	}
 
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.Visible.Text != "Loaded" {
 		t.Errorf("Visible.Text = %q, want %q", step.Visible.Text, "Loaded")
@@ -1743,7 +1776,7 @@ func TestScriptEngine_ExpandStep_WaitUntilStep_NilSelectors(t *testing.T) {
 	}
 
 	// Should not panic with nil selectors
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.Visible != nil {
 		t.Error("Visible should remain nil")
@@ -1763,7 +1796,7 @@ func TestScriptEngine_ExpandStep_ScrollUntilVisibleStep(t *testing.T) {
 		Element: flow.Selector{Text: "${TARGET}"},
 	}
 
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.Element.Text != "Submit" {
 		t.Errorf("Element.Text = %q, want %q", step.Element.Text, "Submit")
@@ -1780,7 +1813,7 @@ func TestScriptEngine_ExpandStep_CopyTextFromStep(t *testing.T) {
 		Selector: flow.Selector{ID: "${FIELD}"},
 	}
 
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.Selector.ID != "price_label" {
 		t.Errorf("Selector.ID = %q, want %q", step.Selector.ID, "price_label")
@@ -1793,7 +1826,7 @@ func TestScriptEngine_ExpandStep_UnhandledStepType(t *testing.T) {
 
 	// BackStep is not handled in ExpandStep switch - should not panic
 	step := &flow.BackStep{}
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 }
 
 // ===========================================
@@ -1816,7 +1849,7 @@ func TestScriptEngine_ExpandSelector_WithRelativeSelectors(t *testing.T) {
 		},
 	}
 
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.Selector.Text != "Button" {
 		t.Errorf("Selector.Text = %q, want %q", step.Selector.Text, "Button")
@@ -1855,7 +1888,7 @@ func TestScriptEngine_ExpandSelector_AllRelativeTypes(t *testing.T) {
 		},
 	}
 
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.Selector.Text != "expanded" {
 		t.Errorf("Text = %q, want %q", step.Selector.Text, "expanded")
@@ -1903,7 +1936,7 @@ func TestScriptEngine_ExpandSelector_AllStringFields(t *testing.T) {
 		},
 	}
 
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.Selector.Text != "test" {
 		t.Errorf("Text = %q, want %q", step.Selector.Text, "test")
@@ -2036,7 +2069,7 @@ func TestScriptEngine_CheckCondition_NotVisible_Success(t *testing.T) {
 	}
 
 	cond := flow.Condition{NotVisible: &flow.Selector{Text: "Loading"}}
-	if !se.CheckCondition(context.Background(), cond, driver) {
+	if !conditionMet(t, se, cond, driver) {
 		t.Error("CheckCondition() with notVisible success should return true")
 	}
 }
@@ -2052,7 +2085,7 @@ func TestScriptEngine_CheckCondition_NotVisible_Failure(t *testing.T) {
 	}
 
 	cond := flow.Condition{NotVisible: &flow.Selector{Text: "Loading"}}
-	if se.CheckCondition(context.Background(), cond, driver) {
+	if conditionMet(t, se, cond, driver) {
 		t.Error("CheckCondition() with notVisible failure should return false")
 	}
 }
@@ -2068,7 +2101,7 @@ func TestScriptEngine_CheckCondition_Visible_Failure(t *testing.T) {
 	}
 
 	cond := flow.Condition{Visible: &flow.Selector{Text: "Missing"}}
-	if se.CheckCondition(context.Background(), cond, driver) {
+	if conditionMet(t, se, cond, driver) {
 		t.Error("CheckCondition() with visible failure should return false")
 	}
 }
@@ -2081,7 +2114,7 @@ func TestScriptEngine_CheckCondition_ScriptError(t *testing.T) {
 
 	// Script that causes an evaluation error
 	cond := flow.Condition{Script: "undefined_var.property"}
-	if se.CheckCondition(context.Background(), cond, driver) {
+	if conditionMet(t, se, cond, driver) {
 		t.Error("CheckCondition() with script error should return false")
 	}
 }
@@ -2094,7 +2127,7 @@ func TestScriptEngine_CheckCondition_EmptyCondition(t *testing.T) {
 
 	// Empty condition with no fields set should return true
 	cond := flow.Condition{}
-	if !se.CheckCondition(context.Background(), cond, driver) {
+	if !conditionMet(t, se, cond, driver) {
 		t.Error("CheckCondition() with empty condition should return true")
 	}
 }
@@ -2117,7 +2150,7 @@ func TestScriptEngine_CheckCondition_AllConditionsMet(t *testing.T) {
 		NotVisible: &flow.Selector{Text: "Absent"},
 		Script:     "flag == 'true'",
 	}
-	if !se.CheckCondition(context.Background(), cond, driver) {
+	if !conditionMet(t, se, cond, driver) {
 		t.Error("CheckCondition() with all conditions met should return true")
 	}
 }
@@ -2137,7 +2170,7 @@ func TestScriptEngine_CheckCondition_PlatformMatch(t *testing.T) {
 	}
 
 	cond := flow.Condition{Platform: "Android"}
-	if !se.CheckCondition(context.Background(), cond, driver) {
+	if !conditionMet(t, se, cond, driver) {
 		t.Error("CheckCondition() should return true when platform matches (case-insensitive)")
 	}
 }
@@ -2153,7 +2186,7 @@ func TestScriptEngine_CheckCondition_PlatformMismatch(t *testing.T) {
 	}
 
 	cond := flow.Condition{Platform: "Android"}
-	if se.CheckCondition(context.Background(), cond, driver) {
+	if conditionMet(t, se, cond, driver) {
 		t.Error("CheckCondition() should return false when platform doesn't match")
 	}
 }
@@ -2170,7 +2203,7 @@ func TestScriptEngine_CheckCondition_PlatformNilInfo(t *testing.T) {
 
 	// When PlatformInfo is nil, platform check is skipped (condition passes)
 	cond := flow.Condition{Platform: "Android"}
-	if !se.CheckCondition(context.Background(), cond, driver) {
+	if !conditionMet(t, se, cond, driver) {
 		t.Error("CheckCondition() should return true when PlatformInfo is nil")
 	}
 }
@@ -2195,7 +2228,7 @@ func TestScriptEngine_CheckCondition_PlatformWithVisible(t *testing.T) {
 		Platform: "Android",
 		Visible:  &flow.Selector{Text: "Login"},
 	}
-	if se.CheckCondition(context.Background(), cond, driver) {
+	if conditionMet(t, se, cond, driver) {
 		t.Error("CheckCondition() should return false when platform doesn't match")
 	}
 	if executed {
@@ -2405,7 +2438,7 @@ func TestScriptEngine_ExpandStep_RunFlowStep(t *testing.T) {
 		},
 	}
 
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.File != "auth.yaml" {
 		t.Errorf("File = %q, want %q", step.File, "auth.yaml")
@@ -2438,7 +2471,7 @@ func TestScriptEngine_ExpandStep_RunFlowStep_NilWhen(t *testing.T) {
 		File: "${FILE}",
 	}
 
-	se.ExpandStep(step)
+	mustExpandStep(t, se, step)
 
 	if step.File != "test.yaml" {
 		t.Errorf("File = %q, want %q", step.File, "test.yaml")
@@ -2460,7 +2493,7 @@ func TestScriptEngine_ExpandCondition(t *testing.T) {
 		Platform:   "${PLAT}",
 	}
 
-	se.ExpandCondition(cond)
+	mustExpandCondition(t, se, cond)
 
 	if cond.Visible.ID != "tab-3" {
 		t.Errorf("Visible.ID = %q, want %q", cond.Visible.ID, "tab-3")
@@ -2479,7 +2512,7 @@ func TestScriptEngine_ExpandCondition(t *testing.T) {
 func TestScriptEngine_ExpandCondition_Nil(t *testing.T) {
 	se := NewScriptEngine()
 	defer se.Close()
-	se.ExpandCondition(nil) // must not panic
+	mustExpandCondition(t, se, nil) // must not panic
 }
 
 // TestExecuteRepeat_WhileInterpolation reproduces issue #97: a `while:`
@@ -2545,27 +2578,27 @@ func TestScriptEngine_ExpandStep_DeviceControlFields(t *testing.T) {
 	se.SetVariable("CLIP", "hello")
 
 	orient := &flow.SetOrientationStep{Orientation: "${ORIENT}"}
-	se.ExpandStep(orient)
+	mustExpandStep(t, se, orient)
 	if orient.Orientation != "LANDSCAPE_LEFT" {
 		t.Errorf("setOrientation not expanded: %q", orient.Orientation)
 	}
 	loc := &flow.SetLocationStep{Latitude: "${LAT}", Longitude: "${LON}"}
-	se.ExpandStep(loc)
+	mustExpandStep(t, se, loc)
 	if loc.Latitude != "37.7" || loc.Longitude != "-122.4" {
 		t.Errorf("setLocation not expanded: %q,%q", loc.Latitude, loc.Longitude)
 	}
 	sw := &flow.SwipeStep{Direction: "${DIR}"}
-	se.ExpandStep(sw)
+	mustExpandStep(t, se, sw)
 	if sw.Direction != "UP" {
 		t.Errorf("swipe direction not expanded: %q", sw.Direction)
 	}
 	clip := &flow.SetClipboardStep{Text: "${CLIP}"}
-	se.ExpandStep(clip)
+	mustExpandStep(t, se, clip)
 	if clip.Text != "hello" {
 		t.Errorf("setClipboard not expanded: %q", clip.Text)
 	}
 	trip := &flow.TravelStep{Points: []string{"${LAT}, ${LON}", "0, 0"}}
-	se.ExpandStep(trip)
+	mustExpandStep(t, se, trip)
 	if trip.Points[0] != "37.7, -122.4" || trip.Points[1] != "0, 0" {
 		t.Errorf("travel points not expanded: %q", trip.Points)
 	}
