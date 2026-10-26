@@ -76,6 +76,10 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		}
 		x := float64(info.Bounds.X + info.Bounds.Width/2)
 		y := float64(info.Bounds.Y + info.Bounds.Height/2)
+		x, y, info, err = d.aimClearOfKeyboard(step.Selector, info, x, y)
+		if err != nil {
+			return keyboardBlocked(step.Selector, err)
+		}
 		if err := d.client.LongPress(x, y, durationSec); err != nil {
 			return errorResult(err, fmt.Sprintf("Press for %.2fs failed", durationSec))
 		}
@@ -98,6 +102,13 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 			info = fresh
 			x, y, onScreen = d.tapPoint(info.Bounds)
 		}
+	}
+	if onScreen {
+		x, y, info, err = d.aimClearOfKeyboard(step.Selector, info, x, y)
+		if err != nil {
+			return keyboardBlocked(step.Selector, err)
+		}
+		isTextField = strings.Contains(info.Class, "TextField")
 	}
 
 	tapped := false
@@ -159,6 +170,77 @@ func (d *Driver) tapPoint(b core.Bounds) (x, y float64, onScreen bool) {
 		return 0, 0, false
 	}
 	return float64(left+right) / 2, float64(top+bottom) / 2, true
+}
+
+// keyboardRefindMs bounds the lookup of a tap's target after the keyboard
+// that covered it was hidden.
+const keyboardRefindMs = 2000
+
+// aimClearOfKeyboard returns where to tap info's element, planned at (x, y),
+// so the touch does not press a key: when the software keyboard covers that
+// point it hides the keyboard and looks sel up again, then aims at the part
+// of the element above the keyboard if it is still covered, else fails
+// (core.KeyboardGuard). It asks for the keyboard only after a step that may
+// have left it up. The element returned is the one last found.
+func (d *Driver) aimClearOfKeyboard(sel flow.Selector, info *core.ElementInfo, x, y float64) (float64, float64, *core.ElementInfo, error) {
+	if !d.keyboardMayBeUp || core.IsIOSKeyboardType(info.Class) {
+		return x, y, info, nil
+	}
+	target := info.Bounds
+	guard := core.KeyboardGuard{
+		Keyboard: func() (*core.Bounds, error) {
+			kb, err := d.keyboardFrame()
+			if err == nil && kb == nil {
+				d.keyboardMayBeUp = false
+			}
+			return kb, err
+		},
+		OnKeyboard: func() bool { return d.onKeyboard(target) },
+		Hide:       func() { d.hideKeyboard(&flow.HideKeyboardStep{}) },
+		Refind: func() (core.Bounds, float64, float64, bool) {
+			fresh, err := d.findElementForTap(sel, true, keyboardRefindMs)
+			if err != nil || fresh == nil {
+				return core.Bounds{}, 0, 0, false
+			}
+			fx, fy, ok := d.tapPoint(fresh.Bounds)
+			if ok {
+				info = fresh
+			}
+			return fresh.Bounds, fx, fy, ok
+		},
+	}
+	tx, ty, _, err := guard.Aim(target, x, y)
+	return tx, ty, info, err
+}
+
+// onKeyboard reports whether the element with bounds b belongs to the
+// keyboard (a key, its return button), read from the page source; false when
+// the source cannot be read.
+func (d *Driver) onKeyboard(b core.Bounds) bool {
+	src, err := d.client.Source()
+	if err != nil {
+		return false
+	}
+	elems, err := ParsePageSource(src)
+	if err != nil {
+		return false
+	}
+	for _, e := range elems {
+		if e.Bounds != b {
+			continue
+		}
+		for p := e; p != nil; p = p.Parent {
+			if p.Type == "XCUIElementTypeKeyboard" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// keyboardBlocked is the result of a tap whose target the keyboard covers.
+func keyboardBlocked(sel flow.Selector, err error) *core.CommandResult {
+	return errorResult(err, fmt.Sprintf("%s is under the keyboard and could not be tapped: %v", selectorDesc(sel), err))
 }
 
 // dragAndDrop long-presses the from-target, then drags it onto the to-target.
@@ -248,6 +330,11 @@ func (d *Driver) doubleTapOn(step *flow.DoubleTapOnStep) *core.CommandResult {
 		return errorResult(perr, fmt.Sprintf("Invalid point coordinates: %v", perr))
 	}
 	x, y := float64(px), float64(py)
+	if step.Selector.Point == "" {
+		if x, y, info, err = d.aimClearOfKeyboard(step.Selector, info, x, y); err != nil {
+			return keyboardBlocked(step.Selector, err)
+		}
+	}
 
 	if err := d.client.DoubleTap(x, y); err != nil {
 		return errorResult(err, "Double tap failed")
@@ -267,6 +354,11 @@ func (d *Driver) longPressOn(step *flow.LongPressOnStep) *core.CommandResult {
 		return errorResult(perr, fmt.Sprintf("Invalid point coordinates: %v", perr))
 	}
 	x, y := float64(px), float64(py)
+	if step.Selector.Point == "" {
+		if x, y, info, err = d.aimClearOfKeyboard(step.Selector, info, x, y); err != nil {
+			return keyboardBlocked(step.Selector, err)
+		}
+	}
 
 	duration := float64(step.DurationMs) / 1000.0
 	if duration <= 0 {
@@ -735,9 +827,11 @@ func (d *Driver) keyboardFrame() (*core.Bounds, error) {
 func (d *Driver) hideKeyboard(step *flow.HideKeyboardStep) *core.CommandResult {
 	kb, err := d.keyboardFrame()
 	if err == nil && kb == nil {
+		d.keyboardMayBeUp = false
 		return successResult("No keyboard to hide", nil)
 	}
 	if d.dismissKeyboard(kb) {
+		d.keyboardMayBeUp = false
 		return successResult("Keyboard hidden", nil)
 	}
 	logger.Info("[wda] hideKeyboard: the keyboard is still visible after the dismiss drags")

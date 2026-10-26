@@ -191,7 +191,7 @@ func (d *Driver) handleTapOn(s *flow.TapOnStep) *core.CommandResult {
 	// taps at the matched element's center. On miss the runner returns the
 	// walked snapshot so we fall through to the existing snapshot+filter
 	// path below (which handles complex selectors: relative, indexed, etc.).
-	if key, value, ok := simpleSelectorKeyValue(s.Selector); ok {
+	if key, value, ok := simpleSelectorKeyValue(s.Selector); ok && !d.keyboardMayBeUp {
 		if hit, err := d.tryTapBySelector(key, value); err == nil && hit != nil {
 			d.lastTappedIdentifier = hit.Identifier
 			// No snapshot on this path, so there is no before-text to diff
@@ -215,6 +215,11 @@ func (d *Driver) handleTapOn(s *flow.TapOnStep) *core.CommandResult {
 	cx, cy, perr := pointOf(node, s.Point)
 	if perr != nil {
 		return core.ErrorResult(perr, "tapOn: "+perr.Error())
+	}
+	if s.Point == "" {
+		if cx, cy, node, err = d.aimClearOfKeyboard(s.Selector, node, cx, cy); err != nil {
+			return keyboardBlocked(s.Selector, err)
+		}
 	}
 	ctx, cancel := d.callTimeout()
 	defer cancel()
@@ -644,7 +649,13 @@ func (d *Driver) handleHideKeyboard(s *flow.HideKeyboardStep) *core.CommandResul
 		}
 		return core.ErrorResult(err, "hideKeyboard failed: "+err.Error())
 	}
+	d.keyboardMayBeUp = false
 	return core.SuccessResult("keyboard dismissed", nil)
+}
+
+// keyboardBlocked is the result of a tap whose target the keyboard covers.
+func keyboardBlocked(sel flow.Selector, err error) *core.CommandResult {
+	return core.ErrorResult(err, fmt.Sprintf("%s is under the keyboard and could not be tapped: %v", describeSelector(sel), err))
 }
 
 // handleSwipe routes maestro's SwipeStep to the runner's drag command with
@@ -936,6 +947,11 @@ func (d *Driver) handleDoubleTap(s *flow.DoubleTapOnStep) *core.CommandResult {
 	if perr != nil {
 		return core.ErrorResult(perr, "doubleTap: "+perr.Error())
 	}
+	if s.Selector.Point == "" {
+		if cx, cy, node, err = d.aimClearOfKeyboard(s.Selector, node, cx, cy); err != nil {
+			return keyboardBlocked(s.Selector, err)
+		}
+	}
 	ctx, cancel := d.callTimeout()
 	defer cancel()
 	if _, err := d.client.Call(ctx, Command{
@@ -1044,6 +1060,11 @@ func (d *Driver) handleLongPress(s *flow.LongPressOnStep) *core.CommandResult {
 	cx, cy, perr := pointOf(node, s.Selector.Point)
 	if perr != nil {
 		return core.ErrorResult(perr, "longPress: "+perr.Error())
+	}
+	if s.Selector.Point == "" {
+		if cx, cy, node, err = d.aimClearOfKeyboard(s.Selector, node, cx, cy); err != nil {
+			return keyboardBlocked(s.Selector, err)
+		}
 	}
 	durationMs := float64(core.LongPressMs(s.DurationMs))
 	ctx, cancel := d.callTimeout()

@@ -2,6 +2,7 @@ package wda
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
 )
 
@@ -22,9 +24,12 @@ type keyboardScreen struct {
 	up        bool
 	hideAfter int
 	source    *string
-	flicks    [][4]float64
-	taps      [][2]float64
-	keys      []string
+	// screen, when set, is the page source with the keyboard up or not.
+	screen  func(up bool) string
+	queries int
+	flicks  [][4]float64
+	taps    [][2]float64
+	keys    []string
 }
 
 func (k *keyboardScreen) serve(t *testing.T) *httptest.Server {
@@ -36,7 +41,13 @@ func (k *keyboardScreen) serve(t *testing.T) *httptest.Server {
 		body, _ := io.ReadAll(r.Body)
 		path := r.URL.Path
 		switch {
+		case strings.HasSuffix(path, "/element"):
+			w.WriteHeader(http.StatusNotFound)
+			jsonResponse(w, map[string]interface{}{"value": map[string]interface{}{"error": "no such element", "message": "not found"}})
 		case strings.HasSuffix(path, "/elements"):
+			if strings.Contains(string(body), "XCUIElementTypeKeyboard") {
+				k.queries++
+			}
 			var found []interface{}
 			if k.up && strings.Contains(string(body), "XCUIElementTypeKeyboard") {
 				found = append(found, map[string]interface{}{"ELEMENT": "kb"})
@@ -45,6 +56,10 @@ func (k *keyboardScreen) serve(t *testing.T) *httptest.Server {
 		case strings.HasSuffix(path, "/element/kb/rect"):
 			jsonResponse(w, map[string]interface{}{"value": map[string]interface{}{"x": 0, "y": 500, "width": 390, "height": 344}})
 		case strings.HasSuffix(path, "/source"):
+			if k.screen != nil {
+				jsonResponse(w, map[string]interface{}{"value": k.screen(k.up)})
+				return
+			}
 			if k.source == nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				jsonResponse(w, map[string]interface{}{"value": map[string]interface{}{"error": "unknown error", "message": "source failed"}})
@@ -201,5 +216,127 @@ func TestHideKeyboardUnreadableScreenUsesCentre(t *testing.T) {
 	d.hideKeyboard(&flow.HideKeyboardStep{})
 	if len(k.flicks) != 1 || k.flicks[0][0] != 195 || k.flicks[0][1] != 422 {
 		t.Errorf("flicks = %v, want one from the centre", k.flicks)
+	}
+}
+
+// pageXML is a 390x844 page source holding body, with the keyboard (top 500)
+// when up.
+func pageXML(body string, up bool) string {
+	if up {
+		return screenXML(body)
+	}
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?><AppiumAUT>
+<XCUIElementTypeApplication type="XCUIElementTypeApplication" name="app" label="app" enabled="true" visible="true" x="0" y="0" width="390" height="844">
+<XCUIElementTypeWindow type="XCUIElementTypeWindow" enabled="true" visible="true" x="0" y="0" width="390" height="844">%s
+</XCUIElementTypeWindow></XCUIElementTypeApplication></AppiumAUT>`, body)
+}
+
+func button(id string, y, h int) string {
+	return fmt.Sprintf(`<XCUIElementTypeButton type="XCUIElementTypeButton" name="%s" label="%s" enabled="true" visible="true" x="20" y="%d" width="350" height="%d"/>`, id, id, y, h)
+}
+
+func tapSubmit(d *Driver) *core.CommandResult {
+	return d.tapOn(&flow.TapOnStep{Selector: flow.Selector{ID: "submit"}})
+}
+
+// Before anything is typed, a tap does not look for the keyboard at all.
+func TestTapNoKeyboardCheckBeforeTyping(t *testing.T) {
+	k := &keyboardScreen{up: true, screen: func(up bool) string { return pageXML(button("submit", 700, 50), up) }}
+	d := createTestDriver(k.serve(t))
+	if r := tapSubmit(d); !r.Success {
+		t.Fatalf("tap failed: %s", r.Message)
+	}
+	if k.queries != 0 {
+		t.Errorf("keyboard queried %d times, want 0", k.queries)
+	}
+	if len(k.taps) != 1 || k.taps[0] != [2]float64{195, 725} {
+		t.Errorf("taps = %v", k.taps)
+	}
+}
+
+// After typing, a tap on a button under the keyboard hides the keyboard
+// first and taps the button, not a key.
+func TestTapUnderKeyboardHidesItFirst(t *testing.T) {
+	shortKeyboardPause(t)
+	k := &keyboardScreen{up: true, hideAfter: 1, screen: func(up bool) string { return pageXML(button("submit", 700, 50), up) }}
+	d := createTestDriver(k.serve(t))
+	d.keyboardMayBeUp = true
+	r := tapSubmit(d)
+	if !r.Success {
+		t.Fatalf("tap failed: %s", r.Message)
+	}
+	if len(k.flicks) != 1 || len(k.keys) != 0 {
+		t.Errorf("flicks %v keys %v, want one dismiss drag and no keys", k.flicks, k.keys)
+	}
+	if len(k.taps) != 1 || k.taps[0] != [2]float64{195, 725} {
+		t.Errorf("taps = %v, want the button's centre", k.taps)
+	}
+	if d.keyboardMayBeUp {
+		t.Error("keyboardMayBeUp still set after the keyboard went")
+	}
+}
+
+// A keyboard that stays up: the tap goes to the part of the button above it.
+func TestTapUnderKeyboardAimsAboveIt(t *testing.T) {
+	shortKeyboardPause(t)
+	k := &keyboardScreen{up: true, screen: func(up bool) string { return pageXML(button("submit", 460, 100), up) }}
+	d := createTestDriver(k.serve(t))
+	d.keyboardMayBeUp = true
+	if r := tapSubmit(d); !r.Success {
+		t.Fatalf("tap failed: %s", r.Message)
+	}
+	if len(k.taps) != 1 || k.taps[0] != [2]float64{195, 480} {
+		t.Errorf("taps = %v, want (195,480), above the keyboard top", k.taps)
+	}
+}
+
+// A keyboard that stays up over all of the button: the step fails and
+// nothing is tapped.
+func TestTapUnderKeyboardFailsWhenCovered(t *testing.T) {
+	shortKeyboardPause(t)
+	k := &keyboardScreen{up: true, screen: func(up bool) string { return pageXML(button("submit", 700, 50), up) }}
+	d := createTestDriver(k.serve(t))
+	d.keyboardMayBeUp = true
+	r := tapSubmit(d)
+	if r.Success || !errors.Is(r.Error, core.ErrUnderKeyboard) {
+		t.Fatalf("result %v %v, want ErrUnderKeyboard", r.Success, r.Error)
+	}
+	if !strings.Contains(r.Message, "under the keyboard") {
+		t.Errorf("message %q", r.Message)
+	}
+	if len(k.taps) != 0 {
+		t.Errorf("taps = %v, want none", k.taps)
+	}
+}
+
+// The keyboard's own return button is tapped where it is.
+func TestTapKeyboardButtonIsNotHidden(t *testing.T) {
+	src := `<?xml version="1.0" encoding="UTF-8"?><AppiumAUT>
+<XCUIElementTypeApplication type="XCUIElementTypeApplication" name="app" label="app" enabled="true" visible="true" x="0" y="0" width="390" height="844">
+<XCUIElementTypeWindow type="XCUIElementTypeWindow" enabled="true" visible="true" x="0" y="0" width="390" height="844">
+<XCUIElementTypeKeyboard type="XCUIElementTypeKeyboard" enabled="true" visible="true" x="0" y="500" width="390" height="344">
+<XCUIElementTypeButton type="XCUIElementTypeButton" name="submit" label="Done" enabled="true" visible="true" x="290" y="760" width="96" height="42"/>
+</XCUIElementTypeKeyboard>
+</XCUIElementTypeWindow></XCUIElementTypeApplication></AppiumAUT>`
+	k := &keyboardScreen{up: true, screen: func(bool) string { return src }}
+	d := createTestDriver(k.serve(t))
+	d.keyboardMayBeUp = true
+	if r := tapSubmit(d); !r.Success {
+		t.Fatalf("tap failed: %s", r.Message)
+	}
+	if len(k.flicks) != 0 || len(k.taps) != 1 || k.taps[0] != [2]float64{338, 781} {
+		t.Errorf("flicks %v taps %v, want the return button tapped in place", k.flicks, k.taps)
+	}
+}
+
+// Once a check finds no keyboard, later taps stop asking.
+func TestTapKeyboardCheckClearsWhenGone(t *testing.T) {
+	k := &keyboardScreen{screen: func(up bool) string { return pageXML(button("submit", 700, 50), up) }}
+	d := createTestDriver(k.serve(t))
+	d.keyboardMayBeUp = true
+	tapSubmit(d)
+	tapSubmit(d)
+	if k.queries != 1 || d.keyboardMayBeUp {
+		t.Errorf("queries %d, keyboardMayBeUp %v; want one check, then none", k.queries, d.keyboardMayBeUp)
 	}
 }
