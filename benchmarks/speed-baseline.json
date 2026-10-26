@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "driver": "devicelab",
+  "platform": "android",
+  "runs": 3,
+  "commands": {
+    "assertNotVisible": {
+      "medianMs": 108,
+      "samples": 6
+    },
+    "assertVisible": {
+      "medianMs": 412,
+      "samples": 36
+    },
+    "extendedWaitUntil": {
+      "medianMs": 317,
+      "samples": 12
+    },
+    "inputText": {
+      "medianMs": 117,
+      "samples": 24
+    },
+    "launchApp": {
+      "medianMs": 452,
+      "samples": 12
+    },
+    "tapOn": {
+      "medianMs": 815,
+      "samples": 36
+    },
+    "waitForAnimationToEnd": {
+      "medianMs": 429,
+      "samples": 6
+    }
+  }
+}
