@@ -23,6 +23,7 @@ type mockDeviceLabClient struct {
 	swipeCoordsErr                   error
 	sourceFunc                       func() (string, error)
 	scrollCalls                      int
+	scrollAreas                      []uiautomator2.RectModel
 	scrollErr                        error
 	findClickCalls                   int
 }
@@ -68,6 +69,7 @@ func (m *mockDeviceLabClient) LongClickElement(elementID string, durationMs int)
 }
 func (m *mockDeviceLabClient) ScrollInArea(area uiautomator2.RectModel, direction string, percent float64, speed int) error {
 	m.scrollCalls++
+	m.scrollAreas = append(m.scrollAreas, area)
 	return m.scrollErr
 }
 func (m *mockDeviceLabClient) SwipeInArea(area uiautomator2.RectModel, direction string, percent float64, speed int) error {

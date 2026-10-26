@@ -1488,13 +1488,6 @@ func (d *Driver) scrollContainerOf(b core.Bounds) (core.Bounds, bool) {
 const scrollEdgeTolerancePx = 2
 
 func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.CommandResult {
-	// `from:` confines the scroll to a container. Only the UIAutomator2 driver
-	// implements it so far; refusing here is better than silently scrolling the
-	// whole screen and leaving the flow author to wonder why.
-	if !step.From.IsEmpty() {
-		return errorResult(fmt.Errorf("unsupported option"), "scrollUntilVisible `from:` is not supported on this driver yet — it currently works on the uiautomator2 driver")
-	}
-
 	direction := strings.ToLower(step.Direction)
 	if direction == "" {
 		direction = "down"
@@ -1523,6 +1516,20 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	width, height, err := d.tappableScreenSize()
 	if err != nil {
 		return errorResult(err, "Failed to get screen size")
+	}
+
+	// `from:` confines the gesture to one container. Resolved once, before the
+	// loop: re-finding it on every iteration would cost a lookup per scroll,
+	// and a container that moves while its own content scrolls is not a case
+	// worth paying for.
+	var container *core.Bounds
+	if !step.From.IsEmpty() {
+		_, info, findErr := d.findElement(step.From, false, step.TimeoutMs)
+		if findErr != nil || info == nil {
+			return errorResult(findErr, fmt.Sprintf("Scroll container not found: %s", step.From.Describe()))
+		}
+		bounds := info.Bounds
+		container = &bounds
 	}
 
 	// Height of a flush candidate awaiting confirmation, or -1 for none.
@@ -1607,8 +1614,14 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 			return errorResult(fmt.Errorf("element not found"), fmt.Sprintf("Element not found: scrolling %s made no progress after %d scrolls (end of content?)", direction, i))
 		}
 
-		if err := d.performScroll(direction, width, height, step.Engine, 0.3, scrollMs); err != nil {
-			return errorResult(err, fmt.Sprintf("Failed to scroll: %v", err))
+		scrollErr := error(nil)
+		if container != nil {
+			scrollErr = d.performScrollInRect(direction, *container, step.Engine, 0.3, scrollMs)
+		} else {
+			scrollErr = d.performScroll(direction, width, height, step.Engine, 0.3, scrollMs)
+		}
+		if scrollErr != nil {
+			return errorResult(scrollErr, fmt.Sprintf("Failed to scroll: %v", scrollErr))
 		}
 
 		time.Sleep(300 * time.Millisecond)
@@ -1654,36 +1667,63 @@ func (d *Driver) performScroll(direction string, width, height int, engine strin
 	return d.client.ScrollInArea(area, direction, percent, durationMs)
 }
 
+// performScrollInRect scrolls inside one container rather than the screen. The
+// inset keeps the gesture off the container's own edges, where a swipe is as
+// likely to be read by the parent list as by the container itself.
+func (d *Driver) performScrollInRect(direction string, bounds core.Bounds, engine string, percent float64, durationMs int) error {
+	inset := bounds.Height / 8
+	x, y := bounds.X, bounds.Y+inset
+	w, h := bounds.Width, bounds.Height-2*inset
+	if h <= 0 {
+		x, y, w, h = bounds.X, bounds.Y, bounds.Width, bounds.Height
+	}
+
+	useAgent := strings.EqualFold(engine, "agent")
+	if !useAgent && d.device != nil {
+		return d.scrollByAdbInRect(direction, x, y, w, h, percent, durationMs)
+	}
+	return d.client.ScrollInArea(uiautomator2.NewRect(x, y, w, h), direction, percent, durationMs)
+}
+
 // scrollByAdb issues `adb shell input swipe` over the local shell executor.
 // percent is the swipe distance as a fraction of the screen dimension along
 // the scroll axis. Direction uses Maestro scroll semantics (what becomes
 // visible — "down" reveals content below by swiping the finger UP).
 func (d *Driver) scrollByAdb(direction string, screenWidth, screenHeight int, percent float64, durationMs int) error {
-	centerX := screenWidth / 2
-	centerY := screenHeight / 2
-	halfV := int(float64(screenHeight) * percent / 2)
-	halfH := int(float64(screenWidth) * percent / 2)
-	var fromX, fromY, toX, toY int
-	switch direction {
-	case "up":
-		fromX, fromY = centerX, centerY-halfV
-		toX, toY = centerX, centerY+halfV
-	case "down":
-		fromX, fromY = centerX, centerY+halfV
-		toX, toY = centerX, centerY-halfV
-	case "left":
-		fromX, fromY = centerX-halfH, centerY
-		toX, toY = centerX+halfH, centerY
-	case "right":
-		fromX, fromY = centerX+halfH, centerY
-		toX, toY = centerX-halfH, centerY
-	default:
-		fromX, fromY = centerX, centerY+halfV
-		toX, toY = centerX, centerY-halfV
-	}
+	return d.scrollByAdbInRect(direction, 0, 0, screenWidth, screenHeight, percent, durationMs)
+}
+
+// scrollByAdbInRect is scrollByAdb over an arbitrary rectangle, so a scroll can
+// be confined to one container rather than the whole screen. The gesture is
+// centred in the rectangle and spans `percent` of its height or width.
+func (d *Driver) scrollByAdbInRect(direction string, rectX, rectY, rectW, rectH int, percent float64, durationMs int) error {
+	fromX, fromY, toX, toY := scrollPointsInRect(direction, rectX, rectY, rectW, rectH, percent)
 	cmd := fmt.Sprintf("input swipe %d %d %d %d %d", fromX, fromY, toX, toY, durationMs)
 	_, err := d.device.Shell(cmd)
 	return err
+}
+
+// scrollPointsInRect returns the swipe endpoints for a scroll centred in a
+// rectangle and spanning `percent` of it along the scroll axis. Pure, so the
+// geometry can be checked without a device.
+//
+// Direction follows Maestro semantics — it names what becomes visible, so
+// "down" reveals content below by dragging the finger up the screen.
+func scrollPointsInRect(direction string, rectX, rectY, rectW, rectH int, percent float64) (fromX, fromY, toX, toY int) {
+	centerX := rectX + rectW/2
+	centerY := rectY + rectH/2
+	halfV := int(float64(rectH) * percent / 2)
+	halfH := int(float64(rectW) * percent / 2)
+	switch direction {
+	case "up":
+		return centerX, centerY - halfV, centerX, centerY + halfV
+	case "left":
+		return centerX - halfH, centerY, centerX + halfH, centerY
+	case "right":
+		return centerX + halfH, centerY, centerX - halfH, centerY
+	default: // "down" and anything unrecognised
+		return centerX, centerY + halfV, centerX, centerY - halfV
+	}
 }
 
 // scrollDurationMs is the swipe duration (in ms) passed to the DeviceLab
