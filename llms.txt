@@ -43,6 +43,7 @@ maestro-runner replaces the execution engine with a single Go binary and fixes a
 - Free local reports: HTML, JUnit XML, Allure — no cloud account needed
 - Configurable timeouts per flow and per command
 - CI/CD: GitHub Actions, GitLab CI, Jenkins, CircleCI
+- Agent skill for AI coding agents: `maestro-runner skills install` writes ~/.claude/skills/maestro-runner/SKILL.md
 
 ## What it does not support (yet)
 
