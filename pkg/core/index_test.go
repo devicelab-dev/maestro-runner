@@ -62,3 +62,32 @@ func TestIndexError(t *testing.T) {
 		t.Errorf("ParseIndex(2.9) = %d, %v; want 2 (truncated, as Maestro)", i, err)
 	}
 }
+
+// Matches are ordered top to bottom, then left to right; an element without
+// bounds goes last and ties keep their order (#254). The input is not changed.
+func TestSortByPosition(t *testing.T) {
+	type el struct {
+		name string
+		b    Bounds
+	}
+	in := []el{
+		{"none", Bounds{}},
+		{"bottom-right", Bounds{X: 200, Y: 500, Width: 10, Height: 10}},
+		{"bottom-left", Bounds{X: 0, Y: 500, Width: 10, Height: 10}},
+		{"top", Bounds{X: 50, Y: 0, Width: 10, Height: 10}},
+		{"tie-a", Bounds{X: 0, Y: 300, Width: 10, Height: 10}},
+		{"tie-b", Bounds{X: 0, Y: 300, Width: 20, Height: 20}},
+	}
+	got := SortByPosition(in, func(e el) Bounds { return e.b })
+	var names []string
+	for _, e := range got {
+		names = append(names, e.name)
+	}
+	want := "top tie-a tie-b bottom-left bottom-right none"
+	if strings.Join(names, " ") != want {
+		t.Errorf("order = %v, want %s", names, want)
+	}
+	if in[0].name != "none" {
+		t.Error("SortByPosition reordered its input")
+	}
+}

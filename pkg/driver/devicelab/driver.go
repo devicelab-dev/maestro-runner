@@ -1631,7 +1631,7 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector) (*core.ElementInfo, 
 		return nil, fmt.Errorf("no elements match relative criteria")
 	}
 
-	candidates = SortClickableFirst(candidates)
+	candidates = SortCandidates(candidates, sel.Index)
 
 	if err := core.IndexError(len(candidates), sel.Index); err != nil {
 		return nil, err
@@ -1711,7 +1711,7 @@ func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements 
 		return nil, nil, fmt.Errorf("no elements match relative criteria")
 	}
 
-	candidates = SortClickableFirst(candidates)
+	candidates = SortCandidates(candidates, sel.Index)
 
 	if err := core.IndexError(len(candidates), sel.Index); err != nil {
 		return nil, nil, err
@@ -1747,7 +1747,7 @@ func (d *Driver) findElementByPageSourceOnce(sel flow.Selector) (*uiautomator2.E
 	}
 
 	candidates := FilterBySelector(allElements, sel)
-	candidates = SortClickableFirst(candidates)
+	candidates = SortCandidates(candidates, sel.Index)
 
 	if len(candidates) == 0 {
 		return nil, nil, fmt.Errorf("no elements match selector")
@@ -1808,7 +1808,7 @@ func (d *Driver) findElementByPageSourceOnceInternal(sel flow.Selector) (*core.E
 	}
 
 	candidates := FilterBySelector(allElements, sel)
-	candidates = SortClickableFirst(candidates)
+	candidates = SortCandidates(candidates, sel.Index)
 
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no elements match selector")
@@ -2052,10 +2052,13 @@ func errorResult(err error, msg string) *core.CommandResult {
 // Maestro. Without an explicit index, SelectByIndex would instead fall through
 // to DeepestMatchingElement and could return a far-away, deeply-nested node.
 //
-// This runs after SortClickableFirst, which is a stable partition: it moves the
-// clickable candidates ahead of the rest without disturbing distance order
-// inside either group. So the first candidate is the nearest clickable one, or
-// the nearest of any kind when none are clickable — which is what a tap wants.
+// This runs after SortCandidates. Without an index that is SortClickableFirst,
+// a stable partition: it moves the clickable candidates ahead of the rest
+// without disturbing distance order inside either group. So the first
+// candidate is the nearest clickable one, or the nearest of any kind when none
+// are clickable — which is what a tap wants. With an index, candidates are in
+// screen-position order instead and the index counts in that order, as in
+// Maestro (#254).
 //
 // Non-directional filters keep the old behaviour: containsChild and friends do
 // not order by distance, and depth is the useful tiebreak there.

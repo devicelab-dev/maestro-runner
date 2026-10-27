@@ -719,6 +719,16 @@ func SelectByIndex(candidates []*ParsedElement, index string) *ParsedElement {
 	return selected
 }
 
+// SortCandidates orders matches before one is picked. Without an index,
+// clickable ones come first; with one, Maestro skips that and counts by
+// position on screen (top to bottom, then left to right), so this does too.
+func SortCandidates(candidates []*ParsedElement, index string) []*ParsedElement {
+	if index == "" {
+		return SortClickableFirst(candidates)
+	}
+	return core.SortByPosition(candidates, func(e *ParsedElement) core.Bounds { return e.Bounds })
+}
+
 // SortClickableFirst puts clickable elements first.
 func SortClickableFirst(elements []*ParsedElement) []*ParsedElement {
 	var clickable, nonClickable []*ParsedElement
