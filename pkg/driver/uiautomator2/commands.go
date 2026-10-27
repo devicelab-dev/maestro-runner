@@ -1705,6 +1705,11 @@ func (d *Driver) setOrientation(step *flow.SetOrientationStep) *core.CommandResu
 		if err := d.client.SetOrientation(orientation); err != nil {
 			return errorResult(err, fmt.Sprintf("Failed to set orientation: %v", err))
 		}
+		// As below, the call returns before the display has turned.
+		if w, h, ok := d.naturalScreenSize(); ok {
+			r, _ := core.WaitForDisplayOrientation(d.device.Shell, orientation == "LANDSCAPE", w, h, rotationSettleTimeout, rotationPollInterval)
+			d.noteRotation(r)
+		}
 		return successResult(fmt.Sprintf("Set orientation to %s", orientation), nil)
 	}
 
@@ -1744,8 +1749,10 @@ func (d *Driver) setOrientation(step *flow.SetOrientationStep) *core.CommandResu
 	// worth saying.
 	want, _ := strconv.Atoi(rotation)
 	if err := core.WaitForDisplayRotation(d.device.Shell, want, rotationSettleTimeout, rotationPollInterval); err != nil {
+		d.noteRotation(core.DisplayRotation(d.device.Shell))
 		return successResult(fmt.Sprintf("Set orientation to %s (%v)", step.Orientation, err), nil)
 	}
+	d.noteRotation(want)
 
 	return successResult(fmt.Sprintf("Set orientation to %s", step.Orientation), nil)
 }

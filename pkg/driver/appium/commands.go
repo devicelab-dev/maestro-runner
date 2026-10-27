@@ -1035,6 +1035,7 @@ func (d *Driver) setOrientation(step *flow.SetOrientationStep) *core.CommandResu
 			if err := d.client.SetRotation(z); err != nil {
 				return errorResult(err, fmt.Sprintf("Failed to set orientation: %s", orientation))
 			}
+			d.client.WaitForScreenOrientation(z != 180, rotationSettleTimeout, rotationPollInterval)
 			return successResult(fmt.Sprintf("Set orientation to %s", orientation), nil)
 		}
 	}
@@ -1042,8 +1043,16 @@ func (d *Driver) setOrientation(step *flow.SetOrientationStep) *core.CommandResu
 	if err := d.client.SetOrientation(orientation); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to set orientation: %s", orientation))
 	}
+	d.client.WaitForScreenOrientation(strings.HasPrefix(orientation, "landscape"), rotationSettleTimeout, rotationPollInterval)
 	return successResult(fmt.Sprintf("Set orientation to %s", orientation), nil)
 }
+
+// How long setOrientation waits for the window to take the new orientation,
+// and how often it looks.
+var (
+	rotationSettleTimeout = 5 * time.Second
+	rotationPollInterval  = 250 * time.Millisecond
+)
 
 func (d *Driver) openLink(step *flow.OpenLinkStep) *core.CommandResult {
 	// Note: Appium's OpenURL opens in the default handler

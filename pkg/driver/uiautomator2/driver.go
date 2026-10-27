@@ -105,6 +105,13 @@ type Driver struct {
 	// end of the run.
 	locationReady bool
 	locationSet   bool
+
+	// The display's natural size (`wm size`) and the rotation (0-3) the last
+	// setOrientation left, when rotated is set: the size read at session
+	// start does not turn with the display (#256).
+	naturalW, naturalH int
+	rotation           int
+	rotated            bool
 }
 
 // New creates a new UIAutomator2 driver.
@@ -117,12 +124,47 @@ func New(client UIA2Client, info *core.PlatformInfo, device ShellExecutor) *Driv
 	}
 }
 
-// screenSize returns cached screen dimensions from PlatformInfo.
+// screenSize returns cached screen dimensions from PlatformInfo, turned to
+// the orientation setOrientation left the display in.
 func (d *Driver) screenSize() (int, int, error) {
 	if d.info != nil && d.info.ScreenWidth > 0 && d.info.ScreenHeight > 0 {
-		return d.info.ScreenWidth, d.info.ScreenHeight, nil
+		w, h := d.info.ScreenWidth, d.info.ScreenHeight
+		if d.rotated {
+			if rw, rh := core.RotateSize(d.naturalW, d.naturalH, d.rotation); (w > h) != (rw > rh) {
+				w, h = h, w
+			}
+		}
+		return w, h, nil
 	}
 	return 0, 0, fmt.Errorf("screen dimensions not available")
+}
+
+// naturalScreenSize is the display size from `wm size`, at rotation 0.
+func (d *Driver) naturalScreenSize() (int, int, bool) {
+	if d.naturalW > 0 && d.naturalH > 0 {
+		return d.naturalW, d.naturalH, true
+	}
+	if d.device == nil {
+		return 0, 0, false
+	}
+	out, err := d.device.Shell("wm size")
+	if err != nil {
+		return 0, 0, false
+	}
+	w, h := core.ParseWmSize(out)
+	if w <= 0 || h <= 0 {
+		return 0, 0, false
+	}
+	d.naturalW, d.naturalH = w, h
+	return w, h, true
+}
+
+// noteRotation records the display rotation setOrientation left. An unknown
+// rotation (-1), or an unknown natural size, keeps the size as it was.
+func (d *Driver) noteRotation(rotation int) {
+	if _, _, ok := d.naturalScreenSize(); ok && rotation >= 0 {
+		d.rotation, d.rotated = rotation, true
+	}
 }
 
 // SetContext sets the parent context for element-finding operations.

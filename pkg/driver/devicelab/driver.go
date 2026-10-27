@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -166,6 +165,11 @@ type Driver struct {
 	cachedActivities map[string]string // appID -> activity
 	cachedScreenW    int               // physical display width  (from `wm size`)
 	cachedScreenH    int               // physical display height (from `wm size`)
+
+	// rotation is the display rotation (0-3) the last setOrientation left,
+	// when rotated is set. Before one, the sizes are as read at session start.
+	rotation int
+	rotated  bool
 
 	// CDP state from background push events (nil = not wired)
 	cdpStateFunc func() *core.CDPInfo
@@ -434,10 +438,17 @@ func (d *Driver) CDPState() *core.CDPInfo {
 	return nil
 }
 
-// screenSize returns cached screen dimensions from PlatformInfo.
+// screenSize returns cached screen dimensions from PlatformInfo, turned to
+// the orientation setOrientation left the display in.
 func (d *Driver) screenSize() (int, int, error) {
 	if d.info != nil && d.info.ScreenWidth > 0 && d.info.ScreenHeight > 0 {
-		return d.info.ScreenWidth, d.info.ScreenHeight, nil
+		w, h := d.info.ScreenWidth, d.info.ScreenHeight
+		if d.rotated {
+			if pw, ph, ok := d.physicalScreenSize(); ok && (w > h) != (pw > ph) {
+				w, h = h, w
+			}
+		}
+		return w, h, nil
 	}
 	return 0, 0, fmt.Errorf("screen dimensions not available")
 }
@@ -447,8 +458,19 @@ func (d *Driver) screenSize() (int, int, error) {
 // on-device-reported USABLE size (it can exclude the status bar, e.g. 1080x2204) —
 // this matches the coordinate space of the accessibility hierarchy (whose root spans
 // the full display), so it is the correct reference for on-screen geometry checks
-// against element bounds. Returns ok=false if it cannot be determined.
+// against element bounds. `wm size` does not turn with the display, so after a
+// setOrientation the size is turned to the rotation it left (2340x1080 in
+// landscape). Returns ok=false if it cannot be determined.
 func (d *Driver) physicalScreenSize() (int, int, bool) {
+	w, h, ok := d.naturalScreenSize()
+	if ok && d.rotated {
+		w, h = core.RotateSize(w, h, d.rotation)
+	}
+	return w, h, ok
+}
+
+// naturalScreenSize is the display size from `wm size`, at rotation 0.
+func (d *Driver) naturalScreenSize() (int, int, bool) {
 	if d.cachedScreenW > 0 && d.cachedScreenH > 0 {
 		return d.cachedScreenW, d.cachedScreenH, true
 	}
@@ -467,6 +489,15 @@ func (d *Driver) physicalScreenSize() (int, int, bool) {
 	return w, h, true
 }
 
+// noteRotation records the display rotation setOrientation left, so sizes
+// and percentage points follow it (#256). An unknown rotation (-1) keeps the
+// sizes as they were.
+func (d *Driver) noteRotation(rotation int) {
+	if rotation >= 0 {
+		d.rotation, d.rotated = rotation, true
+	}
+}
+
 // tappableScreenSize returns the screen size used to validate element bounds: the
 // full physical display (same coordinate space as the accessibility hierarchy that
 // produced the bounds), falling back to the on-device-reported size when the
@@ -482,35 +513,7 @@ func (d *Driver) tappableScreenSize() (int, int, error) {
 // "Override size" line (the effective display size when one is set) over the
 // "Physical size" line.
 func parseWmSize(out string) (int, int) {
-	var pw, ph, ow, oh int
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(line, "Physical size:"):
-			pw, ph = parseWxH(strings.TrimPrefix(line, "Physical size:"))
-		case strings.HasPrefix(line, "Override size:"):
-			ow, oh = parseWxH(strings.TrimPrefix(line, "Override size:"))
-		}
-	}
-	if ow > 0 && oh > 0 {
-		return ow, oh
-	}
-	return pw, ph
-}
-
-// parseWxH parses "1080x2340" (tolerating surrounding spaces) into width, height.
-func parseWxH(s string) (int, int) {
-	s = strings.TrimSpace(s)
-	i := strings.IndexByte(s, 'x')
-	if i <= 0 {
-		return 0, 0
-	}
-	w, err1 := strconv.Atoi(strings.TrimSpace(s[:i]))
-	h, err2 := strconv.Atoi(strings.TrimSpace(s[i+1:]))
-	if err1 != nil || err2 != nil {
-		return 0, 0
-	}
-	return w, h
+	return core.ParseWmSize(out)
 }
 
 // SetContext sets the parent context for element-finding operations.
