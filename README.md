@@ -77,6 +77,14 @@ maestro-runner --driver appium --appium-url <server-url> test flow.yaml # Appium
 maestro-runner test --parallel 3 flows/                                 # Parallel on 3 devices
 ```
 
+## AI coding agents
+
+```bash
+maestro-runner skills install    # writes ~/.claude/skills/maestro-runner/SKILL.md
+```
+
+Installs a skill that tells Claude Code (and other agents that read `SKILL.md`) how to write Maestro flows, run them with maestro-runner, inspect the screen and read the reports. `--dir` writes it elsewhere (`.claude/skills/maestro-runner` in a repository), `--print` prints it. The file carries the binary's version and is replaced when you install from a newer release.
+
 ## Key Features
 
 - **Zero migration** — Runs your existing Maestro YAML flows as-is, no changes needed
