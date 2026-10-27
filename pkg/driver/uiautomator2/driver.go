@@ -889,7 +889,11 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector) (*core.ElementInfo, 
 			}
 		} else {
 			// Simple anchor - use FilterBySelector
-			anchors = FilterBySelector(allElements, *anchorSelector)
+			picked, err := core.PickAnchor(FilterBySelector(allElements, *anchorSelector), anchorSelector.Index, elementBounds)
+			if err != nil {
+				return nil, err
+			}
+			anchors = picked
 		}
 	}
 
@@ -988,7 +992,11 @@ func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements 
 			}
 		} else {
 			// Simple anchor - use FilterBySelector
-			anchors = FilterBySelector(allElements, *anchorSelector)
+			picked, err := core.PickAnchor(FilterBySelector(allElements, *anchorSelector), anchorSelector.Index, elementBounds)
+			if err != nil {
+				return nil, nil, err
+			}
+			anchors = picked
 		}
 	}
 

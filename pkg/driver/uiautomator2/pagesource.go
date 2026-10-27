@@ -638,8 +638,11 @@ func SortCandidates(candidates []*ParsedElement, index string) []*ParsedElement 
 	if index == "" {
 		return SortClickableFirst(candidates)
 	}
-	return core.SortByPosition(candidates, func(e *ParsedElement) core.Bounds { return e.Bounds })
+	return core.SortByPosition(candidates, elementBounds)
 }
+
+// elementBounds is an element's place on screen, for core.PickAnchor.
+func elementBounds(e *ParsedElement) core.Bounds { return e.Bounds }
 
 // SortClickableFirst reorders elements to prioritize clickable ones.
 // Clickable elements come first, maintaining relative order within each group.
