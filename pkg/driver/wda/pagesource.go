@@ -797,6 +797,9 @@ func isClickableType(elemType string) bool {
 	}
 }
 
+// elementBounds is an element's place on screen, for core.PickAnchor.
+func elementBounds(e *ParsedElement) core.Bounds { return e.Bounds }
+
 // SortClickableFirst reorders elements to prioritize interactive ones.
 // iOS doesn't expose a "clickable" attribute, so we determine clickability
 // from the element type (Button, Link, TextField, etc. are clickable).

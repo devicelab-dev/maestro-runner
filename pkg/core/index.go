@@ -1,8 +1,10 @@
 package core
 
 import (
+	"cmp"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -59,4 +61,30 @@ func IndexError(count int, index string) error {
 		return fmt.Errorf("no element at index %s: %d match(es)", strings.TrimSpace(index), count)
 	}
 	return nil
+}
+
+// PickAnchor narrows a relative selector's anchors to the one the anchor's own
+// index names (`childOf: {id: card, index: 1}`). As in Maestro
+// (Filters.INDEX_COMPARATOR), the index counts the anchors by their place on
+// screen: top to bottom, then left to right. Without an index every anchor is
+// kept and the first one with matches wins. An index that is not a number or
+// names no anchor is an error naming that index. The index used to be dropped,
+// so `childOf` the second card searched the first one.
+func PickAnchor[E any](anchors []E, index string, bounds func(E) Bounds) ([]E, error) {
+	if strings.TrimSpace(index) == "" || len(anchors) == 0 {
+		return anchors, nil
+	}
+	if err := IndexError(len(anchors), index); err != nil {
+		return nil, fmt.Errorf("anchor element not found: %w", err)
+	}
+	onScreen := slices.Clone(anchors)
+	slices.SortStableFunc(onScreen, func(a, b E) int {
+		ba, bb := bounds(a), bounds(b)
+		return cmp.Or(cmp.Compare(ba.Y, bb.Y), cmp.Compare(ba.X, bb.X))
+	})
+	i, _ := ParseIndex(index)
+	if i < 0 {
+		i += len(onScreen)
+	}
+	return []E{onScreen[i]}, nil
 }

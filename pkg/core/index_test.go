@@ -62,3 +62,38 @@ func TestIndexError(t *testing.T) {
 		t.Errorf("ParseIndex(2.9) = %d, %v; want 2 (truncated, as Maestro)", i, err)
 	}
 }
+
+// An anchor's index counts the anchors by their place on screen, as Maestro
+// does, not in tree order and not clickable first: the cards here are listed
+// out of screen order, and only card B is clickable.
+func TestPickAnchor(t *testing.T) {
+	type card struct {
+		name      string
+		clickable bool
+		b         Bounds
+	}
+	cards := []card{
+		{"C", false, Bounds{X: 0, Y: 500, Width: 400, Height: 200}},
+		{"B", true, Bounds{X: 420, Y: 100, Width: 400, Height: 200}},
+		{"A", false, Bounds{X: 0, Y: 100, Width: 400, Height: 200}},
+	}
+	bounds := func(c card) Bounds { return c.b }
+
+	for index, want := range map[string]string{"0": "A", "1": "B", "2": "C", "-1": "C", "1.0": "B"} {
+		got, err := PickAnchor(cards, index, bounds)
+		if err != nil || len(got) != 1 || got[0].name != want {
+			t.Errorf("PickAnchor(index %s) = %v, %v; want card %s", index, got, err, want)
+		}
+	}
+	if got, err := PickAnchor(cards, "", bounds); err != nil || len(got) != 3 || got[0].name != "C" {
+		t.Errorf("PickAnchor without an index = %v, %v; want every anchor as found", got, err)
+	}
+	for index, want := range map[string]string{
+		"3":         "anchor element not found: no element at index 3: 3 match(es)",
+		"undefined": `anchor element not found: invalid index "undefined"`,
+	} {
+		if _, err := PickAnchor(cards, index, bounds); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("PickAnchor(index %s) error = %v, want %q", index, err, want)
+		}
+	}
+}

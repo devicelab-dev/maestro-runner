@@ -719,6 +719,9 @@ func SelectByIndex(candidates []*ParsedElement, index string) *ParsedElement {
 	return selected
 }
 
+// elementBounds is an element's place on screen, for core.PickAnchor.
+func elementBounds(e *ParsedElement) core.Bounds { return e.Bounds }
+
 // SortClickableFirst puts clickable elements first.
 func SortClickableFirst(elements []*ParsedElement) []*ParsedElement {
 	var clickable, nonClickable []*ParsedElement
