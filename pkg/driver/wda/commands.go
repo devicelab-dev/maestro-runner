@@ -667,6 +667,11 @@ func (d *Driver) eraseText(step *flow.EraseTextStep) *core.CommandResult {
 	if err == nil && elemID != "" {
 		// Got active element - try to read its text
 		currentText, textErr := d.client.ElementText(elemID)
+		if textErr == nil && chars < len([]rune(currentText)) && d.showsPlaceholder(elemID, currentText) {
+			// WDA reads an empty field's placeholder as its text: keeping
+			// "the rest" of it would type the placeholder into the field.
+			currentText = ""
+		}
 		if textErr == nil {
 			textLen := len([]rune(currentText)) // Use runes for proper Unicode handling
 
@@ -709,9 +714,21 @@ func (d *Driver) eraseText(step *flow.EraseTextStep) *core.CommandResult {
 	return successResult(fmt.Sprintf("Erased %d characters", chars), nil)
 }
 
+// showsPlaceholder reports whether text, read from an element, is its
+// placeholder: WDA's text of an empty text field is the placeholder.
+func (d *Driver) showsPlaceholder(elemID, text string) bool {
+	placeholder, err := d.client.ElementAttribute(elemID, "placeholderValue")
+	return err == nil && placeholder != "" && placeholder == text
+}
+
 func (d *Driver) hideKeyboard(step *flow.HideKeyboardStep) *core.CommandResult {
-	// iOS: tap outside to dismiss keyboard, or press Done button
-	// Try pressing the "return" key (ignore error - keyboard might not be visible)
+	// No keyboard, nothing to hide: the return key below still reaches a
+	// focused field (a simulator with the hardware keyboard connected shows
+	// none) and submits its form. Maestro's hideKeyboard does nothing then.
+	if visible, err := d.keyboardVisible(); err == nil && !visible {
+		return successResult("No keyboard to hide", nil)
+	}
+	// Press the "return" key (ignore error - keyboard might not be visible)
 	_ = d.client.SendKeys("\n", 0)
 
 	return successResult("Attempted to hide keyboard", nil)
@@ -1304,11 +1321,12 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 		"animationCoolOffTimeout": 0,
 		"defaultAlertAction":      d.alertAction,
 		"autoClickAlertSelector":  autoClickAlertSelector(d.alertAction),
-	}
-	if d.alertAction == "accept" {
-		sessionSettings["acceptAlertButtonSelector"] = "**/XCUIElementTypeButton[`label BEGINSWITH[c] 'Allow' OR label ==[c] 'OK'`]"
-	} else if d.alertAction == "dismiss" {
-		sessionSettings["dismissAlertButtonSelector"] = "**/XCUIElementTypeButton[`label CONTAINS[c] 'Don't Allow' OR label CONTAINS[c] 'Dont Allow'`]"
+		// acceptAlert and dismissAlert name their button whatever the
+		// permissions: without a match WDA taps by position (dismiss the
+		// first button, accept the last), which on a stacked alert is the
+		// wrong end: "Allow Once" for a dismiss.
+		"acceptAlertButtonSelector":  acceptAlertButtonSelector,
+		"dismissAlertButtonSelector": dismissAlertButtonSelector,
 	}
 	_ = d.client.UpdateSettings(sessionSettings)
 
@@ -2182,6 +2200,15 @@ func (d *Driver) resetIOSPermission(appID, permission string) error {
 const (
 	autoAcceptAlertSelector  = "**/XCUIElementTypeButton[`label BEGINSWITH[c] 'Allow'`]"
 	autoDismissAlertSelector = "**/XCUIElementTypeButton[`(label BEGINSWITH[c] 'Don' AND label CONTAINS[c] 'Allow') OR label BEGINSWITH[c] 'Ask App Not'`]"
+)
+
+// Selectors for the buttons acceptAlert and dismissAlert tap. Only a button
+// with no match falls back to WDA's positional pick. The apostrophe in
+// "Don't Allow" is matched as "Don…Allow": a quote inside the predicate ends
+// its string, and the selector that had one never matched.
+const (
+	acceptAlertButtonSelector  = "**/XCUIElementTypeButton[`label BEGINSWITH[c] 'Allow' OR label ==[c] 'OK' OR label ==[c] 'Continue' OR label ==[c] 'Open' OR label ==[c] 'Yes'`]"
+	dismissAlertButtonSelector = "**/XCUIElementTypeButton[`(label BEGINSWITH[c] 'Don' AND label CONTAINS[c] 'Allow') OR label BEGINSWITH[c] 'Ask App Not' OR label ==[c] 'Cancel' OR label ==[c] 'Not Now' OR label ==[c] 'Close' OR label ==[c] 'No' OR label ==[c] 'Dismiss'`]"
 )
 
 // autoClickAlertSelector returns the autoClickAlertSelector for an alert

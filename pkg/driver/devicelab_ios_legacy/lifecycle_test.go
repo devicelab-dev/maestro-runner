@@ -75,6 +75,26 @@ func TestLaunchAppDefaultsToAllowAll(t *testing.T) {
 	}
 }
 
+func TestLaunchAppStopAppFalseKeepsRunningApp(t *testing.T) {
+	f := &fakeSimctl{}
+	f.install(t)
+	d := simDriver()
+	stop := false
+	res := d.handleLaunchApp(&flow.LaunchAppStep{AppID: "com.x", StopApp: &stop})
+	if !res.Success {
+		t.Fatalf("launch failed: %s", res.Message)
+	}
+	got := f.joined()
+	if last := got[len(got)-1]; last != "launch SIM com.x" {
+		t.Errorf("launch = %q, want no --terminate-running-process", last)
+	}
+	for _, c := range got {
+		if strings.HasPrefix(c, "terminate") {
+			t.Errorf("stopApp: false must not terminate: %q", got)
+		}
+	}
+}
+
 func TestLaunchAppPermissionsKeychainAndEnv(t *testing.T) {
 	f := &fakeSimctl{reply: func(args []string) (string, bool) {
 		return "", args[0] == "privacy" && args[2] == "grant" && args[3] == "camera"

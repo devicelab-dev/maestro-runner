@@ -1221,32 +1221,39 @@ func TestGetIOSPermissions(t *testing.T) {
 // hideKeyboard test
 // =============================================================================
 
-// TestHideKeyboardSendsNewline tests that hideKeyboard sends a newline character.
-func TestHideKeyboardSendsNewline(t *testing.T) {
-	var keysSent string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if strings.Contains(r.URL.Path, "/wda/keys") {
-			body, _ := io.ReadAll(r.Body)
-			keysSent = string(body)
+// hideKeyboard presses return while a keyboard is up, and does nothing when
+// none is: return would still submit a focused field's form.
+func TestHideKeyboardSendsNewlineOnlyWithKeyboard(t *testing.T) {
+	for _, tc := range []struct {
+		keyboard bool
+		wantKeys bool
+	}{{true, true}, {false, false}} {
+		var keysSent string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if strings.Contains(r.URL.Path, "/wda/keys") {
+				body, _ := io.ReadAll(r.Body)
+				keysSent = string(body)
+			}
+			if strings.HasSuffix(r.URL.Path, "/elements") {
+				var found []interface{}
+				if tc.keyboard {
+					found = append(found, map[string]interface{}{"ELEMENT": "kb"})
+				}
+				jsonResponse(w, map[string]interface{}{"value": found})
+				return
+			}
 			jsonResponse(w, map[string]interface{}{"status": 0})
-			return
+		}))
+		driver := createTestDriver(server)
+		result := driver.hideKeyboard(&flow.HideKeyboardStep{})
+		server.Close()
+		if !result.Success {
+			t.Errorf("keyboard=%v: expected success, got: %s", tc.keyboard, result.Message)
 		}
-		jsonResponse(w, map[string]interface{}{"status": 0})
-	}))
-	defer server.Close()
-	driver := createTestDriver(server)
-
-	step := &flow.HideKeyboardStep{}
-	result := driver.hideKeyboard(step)
-
-	if !result.Success {
-		t.Errorf("Expected success, got: %s", result.Message)
-	}
-	// Verify a newline was sent
-	if !strings.Contains(keysSent, "\\n") {
-		// The body is JSON-encoded, so \n appears as \\n
-		t.Logf("Keys sent body: %s", keysSent)
+		if sent := strings.Contains(keysSent, "\\n"); sent != tc.wantKeys {
+			t.Errorf("keyboard=%v: return sent = %v (body %q)", tc.keyboard, sent, keysSent)
+		}
 	}
 }
 
@@ -5413,5 +5420,45 @@ func TestAutoClickAlertSelectors(t *testing.T) {
 		if strings.Count(sel, "'")%2 != 0 || strings.Count(sel, "`") != 2 {
 			t.Errorf("%q: unbalanced quotes", sel)
 		}
+	}
+}
+
+// An empty field reads as its placeholder: erasing part of it must clear the
+// field, not type the rest of the placeholder back in.
+func TestEraseTextEmptyFieldShowingPlaceholder(t *testing.T) {
+	var cleared bool
+	var typed []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		switch {
+		case strings.Contains(path, "/element/active"):
+			jsonResponse(w, map[string]interface{}{"value": map[string]interface{}{"ELEMENT": "field-1"}})
+		case strings.HasSuffix(path, "/text"):
+			jsonResponse(w, map[string]interface{}{"value": "Email address"})
+		case strings.HasSuffix(path, "/attribute/placeholderValue"):
+			jsonResponse(w, map[string]interface{}{"value": "Email address"})
+		case strings.HasSuffix(path, "/clear"):
+			cleared = true
+			jsonResponse(w, map[string]interface{}{"status": 0})
+		case strings.Contains(path, "/wda/keys"):
+			body, _ := io.ReadAll(r.Body)
+			typed = append(typed, string(body))
+			jsonResponse(w, map[string]interface{}{"status": 0})
+		default:
+			jsonResponse(w, map[string]interface{}{"status": 0})
+		}
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	if res := driver.eraseText(&flow.EraseTextStep{Characters: 5}); !res.Success {
+		t.Fatalf("eraseText: %s", res.Message)
+	}
+	if !cleared {
+		t.Error("expected the field to be cleared")
+	}
+	if len(typed) != 0 {
+		t.Errorf("typed into an empty field: %q", typed)
 	}
 }

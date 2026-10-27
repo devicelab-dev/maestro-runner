@@ -143,6 +143,11 @@ func (d *Driver) handleLaunchApp(s *flow.LaunchAppStep) *core.CommandResult {
 	}
 
 	args := []string{"launch", "--terminate-running-process", d.udid, bid}
+	if s.StopApp != nil && !*s.StopApp {
+		// Maestro's plain `simctl launch`: a running app comes to the front
+		// as it was, not restarted.
+		args = []string{"launch", d.udid, bid}
+	}
 	args = append(args, flattenArguments(s.Arguments)...)
 	cmd := d.simctl(args...)
 	if env := launchEnv(s.Environment); env != nil {
