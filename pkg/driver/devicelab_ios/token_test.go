@@ -18,9 +18,18 @@ import (
 // token, answers a request without it 401 UNAUTHORIZED.
 func tokenAgent(t *testing.T, token string) int {
 	t.Helper()
+	return tokenAgentFunc(t, token, func(string) Response {
+		return Response{OK: true, Data: &Payload{Message: "ready"}}
+	})
+}
+
+// tokenAgentFunc is tokenAgent answering each command with handle.
+func tokenAgentFunc(t *testing.T, token string, handle func(cmd string) Response) int {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			ID string `json:"id"`
+			ID  string `json:"id"`
+			Cmd string `json:"cmd"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		if r.Header.Get(TokenHeader) != token {
@@ -28,7 +37,9 @@ func tokenAgent(t *testing.T, token string) int {
 			_ = json.NewEncoder(w).Encode(Response{OK: false, Error: &ErrorBody{Code: "UNAUTHORIZED", Message: "missing or wrong X-DeviceLab-Token"}})
 			return
 		}
-		_ = json.NewEncoder(w).Encode(Response{OK: true, ID: req.ID, Data: &Payload{Message: "ready"}})
+		resp := handle(req.Cmd)
+		resp.ID = req.ID
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	t.Cleanup(srv.Close)
 	_, portStr, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
@@ -86,6 +97,43 @@ func TestStartAgentReattachesWithSavedToken(t *testing.T) {
 	}
 	if _, err := c.Call(context.Background(), "snapshot", &Args{MaxNodes: 1}); err != nil {
 		t.Fatalf("re-attached client should send the saved token: %v", err)
+	}
+}
+
+// An agent that answers without the token is not one this runner started:
+// another runner home put an older build on the simulator. A run does not
+// re-attach to it, and reinstalls its own build.
+func TestStartAgentSkipsAgentWithoutToken(t *testing.T) {
+	t.Setenv("MAESTRO_RUNNER_HOME", t.TempDir())
+	dir := t.TempDir()
+	writeManifest(t, dir, "1.0")
+	_, port := agentServer(t, func(cmd string, _ Args) Response {
+		return Response{OK: true, Data: &Payload{Message: "ready"}}
+	})
+	saveState("SIM-OLD", agentState{Port: port, Version: "abc123", Token: "tok"})
+	marker := filepath.Join(stateDir("SIM-OLD"), "installed")
+	if err := os.WriteFile(marker, []byte("abc123"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, _, err := StartAgent(context.Background(), AgentOptions{UDID: "SIM-OLD", Dir: dir})
+	if err == nil && a.Mode() == "reattached" {
+		t.Fatal("re-attached to an agent that answers without the token")
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Error("the installed marker should be dropped so the build is reinstalled")
+	}
+	if s, ok := loadState("SIM-OLD"); ok && s.Port == port {
+		t.Error("the old agent's state should be dropped")
+	}
+}
+
+func TestGuarded(t *testing.T) {
+	if !guarded(context.Background(), tokenAgent(t, "tok")) {
+		t.Error("an agent started with a token is guarded")
+	}
+	_, open := agentServer(t, func(string, Args) Response { return Response{OK: true} })
+	if guarded(context.Background(), open) {
+		t.Error("an agent that answers without the token is not guarded")
 	}
 }
 

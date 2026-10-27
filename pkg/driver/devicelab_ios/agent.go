@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -217,19 +218,28 @@ func StartAgent(ctx context.Context, opts AgentOptions) (*Agent, *Client, error)
 	}
 	a := &Agent{opts: opts, version: m.Version}
 
-	// Re-attach to an agent a previous run left running, if it still does
-	// real work: a stuck agent answers status but not a snapshot, and
-	// re-attaching to one failed every later flow (RNTester iOS on CI).
+	// Re-attach to an agent a previous run left running, if it is ours and
+	// still does real work: a stuck agent answers status but not a snapshot,
+	// and re-attaching to one failed every later flow (RNTester iOS on CI).
 	if s, ok := loadState(opts.UDID); ok && s.Version == m.Version {
 		c := NewClient(s.Port)
 		c.SetToken(s.Token)
-		if a.alive(ctx, c, 2*time.Second) && a.working(ctx, c, reattachProbeWait) {
+		alive := a.alive(ctx, c, 2*time.Second)
+		switch {
+		case alive && !guarded(ctx, s.Port):
+			// It answers without the token: an older build, put on the
+			// simulator by another runner home, runs in place of ours, so
+			// the installed marker is wrong too.
+			logger.Info("[devicelab-ios] agent on port %d answers without the token; reinstalling", s.Port)
+			_ = os.Remove(filepath.Join(stateDir(opts.UDID), "installed"))
+		case alive && a.working(ctx, c, reattachProbeWait):
 			a.port, a.mode, a.keptPid, a.token = s.Port, "reattached", s.Pid, s.Token
 			logger.Info("[devicelab-ios] re-attached to agent %s on port %d", m.Version, s.Port)
 			c.SetReviver(a.revive)
 			return a, c, nil
+		default:
+			logger.Info("[devicelab-ios] agent on port %d left by an earlier run does not answer; starting a new one", s.Port)
 		}
-		logger.Info("[devicelab-ios] agent on port %d left by an earlier run does not answer; starting a new one", s.Port)
 		killPidGroup(s.Pid)
 		_ = os.Remove(filepath.Join(stateDir(opts.UDID), "agent.json"))
 	}
@@ -257,6 +267,16 @@ func (a *Agent) working(ctx context.Context, c *Client, wait time.Duration) bool
 	defer cancel()
 	resp, err := c.Call(callCtx, "snapshot", &Args{MaxNodes: 1})
 	return err == nil && resp.OK
+}
+
+// guarded reports whether the agent on port turns away a request without
+// the token, as every agent this runner starts does.
+func guarded(ctx context.Context, port int) bool {
+	callCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	_, err := NewClient(port).Call(callCtx, "status", nil)
+	var ae *AgentError
+	return errors.As(err, &ae) && ae.Code == "UNAUTHORIZED"
 }
 
 func (a *Agent) alive(ctx context.Context, c *Client, wait time.Duration) bool {
