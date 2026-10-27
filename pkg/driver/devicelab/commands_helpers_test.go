@@ -2202,20 +2202,21 @@ func TestAssertVisible_NotFound(t *testing.T) {
 // =============================================================================
 
 // TestInputText_NoSelector_PrefersFocusedElement locks in the #122 fix:
-// with a focused element available, typing is element-scoped (reaches
-// WebView DOM inputs) instead of blind key events.
+// with a focused element available, text too long to type key by key is
+// element-scoped (reaches WebView DOM inputs) instead of blind key events.
 func TestInputText_NoSelector_PrefersFocusedElement(t *testing.T) {
+	const text = "hello from a longer message"
 	var typed string
 	client := &scriptedClient{trackingClient: newTrackingClient()}
 	client.activeElementReturn = makeFocusedElement("", &typed, nil, nil)
 	driver := New(client, &core.PlatformInfo{}, &mockShell{})
 
-	res := driver.inputText(&flow.InputTextStep{Text: "hello"})
+	res := driver.inputText(&flow.InputTextStep{Text: text})
 	if !res.Success {
 		t.Fatalf("inputText no-selector: %v", res.Error)
 	}
-	if typed != "hello" {
-		t.Errorf("expected element-scoped typing of %q, got %q", "hello", typed)
+	if typed != text {
+		t.Errorf("expected element-scoped typing of %q, got %q", text, typed)
 	}
 	if len(client.sendKeyActionsCalls) != 0 {
 		t.Errorf("expected no blind key actions, got %v", client.sendKeyActionsCalls)
@@ -3667,8 +3668,9 @@ func TestInputText_NoSelector_AppendsToExistingText(t *testing.T) {
 	}
 }
 
-// TestInputText_NoSelector_SetsWhenFieldIsEmpty: a field showing its hint, or
-// one whose hint state is not reported (an older agent), is set in one call.
+// TestInputText_NoSelector_SetsWhenFieldIsEmpty: long text for a field showing
+// its hint, or one whose hint state is not reported (an older agent), is set in
+// one call.
 func TestInputText_NoSelector_SetsWhenFieldIsEmpty(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -3685,12 +3687,12 @@ func TestInputText_NoSelector_SetsWhenFieldIsEmpty(t *testing.T) {
 			client.activeElementReturn = field
 			driver := New(client, &core.PlatformInfo{}, &mockShell{})
 
-			res := driver.inputText(&flow.InputTextStep{Text: "a@b.co"})
+			res := driver.inputText(&flow.InputTextStep{Text: "someone.long@example.com"})
 			if !res.Success {
 				t.Fatalf("inputText: %v", res.Error)
 			}
-			if set != "a@b.co" {
-				t.Errorf("expected the field to be set to %q, got %q", "a@b.co", set)
+			if set != "someone.long@example.com" {
+				t.Errorf("expected the field to be set to %q, got %q", "someone.long@example.com", set)
 			}
 			if len(client.sendKeyActionsCalls) != 0 {
 				t.Errorf("expected no key events, got %v", client.sendKeyActionsCalls)
@@ -3716,5 +3718,77 @@ func TestTapOn_UnansweredClickIsNotRepeated(t *testing.T) {
 	}
 	if !strings.Contains(res.Message, "not repeated") || time.Since(start) > time.Second {
 		t.Errorf("message %q after %v; want an immediate 'not repeated' failure", res.Message, time.Since(start))
+	}
+}
+
+// TestInputText_NoSelector_TypesShortTextPerKey: short text for an empty field
+// goes in as key events, as Maestro types it, so apps that react per
+// keystroke (a code box advancing, an input mask) see every character. Text
+// key events cannot type, or too long to type key by key, is set in one call.
+func TestInputText_NoSelector_TypesShortTextPerKey(t *testing.T) {
+	for _, tc := range []struct {
+		text   string
+		perKey bool
+	}{
+		{"1234", true},
+		{"a@b.co", true},
+		{"12345678", true},
+		{"123456789", false},
+		{"héllo", false},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			var set string
+			client := &scriptedClient{trackingClient: newTrackingClient()}
+			field := makeFocusedElement("Code", &set, nil, nil)
+			field.SetShowingHint(true)
+			client.activeElementReturn = field
+			driver := New(client, &core.PlatformInfo{}, &mockShell{})
+
+			res := driver.inputText(&flow.InputTextStep{Text: tc.text})
+			if !res.Success {
+				t.Fatalf("inputText: %v", res.Error)
+			}
+			if tc.perKey {
+				if set != "" {
+					t.Errorf("field was set to %q; short text must go in as key events", set)
+				}
+				if len(client.sendKeyActionsCalls) != 1 || client.sendKeyActionsCalls[0] != tc.text {
+					t.Errorf("expected key events typing %q, got %v", tc.text, client.sendKeyActionsCalls)
+				}
+				return
+			}
+			if set != tc.text {
+				t.Errorf("expected the field to be set to %q, got %q", tc.text, set)
+			}
+			if len(client.sendKeyActionsCalls) != 0 {
+				t.Errorf("expected no key events, got %v", client.sendKeyActionsCalls)
+			}
+		})
+	}
+}
+
+// TestFocusStayedOn: focus that moved to another field while typing (a code
+// box advancing to the next) means the first field holds only part of the
+// text by design, so it is not read back and retyped.
+func TestFocusStayedOn(t *testing.T) {
+	first := uiautomator2.NewCachedElement("box1", "", uiautomator2.ElementRect{X: 0, Y: 0, Width: 100, Height: 100})
+	second := uiautomator2.NewCachedElement("box2", "", uiautomator2.ElementRect{X: 120, Y: 0, Width: 100, Height: 100})
+	for _, tc := range []struct {
+		name string
+		now  *uiautomator2.Element
+		want bool
+	}{
+		{"same field", first, true},
+		{"moved to the next box", second, false},
+		{"nothing focused", nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &scriptedClient{trackingClient: newTrackingClient()}
+			client.activeElementReturn = tc.now
+			driver := New(client, &core.PlatformInfo{}, &mockShell{})
+			if got := driver.focusStayedOn(&NativeElement{elem: first, client: client, info: &core.ElementInfo{Bounds: core.Bounds{Width: 100, Height: 100}}}); got != tc.want {
+				t.Errorf("focusStayedOn = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

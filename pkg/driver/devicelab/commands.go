@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
@@ -1182,6 +1183,23 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 					invalidateText(focused)
 					typedInto, beforeText = focused, before
 				}
+			} else if typesPerKey(text) {
+				// Maestro types every character as its own key event. Apps
+				// that react per keystroke — a one-time-code box that moves to
+				// the next box, an input mask, search as you type — see one
+				// change when the field is set in one call, so short text is
+				// typed key by key here too. Long text is still set: per-key
+				// typing is slow, and such fields hold short values.
+				if err := d.sendKeys(text); err == nil {
+					typed = true
+					invalidateText(focused)
+					if d.focusStayedOn(focused) {
+						typedInto, beforeText = focused, before
+					}
+					// Otherwise the app moved focus while the text went in (a
+					// code box advancing), so the first field holds only part
+					// of it by design; retyping it there would undo that.
+				}
 			} else if err := focused.Input(text); err == nil {
 				typed = true
 				typedInto, beforeText = focused, before
@@ -1231,6 +1249,35 @@ func fieldHoldsText(field core.Element, value string) bool {
 	}
 	showing, known := native.elem.ShowingHint()
 	return known && !showing
+}
+
+// perKeyMaxChars is the longest text an empty field is typed into key by key.
+// One-time codes, PINs and masked dates fit; longer text is set in one call,
+// since each key waits for the app (about 90 ms on a React Native field).
+const perKeyMaxChars = 8
+
+// typesPerKey reports whether text for an empty field goes in as key events.
+// Characters outside ASCII are set instead: key events cannot type them all.
+func typesPerKey(text string) bool {
+	return utf8.RuneCountInString(text) <= perKeyMaxChars && !core.HasNonASCII(text)
+}
+
+// focusStayedOn reports whether field still has focus after typing. A field
+// whose bounds are unknown counts as kept: there is nothing to compare.
+func (d *Driver) focusStayedOn(field core.Element) bool {
+	info := field.Info()
+	if info == nil {
+		return true
+	}
+	now, err := d.findFocused()
+	if err != nil || now == nil {
+		return true
+	}
+	nb, fb := now.Info(), info.Bounds
+	if nb == nil || fb.Width <= 0 || fb.Height <= 0 {
+		return true
+	}
+	return nb.Bounds == fb
 }
 
 // focusedFieldBefore resolves the element that key events will reach and reads
