@@ -525,6 +525,7 @@ func (se *ScriptEngine) ExecuteRunScript(step *flow.RunScriptStep) *core.Command
 
 	// Check if it's a file path (ends with .js)
 	isFile := strings.HasSuffix(script, ".js")
+	scriptDir := ""
 	if isFile {
 		filePath := se.ResolvePath(script)
 		content, err := os.ReadFile(filePath)
@@ -536,9 +537,16 @@ func (se *ScriptEngine) ExecuteRunScript(step *flow.RunScriptStep) *core.Command
 			}
 		}
 		script = string(content)
+		scriptDir = filepath.Dir(filePath)
 	}
 
-	if err := se.RunScript(script, step.Env); err != nil {
+	// A script file's relative require() looks beside the script first, then
+	// in the flow's directory (#253); an inline script (scriptDir "") uses
+	// the flow's directory only.
+	err := se.js.WithRequireScriptDir(scriptDir, func() error {
+		return se.RunScript(script, step.Env)
+	})
+	if err != nil {
 		return &core.CommandResult{
 			Success: false,
 			Error:   err,
