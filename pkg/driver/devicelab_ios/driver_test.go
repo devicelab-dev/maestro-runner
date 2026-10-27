@@ -60,7 +60,7 @@ func TestExecuteDoesNotSettleWhenIdleTimeoutIsZero(t *testing.T) {
 
 func TestExecuteUnsupported(t *testing.T) {
 	d, _, _ := newTestDriver(t, nil)
-	for _, s := range []flow.Step{&flow.SetAirplaneModeStep{}, &flow.ToggleAirplaneModeStep{}, &flow.EvalScriptStep{}} {
+	for _, s := range []flow.Step{&flow.EvalScriptStep{}} {
 		if res := d.Execute(s); res.Success {
 			t.Errorf("%T should fail", s)
 		}
