@@ -102,7 +102,7 @@ func TestStartAgentReattachesWithSavedToken(t *testing.T) {
 
 // An agent that answers without the token is not one this runner started:
 // another runner home put an older build on the simulator. A run does not
-// re-attach to it, and reinstalls its own build.
+// re-attach to it.
 func TestStartAgentSkipsAgentWithoutToken(t *testing.T) {
 	t.Setenv("MAESTRO_RUNNER_HOME", t.TempDir())
 	dir := t.TempDir()
@@ -111,19 +111,45 @@ func TestStartAgentSkipsAgentWithoutToken(t *testing.T) {
 		return Response{OK: true, Data: &Payload{Message: "ready"}}
 	})
 	saveState("SIM-OLD", agentState{Port: port, Version: "abc123", Token: "tok"})
-	marker := filepath.Join(stateDir("SIM-OLD"), "installed")
-	if err := os.WriteFile(marker, []byte("abc123"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	a, _, err := StartAgent(context.Background(), AgentOptions{UDID: "SIM-OLD", Dir: dir})
 	if err == nil && a.Mode() == "reattached" {
 		t.Fatal("re-attached to an agent that answers without the token")
 	}
-	if _, err := os.Stat(marker); !os.IsNotExist(err) {
-		t.Error("the installed marker should be dropped so the build is reinstalled")
-	}
 	if s, ok := loadState("SIM-OLD"); ok && s.Port == port {
 		t.Error("the old agent's state should be dropped")
+	}
+}
+
+// The agent counts as installed only when the simulator holds this build:
+// what another runner install put there, or nothing, is reinstalled.
+func TestAgentInstalledChecksBuild(t *testing.T) {
+	app := t.TempDir()
+	bin := filepath.Join(app, strings.TrimPrefix(agentBinary, runnerAppName+"/"))
+	if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin, []byte("agent build"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	container, containerErr := app, error(nil)
+	saved := appContainer
+	appContainer = func(context.Context, string, string) (string, error) { return container, containerErr }
+	t.Cleanup(func() { appContainer = saved })
+
+	ours := fileSHA256(bin)
+	ctx := context.Background()
+	if a := (&Agent{agentSHA: ours}); !a.installed(ctx) {
+		t.Error("this build is installed")
+	}
+	if a := (&Agent{agentSHA: "other"}); a.installed(ctx) {
+		t.Error("another build is installed")
+	}
+	if a := (&Agent{}); a.installed(ctx) {
+		t.Error("a manifest without hashes always reinstalls")
+	}
+	containerErr = errors.New("not installed")
+	if a := (&Agent{agentSHA: ours}); a.installed(ctx) {
+		t.Error("nothing is installed")
 	}
 }
 

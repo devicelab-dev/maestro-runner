@@ -3,6 +3,7 @@ package devicelab_ios
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -59,6 +60,8 @@ type Agent struct {
 	port    int
 	mode    string
 	version string
+	// agentSHA is the SHA-256 of agentBinary in this build.
+	agentSHA string
 
 	// device is set for a real iPhone (StartDeviceAgent), with the bundle
 	// ids the agent was signed as and the usbmux port forward.
@@ -95,6 +98,8 @@ func BundledAgentDir() string {
 type manifest struct {
 	Version  string `json:"version"`
 	Protocol string `json:"protocol"`
+	// Files maps each file of the build to its SHA-256.
+	Files map[string]string `json:"files"`
 }
 
 func readManifest(dir string) (manifest, error) {
@@ -112,7 +117,7 @@ func readManifest(dir string) (manifest, error) {
 	return m, nil
 }
 
-// stateDir holds per-simulator agent state (installed version, port).
+// stateDir holds per-simulator agent state (port, token).
 func stateDir(udid string) string {
 	return filepath.Join(config.GetCacheDir(), "devicelab-ios-agent", udid)
 }
@@ -216,7 +221,7 @@ func StartAgent(ctx context.Context, opts AgentOptions) (*Agent, *Client, error)
 	if err != nil {
 		return nil, nil, err
 	}
-	a := &Agent{opts: opts, version: m.Version}
+	a := &Agent{opts: opts, version: m.Version, agentSHA: m.Files[agentBinary]}
 
 	// Re-attach to an agent a previous run left running, if it is ours and
 	// still does real work: a stuck agent answers status but not a snapshot,
@@ -228,10 +233,8 @@ func StartAgent(ctx context.Context, opts AgentOptions) (*Agent, *Client, error)
 		switch {
 		case alive && !guarded(ctx, s.Port):
 			// It answers without the token: an older build, put on the
-			// simulator by another runner home, runs in place of ours, so
-			// the installed marker is wrong too.
-			logger.Info("[devicelab-ios] agent on port %d answers without the token; reinstalling", s.Port)
-			_ = os.Remove(filepath.Join(stateDir(opts.UDID), "installed"))
+			// simulator by another runner home, runs in place of ours.
+			logger.Info("[devicelab-ios] agent on port %d answers without the token; starting this build's", s.Port)
 		case alive && a.working(ctx, c, reattachProbeWait):
 			a.port, a.mode, a.keptPid, a.token = s.Port, "reattached", s.Pid, s.Token
 			logger.Info("[devicelab-ios] re-attached to agent %s on port %d", m.Version, s.Port)
@@ -286,20 +289,58 @@ func (a *Agent) alive(ctx context.Context, c *Client, wait time.Duration) bool {
 	return err == nil && resp.OK
 }
 
-// install puts the agent apps on the simulator unless this version is there.
+// agentBinary is the file of the build whose hash tells which agent is
+// installed: the test bundle holds the agent's code.
+const agentBinary = runnerAppName + "/PlugIns/DevicelabIOSAgentUITests.xctest/DevicelabIOSAgentUITests"
+
+// install puts the agent apps on the simulator unless this build is there.
+// What is installed is checked, not remembered: another maestro-runner
+// install can put its own build on the same simulator.
 func (a *Agent) install(ctx context.Context, version string) error {
-	marker := filepath.Join(stateDir(a.opts.UDID), "installed")
-	if raw, err := os.ReadFile(marker); err == nil && strings.TrimSpace(string(raw)) == version {
+	if a.installed(ctx) {
 		return nil
 	}
+	logger.Info("[devicelab-ios] installing agent %s", version)
 	for _, app := range []string{hostAppName, runnerAppName} {
 		if out, err := simctl(ctx, 3*time.Minute, "install", a.opts.UDID, filepath.Join(a.opts.Dir, app)); err != nil {
 			return fmt.Errorf("install %s: %v: %s", app, err, strings.TrimSpace(out))
 		}
 	}
-	_ = os.MkdirAll(filepath.Dir(marker), 0o755)
-	_ = os.WriteFile(marker, []byte(version), 0o644)
 	return nil
+}
+
+// installed reports whether the agent on the simulator is this build: its
+// binary hashes to what the manifest lists.
+func (a *Agent) installed(ctx context.Context) bool {
+	if a.agentSHA == "" {
+		return false
+	}
+	app, err := appContainer(ctx, a.opts.UDID, runnerBundleID)
+	if err != nil {
+		return false
+	}
+	return fileSHA256(filepath.Join(app, strings.TrimPrefix(agentBinary, runnerAppName+"/"))) == a.agentSHA
+}
+
+// appContainer is where the app with bundle id is installed on the
+// simulator.
+var appContainer = func(ctx context.Context, udid, id string) (string, error) {
+	out, err := simctl(ctx, 15*time.Second, "get_app_container", udid, id)
+	return strings.TrimSpace(out), err
+}
+
+// fileSHA256 is the hex SHA-256 of the file at path, "" when it cannot be read.
+func fileSHA256(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // launch starts the agent on a free port, by simctl launch and, failing that
