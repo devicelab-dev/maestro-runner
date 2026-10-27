@@ -64,6 +64,12 @@ type Driver struct {
 	autoAlert       string
 	alertWatchUntil time.Time
 	lastAlertCheck  time.Time
+	// keyboardMayBeUp is set by a step that may have left the software
+	// keyboard up (core.MayLeaveIOSKeyboardUp) and cleared once the keyboard
+	// is seen gone. Only while it is set does a tap look for the keyboard
+	// first (aimClearOfKeyboard).
+	keyboardMayBeUp bool
+
 	// step is the step Execute is running; a prompt it is aimed at
 	// (`tapOn: "Allow"`) is left to it.
 	step flow.Step
@@ -316,6 +322,9 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 		// The app asks for permissions as it starts: the next steps ask
 		// for a prompt first.
 		d.alertWatchUntil = time.Now().Add(autoAlertLaunchWindow)
+	}
+	if core.MayLeaveIOSKeyboardUp(step, result) {
+		d.keyboardMayBeUp = true
 	}
 	result.Duration = time.Since(start)
 	return result

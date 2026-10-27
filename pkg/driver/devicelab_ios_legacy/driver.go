@@ -52,6 +52,13 @@ type Driver struct {
 	lastTappedY      float64
 	lastTapHasCoords bool
 
+	// keyboardMayBeUp is set by a step that may have left the software
+	// keyboard up (core.MayLeaveIOSKeyboardUp) and cleared once the keyboard
+	// is seen gone. While it is set, a tap resolves its target through the
+	// snapshot, which shows the keyboard, instead of the runner's one-shot
+	// tapBySelector, and keeps off the keyboard (aimClearOfKeyboard).
+	keyboardMayBeUp bool
+
 	// Snapshot cache. snapshotMatching reuses a recent snapshot when
 	// successive selector resolutions happen close together (tapOn →
 	// inputText, assertVisible chains). Invalidated on every interaction
@@ -115,6 +122,9 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	start := time.Now()
 	res := d.executeStep(step)
 	d.noteRunnerTimeout(res, time.Since(start))
+	if core.MayLeaveIOSKeyboardUp(step, res) {
+		d.keyboardMayBeUp = true
+	}
 	return res
 }
 

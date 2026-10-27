@@ -120,6 +120,10 @@ NSDictionary<NSString *, NSString *> *customExclusionAttributesMap(void) {
   return result;
 }
 
+@interface XCUIApplication (FBActivationPrivate)
+- (void)fb_activateWaitingForSystemTransition:(BOOL)shouldWait;
+@end
+
 @implementation XCUIApplication (FBHelpers)
 
 - (BOOL)fb_waitForAppElement:(NSTimeInterval)timeout
@@ -172,13 +176,38 @@ NSDictionary<NSString *, NSString *> *customExclusionAttributesMap(void) {
   return [self fb_appsInfoWithAxElements:[FBXCAXClientProxy.sharedClient activeApplications]];
 }
 
+- (void)fb_activate
+{
+  BOOL shouldWaitForSystemTransition = NO;
+#if !TARGET_OS_TV && !TARGET_OS_WATCH
+  XCUIApplicationState previousState = self.state;
+  shouldWaitForSystemTransition = previousState == XCUIApplicationStateRunningBackground
+    || previousState == XCUIApplicationStateRunningBackgroundSuspended;
+#endif
+  [self fb_activateWaitingForSystemTransition:shouldWaitForSystemTransition];
+}
+
+- (void)fb_activateWaitingForSystemTransition:(BOOL)shouldWait
+{
+  [self activate];
+#if !TARGET_OS_TV && !TARGET_OS_WATCH
+  if (shouldWait) {
+    // App quiescence alone can miss the system resume transition.
+    // https://github.com/appium/appium/issues/22857
+    [XCUIApplication.fb_systemApplication fb_waitUntilStableWithTimeout:
+      FBConfiguration.sharedInstance.animationCoolOffTimeout];
+  }
+#endif
+}
+
 - (BOOL)fb_deactivateWithDuration:(NSTimeInterval)duration error:(NSError **)error
 {
   if(![[XCUIDevice sharedDevice] fb_goToHomescreenWithError:error]) {
     return NO;
   }
   [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:MAX(duration, .0)]];
-  [self activate];
+  // A zero-duration background transition may still report the app as foreground.
+  [self fb_activateWaitingForSystemTransition:YES];
   return YES;
 }
 

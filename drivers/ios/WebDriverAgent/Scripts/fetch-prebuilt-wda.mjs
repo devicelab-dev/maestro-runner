@@ -16,9 +16,10 @@ const log = logger.getLogger('WDA');
  */
 async function fetchPrebuiltWebDriverAgentAssets() {
   const packageJson = JSON.parse(readFileSync(path.resolve(__dirname, '..', 'package.json'), 'utf8'));
-  const tag = packageJson.version;
+  // lerna's independent-mode release tag
+  const tag = `${packageJson.name}@${packageJson.version}`;
   log.info(`Getting links to webdriveragent release ${tag}`);
-  const downloadUrl = `https://api.github.com/repos/appium/webdriveragent/releases/tags/v${tag}`;
+  const downloadUrl = `https://api.github.com/repos/appium/appium-ios/releases/tags/${encodeURIComponent(tag)}`;
   log.info(`Getting WDA release ${downloadUrl}`);
   let releases;
   try {

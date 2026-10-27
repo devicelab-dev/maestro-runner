@@ -76,6 +76,10 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		}
 		x := float64(info.Bounds.X + info.Bounds.Width/2)
 		y := float64(info.Bounds.Y + info.Bounds.Height/2)
+		x, y, info, err = d.aimClearOfKeyboard(step.Selector, info, x, y)
+		if err != nil {
+			return keyboardBlocked(step.Selector, err)
+		}
 		if err := d.client.LongPress(x, y, durationSec); err != nil {
 			return errorResult(err, fmt.Sprintf("Press for %.2fs failed", durationSec))
 		}
@@ -98,6 +102,13 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 			info = fresh
 			x, y, onScreen = d.tapPoint(info.Bounds)
 		}
+	}
+	if onScreen {
+		x, y, info, err = d.aimClearOfKeyboard(step.Selector, info, x, y)
+		if err != nil {
+			return keyboardBlocked(step.Selector, err)
+		}
+		isTextField = strings.Contains(info.Class, "TextField")
 	}
 
 	tapped := false
@@ -159,6 +170,77 @@ func (d *Driver) tapPoint(b core.Bounds) (x, y float64, onScreen bool) {
 		return 0, 0, false
 	}
 	return float64(left+right) / 2, float64(top+bottom) / 2, true
+}
+
+// keyboardRefindMs bounds the lookup of a tap's target after the keyboard
+// that covered it was hidden.
+const keyboardRefindMs = 2000
+
+// aimClearOfKeyboard returns where to tap info's element, planned at (x, y),
+// so the touch does not press a key: when the software keyboard covers that
+// point it hides the keyboard and looks sel up again, then aims at the part
+// of the element above the keyboard if it is still covered, else fails
+// (core.KeyboardGuard). It asks for the keyboard only after a step that may
+// have left it up. The element returned is the one last found.
+func (d *Driver) aimClearOfKeyboard(sel flow.Selector, info *core.ElementInfo, x, y float64) (float64, float64, *core.ElementInfo, error) {
+	if !d.keyboardMayBeUp || core.IsIOSKeyboardType(info.Class) {
+		return x, y, info, nil
+	}
+	target := info.Bounds
+	guard := core.KeyboardGuard{
+		Keyboard: func() (*core.Bounds, error) {
+			kb, err := d.keyboardFrame()
+			if err == nil && kb == nil {
+				d.keyboardMayBeUp = false
+			}
+			return kb, err
+		},
+		OnKeyboard: func() bool { return d.onKeyboard(target) },
+		Hide:       func() { d.hideKeyboard(&flow.HideKeyboardStep{}) },
+		Refind: func() (core.Bounds, float64, float64, bool) {
+			fresh, err := d.findElementForTap(sel, true, keyboardRefindMs)
+			if err != nil || fresh == nil {
+				return core.Bounds{}, 0, 0, false
+			}
+			fx, fy, ok := d.tapPoint(fresh.Bounds)
+			if ok {
+				info = fresh
+			}
+			return fresh.Bounds, fx, fy, ok
+		},
+	}
+	tx, ty, _, err := guard.Aim(target, x, y)
+	return tx, ty, info, err
+}
+
+// onKeyboard reports whether the element with bounds b belongs to the
+// keyboard (a key, its return button), read from the page source; false when
+// the source cannot be read.
+func (d *Driver) onKeyboard(b core.Bounds) bool {
+	src, err := d.client.Source()
+	if err != nil {
+		return false
+	}
+	elems, err := ParsePageSource(src)
+	if err != nil {
+		return false
+	}
+	for _, e := range elems {
+		if e.Bounds != b {
+			continue
+		}
+		for p := e; p != nil; p = p.Parent {
+			if p.Type == "XCUIElementTypeKeyboard" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// keyboardBlocked is the result of a tap whose target the keyboard covers.
+func keyboardBlocked(sel flow.Selector, err error) *core.CommandResult {
+	return errorResult(err, fmt.Sprintf("%s is under the keyboard and could not be tapped: %v", selectorDesc(sel), err))
 }
 
 // dragAndDrop long-presses the from-target, then drags it onto the to-target.
@@ -248,6 +330,11 @@ func (d *Driver) doubleTapOn(step *flow.DoubleTapOnStep) *core.CommandResult {
 		return errorResult(perr, fmt.Sprintf("Invalid point coordinates: %v", perr))
 	}
 	x, y := float64(px), float64(py)
+	if step.Selector.Point == "" {
+		if x, y, info, err = d.aimClearOfKeyboard(step.Selector, info, x, y); err != nil {
+			return keyboardBlocked(step.Selector, err)
+		}
+	}
 
 	if err := d.client.DoubleTap(x, y); err != nil {
 		return errorResult(err, "Double tap failed")
@@ -267,6 +354,11 @@ func (d *Driver) longPressOn(step *flow.LongPressOnStep) *core.CommandResult {
 		return errorResult(perr, fmt.Sprintf("Invalid point coordinates: %v", perr))
 	}
 	x, y := float64(px), float64(py)
+	if step.Selector.Point == "" {
+		if x, y, info, err = d.aimClearOfKeyboard(step.Selector, info, x, y); err != nil {
+			return keyboardBlocked(step.Selector, err)
+		}
+	}
 
 	duration := float64(step.DurationMs) / 1000.0
 	if duration <= 0 {
@@ -721,17 +813,103 @@ func (d *Driver) showsPlaceholder(elemID, text string) bool {
 	return err == nil && placeholder != "" && placeholder == text
 }
 
+// keyboardFrame returns the software keyboard's frame, nil when none is on
+// screen.
+func (d *Driver) keyboardFrame() (*core.Bounds, error) {
+	ids, err := d.client.FindElements("class chain", "**/XCUIElementTypeKeyboard")
+	if err != nil || len(ids) == 0 {
+		return nil, err
+	}
+	x, y, w, h, err := d.client.ElementRect(ids[0])
+	if err != nil {
+		return nil, err
+	}
+	if w <= 0 || h <= 0 {
+		return nil, nil
+	}
+	return &core.Bounds{X: x, Y: y, Width: w, Height: h}, nil
+}
+
+// hideKeyboard dismisses the software keyboard the way Maestro's iOS driver
+// does: two short drags (up, then left) that a scroll view turns into a
+// dismissal. It no longer presses return, which in a form submits it or
+// closes the screen. With no keyboard up it does nothing, as in Maestro. A
+// keyboard that will not go is left up, and the step still passes, as in
+// Maestro.
 func (d *Driver) hideKeyboard(step *flow.HideKeyboardStep) *core.CommandResult {
-	// No keyboard, nothing to hide: the return key below still reaches a
-	// focused field (a simulator with the hardware keyboard connected shows
-	// none) and submits its form. Maestro's hideKeyboard does nothing then.
-	if visible, err := d.keyboardVisible(); err == nil && !visible {
+	kb, err := d.keyboardFrame()
+	if err == nil && kb == nil {
+		d.keyboardMayBeUp = false
 		return successResult("No keyboard to hide", nil)
 	}
-	// Press the "return" key (ignore error - keyboard might not be visible)
-	_ = d.client.SendKeys("\n", 0)
+	if d.dismissKeyboard(kb) {
+		d.keyboardMayBeUp = false
+		return successResult("Keyboard hidden", nil)
+	}
+	logger.Info("[wda] hideKeyboard: the keyboard is still visible after the dismiss drags")
+	return successResult("Keyboard still visible (not dismissible here)", nil)
+}
 
-	return successResult("Attempted to hide keyboard", nil)
+const (
+	// keyboardDragMs is how long each dismissing drag moves: Maestro's 50 ms.
+	keyboardDragMs = 50
+	// keyboardDragFraction is each drag's length as a share of the screen:
+	// Maestro's 3%.
+	keyboardDragFraction = 0.03
+)
+
+// keyboardDragPause is how long the keyboard gets to go after each drag.
+var keyboardDragPause = 300 * time.Millisecond
+
+// dismissKeyboard makes Maestro's two keyboard-dismissing drags and reports
+// whether the keyboard went. kb is the keyboard's frame, nil when unknown.
+// Maestro starts them at the exact centre of the screen, where a 50 ms drag
+// still presses the control under it; they start at the point nearest the
+// centre that no control covers (core.KeyboardDragStart). With no such point
+// the keyboard stays. When the screen cannot be read, the centre is used, as
+// in Maestro.
+func (d *Driver) dismissKeyboard(kb *core.Bounds) bool {
+	w, h, err := d.screenSize()
+	if err != nil {
+		return false
+	}
+	keyboardTop := h
+	if kb != nil {
+		keyboardTop = kb.Y
+	}
+	sx, sy, ok := w/2, h/2, true
+	if src, err := d.client.Source(); err == nil {
+		if elems, err := ParsePageSource(src); err == nil {
+			elems = FilterOutOfBounds(elems, w, h)
+			nodes := make([]core.ScreenNode, 0, len(elems))
+			for _, e := range elems {
+				if kb == nil && e.Type == "XCUIElementTypeKeyboard" && e.Bounds.Height > 0 {
+					keyboardTop = e.Bounds.Y
+				}
+				nodes = append(nodes, core.ScreenNode{Type: e.Type, Bounds: e.Bounds, Leaf: len(e.Children) == 0})
+			}
+			sx, sy, ok = core.KeyboardDragStart(nodes, w, h, keyboardTop)
+		}
+	}
+	if !ok {
+		logger.Debug("[wda] hideKeyboard: no point clear of controls to start the dismiss drags")
+		return false
+	}
+	x, y := float64(sx), float64(sy)
+	ends := [][2]float64{
+		{x, y - float64(h)*keyboardDragFraction},
+		{x - float64(w)*keyboardDragFraction, y},
+	}
+	for _, end := range ends {
+		if err := d.client.Flick(x, y, end[0], end[1], keyboardDragMs); err != nil {
+			return false
+		}
+		time.Sleep(keyboardDragPause)
+		if visible, err := d.keyboardVisible(); err == nil && !visible {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *Driver) acceptAlert(step *flow.AcceptAlertStep) *core.CommandResult {

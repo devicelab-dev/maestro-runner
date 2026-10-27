@@ -93,6 +93,10 @@ func (d *Driver) tapSelector(sel flow.Selector, optional bool, timeoutMs int, ki
 		err := fmt.Errorf("%s is not on screen", describe(sel))
 		return core.ErrorResult(err, err.Error())
 	}
+	x, y, node, err = d.aimClearOfKeyboard(sel, node, x, y)
+	if err != nil {
+		return core.ErrorResult(err, fmt.Sprintf("%s is under the keyboard and could not be tapped: %v", describe(sel), err))
+	}
 	var extra *Args
 	if kind == "longPress" {
 		extra = &Args{HoldMs: f64(float64(core.LongPressMs(holdMs)))}
@@ -578,6 +582,7 @@ func (d *Driver) hideKeyboard() *core.CommandResult {
 		logger.Info("[devicelab-ios] hideKeyboard: the keyboard is still visible after the dismiss swipes")
 		return core.SuccessResult("keyboard still visible (not dismissible here)", nil)
 	}
+	d.keyboardMayBeUp = false
 	return core.SuccessResult("keyboard hidden", nil)
 }
 
