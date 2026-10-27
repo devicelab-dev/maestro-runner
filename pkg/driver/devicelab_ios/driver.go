@@ -412,9 +412,10 @@ func (d *Driver) execute(step flow.Step) *core.CommandResult {
 		return d.assertDarkMode(false)
 	case *flow.AddMediaStep:
 		return d.addMedia(s.Files)
-	case *flow.SetAirplaneModeStep, *flow.ToggleAirplaneModeStep:
-		err := fmt.Errorf("airplane mode is not available on the iOS simulator")
-		return core.ErrorResult(err, err.Error())
+	case *flow.SetAirplaneModeStep:
+		return d.setAirplaneMode(s.Enabled)
+	case *flow.ToggleAirplaneModeStep:
+		return d.toggleAirplaneMode()
 	default:
 		err := fmt.Errorf("%s is not supported by --driver devicelab on iOS", step.Type())
 		return core.ErrorResult(err, err.Error())
@@ -441,7 +442,8 @@ func movesScreen(step flow.Step) bool {
 		*flow.DragAndDropStep, *flow.SwipeStep, *flow.ScrollStep, *flow.ScrollUntilVisibleStep,
 		*flow.BackStep, *flow.PressKeyStep, *flow.InputTextStep, *flow.InputRandomStep,
 		*flow.EraseTextStep, *flow.HideKeyboardStep, *flow.LaunchAppStep, *flow.OpenLinkStep,
-		*flow.OpenBrowserStep, *flow.AcceptAlertStep, *flow.DismissAlertStep, *flow.SetOrientationStep:
+		*flow.OpenBrowserStep, *flow.AcceptAlertStep, *flow.DismissAlertStep, *flow.SetOrientationStep,
+		*flow.SetAirplaneModeStep, *flow.ToggleAirplaneModeStep:
 		return true
 	}
 	return false
