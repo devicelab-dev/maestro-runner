@@ -288,3 +288,28 @@ func TestSameIDPrefersTheControl(t *testing.T) {
 		t.Errorf("picked node %d (%s), want the text field (16)", got.I, got.Type)
 	}
 }
+
+// TestIndexCountsByScreenPosition: with an index, matches are counted top to
+// bottom, then left to right, as in Maestro, not in tree order (#254). The
+// tab bar comes first in the tree but sits at the bottom of the screen.
+func TestIndexCountsByScreenPosition(t *testing.T) {
+	tabA := node(1, "Button", "Home", 0, 780, 130, 50)
+	tabB := node(2, "Button", "Back", 130, 780, 130, 50)
+	header := node(3, "StaticText", "Connections", 0, 100, 400, 30)
+	summary := node(4, "StaticText", "Wi-Fi", 0, 140, 400, 30)
+	devices := node(5, "StaticText", "Connected devices", 0, 200, 400, 30)
+	s := sc(tabA, tabB, header, summary, devices)
+
+	for idx, want := range map[string]int{"0": 4, "1": 5, "2": 1, "-1": 2} {
+		got, err := pick(s, flow.Selector{Below: &flow.Selector{Text: "Connections"}, Text: ".+", Index: idx})
+		if err != nil || got.I != want {
+			t.Errorf("below, index %s: got %+v %v, want %d", idx, got, err, want)
+		}
+	}
+	for idx, want := range map[string]int{"0": 3, "1": 4, "-1": 2} {
+		got, err := pick(s, flow.Selector{Text: ".+", Index: idx})
+		if err != nil || got.I != want {
+			t.Errorf("plain, index %s: got %+v %v, want %d", idx, got, err, want)
+		}
+	}
+}
