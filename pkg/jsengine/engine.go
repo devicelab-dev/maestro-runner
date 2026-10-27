@@ -3,6 +3,7 @@ package jsengine
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -34,8 +35,13 @@ type Engine struct {
 	// runs while Eval holds mu, so it has its own lock rather than reusing mu
 	// (mu is not reentrant — reusing it would self-deadlock).
 	requireBaseDir string
-	requireMu      sync.RWMutex
-	mu             sync.Mutex
+	// requireScriptDir is the directory of the runScript file running now
+	// ("" for an inline script and between scripts); a relative require
+	// made by that script looks there before requireBaseDir. Guarded by
+	// requireMu, like requireBaseDir.
+	requireScriptDir string
+	requireMu        sync.RWMutex
+	mu               sync.Mutex
 }
 
 // timerRegistry manages setTimeout/setInterval timers
@@ -155,26 +161,71 @@ func (e *Engine) setupConsole() {
 }
 
 // setupRequire enables CommonJS `require` so a runScript can pull in helper
-// modules (`const h = require('./helpers.js')`). A bare relative path resolves
-// against the flow's directory (set via SetRequireBaseDir); an absolute path is
-// read as given. Only CommonJS is supported — goja has no ES-module loader, so
-// `import` is not available. This is a maestro-runner extension; Maestro's
-// runScript has no module system.
+// modules (`const h = require('./helpers.js')`). A relative path required by
+// a script that came from a file (see WithRequireScriptDir) resolves against
+// the script file's own directory first, then against the flow's directory
+// (set via SetRequireBaseDir); an inline script resolves against the flow's
+// directory only. A module's own require resolves relative to that module, as
+// in Node, and an absolute path is read as given. Only CommonJS is supported —
+// goja has no ES-module loader, so `import` is not available. This is a
+// maestro-runner extension; Maestro's runScript has no module system.
 func (e *Engine) setupRequire() {
-	loader := func(path string) ([]byte, error) {
-		resolved := path
-		if !filepath.IsAbs(path) {
-			e.requireMu.RLock()
-			base := e.requireBaseDir
-			e.requireMu.RUnlock()
-			if base != "" {
-				resolved = filepath.Join(base, path)
-			}
-		}
-		return require.DefaultSourceLoader(resolved)
-	}
-	registry := require.NewRegistryWithLoader(loader)
+	registry := require.NewRegistry(require.WithPathResolver(e.resolveRequirePath))
 	registry.Enable(e.runtime)
+}
+
+// resolveRequirePath is the require registry's path resolver. goja_nodejs
+// passes the requiring module's directory as base. Every path this returns is
+// absolute, so every loaded module has an absolute name, and a relative base
+// can only come from the top-level script or expression — its source has no
+// file name, so base is "." — or from the node_modules walk that starts
+// there. Such a base is taken relative to the running script file's directory
+// when the target exists there, else relative to the flow's directory.
+//
+// Absolute paths also key goja_nodejs's module cache by the real file, so the
+// same relative path required from two directories loads two modules.
+//
+// It runs inside require(), while Eval/RunScript holds mu, so it reads the
+// directories under requireMu only.
+func (e *Engine) resolveRequirePath(base, path string) string {
+	path = filepath.FromSlash(path)
+	if filepath.IsAbs(path) || filepath.IsAbs(base) {
+		return absPath(require.DefaultPathResolver(base, path))
+	}
+
+	e.requireMu.RLock()
+	flowDir, scriptDir := e.requireBaseDir, e.requireScriptDir
+	e.requireMu.RUnlock()
+
+	if scriptDir != "" {
+		candidate := absPath(require.DefaultPathResolver(filepath.Join(scriptDir, base), path))
+		if requireTargetExists(candidate) {
+			return candidate
+		}
+	}
+	return absPath(require.DefaultPathResolver(filepath.Join(flowDir, base), path))
+}
+
+// requireTargetExists reports whether goja_nodejs would find a module at p:
+// the file itself, p with a .js or .json extension, or a directory holding an
+// index.js, index.json or package.json.
+func requireTargetExists(p string) bool {
+	for _, c := range []string{
+		p, p + ".js", p + ".json",
+		filepath.Join(p, "index.js"), filepath.Join(p, "index.json"), filepath.Join(p, "package.json"),
+	} {
+		if fi, err := os.Stat(c); err == nil && !fi.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+func absPath(p string) string {
+	if a, err := filepath.Abs(p); err == nil {
+		return a
+	}
+	return p
 }
 
 // SetRequireBaseDir sets the directory that a relative `require('./x.js')`
@@ -183,6 +234,26 @@ func (e *Engine) SetRequireBaseDir(dir string) {
 	e.requireMu.Lock()
 	e.requireBaseDir = dir
 	e.requireMu.Unlock()
+}
+
+// WithRequireScriptDir runs fn with dir as the running script file's
+// directory: a relative require made by the top-level script looks there
+// first and falls back to the flow's directory. The previous value is
+// restored when fn returns, also when it fails or panics.
+func (e *Engine) WithRequireScriptDir(dir string, fn func() error) error {
+	if dir != "" {
+		dir = absPath(dir)
+	}
+	e.requireMu.Lock()
+	prev := e.requireScriptDir
+	e.requireScriptDir = dir
+	e.requireMu.Unlock()
+	defer func() {
+		e.requireMu.Lock()
+		e.requireScriptDir = prev
+		e.requireMu.Unlock()
+	}()
+	return fn()
 }
 
 // setupTimers adds setTimeout, setInterval, clearTimeout, clearInterval
