@@ -12,7 +12,7 @@
 
 ![~5x faster vs Maestro CLI](https://img.shields.io/badge/~5x_faster_vs_Maestro_CLI-3a9d5c?style=for-the-badge) ![14x less memory](https://img.shields.io/badge/14x_less_memory-3a9d5c?style=for-the-badge)
 
-[![npm installs/mo](https://img.shields.io/npm/dm/maestro-runner?label=npm%20installs%2Fmo&color=cb3837&style=for-the-badge)](https://www.npmjs.com/package/maestro-runner) [![GitHub downloads](https://img.shields.io/github/downloads/devicelab-dev/maestro-runner/total?label=github%20downloads&color=17a2b8&style=for-the-badge)](https://github.com/devicelab-dev/maestro-runner/releases) [![CI runs](https://img.shields.io/endpoint?url=https://open.devicelab.dev/api/maestro-runner/shield&style=for-the-badge)](https://www.npmjs.com/package/maestro-runner)
+[![npm installs/mo](https://img.shields.io/badge/npm%20installs%2Fmo-36k%2Fmonth-cb3837?style=for-the-badge)](https://www.npmjs.com/package/maestro-runner) [![GitHub downloads](https://img.shields.io/github/downloads/devicelab-dev/maestro-runner/total?label=github%20downloads&color=17a2b8&style=for-the-badge)](https://github.com/devicelab-dev/maestro-runner/releases) [![CI runs](https://img.shields.io/endpoint?url=https://open.devicelab.dev/api/maestro-runner/shield&style=for-the-badge)](https://www.npmjs.com/package/maestro-runner)
 
 [![license](https://img.shields.io/badge/license-Apache_2.0-blue.svg?style=for-the-badge)](LICENSE)
 [![by](https://img.shields.io/badge/by-DeviceLab.dev-17a2b8.svg?style=for-the-badge)](https://devicelab.dev)
