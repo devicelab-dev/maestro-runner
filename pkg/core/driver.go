@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
@@ -119,6 +120,18 @@ func (b Bounds) Center() (int, int) {
 // Contains checks if a point is within the bounds
 func (b Bounds) Contains(x, y int) bool {
 	return x >= b.X && x < b.X+b.Width && y >= b.Y && y < b.Y+b.Height
+}
+
+// ZeroArea reports whether b has no area: a width or height of zero or less.
+// Tapping such an element can only aim at its origin, which is a point on
+// whatever else is drawn there.
+func ZeroArea(b Bounds) bool {
+	return b.Width <= 0 || b.Height <= 0
+}
+
+// ZeroAreaTapError is the error for refusing to tap an element with no area.
+func ZeroAreaTapError(b Bounds) error {
+	return fmt.Errorf("element has no area (w=%d h=%d at %d,%d), so a tap would land on whatever is drawn at its corner", b.Width, b.Height, b.X, b.Y)
 }
 
 // VisiblePercentage returns the fraction of the element's area that overlaps
