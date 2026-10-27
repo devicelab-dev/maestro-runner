@@ -96,7 +96,7 @@ maestro-runner test --parallel 3 flows/                                 # Parall
 - **scrollUntilVisible** — Native scroll implementation that reliably finds off-screen elements
 - **Relative selectors** — Find elements by position: below, above, leftOf, rightOf, childOf
 - **JavaScript scripting** — Embedded JS runtime with HTTP client for dynamic test logic, no external dependencies
-- **Configurable timeouts** — Per-command and per-flow timeouts, `--wait-for-idle-timeout 0` to disable
+- **Configurable timeouts** — Per-command and per-flow timeouts, `--find-timeout 3000` to make a wrong selector fail in 3 s instead of 17 s, `--wait-for-idle-timeout 0` to disable
 - **Lightweight** — Single binary, no JVM required
 
 ## Supported Platforms & Drivers

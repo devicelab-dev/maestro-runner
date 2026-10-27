@@ -41,7 +41,7 @@ maestro-runner replaces the execution engine with a single Go binary and fixes a
 - Parallel execution with dynamic work distribution across devices
 - React Native testID and Flutter semantics — built-in, no workarounds
 - Free local reports: HTML, JUnit XML, Allure — no cloud account needed
-- Configurable timeouts per flow and per command
+- Configurable timeouts per run (`--find-timeout`), per flow and per command
 - CI/CD: GitHub Actions, GitLab CI, Jenkins, CircleCI
 
 ## What it does not support (yet)
