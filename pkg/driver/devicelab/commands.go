@@ -1092,7 +1092,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		invalidateText(target)
 		// Per-character key events are the path that loses characters when the
 		// app janks — the reason this verification exists at all.
-		note := core.ConfirmTypedText(target, text, before, logger.Warn)
+		note := core.ConfirmTypedText(target, text, before, step.Retypes(), logger.Warn)
 		return successResult(fmt.Sprintf("Entered text (keyPress): %s%s%s", text, unicodeWarning, note), nil)
 	}
 
@@ -1218,7 +1218,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		}
 	}
 
-	note := core.ConfirmTypedText(typedInto, text, beforeText, logger.Warn)
+	note := core.ConfirmTypedText(typedInto, text, beforeText, step.Retypes(), logger.Warn)
 	return successResult(fmt.Sprintf("Entered text: %s%s%s", text, unicodeWarning, note), nil)
 }
 

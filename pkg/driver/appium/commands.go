@@ -584,7 +584,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 			if err := d.client.ElementSendKeys(info.ID, text); err != nil {
 				return errorResult(err, "Failed to input text")
 			}
-			note := core.ConfirmTypedText(d.textField(info.ID), text, before, logger.Warn)
+			note := core.ConfirmTypedText(d.textField(info.ID), text, before, step.Retypes(), logger.Warn)
 			return successResult(fmt.Sprintf("Input text: %s%s", text, note), info)
 		}
 	}
@@ -648,7 +648,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		}
 	}
 
-	note := core.ConfirmTypedText(verified, text, beforeText, logger.Warn)
+	note := core.ConfirmTypedText(verified, text, beforeText, step.Retypes(), logger.Warn)
 	return successResult(fmt.Sprintf("Input text: %s%s", text, note), nil)
 }
 

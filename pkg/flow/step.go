@@ -391,7 +391,16 @@ type InputTextStep struct {
 	// variable, so a password passed through `${PASSWORD}` reaches the report,
 	// the console and the log as `${PASSWORD}` and not as its value.
 	RawText string `yaml:"-"`
+	// Retype: false leaves a field that reads back shorter than what was
+	// typed as it is, for a field that cuts what it is given (a stake field
+	// dropping decimals), where clearing and typing again changes the app's
+	// state. Default true: the field is typed again (dropped keystrokes).
+	Retype *bool `yaml:"retype"`
 }
+
+// Retypes reports whether a field that reads back short is typed again: true
+// unless the step says `retype: false`.
+func (s *InputTextStep) Retypes() bool { return s.Retype == nil || *s.Retype }
 
 // UnmarshalYAML decodes InputTextStep and drops the `text:` value that the
 // inlined Selector picked up alongside Text. See the type comment.
