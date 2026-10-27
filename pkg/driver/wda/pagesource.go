@@ -797,6 +797,16 @@ func isClickableType(elemType string) bool {
 	}
 }
 
+// SortCandidates orders matches before one is picked. Without an index,
+// clickable ones come first; with one, Maestro skips that and counts by
+// position on screen (top to bottom, then left to right), so this does too.
+func SortCandidates(candidates []*ParsedElement, index string) []*ParsedElement {
+	if index == "" {
+		return SortClickableFirst(candidates)
+	}
+	return core.SortByPosition(candidates, func(e *ParsedElement) core.Bounds { return e.Bounds })
+}
+
 // SortClickableFirst reorders elements to prioritize interactive ones.
 // iOS doesn't expose a "clickable" attribute, so we determine clickability
 // from the element type (Button, Link, TextField, etc. are clickable).

@@ -917,8 +917,8 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector) (*core.ElementInfo, 
 		return nil, fmt.Errorf("no elements match relative criteria")
 	}
 
-	// Prioritize clickable elements
-	candidates = SortClickableFirst(candidates)
+	// Clickable first, or by position when an index is given
+	candidates = SortCandidates(candidates, sel.Index)
 
 	var selected *ParsedElement
 	if sel.Index == "" && (filterType == filterBelow || filterType == filterAbove || filterType == filterLeftOf || filterType == filterRightOf) {
@@ -1016,8 +1016,8 @@ func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements 
 		return nil, nil, fmt.Errorf("no elements match relative criteria")
 	}
 
-	// Prioritize clickable elements
-	candidates = SortClickableFirst(candidates)
+	// Clickable first, or by position when an index is given
+	candidates = SortCandidates(candidates, sel.Index)
 
 	var selected *ParsedElement
 	if sel.Index == "" && (filterType == filterBelow || filterType == filterAbove || filterType == filterLeftOf || filterType == filterRightOf) {
@@ -1065,7 +1065,7 @@ func (d *Driver) findElementByPageSourceOnce(sel flow.Selector) (*uiautomator2.E
 	}
 
 	candidates := FilterBySelector(allElements, sel)
-	candidates = SortClickableFirst(candidates)
+	candidates = SortCandidates(candidates, sel.Index)
 
 	if len(candidates) == 0 {
 		return nil, nil, fmt.Errorf("no elements match selector")
@@ -1135,7 +1135,7 @@ func (d *Driver) findElementByPageSourceOnceInternal(sel flow.Selector) (*core.E
 	}
 
 	candidates := FilterBySelector(allElements, sel)
-	candidates = SortClickableFirst(candidates)
+	candidates = SortCandidates(candidates, sel.Index)
 
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no elements match selector")

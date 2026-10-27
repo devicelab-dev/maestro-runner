@@ -1266,8 +1266,8 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector, allElements []*Parse
 		return nil, notFound("no elements match selector")
 	}
 
-	// Prioritize clickable/interactive elements
-	candidates = SortClickableFirst(candidates)
+	// Interactive first, or by position when an index is given
+	candidates = SortCandidates(candidates, sel.Index)
 
 	var selected *ParsedElement
 	if sel.Index == "" && (filterType == filterBelow || filterType == filterAbove || filterType == filterLeftOf || filterType == filterRightOf) {
@@ -1328,8 +1328,8 @@ func (d *Driver) findElementByPageSourceOnce(sel flow.Selector) (*core.ElementIn
 		return nil, notFound("no elements match selector")
 	}
 
-	// Prioritize clickable/interactive elements
-	candidates = SortClickableFirst(candidates)
+	// Interactive first, or by position when an index is given
+	candidates = SortCandidates(candidates, sel.Index)
 
 	if err := core.IndexError(len(candidates), sel.Index); err != nil {
 		return nil, err

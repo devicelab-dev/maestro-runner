@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -59,4 +60,29 @@ func IndexError(count int, index string) error {
 		return fmt.Errorf("no element at index %s: %d match(es)", strings.TrimSpace(index), count)
 	}
 	return nil
+}
+
+// SortByPosition returns elems ordered as Maestro orders matches before it
+// applies a selector's index: top to bottom, then left to right. An element
+// with no bounds (all zero) goes last; ties keep their incoming order.
+// Ordering clickable matches first instead made `index: 0` pick a clickable
+// navigation-bar button over the text view above it (#254).
+func SortByPosition[T any](elems []T, bounds func(T) Bounds) []T {
+	sorted := append([]T(nil), elems...)
+	key := func(e T) (int, int) {
+		b := bounds(e)
+		if b == (Bounds{}) {
+			return math.MaxInt, math.MaxInt
+		}
+		return b.Y, b.X
+	}
+	sort.SliceStable(sorted, func(i, j int) bool {
+		yi, xi := key(sorted[i])
+		yj, xj := key(sorted[j])
+		if yi != yj {
+			return yi < yj
+		}
+		return xi < xj
+	})
+	return sorted
 }

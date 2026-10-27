@@ -571,8 +571,8 @@ func (d *Driver) findElementByPageSource(sel flow.Selector) (*core.ElementInfo, 
 		return nil, fmt.Errorf("no elements match selector")
 	}
 
-	// Prioritize clickable, then select by index or deepest
-	candidates = SortClickableFirst(candidates)
+	// Clickable first (by position when an index is given), then select by index or deepest
+	candidates = SortCandidates(candidates, sel.Index)
 	if err := core.IndexError(len(candidates), sel.Index); err != nil {
 		return nil, err
 	}
@@ -759,7 +759,7 @@ func (d *Driver) findElementForTapDirect(sel flow.Selector) (*core.ElementInfo, 
 //
 // Step 2: Fall back to page source which has clickable prioritization
 //
-//	(SortClickableFirst + GetClickableElement).
+//	(SortCandidates + GetClickableElement).
 func (d *Driver) findElementForTapIOS(sel flow.Selector) (*core.ElementInfo, error) {
 	// Step 1: Try the whole text (fast path — returns Appium element ID)
 	if core.IsPlainSelectorText(sel.Text) {
@@ -980,8 +980,8 @@ func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements 
 		return nil, fmt.Errorf("no elements match relative criteria")
 	}
 
-	// Prioritize and select
-	candidates = SortClickableFirst(candidates)
+	// Clickable first, or by position when an index is given, then select
+	candidates = SortCandidates(candidates, sel.Index)
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no candidates after sorting")
 	}
