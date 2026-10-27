@@ -2,6 +2,8 @@ package devicelab_ios
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -62,6 +64,11 @@ type Agent struct {
 	device bool
 	ids    bundleIDs
 
+	// token is the run's secret the agent is started with and every request
+	// carries (TokenHeader). It is kept across restarts, and saved with the
+	// state so a later run can re-attach.
+	token string
+
 	// keptPid is the xcodebuild of an agent an earlier run left running and
 	// this one re-attached to, stopped if the agent has to be restarted.
 	keptPid int
@@ -115,6 +122,9 @@ type agentState struct {
 	// Pid is the xcodebuild the agent runs under, when it was started that
 	// way: a later run that finds the agent stuck stops it by this.
 	Pid int `json:"pid,omitempty"`
+	// Token is the one the agent was started with, which a re-attaching run
+	// must send.
+	Token string `json:"token,omitempty"`
 }
 
 func loadState(udid string) (agentState, bool) {
@@ -132,7 +142,24 @@ func saveState(udid string, s agentState) {
 		return
 	}
 	raw, _ := json.Marshal(s)
-	_ = os.WriteFile(filepath.Join(dir, "agent.json"), raw, 0o644)
+	// It holds the agent's token: readable by this user only.
+	path := filepath.Join(dir, "agent.json")
+	_ = os.WriteFile(path, raw, 0o600)
+	_ = os.Chmod(path, 0o600)
+}
+
+// agentTokenVar is the agent's setting for the token it requires.
+const agentTokenVar = "DL_AGENT_TOKEN"
+
+// newToken returns a random token for an agent this run starts.
+func newToken() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand does not fail on the platforms this runs on; a fixed
+		// token still beats none.
+		return fmt.Sprintf("t%x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
 }
 
 // PortFor derives a stable port for a simulator from its UDID, in
@@ -195,8 +222,9 @@ func StartAgent(ctx context.Context, opts AgentOptions) (*Agent, *Client, error)
 	// re-attaching to one failed every later flow (RNTester iOS on CI).
 	if s, ok := loadState(opts.UDID); ok && s.Version == m.Version {
 		c := NewClient(s.Port)
+		c.SetToken(s.Token)
 		if a.alive(ctx, c, 2*time.Second) && a.working(ctx, c, reattachProbeWait) {
-			a.port, a.mode, a.keptPid = s.Port, "reattached", s.Pid
+			a.port, a.mode, a.keptPid, a.token = s.Port, "reattached", s.Pid, s.Token
 			logger.Info("[devicelab-ios] re-attached to agent %s on port %d", m.Version, s.Port)
 			c.SetReviver(a.revive)
 			return a, c, nil
@@ -257,6 +285,9 @@ func (a *Agent) install(ctx context.Context, version string) error {
 // launch starts the agent on a free port, by simctl launch and, failing that
 // (auto mode), by xcodebuild test-without-building.
 func (a *Agent) launch(ctx context.Context) (*Client, error) {
+	if a.token == "" {
+		a.token = newToken()
+	}
 	if a.device {
 		return a.launchDevice(ctx)
 	}
@@ -266,6 +297,7 @@ func (a *Agent) launch(ctx context.Context) (*Client, error) {
 	}
 	a.port = port
 	c := NewClient(port)
+	c.SetToken(a.token)
 	var errs []string
 	// In auto mode a simulator where simctl launch once failed goes straight
 	// to xcodebuild, instead of paying the simctl wait on every run.
@@ -281,7 +313,7 @@ func (a *Agent) launch(ctx context.Context) (*Client, error) {
 	if (a.opts.Mode == ModeAuto && !skipSimctl) || a.opts.Mode == ModeSimctl {
 		if err := a.launchSimctl(ctx, c); err == nil {
 			a.mode = ModeSimctl
-			saveState(a.opts.UDID, agentState{Port: port, Version: a.version})
+			saveState(a.opts.UDID, agentState{Port: port, Version: a.version, Token: a.token})
 			return c, nil
 		} else {
 			errs = append(errs, "simctl launch: "+err.Error())
@@ -302,7 +334,7 @@ func (a *Agent) launch(ctx context.Context) (*Client, error) {
 				pid = a.xcodeCmd.Process.Pid
 			}
 			a.mu.Unlock()
-			saveState(a.opts.UDID, agentState{Port: port, Version: a.version, Pid: pid})
+			saveState(a.opts.UDID, agentState{Port: port, Version: a.version, Pid: pid, Token: a.token})
 			return c, nil
 		} else {
 			errs = append(errs, "xcodebuild: "+err.Error())
@@ -317,7 +349,8 @@ func (a *Agent) launch(ctx context.Context) (*Client, error) {
 func (a *Agent) launchSimctl(ctx context.Context, c *Client) error {
 	_, _ = simctl(ctx, 15*time.Second, "terminate", a.opts.UDID, runnerBundleID)
 	cmd := exec.CommandContext(ctx, "xcrun", "simctl", "launch", a.opts.UDID, runnerBundleID)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("SIMCTL_CHILD_DL_AGENT_PORT=%d", a.port))
+	cmd.Env = append(os.Environ(), fmt.Sprintf("SIMCTL_CHILD_DL_AGENT_PORT=%d", a.port),
+		"SIMCTL_CHILD_"+agentTokenVar+"="+a.token)
 	if os.Getenv("SIMCTL_CHILD_"+snapshotDepthVar) == "" {
 		cmd.Env = append(cmd.Env, "SIMCTL_CHILD_"+snapshotDepthVar+"="+agentSnapshotMaxDepth())
 	}
@@ -381,7 +414,8 @@ func keepPreviousLog(path string, keep int) {
 }
 
 // xctestrunFor writes a copy of agent.xctestrun next to the apps with the
-// port set, one per port so parallel simulators never share a file.
+// port and token set, one per port so parallel simulators never share a
+// file. It holds the token, so only this user may read it.
 func (a *Agent) xctestrunFor(port int) (string, error) {
 	src := filepath.Join(a.opts.Dir, "agent.xctestrun")
 	dst := filepath.Join(a.opts.Dir, fmt.Sprintf("agent-%d.xctestrun", port))
@@ -389,7 +423,10 @@ func (a *Agent) xctestrunFor(port int) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read %s: %w", src, err)
 	}
-	if err := os.WriteFile(dst, raw, 0o644); err != nil {
+	if err := os.WriteFile(dst, raw, 0o600); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(dst, 0o600); err != nil {
 		return "", err
 	}
 	for _, key := range []string{"EnvironmentVariables", "TestingEnvironmentVariables"} {
@@ -400,6 +437,10 @@ func (a *Agent) xctestrunFor(port int) (string, error) {
 		path = fmt.Sprintf("%s.%s.%s", testTargetName, key, snapshotDepthVar)
 		if out, err := exec.Command("plutil", "-replace", path, "-string", agentSnapshotMaxDepth(), dst).CombinedOutput(); err != nil {
 			return "", fmt.Errorf("set snapshot depth in %s: %v: %s", dst, err, strings.TrimSpace(string(out)))
+		}
+		path = fmt.Sprintf("%s.%s.%s", testTargetName, key, agentTokenVar)
+		if out, err := exec.Command("plutil", "-replace", path, "-string", a.token, dst).CombinedOutput(); err != nil {
+			return "", fmt.Errorf("set token in %s: %v: %s", dst, err, strings.TrimSpace(string(out)))
 		}
 	}
 	return dst, nil
