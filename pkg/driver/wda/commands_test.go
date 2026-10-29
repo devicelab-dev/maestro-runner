@@ -5400,10 +5400,10 @@ func TestEnsureSessionSetsAutoClickAlertSelector(t *testing.T) {
 // invalid autoClickAlertSelector, and a straight apostrophe inside a quoted
 // predicate string (as in 'Don't Allow') ends the string early.
 func TestAutoClickAlertSelectors(t *testing.T) {
-	if got := autoClickAlertSelector(""); got != "" {
+	if got := autoClickAlertSelector("", core.IOSPromptLabels{}); got != "" {
 		t.Errorf("no action: got %q, want \"\" (monitor off)", got)
 	}
-	for _, sel := range []string{autoClickAlertSelector("accept"), autoClickAlertSelector("dismiss")} {
+	for _, sel := range []string{autoClickAlertSelector("accept", core.IOSPromptLabels{}), autoClickAlertSelector("dismiss", core.IOSPromptLabels{})} {
 		if sel == "" {
 			t.Fatal("accept/dismiss must have a selector")
 		}
@@ -5413,5 +5413,30 @@ func TestAutoClickAlertSelectors(t *testing.T) {
 		if strings.Count(sel, "'")%2 != 0 || strings.Count(sel, "`") != 2 {
 			t.Errorf("%q: unbalanced quotes", sel)
 		}
+	}
+}
+
+// On a simulator in another language the prompt's own labels join the
+// selector as whole labels; one that would break the quoting is left out.
+func TestAutoClickAlertSelectorLocalized(t *testing.T) {
+	labels := core.NewIOSPromptLabels([][2]string{
+		{"Allow", "Erlauben"},
+		{"Don’t Allow", "Nicht erlauben"},
+		{"Allow Once", "Bad'quote"},
+	})
+	accept := autoClickAlertSelector("accept", labels)
+	want := "**/XCUIElementTypeButton[`label BEGINSWITH[c] 'Allow' OR label ==[c] 'erlauben'`]"
+	if accept != want {
+		t.Errorf("accept = %q, want %q", accept, want)
+	}
+	dismiss := autoClickAlertSelector("dismiss", labels)
+	if !strings.HasSuffix(dismiss, " OR label ==[c] 'nicht erlauben'`]") || strings.Count(dismiss, "`") != 2 {
+		t.Errorf("dismiss = %q", dismiss)
+	}
+	if got := autoClickAlertSelector("", labels); got != "" {
+		t.Errorf("no action: got %q", got)
+	}
+	if got := autoClickAlertSelector("accept", core.IOSPromptLabels{}); got != autoAcceptAlertSelector {
+		t.Errorf("English: got %q", got)
 	}
 }

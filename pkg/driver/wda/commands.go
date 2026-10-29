@@ -16,6 +16,7 @@ import (
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
 	"github.com/devicelab-dev/maestro-runner/pkg/iosinstall"
 	"github.com/devicelab-dev/maestro-runner/pkg/logger"
+	"github.com/devicelab-dev/maestro-runner/pkg/simulator"
 )
 
 // Tap commands
@@ -1303,7 +1304,7 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 		// driver settles on screenshots itself.
 		"animationCoolOffTimeout": 0,
 		"defaultAlertAction":      d.alertAction,
-		"autoClickAlertSelector":  autoClickAlertSelector(d.alertAction),
+		"autoClickAlertSelector":  autoClickAlertSelector(d.alertAction, d.localPromptLabels(d.alertAction)),
 	}
 	if d.alertAction == "accept" {
 		sessionSettings["acceptAlertButtonSelector"] = "**/XCUIElementTypeButton[`label BEGINSWITH[c] 'Allow' OR label ==[c] 'OK'`]"
@@ -2185,16 +2186,60 @@ const (
 )
 
 // autoClickAlertSelector returns the autoClickAlertSelector for an alert
-// action from resolveAlertAction: "" (monitor off) when there is none.
-func autoClickAlertSelector(alertAction string) string {
+// action from resolveAlertAction: "" (monitor off) when there is none. On a
+// simulator in another language, labels adds the prompt buttons as iOS words
+// them there ("Erlauben" in German), each matched as a whole label.
+func autoClickAlertSelector(alertAction string, labels core.IOSPromptLabels) string {
+	var sel string
 	switch alertAction {
 	case "accept":
-		return autoAcceptAlertSelector
+		sel = autoAcceptAlertSelector
 	case "dismiss":
-		return autoDismissAlertSelector
+		sel = autoDismissAlertSelector
 	default:
 		return ""
 	}
+	var extra []string
+	for _, l := range labels.Labels(alertAction) {
+		// The label goes inside a quoted predicate string inside a
+		// backtick-quoted class chain; one that would end either is left out.
+		if strings.ContainsAny(l, "'`\\\"") {
+			continue
+		}
+		extra = append(extra, "label ==[c] '"+l+"'")
+	}
+	if len(extra) == 0 {
+		return sel
+	}
+	return strings.TrimSuffix(sel, "`]") + " OR " + strings.Join(extra, " OR ") + "`]"
+}
+
+// localPromptLabels is, on a simulator, its prompt vocabulary in its preferred
+// languages, read the first time an action needs it. A real device, no
+// action, or strings that cannot be read keep the English labels.
+func (d *Driver) localPromptLabels(alertAction string) core.IOSPromptLabels {
+	if alertAction == "" {
+		return core.IOSPromptLabels{}
+	}
+	d.promptLabelsOnce.Do(func() {
+		if d.loadPromptLabels != nil {
+			d.promptLabels = d.loadPromptLabels()
+			return
+		}
+		if d.info == nil || !d.info.IsSimulator || d.udid == "" {
+			return
+		}
+		pairs, err := simulator.PromptStringPairs(d.udid)
+		if err != nil {
+			logger.Debug("[wda] permission prompt strings unavailable, English labels only: %v", err)
+			return
+		}
+		d.promptLabels = core.NewIOSPromptLabels(pairs)
+		if n := len(d.promptLabels.Labels("accept")) + len(d.promptLabels.Labels("dismiss")); n > 0 {
+			logger.Debug("[wda] %d localized permission prompt labels", n)
+		}
+	})
+	return d.promptLabels
 }
 
 // resolveAlertAction determines the WDA defaultAlertAction from a permission map.

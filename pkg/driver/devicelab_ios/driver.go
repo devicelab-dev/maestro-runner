@@ -64,6 +64,12 @@ type Driver struct {
 	autoAlert       string
 	alertWatchUntil time.Time
 	lastAlertCheck  time.Time
+	// promptLabels is how this simulator's language words the prompt
+	// buttons, read once, the first time a prompt has no English match;
+	// loadPromptLabels reads it, and tests replace it.
+	promptLabels     core.IOSPromptLabels
+	promptLabelsOnce sync.Once
+	loadPromptLabels func() core.IOSPromptLabels
 	// step is the step Execute is running; a prompt it is aimed at
 	// (`tapOn: "Allow"`) is left to it.
 	step flow.Step

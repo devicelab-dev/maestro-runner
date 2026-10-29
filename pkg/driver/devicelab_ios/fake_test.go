@@ -120,6 +120,7 @@ func newTestDriver(t *testing.T, handler func(string, Args) (*Response, error)) 
 	d.runSimctl = sl.run
 	d.runSimctlWithin = func(_ time.Duration, args ...string) (string, error) { return sl.run(args...) }
 	d.openWeb = func() (webPages, error) { return nil, errNoInspector }
+	d.loadPromptLabels = func() core.IOSPromptLabels { return core.IOSPromptLabels{} }
 	d.SetFindTimeout(300)
 	d.SetOptionalFindTimeout(200)
 	return d, fa, sl
