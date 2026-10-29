@@ -143,7 +143,9 @@ func (c *Client) CreateSession(bundleID string, alertAction string) error {
 		},
 	}
 
-	resp, err := c.post("/session", caps)
+	// A session with a bundleId launches the app, so it waits for iOS to
+	// register the app as a launch does.
+	resp, err := c.postLaunch("/session", caps, bundleID)
 	if err != nil {
 		return fmt.Errorf("failed to create session: %w", err)
 	}
@@ -263,8 +265,46 @@ func (c *Client) LaunchAppWithArgs(bundleID string, arguments []string, environm
 	if len(environment) > 0 {
 		body["environment"] = environment
 	}
-	_, err := c.post(c.sessionPath("/wda/apps/launch"), body)
+	_, err := c.postLaunch(c.sessionPath("/wda/apps/launch"), body, bundleID)
 	return err
+}
+
+// appNotFound is how WDA's launch fails while iOS does not know the app:
+// FrontBoard's NotFound. /wda/apps/launch words it "Application … is unknown
+// to FrontBoard" (iOS 17 and 26) or "Unknown application display identifier
+// …" (iOS 18); a new session "Application info provider
+// (FBSApplicationLibrary) returned nil for …" (iOS 26 and 27). On a real
+// device it happens right after an install (clearState's reinstall): the
+// launch is sent before iOS has registered the app, and the same launch
+// succeeds a few seconds later.
+const appNotFound = "FBSOpenApplicationErrorDomain Code=4"
+
+// How long, and how often, a launch is sent again while it fails with
+// appNotFound. An app that is not installed at all fails after launchRetryFor.
+var (
+	launchRetryFor   = 10 * time.Second
+	launchRetryEvery = 500 * time.Millisecond
+)
+
+// postLaunch posts a request that launches bundleID, sending it again while
+// iOS has not registered the app yet. It logs one line when it had to.
+func (c *Client) postLaunch(path string, body interface{}, bundleID string) (map[string]interface{}, error) {
+	start := time.Now()
+	for tries := 1; ; tries++ {
+		resp, err := c.post(path, body)
+		if err == nil || !strings.Contains(err.Error(), appNotFound) || time.Since(start) >= launchRetryFor {
+			if tries > 1 {
+				took := time.Since(start).Round(10 * time.Millisecond)
+				if err != nil {
+					logger.Warn("WDA launch of %s: iOS still did not know the app after %d tries in %s", bundleID, tries, took)
+				} else {
+					logger.Info("WDA launch of %s: iOS had not registered the app yet; launched after %d tries in %s", bundleID, tries, took)
+				}
+			}
+			return resp, err
+		}
+		time.Sleep(launchRetryEvery)
+	}
 }
 
 // TerminateApp terminates an app by bundle ID.
