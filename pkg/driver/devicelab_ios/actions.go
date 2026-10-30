@@ -534,7 +534,8 @@ func (d *Driver) inputText(s *flow.InputTextStep) *core.CommandResult {
 	if s.Text == "" {
 		return core.SuccessResult("nothing to type", nil)
 	}
-	resp, err := d.call("type", &Args{Text: s.Text, Speed: d.typingSpeed})
+	args := &Args{Text: s.Text, Speed: d.typingSpeed, Verify: typeVerify(s)}
+	resp, err := d.call("type", args)
 	// Nothing had focus: the tap meant to focus the field did not take. That
 	// is this step's own tap when it has a selector, else the step before's
 	// (the usual "tapOn field, inputText" pair). Tap it once more and type.
@@ -546,7 +547,7 @@ func (d *Driver) inputText(s *flow.InputTextStep) *core.CommandResult {
 		logger.Debug("[devicelab-ios] inputText: no field has focus; re-tapping (%.0f,%.0f)", retry.x, retry.y)
 		if terr := d.act("tap", retry.x, retry.y, nil); terr == nil {
 			d.settle(defaultSettleTimeout)
-			resp, err = d.call("type", &Args{Text: s.Text, Speed: d.typingSpeed})
+			resp, err = d.call("type", args)
 		}
 	}
 	if err != nil {
@@ -557,6 +558,21 @@ func (d *Driver) inputText(s *flow.InputTextStep) *core.CommandResult {
 		msg += " (not confirmed in the field)"
 	}
 	return core.SuccessResult(msg, nil)
+}
+
+// typeVerify is the agent's verify flag for an inputText: nil (the agent's
+// default, read the field back and retype once when keys went missing) unless
+// a retype would do harm. With `retype: false` the flow asked for a field
+// that reads back short to be left as it is. Text with a newline or a tab
+// moves on as it is typed: the field never shows those characters, so the
+// read-back always looks short, and the retype pressed return a second time,
+// submitting the form twice. WDA skips its check for the same text.
+func typeVerify(s *flow.InputTextStep) *bool {
+	if s.Retypes() && !strings.ContainsAny(s.Text, "\n\t") {
+		return nil
+	}
+	off := false
+	return &off
 }
 
 func (d *Driver) eraseText(count int) *core.CommandResult {

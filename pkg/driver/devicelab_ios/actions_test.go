@@ -833,3 +833,37 @@ func TestTapDoesNotHitAStalePointWhenTheElementLeft(t *testing.T) {
 		t.Errorf("taps = %d, want 0", n)
 	}
 }
+
+// The agent reads the field back and retypes once when keys went missing,
+// unless that would do harm: `retype: false` leaves a short field as it is,
+// and text with a newline or a tab, which the field never shows, would read
+// back short every time and press return twice (a double submit).
+func TestInputTextVerifyFlag(t *testing.T) {
+	d, fa, _ := newTestDriver(t, func(cmd string, _ Args) (*Response, error) {
+		return ok(&Payload{Typed: true}), nil
+	})
+	no := false
+	steps := []*flow.InputTextStep{
+		{Text: "jane"},
+		{Text: "jane", Retype: &no},
+		{Text: "query\n"},
+		{Text: "a\tb"},
+	}
+	for _, s := range steps {
+		if r := d.Execute(s); !r.Success {
+			t.Fatalf("%q: %s", s.Text, r.Message)
+		}
+	}
+	types := fa.sent("type")
+	if len(types) != len(steps) {
+		t.Fatalf("types = %+v", types)
+	}
+	if types[0].Verify != nil {
+		t.Errorf("plain text: verify = %v, want the agent's default", *types[0].Verify)
+	}
+	for i, ty := range types[1:] {
+		if ty.Verify == nil || *ty.Verify {
+			t.Errorf("%q: verify = %v, want false", steps[i+1].Text, ty.Verify)
+		}
+	}
+}
