@@ -60,3 +60,24 @@ func TestScreenSizeWhenRotationNotReached(t *testing.T) {
 		t.Errorf("portrait-locked: screenSize = %dx%d, want 1080x2340", w, h)
 	}
 }
+
+// Percentage points count from the whole display, as Maestro's do
+// (getRealMetrics), not the agent's size without the system bars: `50%` of a
+// 1080x2340 Pixel 4a whose agent reports 1080x2138 is y=1170, not 1069.
+func TestScreenPercentUsesWholeDisplay(t *testing.T) {
+	shell := &mockShell{out: "Physical size: 1080x2340\n"}
+	d := New(newAdbSwipeClient(), &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2138}, shell)
+	w, h, err := d.screenSize()
+	if err != nil || w != 1080 || h != 2340 {
+		t.Fatalf("screenSize = %dx%d %v, want 1080x2340", w, h, err)
+	}
+	if x, y, _ := core.ParsePointCoords("50%, 50%", w, h); x != 540 || y != 1170 {
+		t.Errorf("50%%, 50%% = (%d, %d), want (540, 1170)", x, y)
+	}
+
+	shell.commands = nil
+	d.swipeWithCoordinates("50%,90%", "50%,10%", 300)
+	if len(shell.commands) == 0 || shell.commands[len(shell.commands)-1] != "input swipe 540 2106 540 234 300" {
+		t.Errorf("swipe 50%%,90%% → 50%%,10%% = %v, want input swipe 540 2106 540 234 300", shell.commands)
+	}
+}
