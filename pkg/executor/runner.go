@@ -73,6 +73,12 @@ type RunnerConfig struct {
 	// For pacing demos and apps whose animations outrun the assertions.
 	StepDelay int
 
+	// Pauser, when set, is asked what to do when a step fails the flow, with
+	// the device left as the failure left it (--pause-on-failure, #246). Nil
+	// (the default) never pauses. Sequential runs only: ParallelRunner
+	// ignores it.
+	Pauser FailurePauser
+
 	// Device information (set by executor)
 	DeviceInfo *report.Device
 

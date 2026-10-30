@@ -122,6 +122,11 @@ MAESTRO_RUNNER_NO_UPDATE_CHECK=1 to skip the check; on CI the notice is not prin
 			Name:  "retry-failed",
 			Usage: "Run only the flows that failed in the previous run (looks for the last report under the same --output directory)",
 		},
+		&cli.BoolFlag{
+			Name:    "pause-on-failure",
+			Usage:   "When a step fails its flow, pause there with the device and app left as they are: print the screen's elements, save a screenshot, run steps on it, then retry the step or continue. Interactive terminals only: ignored with a warning when stdin is not a terminal (CI) and with --parallel or several devices",
+			EnvVars: []string{"MAESTRO_PAUSE_ON_FAILURE"},
+		},
 
 		// Parallelization
 		&cli.IntFlag{
@@ -565,6 +570,10 @@ type RunConfig struct {
 	ReportFile  string
 	RetryFailed bool // Narrow the selection to flows that failed in the previous run
 	Retries     int  // Run failing flows again, up to this many more times, in the same run
+	// PauseOnFailure pauses a sequential run at a step that fails its flow
+	// and takes commands from the terminal (--pause-on-failure, #246).
+	// Already resolved: false whenever no one could answer the pause.
+	PauseOnFailure bool
 	// ShareHierarchy makes a test run answer `hierarchy` for its device
 	// (see hierarchy_share.go); off for the hierarchy command itself.
 	ShareHierarchy bool
@@ -852,6 +861,7 @@ func runTest(c *cli.Context) error {
 		ReportBaseDir:      reportBaseDir,
 		ReportFile:         reportFile,
 		RetryFailed:        getBool("retry-failed"),
+		PauseOnFailure:     getBool("pause-on-failure"),
 		Retries:            getInt("retries"),
 		ShareHierarchy:     true,
 		Parallel:           parallel,
@@ -930,6 +940,13 @@ func runTest(c *cli.Context) error {
 			}
 			// else: keep default 200ms from CLI flag
 		}
+	}
+
+	var pauseWarning string
+	cfg.PauseOnFailure, pauseWarning = resolvePauseOnFailure(cfg.PauseOnFailure, cfg.Parallel, cfg.Devices, stdinIsTerminal())
+	if pauseWarning != "" {
+		printSetupWarning(pauseWarning)
+		logger.Warn("%s", pauseWarning)
 	}
 
 	cfg.TelemetryFlags = setFlagNames(c)
@@ -1800,6 +1817,7 @@ func executeSingleDevice(cfg *RunConfig, flows []flow.Flow) (*executor.RunResult
 		OnNestedStep:       onNestedStep,
 		OnNestedFlowStart:  onNestedFlowStart,
 		OnFlowEnd:          onFlowEndWithCloud(cfg),
+		Pauser:             failurePauser(cfg, deviceInfo, driverName),
 	})
 
 	notifyCloudRunStart(cfg, len(flows))
@@ -1854,6 +1872,7 @@ func ExecuteFlowWithDriver(driver core.Driver, cfg *RunConfig, f flow.Flow) (*ex
 		OnNestedStep:       onNestedStep,
 		OnNestedFlowStart:  onNestedFlowStart,
 		OnFlowEnd:          onFlowEndWithCloud(cfg),
+		Pauser:             failurePauser(cfg, deviceInfo, driverName),
 	})
 
 	notifyCloudRunStart(cfg, 1)
@@ -2235,6 +2254,7 @@ func executeAppiumSingleSession(cfg *RunConfig, flows []flow.Flow) (*executor.Ru
 		OnNestedStep:       onNestedStep,
 		OnNestedFlowStart:  onNestedFlowStart,
 		OnFlowEnd:          onFlowEndWithCloud(cfg),
+		Pauser:             failurePauser(cfg, deviceInfo, "appium"),
 	})
 
 	notifyCloudRunStart(cfg, len(flows))

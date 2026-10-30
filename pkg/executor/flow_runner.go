@@ -282,40 +282,17 @@ func (fr *FlowRunner) Run() FlowResult {
 			break
 		}
 
-		// Describe before executing: expansion rewrites the step in place, and
-		// the description is what the console shows.
-		describe, desc := fr.stepNames(step)
+		// Counts before the step, for a retry from a pause to start again from.
+		passedBefore, failedBefore, skippedBefore := fr.stepsPassed, fr.stepsFailed, fr.stepsSkipped
 
-		// Execute step
-		stepStatus, stepError, stepDuration, optionalFailed := fr.executeStep(i, step)
+		stepStatus, stepError, desc, optionalFailed := fr.runTopLevelStep(i, step)
 
-		// The report described the step before the run, with every ${NAME}
-		// as written; give it the flow values that are known now.
-		if describe != step.Describe() {
-			fr.flowWriter.CommandYAML(i, describe)
-		}
-
-		// Notify step complete
-		if fr.config.OnStepComplete != nil {
-			fr.config.OnStepComplete(i, desc, stepStatus == report.StatusPassed, stepDuration, stepError)
-		}
-
-		// Track step counts (compound steps like runFlow/repeat/retry don't count themselves,
-		// their sub-steps are counted individually in executeNestedStep)
-		isCompoundStep := false
-		switch step.(type) {
-		case *flow.RepeatStep, *flow.RetryStep, *flow.RunFlowStep:
-			isCompoundStep = true
-		}
-		if !isCompoundStep {
-			switch stepStatus {
-			case report.StatusPassed:
-				fr.stepsPassed++
-			case report.StatusFailed:
-				fr.stepsFailed++
-			case report.StatusSkipped:
-				fr.stepsSkipped++
-			}
+		// --pause-on-failure (#246): a failure that would fail the flow waits
+		// here, with the device as it left it, and may be run again.
+		for attempt := 1; stepStatus == report.StatusFailed && !optionalFailed &&
+			fr.pauseOnFailure(i, desc, stepError, attempt); attempt++ {
+			fr.stepsPassed, fr.stepsFailed, fr.stepsSkipped = passedBefore, failedBefore, skippedBefore
+			stepStatus, stepError, desc, optionalFailed = fr.runTopLevelStep(i, step)
 		}
 
 		// Handle step result
@@ -402,6 +379,48 @@ func (fr *FlowRunner) Run() FlowResult {
 		StepsFailed:  fr.stepsFailed,
 		StepsSkipped: fr.stepsSkipped,
 	}
+}
+
+// runTopLevelStep runs the flow's step idx, reports it and counts it. It
+// returns the step's status and error, its title as the console shows it, and
+// whether a failure lets the flow go on because the step is optional.
+func (fr *FlowRunner) runTopLevelStep(idx int, step flow.Step) (report.Status, string, string, bool) {
+	// Describe before executing: expansion rewrites the step in place, and
+	// the description is what the console shows.
+	describe, desc := fr.stepNames(step)
+
+	// Execute step
+	stepStatus, stepError, stepDuration, optionalFailed := fr.executeStep(idx, step)
+
+	// The report described the step before the run, with every ${NAME}
+	// as written; give it the flow values that are known now.
+	if describe != step.Describe() {
+		fr.flowWriter.CommandYAML(idx, describe)
+	}
+
+	// Notify step complete
+	if fr.config.OnStepComplete != nil {
+		fr.config.OnStepComplete(idx, desc, stepStatus == report.StatusPassed, stepDuration, stepError)
+	}
+
+	// Track step counts (compound steps like runFlow/repeat/retry don't count themselves,
+	// their sub-steps are counted individually in executeNestedStep)
+	isCompoundStep := false
+	switch step.(type) {
+	case *flow.RepeatStep, *flow.RetryStep, *flow.RunFlowStep:
+		isCompoundStep = true
+	}
+	if !isCompoundStep {
+		switch stepStatus {
+		case report.StatusPassed:
+			fr.stepsPassed++
+		case report.StatusFailed:
+			fr.stepsFailed++
+		case report.StatusSkipped:
+			fr.stepsSkipped++
+		}
+	}
+	return stepStatus, stepError, desc, optionalFailed
 }
 
 // runFlowCompleteHooks runs the flow's onFlowComplete steps and returns why
