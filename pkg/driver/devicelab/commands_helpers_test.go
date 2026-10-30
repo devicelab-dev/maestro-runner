@@ -901,6 +901,7 @@ func TestSwipeWithAbsoluteCoords(t *testing.T) {
 func TestSwipeWithCoordinates(t *testing.T) {
 	shell := &mockShell{}
 	driver := New(newAdbSwipeClient(), &core.PlatformInfo{ScreenWidth: 1000, ScreenHeight: 2000}, shell)
+	driver.cachedScreenW, driver.cachedScreenH = 1000, 2000 // `wm size`, read once per session
 
 	// Percentage coords resolve to absolute via screen size.
 	res := driver.swipeWithCoordinates("50%,25%", "50%,75%", 200)
@@ -1676,6 +1677,7 @@ func TestTapOnPoint_Errors(t *testing.T) {
 func TestSwipe_StartEndStrings(t *testing.T) {
 	shell := &mockShell{}
 	driver := New(newAdbSwipeClient(), &core.PlatformInfo{ScreenWidth: 1000, ScreenHeight: 2000}, shell)
+	driver.cachedScreenW, driver.cachedScreenH = 1000, 2000 // `wm size`, read once per session
 	res := driver.swipe(&flow.SwipeStep{Start: "50%,25%", End: "50%,75%", Duration: 100})
 	if !res.Success {
 		t.Fatalf("swipe start/end failed: %v", res.Error)
@@ -1700,6 +1702,7 @@ func TestSwipe_AbsoluteXY(t *testing.T) {
 func TestSwipe_DirectionOnly(t *testing.T) {
 	shell := &mockShell{}
 	driver := New(newAdbSwipeClient(), &core.PlatformInfo{ScreenWidth: 1000, ScreenHeight: 2000}, shell)
+	driver.cachedScreenW, driver.cachedScreenH = 1000, 2000 // `wm size`, read once per session
 	// No start/end, no x/y, no selector → use Maestro coordinates
 	res := driver.swipe(&flow.SwipeStep{Direction: "up", Duration: 300})
 	if !res.Success {
@@ -2463,6 +2466,7 @@ func TestScroll_NoSelector_UsesADB(t *testing.T) {
 	client := &scriptedClient{trackingClient: newAdbSwipeClient()}
 	shell := &mockShell{}
 	driver := New(client, &core.PlatformInfo{ScreenWidth: 1000, ScreenHeight: 2000}, shell)
+	driver.cachedScreenW, driver.cachedScreenH = 1000, 2000 // `wm size`, read once per session
 
 	res := driver.scroll(&flow.ScrollStep{Direction: "down"})
 	if !res.Success {

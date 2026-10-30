@@ -210,3 +210,29 @@ to pool reports of different drivers or platforms, and warns when the baseline's
 differ from the reports'. Say which device and suite in the commit that adds or
 updates the baseline. Run it directly for other paths or thresholds:
 `go run ./tools/speedgate --baseline <file> --threshold-pct 30 <report-dir>...`.
+
+## Hierarchy Parity (DeviceLab Android)
+
+`tools/hierparity` checks that the DeviceLab Android agent reads every labelled
+element Android's own `uiautomator dump` reads, in the same place. With the
+screen to check in front and left alone:
+
+```bash
+make build
+make hierparity DEVICE=<SERIAL>        # or: go run ./tools/hierparity --device <SERIAL> --save /tmp/hp
+```
+
+It reads the screen with `maestro-runner hierarchy`, stops the agent (only one
+process can hold UiAutomation), then runs `uiautomator dump`. Every element of
+the dump with a text or content-desc must be in the agent's read with the same
+label and bounds overlapping by IoU 0.5 or more (recall, at least 0.9), and the
+agent's elements inside the dump's window must be in the dump (precision, at
+least 0.8). The dump reads the active window only, so the agent's SystemUI
+elements and those outside that window are not counted. Exit status: 0 pass,
+1 below a threshold, 2 bad input. A screen that changes between the two reads
+counts as a loss, so use still screens. `--agent agent.json --dump dump.xml`
+compares two saved reads.
+
+Run it over a few screens of each app suite before bundling a new agent. It
+found the agent missing a whole app behind a starting window Android never
+removed (agent 5ab75d5).

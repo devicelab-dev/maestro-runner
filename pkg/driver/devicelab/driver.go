@@ -438,27 +438,28 @@ func (d *Driver) CDPState() *core.CDPInfo {
 	return nil
 }
 
-// screenSize returns cached screen dimensions from PlatformInfo, turned to
-// the orientation setOrientation left the display in.
+// screenSize returns the size percentage points, swipes and scrolls are
+// worked out from: the whole display, as Maestro reads it (getRealMetrics),
+// turned to the orientation setOrientation left. The size the agent reports
+// at session start leaves out the system bars (1080x2138 of a 1080x2340
+// Pixel 4a), which put `50%` about 100 px above Maestro's; it is the fallback
+// when `wm size` can't be read.
 func (d *Driver) screenSize() (int, int, error) {
-	if d.info != nil && d.info.ScreenWidth > 0 && d.info.ScreenHeight > 0 {
-		w, h := d.info.ScreenWidth, d.info.ScreenHeight
-		if d.rotated {
-			if pw, ph, ok := d.physicalScreenSize(); ok && (w > h) != (pw > ph) {
-				w, h = h, w
-			}
-		}
+	if w, h, ok := d.physicalScreenSize(); ok {
 		return w, h, nil
+	}
+	if d.info != nil && d.info.ScreenWidth > 0 && d.info.ScreenHeight > 0 {
+		return d.info.ScreenWidth, d.info.ScreenHeight, nil
 	}
 	return 0, 0, fmt.Errorf("screen dimensions not available")
 }
 
-// physicalScreenSize returns the full physical display size (e.g. 1080x2340 from
-// `wm size`), cached for the session. Unlike screenSize() — which returns the
-// on-device-reported USABLE size (it can exclude the status bar, e.g. 1080x2204) —
-// this matches the coordinate space of the accessibility hierarchy (whose root spans
-// the full display), so it is the correct reference for on-screen geometry checks
-// against element bounds. `wm size` does not turn with the display, so after a
+// physicalScreenSize returns the full physical display size (e.g. 1080x2340
+// from `wm size`), cached for the session. Unlike the size the agent reports
+// (the usable size, which can leave out the system bars, e.g. 1080x2204), it
+// matches the coordinate space of the accessibility hierarchy, whose root
+// spans the full display, so it is the reference for on-screen geometry
+// checks against element bounds. `wm size` does not turn with the display, so after a
 // setOrientation the size is turned to the rotation it left (2340x1080 in
 // landscape). Returns ok=false if it cannot be determined.
 func (d *Driver) physicalScreenSize() (int, int, bool) {
@@ -501,11 +502,8 @@ func (d *Driver) noteRotation(rotation int) {
 // tappableScreenSize returns the screen size used to validate element bounds: the
 // full physical display (same coordinate space as the accessibility hierarchy that
 // produced the bounds), falling back to the on-device-reported size when the
-// physical size is unavailable.
+// physical size is unavailable. It is screenSize, named for what it guards.
 func (d *Driver) tappableScreenSize() (int, int, error) {
-	if w, h, ok := d.physicalScreenSize(); ok {
-		return w, h, nil
-	}
 	return d.screenSize()
 }
 
@@ -1218,6 +1216,28 @@ func (d *Driver) findElementDirectWithContext(ctx context.Context, sel flow.Sele
 	}
 }
 
+// agentTextTiers is core.UiSelectorTextTiers with hints, plus errorMatches in
+// its last, ignore-case tier: the agent then also finds a field by its
+// validation error, as Maestro's text matching does (2.9+). Only the last tier
+// gets it, since that one matches whatever the case and each query is another
+// walk of the tree when nothing matches. errorMatches, like hintMatches, is a
+// DeviceLab-agent extension, in the agent this runner bundles (c9e34be on);
+// an older agent refuses that query.
+func agentTextTiers(text string) [][]string {
+	tiers := core.UiSelectorTextTiers(text, true)
+	if len(tiers) == 0 {
+		return tiers
+	}
+	last := len(tiers) - 1
+	for _, body := range tiers[last] {
+		if rest, ok := strings.CutPrefix(body, ".hintMatches("); ok {
+			tiers[last] = append(tiers[last], ".errorMatches("+rest)
+			break
+		}
+	}
+	return tiers
+}
+
 // buildClickableOnlyStrategies builds UiAutomator strategies that only match clickable elements.
 //
 // Every query matches the whole text, description or hint, as Maestro does
@@ -1230,7 +1250,7 @@ func (d *Driver) findElementDirectWithContext(ctx context.Context, sel flow.Sele
 func buildClickableOnlyStrategies(sel flow.Selector) ([]LocatorStrategy, error) {
 	var strategies []LocatorStrategy
 	filters := ".clickable(true)" + buildStateFilters(sel)
-	for _, tier := range core.UiSelectorTextTiers(sel.Text, true) {
+	for _, tier := range agentTextTiers(sel.Text) {
 		for _, body := range tier {
 			strategies = append(strategies, LocatorStrategy{
 				Strategy: uiautomator2.StrategyUIAutomator,
@@ -1937,7 +1957,7 @@ func buildSelectorsWithOptions(sel flow.Selector, timeoutMs int, preferClickable
 	// (#188). hintMatches is a DeviceLab-agent extension: it matches the
 	// EditText android:hint placeholder, so "tapOn: 'Email'" finds an empty
 	// field by hint.
-	textTiers := core.UiSelectorTextTiers(sel.Text, true)
+	textTiers := agentTextTiers(sel.Text)
 
 	// A selector naming both must match one element carrying both. Emitting the
 	// id-only and text-only queries as separate candidates made them an OR: the
