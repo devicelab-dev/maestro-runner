@@ -1,4 +1,4 @@
-.PHONY: build clean test test-race test-coverage test-coverage-check cover-gaps test-fuzz bench speedgate install check ci fmt fmt-check imports fumpt staticcheck revive vet errcheck nilaway gosec ineffassign deadcode govulncheck
+.PHONY: build clean test test-race test-coverage test-coverage-check cover-gaps test-fuzz bench speedgate hierparity install check ci fmt fmt-check imports fumpt staticcheck revive vet errcheck nilaway gosec ineffassign deadcode govulncheck
 
 # Build variables
 BINARY_NAME=maestro-runner
@@ -90,6 +90,12 @@ bench:
 speedgate:
 	@test -n "$(REPORTS)" || { echo "usage: make speedgate REPORTS=\"/tmp/sg/1 /tmp/sg/2 /tmp/sg/3\" [WRITE=1]"; exit 2; }
 	$(GOCMD) run ./tools/speedgate $(if $(WRITE),--write-baseline) $(REPORTS)
+
+## hierparity: check the DeviceLab Android agent reads every labelled element uiautomator dump does.
+## DEVICE = serial; the screen to check must be in front. See DEVELOPER.md.
+hierparity:
+	@test -n "$(DEVICE)" || { echo "usage: make hierparity DEVICE=<serial>"; exit 2; }
+	$(GOCMD) run ./tools/hierparity --device $(DEVICE)
 
 # Code quality tools
 fmt:
