@@ -37,6 +37,13 @@ type Driver struct {
 	// WDA alert action for real device permission handling ("accept", "dismiss", or "")
 	alertAction string
 
+	// promptLabels is how a simulator's language words the permission
+	// prompt buttons, read once on first use; loadPromptLabels reads it, and
+	// tests replace it.
+	promptLabels     core.IOSPromptLabels
+	promptLabelsOnce sync.Once
+	loadPromptLabels func() core.IOSPromptLabels
+
 	// Timeouts (0 = use defaults)
 	findTimeout         int // ms, for required elements
 	optionalFindTimeout int // ms, for optional elements
@@ -145,7 +152,7 @@ func (d *Driver) EnsureSession(appID string) error {
 		"animationCoolOffTimeout": 0,
 		// Permission prompts only: without it the monitor the session's
 		// defaultAlertAction starts also taps the app's own alerts.
-		"autoClickAlertSelector": autoClickAlertSelector(d.alertAction),
+		"autoClickAlertSelector": autoClickAlertSelector(d.alertAction, d.localPromptLabels(d.alertAction)),
 	})
 	return nil
 }
