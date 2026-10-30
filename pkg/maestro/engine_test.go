@@ -251,6 +251,22 @@ func TestObserveJSON(t *testing.T) {
 	}
 }
 
+func TestObserveVisibleBoundsOnlyWhenAsked(t *testing.T) {
+	var sent map[string]interface{}
+	adapter, cleanup := adapterWithMock(t, func(req Request) interface{} {
+		sent = paramsOf(t, req)
+		return map[string]interface{}{"xml": "<hierarchy/>"}
+	})
+	defer cleanup()
+
+	if _, _, err := adapter.Observe(ObserveOptions{VisibleBounds: true}); err != nil {
+		t.Fatal(err)
+	}
+	if sent["visibleBounds"] != true {
+		t.Errorf("params = %v, want visibleBounds true", sent)
+	}
+}
+
 // observeFrame builds the agent's one-frame reply: id, JSON length, JSON, JPEG.
 func observeFrame(id int64, resp Response, image []byte) []byte {
 	js, _ := json.Marshal(resp)

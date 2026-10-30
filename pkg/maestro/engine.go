@@ -49,12 +49,13 @@ type SnapshotOptions struct {
 	// WindowInfo adds window attributes to each window root (window-id,
 	// window-type, window-layer, window-active, window-focused, window-title,
 	// package) and width, height, foreground-package, keyboard and
-	// keyboard-top to <hierarchy>. It also turns on visible-bounds.
+	// keyboard-top to <hierarchy>.
 	WindowInfo bool
 	// IncludeKeyboard dumps the keyboard window too.
 	IncludeKeyboard bool
 	// VisibleBounds adds visible-bounds where a node is clipped by its window
-	// or a scrolling ancestor.
+	// or a scrolling ancestor. Off unless asked: Android already clips bounds,
+	// so on a Pixel 4a it only marked rows scrolled out of view.
 	VisibleBounds bool
 }
 
@@ -241,6 +242,7 @@ type ObserveOptions struct {
 	// Settle, when set, settles before the snapshot is read.
 	Settle          *SettleOptions
 	IncludeKeyboard bool
+	VisibleBounds   bool
 	Screenshot      bool
 	// ScreenshotMaxEdge caps the screenshot's long side (0: the agent's
 	// default, 1024); ScreenshotQuality is the JPEG quality (0: 75).
@@ -248,8 +250,8 @@ type ObserveOptions struct {
 	ScreenshotQuality int
 }
 
-// ObserveResult is what UI.observe reports. XML has window info and visible
-// bounds, as SnapshotWith with WindowInfo.
+// ObserveResult is what UI.observe reports. XML has window info, as
+// SnapshotWith with WindowInfo.
 type ObserveResult struct {
 	Settle     *SettleResult `json:"settle,omitempty"`
 	XML        string        `json:"xml"`
@@ -280,6 +282,9 @@ func (a *Adapter) Observe(opts ObserveOptions) (*ObserveResult, []byte, error) {
 	}
 	if opts.IncludeKeyboard {
 		params["includeKeyboard"] = true
+	}
+	if opts.VisibleBounds {
+		params["visibleBounds"] = true
 	}
 	if opts.Screenshot {
 		params["screenshot"] = true
