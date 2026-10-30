@@ -87,6 +87,37 @@ func SortByPosition[T any](elems []T, bounds func(T) Bounds) []T {
 	return sorted
 }
 
+// DeepestMatches drops every match that contains another match, as Maestro
+// does before it applies an index (Filters.deepestMatchingElement): a tab
+// whose description is "Home" yields to the "Home" label inside it, so
+// `index: 1` counts on to the next "Home" on screen. parent returns an
+// element's parent, or the zero value at the root.
+func DeepestMatches[T comparable](elems []T, parent func(T) T) []T {
+	var zero T
+	isMatch := make(map[T]bool, len(elems))
+	for _, e := range elems {
+		isMatch[e] = true
+	}
+	contains := make(map[T]bool)
+	for _, e := range elems {
+		for p := parent(e); p != zero; p = parent(p) {
+			if isMatch[p] {
+				contains[p] = true
+			}
+		}
+	}
+	if len(contains) == 0 {
+		return elems
+	}
+	kept := make([]T, 0, len(elems)-len(contains))
+	for _, e := range elems {
+		if !contains[e] {
+			kept = append(kept, e)
+		}
+	}
+	return kept
+}
+
 // PickAnchor narrows a relative selector's anchors to the one the anchor's own
 // index names (`childOf: {id: card, index: 1}`). As in Maestro
 // (Filters.INDEX_COMPARATOR), the index counts the anchors by their place on

@@ -49,7 +49,7 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 	// element the keyboard leaves showing, so only a fully covered element
 	// fails there; every other tap aims at the centre.
 	agentPlaced := (step.Selector.Text != "" || step.Selector.ID != "") && step.Point == "" &&
-		!step.Selector.HasRelativeSelector() && !d.isBrowserMode()
+		!step.Selector.HasRelativeSelector() && !step.Selector.HasNonZeroIndex() && !d.isBrowserMode()
 	covering := keyboardStillCovering
 	if agentPlaced {
 		covering = keyboardCoversAll
@@ -63,8 +63,11 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 	// No stale nodes, no performAction, no parent walk-up. Routing id
 	// selectors through this path gives them the same tree-signature
 	// settle that text selectors get (agent's findAndClick → findElement
-	// with settle=true), so id taps don't fire mid-animation.
-	if (step.Selector.Text != "" || step.Selector.ID != "") && step.Point == "" && !step.Selector.HasRelativeSelector() {
+	// with settle=true), so id taps don't fire mid-animation. The agent taps
+	// its first match, so a non-zero index goes to the page-source lookup
+	// below, which counts matches by position (#260).
+	if (step.Selector.Text != "" || step.Selector.ID != "") && step.Point == "" &&
+		!step.Selector.HasRelativeSelector() && !step.Selector.HasNonZeroIndex() {
 		// Browser mode: find via CDP and click via CDP
 		if d.isBrowserMode() {
 			return d.tapOnBrowser(step)

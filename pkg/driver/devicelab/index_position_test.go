@@ -5,6 +5,7 @@ import (
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
+	"github.com/devicelab-dev/maestro-runner/pkg/uiautomator2"
 )
 
 // settingsHome is the screen from #254: Settings text views that are not
@@ -100,5 +101,70 @@ func TestSortCandidates(t *testing.T) {
 	}
 	if got := SortCandidates(in, "0"); got[0] != top {
 		t.Errorf("index: first = %q, want the top-most one", got[0].Text)
+	}
+}
+
+// homeTabs is the #260 screen as YouTube draws it: the app's "Home" tab, a
+// clickable container described "Home" holding the label "Home", and below
+// it the 3-button navigation bar's Home button (content-desc only), which
+// comes first in the tree. As in Maestro, the container yields to the label
+// inside it, so there are two matches.
+const homeTabs = `<hierarchy rotation="0">
+<node index="0" text="" resource-id="" class="android.widget.FrameLayout" bounds="[0,2300][1080,2400]" displayed="true" enabled="true">
+<node index="0" text="" content-desc="Home" resource-id="com.android.systemui:id/home" class="android.widget.ImageView" clickable="true" bounds="[360,2300][720,2400]" displayed="true" enabled="true"/>
+</node>
+<node index="0" text="" resource-id="" class="android.widget.FrameLayout" bounds="[0,0][1080,2300]" displayed="true" enabled="true">
+<node index="0" text="" content-desc="Home" resource-id="tab_home" class="android.widget.Button" clickable="true" bounds="[0,2100][216,2260]" displayed="true" enabled="true">
+<node index="0" text="Home" resource-id="" class="android.widget.TextView" bounds="[60,2180][150,2220]" displayed="true" enabled="true"/>
+</node>
+</node>
+</hierarchy>`
+
+// indexTapClient records where taps land and how often the agent's
+// find-and-click was asked.
+type indexTapClient struct {
+	*splitClient
+	clicks       [][2]int
+	findAndClick int
+}
+
+func (c *indexTapClient) Click(x, y int) error {
+	c.clicks = append(c.clicks, [2]int{x, y})
+	return nil
+}
+
+func (c *indexTapClient) FindAndClickChecked(strategy, selector string, w, h int, hitTest bool) (*uiautomator2.Element, bool, string, error) {
+	c.findAndClick++
+	return c.splitClient.FindAndClickChecked(strategy, selector, w, h, hitTest)
+}
+
+// tapOn with text and a non-zero index taps that match by screen position,
+// counting the label rather than the tab around it, and an index past the
+// matches fails; the agent's find-and-click, which taps
+// its first match, is not used for it (#260).
+func TestTapOnTextIndexCountsByPosition(t *testing.T) {
+	newDriver := func() (*Driver, *indexTapClient) {
+		c := &indexTapClient{splitClient: &splitClient{trackingClient: newTrackingClient(), snapshot: homeTabs, source: homeTabs}}
+		return New(c, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, &mockShell{}), c
+	}
+
+	d, c := newDriver()
+	res := d.tapOn(&flow.TapOnStep{Selector: flow.Selector{Text: "Home", Index: "1"}})
+	if !res.Success {
+		t.Fatalf("index 1: %s", res.Message)
+	}
+	if c.findAndClick != 0 {
+		t.Errorf("index 1 went to the agent's find-and-click %d times", c.findAndClick)
+	}
+	if len(c.clicks) != 1 || c.clicks[0] != [2]int{540, 2350} {
+		t.Errorf("index 1 tapped %v, want the navigation bar's Home at (540,2350)", c.clicks)
+	}
+
+	for _, index := range []string{"2", "5"} {
+		d, c = newDriver()
+		res = d.tapOn(&flow.TapOnStep{Selector: flow.Selector{Text: "Home", Index: index}, BaseStep: flow.BaseStep{TimeoutMs: 200}})
+		if res.Success || len(c.clicks) != 0 {
+			t.Errorf("index %s of 2 matches: success=%v, clicks %v; want a failure and no tap", index, res.Success, c.clicks)
+		}
 	}
 }

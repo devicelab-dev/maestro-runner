@@ -126,3 +126,35 @@ func TestPickAnchor(t *testing.T) {
 		}
 	}
 }
+
+type treeNode struct {
+	name   string
+	parent *treeNode
+}
+
+func TestDeepestMatches(t *testing.T) {
+	root := &treeNode{name: "root"}
+	tab := &treeNode{name: "tab", parent: root}
+	label := &treeNode{name: "label", parent: &treeNode{name: "wrapper", parent: tab}}
+	nav := &treeNode{name: "nav", parent: root}
+	parent := func(n *treeNode) *treeNode { return n.parent }
+	names := func(ns []*treeNode) string {
+		var s []string
+		for _, n := range ns {
+			s = append(s, n.name)
+		}
+		return strings.Join(s, ",")
+	}
+
+	// The tab holds the label (two levels down), so it yields to it.
+	if got := names(DeepestMatches([]*treeNode{nav, tab, label}, parent)); got != "nav,label" {
+		t.Errorf("got %s, want nav,label", got)
+	}
+	// Matches that hold no other match are all kept, in order.
+	if got := names(DeepestMatches([]*treeNode{nav, tab}, parent)); got != "nav,tab" {
+		t.Errorf("got %s, want nav,tab", got)
+	}
+	if got := DeepestMatches([]*treeNode(nil), parent); len(got) != 0 {
+		t.Errorf("no matches: got %v", got)
+	}
+}
