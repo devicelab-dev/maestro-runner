@@ -570,13 +570,13 @@ func (d *Driver) hideKeyboard() *core.CommandResult {
 	if err != nil {
 		return core.ErrorResult(err, err.Error())
 	}
-	// Maestro's iOS hideKeyboard tries its two swipes and moves on: a
-	// keyboard some screens will not dismiss (TestHive's search field) is
-	// not an error there, and the flow's next steps decide. Failing here
-	// failed a flow Maestro and WDA pass.
+	// A keyboard still up after the dismiss swipes fails the step, as in
+	// Maestro (since 2.2). Passing left it over the screen, and the flow
+	// failed later on a step that had nothing to do with the keyboard.
 	if resp.payload().Visible {
-		logger.Info("[devicelab-ios] hideKeyboard: the keyboard is still visible after the dismiss swipes")
-		return core.SuccessResult("keyboard still visible (not dismissible here)", nil)
+		err := errors.New("couldn't hide the keyboard: the screen did not dismiss it on the swipes. " +
+			"Use pressKey: Enter on a field whose return key closes it, or tap a non-interactive element, such as a label, instead of hideKeyboard")
+		return core.ErrorResult(err, err.Error())
 	}
 	return core.SuccessResult("keyboard hidden", nil)
 }

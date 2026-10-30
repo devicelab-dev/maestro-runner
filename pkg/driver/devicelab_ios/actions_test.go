@@ -407,9 +407,10 @@ func TestHideKeyboard(t *testing.T) {
 	d, _, _ := newTestDriver(t, func(cmd string, _ Args) (*Response, error) {
 		return ok(&Payload{Visible: visible}), nil
 	})
-	// A keyboard that stays up is not an error, as in Maestro.
-	if res := d.Execute(&flow.HideKeyboardStep{}); !res.Success {
-		t.Fatalf("keyboard still up should pass, as in Maestro: %s", res.Message)
+	// A keyboard that stays up fails the step, as in Maestro, and says what
+	// to use instead.
+	if res := d.Execute(&flow.HideKeyboardStep{}); res.Success || !strings.Contains(res.Message, "pressKey: Enter") {
+		t.Fatalf("keyboard still up should fail and name pressKey: Enter: %+v", res)
 	}
 	visible = false
 	if res := d.Execute(&flow.HideKeyboardStep{}); !res.Success {
