@@ -21,6 +21,9 @@ import (
 // The handler receives the parsed Request and returns a Response to send back.
 type wsHandler func(req Request) interface{}
 
+// binaryFrame is a handler result sent as one binary frame, as is.
+type binaryFrame []byte
+
 func newMockWSServer(t *testing.T, handler wsHandler) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +49,13 @@ func newMockWSServer(t *testing.T, handler wsHandler) *httptest.Server {
 			}
 
 			result := handler(req)
+
+			if frame, ok := result.(binaryFrame); ok {
+				if err := conn.Write(ctx, websocket.MessageBinary, frame); err != nil {
+					return
+				}
+				continue
+			}
 
 			var respData []byte
 			switch v := result.(type) {

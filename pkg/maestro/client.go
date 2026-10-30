@@ -170,6 +170,7 @@ var readOnlyMethods = map[string]bool{
 	"UI.snapshot": true, "UI.getSource": true, "UI.activeElement": true, "UI.treeHash": true,
 	"UI.screenshot": true, "UI.findElement": true, "UI.findElements": true, "UI.waitForSettle": true,
 	"UI.detectWebView": true, "UI.viewHierarchy": true,
+	"Device.getForeground": true, "UI.observe": true,
 }
 
 // errConnectionLost is what a call gets when the connection drops under it.
