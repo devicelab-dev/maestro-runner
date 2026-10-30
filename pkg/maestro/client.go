@@ -39,6 +39,9 @@ type Client struct {
 	// Connection parameters — exactly one will be set
 	socketPath string
 	tcpPort    int
+	// token is sent with every connect; the agent refuses a client
+	// without the token it was started with (see SetToken).
+	token string
 
 	// Request ID counter
 	nextID atomic.Int64
@@ -82,6 +85,18 @@ func newLogger() *log.Logger {
 	return log.New(f, "", log.Ltime|log.Lmicroseconds)
 }
 
+// TokenHeader is the upgrade-request header that carries the agent's token.
+const TokenHeader = "X-DeviceLab-Token"
+
+// SetToken sets the token the agent was started with, sent on every connect
+// from then on. An agent restarted with a new token needs the new one before
+// the reconnect. Empty sends none, which an agent started without one accepts.
+func (c *Client) SetToken(token string) {
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
+	c.token = token
+}
+
 // SetLogPath sets the log file path.
 func (c *Client) SetLogPath(path string) {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
@@ -109,20 +124,22 @@ func (c *Client) ConnectWithTimeout(timeout time.Duration) error {
 	var conn *websocket.Conn
 	var err error
 
+	opts := &websocket.DialOptions{}
+	if c.token != "" {
+		opts.HTTPHeader = http.Header{TokenHeader: []string{c.token}}
+	}
 	if c.socketPath != "" {
-		httpClient := &http.Client{
+		opts.HTTPClient = &http.Client{
 			Transport: &http.Transport{
 				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 					return net.Dial("unix", c.socketPath)
 				},
 			},
 		}
-		conn, _, err = websocket.Dial(dialCtx, "ws://localhost/ws", &websocket.DialOptions{
-			HTTPClient: httpClient,
-		})
+		conn, _, err = websocket.Dial(dialCtx, "ws://localhost/ws", opts)
 	} else {
 		url := fmt.Sprintf("ws://127.0.0.1:%d/ws", c.tcpPort)
-		conn, _, err = websocket.Dial(dialCtx, url, nil)
+		conn, _, err = websocket.Dial(dialCtx, url, opts)
 	}
 	if err != nil {
 		c.cancel()

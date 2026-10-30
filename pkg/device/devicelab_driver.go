@@ -2,6 +2,7 @@ package device
 
 import (
 	"archive/zip"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -86,10 +87,18 @@ func (d *AndroidDevice) StartDeviceLabDriver(cfg DeviceLabDriverConfig) error {
 		}
 	}
 
+	// A new token for every start: the driver refuses a client without it,
+	// so another app on the device cannot drive it through its port.
+	token, err := newDriverToken()
+	if err != nil {
+		return fmt.Errorf("DeviceLab Android Driver token: %w", err)
+	}
+	d.driverToken = token
+
 	// Start instrumentation to a fresh log file so we can read crash
 	// output — and only this start's output (see deviceLabStartCommand).
 	marker := newDriverLogMarker()
-	if _, err := d.Shell(deviceLabStartCommand(marker)); err != nil {
+	if _, err := d.Shell(deviceLabStartCommand(marker, token, os.Getenv("DEVICELAB_ANDROID_AGENT_BIND") == "any")); err != nil {
 		return fmt.Errorf("failed to start DeviceLab Android Driver instrumentation: %w", err)
 	}
 
@@ -204,15 +213,49 @@ func newDriverLogMarker() string {
 // reject anything that is not this start's output (see driverOutput).
 // --no-hidden-api-checks lets the agent reach the accessibility node cache,
 // which it clears before reading the tree (public only from API 34).
-func deviceLabStartCommand(marker string) string {
+//
+// token (hex, so it needs no quoting) is the one the driver then requires of
+// every client; only the shell can start instrumentation, so no app on the
+// device can read it. The driver listens on the device's loopback, where adb
+// forwards connect; bindAll (DEVICELAB_ANDROID_AGENT_BIND=any) has it listen
+// on every interface instead, as before. A driver built before the token
+// ignores both arguments.
+func deviceLabStartCommand(marker, token string, bindAll bool) string {
+	args := ""
+	if token != "" {
+		args += " -e token " + token
+	}
+	if bindAll {
+		args += " -e bind any"
+	}
 	return fmt.Sprintf(
 		"rm -f %[1]s; echo '%[2]s' > %[1]s; "+
-			"nohup am instrument -w --no-hidden-api-checks %[3]s/%[4]s >> %[1]s 2>&1 &",
+			"nohup am instrument -w --no-hidden-api-checks%[5]s %[3]s/%[4]s >> %[1]s 2>&1 &",
 		deviceLabDriverLog,
 		marker,
 		DeviceLabDriverTest,
 		DeviceLabDriverServer+".DeviceLabDriverRunner",
+		args,
 	)
+}
+
+// DeviceLabDriverTokenHeader is the upgrade-request header that carries the
+// driver's token.
+const DeviceLabDriverTokenHeader = "X-DeviceLab-Token"
+
+// newDriverToken returns a random token for one driver start, 48 hex digits.
+func newDriverToken() (string, error) {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// DeviceLabDriverToken returns the token the running driver requires of its
+// clients, empty before the driver is started.
+func (d *AndroidDevice) DeviceLabDriverToken() string {
+	return d.driverToken
 }
 
 // driverOutput returns what this start's `am instrument` wrote to the log,
@@ -440,10 +483,10 @@ func (d *AndroidDevice) waitForDeviceLabDriverReady(timeout time.Duration, marke
 // Uses TCP connect since the driver uses WebSocket (not HTTP /status).
 func (d *AndroidDevice) checkDeviceLabHealth() bool {
 	if d.driverSocketPath != "" {
-		return checkDeviceLabHealthViaSocket(d.driverSocketPath)
+		return checkDeviceLabHealthViaSocket(d.driverSocketPath, d.driverToken)
 	}
 	if d.driverLocalPort != 0 {
-		return checkDeviceLabHealthViaTCP(d.driverLocalPort)
+		return checkDeviceLabHealthViaTCP(d.driverLocalPort, d.driverToken)
 	}
 	return false
 }
@@ -451,18 +494,20 @@ func (d *AndroidDevice) checkDeviceLabHealth() bool {
 // checkDeviceLabHealthViaSocket checks health via Unix socket.
 // Sends a WebSocket handshake to verify end-to-end connectivity
 // (bare connect succeeds immediately since ADB creates the socket on forward).
-func checkDeviceLabHealthViaSocket(socketPath string) bool {
-	return checkDeviceLabHandshake("unix", socketPath)
+func checkDeviceLabHealthViaSocket(socketPath, token string) bool {
+	return checkDeviceLabHandshake("unix", socketPath, token)
 }
 
 // checkDeviceLabHealthViaTCP checks health via TCP connect.
-func checkDeviceLabHealthViaTCP(port int) bool {
-	return checkDeviceLabHandshake("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+func checkDeviceLabHealthViaTCP(port int, token string) bool {
+	return checkDeviceLabHandshake("tcp", fmt.Sprintf("127.0.0.1:%d", port), token)
 }
 
 // checkDeviceLabHandshake verifies the driver is responding by sending a
-// WebSocket upgrade request and checking for the 101 response.
-func checkDeviceLabHandshake(network, address string) bool {
+// WebSocket upgrade request, with the driver's token, and checking for the
+// 101 response. A driver that requires another token refuses the upgrade,
+// so this start's driver is the one that answers.
+func checkDeviceLabHandshake(network, address, token string) bool {
 	conn, err := net.DialTimeout(network, address, 2*time.Second)
 	if err != nil {
 		return false
@@ -477,7 +522,11 @@ func checkDeviceLabHandshake(network, address string) bool {
 		"Upgrade: websocket\r\n" +
 		"Connection: Upgrade\r\n" +
 		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
-		"Sec-WebSocket-Version: 13\r\n\r\n"
+		"Sec-WebSocket-Version: 13\r\n"
+	if token != "" {
+		handshake += DeviceLabDriverTokenHeader + ": " + token + "\r\n"
+	}
+	handshake += "\r\n"
 	if _, err := conn.Write([]byte(handshake)); err != nil {
 		return false
 	}
@@ -488,8 +537,10 @@ func checkDeviceLabHandshake(network, address string) bool {
 		return false
 	}
 
-	// Check for HTTP 101 Switching Protocols
-	return strings.Contains(string(buf[:n]), "101")
+	// HTTP 101 Switching Protocols. Only the status line counts: a refusal
+	// can carry other numbers ("1008" for a wrong token).
+	status, _, _ := strings.Cut(string(buf[:n]), "\r\n")
+	return strings.Contains(status, " 101 ")
 }
 
 // agentBuildMarker is how the agent's build embeds the commit it came from.

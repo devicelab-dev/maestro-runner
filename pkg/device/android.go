@@ -21,6 +21,7 @@ type AndroidDevice struct {
 
 	driverSocketPath string // Unix socket path for DeviceLab Android Driver (Linux/Mac)
 	driverLocalPort  int    // TCP port for DeviceLab Android Driver (Windows)
+	driverToken      string // per-start token the DeviceLab Android Driver requires
 }
 
 // DeviceInfo contains basic device information.
