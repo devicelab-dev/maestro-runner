@@ -10,6 +10,7 @@
 
 #import "FBConfiguration.h"
 #import "FBErrorBuilder.h"
+#import "FBKeyboard.h"
 #import "FBXCElementSnapshotWrapper.h"
 #import "FBXCElementSnapshotWrapper+Helpers.h"
 #import "FBXCodeCompatibility.h"
@@ -38,6 +39,19 @@ BOOL FBTypeText(NSString *text, NSUInteger typingSpeed, NSError **error)
   [eventRecord addPointerEventPath:ep];
   return [FBXCTestDaemonsProxy synthesizeEventWithRecord:eventRecord error:error];
 }
+
+#if TARGET_OS_IOS
+void FBWaitForHittableKey(XCUIApplication *application, NSTimeInterval timeout)
+{
+  if (nil == application) {
+    return;
+  }
+  NSError *visibilityError = nil;
+  [FBKeyboard waitUntilVisibleForApplication:application
+                                    timeout:timeout
+                                      error:&visibilityError];
+}
+#endif
 
 @interface NSString (FBRepeat)
 
@@ -139,6 +153,12 @@ BOOL FBTypeText(NSString *text, NSUInteger typingSpeed, NSError **error)
   // partial workaround (keystrokes still don't always land - a known limitation).
   [self typeText:text];
   return YES;
+#elif TARGET_OS_IOS
+  NSTimeInterval keyboardWait = FBConfiguration.sharedInstance.keyboardWaitTimeout;
+  if (keyboardWait > 0) {
+    FBWaitForHittableKey(self.application, keyboardWait);
+  }
+  return FBTypeText(text, frequency, error);
 #else
   return FBTypeText(text, frequency, error);
 #endif

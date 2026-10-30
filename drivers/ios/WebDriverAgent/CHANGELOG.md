@@ -1,3 +1,205 @@
+# Change Log
+
+All notable changes to this project will be documented in this file.
+See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
+
+## [16.17.5](https://github.com/appium/appium-ios/compare/appium-webdriveragent@16.17.4...appium-webdriveragent@16.17.5) (2026-10-24)
+
+**Note:** Version bump only for package appium-webdriveragent
+
+
+
+
+
+## [16.17.4](https://github.com/appium/appium-ios/compare/appium-webdriveragent@16.17.3...appium-webdriveragent@16.17.4) (2026-10-24)
+
+### Bug Fixes
+
+* **webdriveragent:** wait for SpringBoard after background apps resume ([#82](https://github.com/appium/appium-ios/issues/82)) ([b8b0b45](https://github.com/appium/appium-ios/commit/b8b0b45294c47882c3d31c023a9fb6912496518d))
+
+
+## [16.17.3](https://github.com/appium/appium-ios/compare/appium-webdriveragent@16.17.2...appium-webdriveragent@16.17.3) (2026-10-23)
+
+### Miscellaneous Chores
+
+* use AsyncLock from asyncbox instead of async-lock ([#107](https://github.com/appium/appium-ios/issues/107)) ([c6f7784](https://github.com/appium/appium-ios/commit/c6f7784ce933cc5910103b756645e159453964a2))
+
+
+## [16.17.2](https://github.com/appium/appium-ios/compare/appium-webdriveragent@16.17.1...appium-webdriveragent@16.17.2) (2026-10-23)
+
+### Bug Fixes
+
+* wait for a hittable key only when keyboardWaitTimeout is set ([#93](https://github.com/appium/appium-ios/issues/93)) ([5a3eed4](https://github.com/appium/appium-ios/commit/5a3eed4b07172fce2413f4d55c1686da68fe6140))
+
+
+## [16.17.1](https://github.com/appium/appium-ios/compare/appium-webdriveragent@16.17.0...appium-webdriveragent@16.17.1) (2026-10-21)
+
+### Bug Fixes
+
+* **webdriveragent:** do not embed lib_TestingInterop.dylib on Xcode 26.0-26.3 ([#104](https://github.com/appium/appium-ios/issues/104)) ([a78d1fe](https://github.com/appium/appium-ios/commit/a78d1fee46b483613b2e659936b490573cfc81d6))
+
+
+## [16.17.0](https://github.com/appium/appium-ios/compare/appium-webdriveragent@16.16.5...appium-webdriveragent@16.17.0) (2026-10-21)
+
+### Features
+
+* **webdriveragent:** add route for retrieving pressButton values ([#102](https://github.com/appium/appium-ios/issues/102)) ([5b4eaaa](https://github.com/appium/appium-ios/commit/5b4eaaacc7b97d571ab269f98a4e23396be7bae1))
+
+
+## [16.16.5](https://github.com/appium/appium-ios/compare/appium-webdriveragent@16.16.4...appium-webdriveragent@16.16.5) (2026-10-21)
+
+### Code Refactoring
+
+* move HID related implementation in a separate module ([#103](https://github.com/appium/appium-ios/issues/103)) ([701eb60](https://github.com/appium/appium-ios/commit/701eb601455c7ab04c283dbc8a0da055eb7e3199))
+
+
+## [16.16.4](https://github.com/appium/appium-ios/compare/appium-webdriveragent@16.16.3...appium-webdriveragent@16.16.4) (2026-10-21)
+
+### Bug Fixes
+
+* **webdriveragent:** dispatch Home button HID events on Duo simulators ([#78](https://github.com/appium/appium-ios/issues/78)) ([19ce62f](https://github.com/appium/appium-ios/commit/19ce62f69b657e5b0fe2f7f74545c56f9631beb6)), closes [#85](https://github.com/appium/appium-ios/issues/85)
+* **webdriveragent:** fall back to vendor HID events for Duo rotation ([#81](https://github.com/appium/appium-ios/issues/81)) ([71d1ae0](https://github.com/appium/appium-ios/commit/71d1ae01dd1cea5b85063ed74c1b51f02134c6c5))
+
+
+## [16.16.3](https://github.com/appium/appium-ios/compare/appium-webdriveragent@16.16.2...appium-webdriveragent@16.16.3) (2026-10-19)
+
+### Bug Fixes
+
+* **webdriveragent:** shorten lock button press on iOS 27 ([#91](https://github.com/appium/appium-ios/issues/91)) ([e002283](https://github.com/appium/appium-ios/commit/e002283d4b26738b0dae1200a3a639e611101d79))
+
+
+## [16.16.2](https://github.com/appium/appium-ios/compare/appium-webdriveragent@16.16.1...appium-webdriveragent@16.16.2) (2026-10-18)
+
+### Bug Fixes
+
+* **webdriveragent:** use Home to background watchOS apps ([#84](https://github.com/appium/appium-ios/issues/84)) ([b1dd12e](https://github.com/appium/appium-ios/commit/b1dd12e93d8eb0f6acc0a0addaf8733b2bfb0b19))
+
+
+## [16.16.1](https://github.com/appium/appium-ios/compare/appium-webdriveragent@16.16.0...appium-webdriveragent@16.16.1) (2026-10-18)
+
+### Bug Fixes
+
+* **webdriveragent:** use the remote Home button to background tvOS apps ([#83](https://github.com/appium/appium-ios/issues/83)) ([2d953f4](https://github.com/appium/appium-ios/commit/2d953f41a598ddcb2ebe10398aecf3164bd00ad4))
+
+
+## 16.16.0 (2026-10-17)
+
+### Features
+
+* move WebDriverAgent into the monorepo as packages/webdriveragent ([#76](https://github.com/appium/appium-ios/issues/76)) ([e5886f6](https://github.com/appium/appium-ios/commit/e5886f6f2265f4fc94e5c4c35889f67bd09aad96))
+
+
+## [16.15.3](https://github.com/appium/WebDriverAgent/compare/v16.15.2...v16.15.3) (2026-10-16)
+
+### Bug Fixes
+
+* bind the MJPEG server to the USE_IP address ([#1299](https://github.com/appium/WebDriverAgent/issues/1299)) ([53573cf](https://github.com/appium/WebDriverAgent/commit/53573cf3a74fe8db87cb5f38b2cdc7f17e856e4f))
+
+## [16.15.2](https://github.com/appium/WebDriverAgent/compare/v16.15.1...v16.15.2) (2026-10-16)
+
+### Bug Fixes
+
+* make /health a standalone route ([#1300](https://github.com/appium/WebDriverAgent/issues/1300)) ([eabb56e](https://github.com/appium/WebDriverAgent/commit/eabb56efdc6bca22ae1e8e4e11368de95a31e1c7))
+
+## [16.15.1](https://github.com/appium/WebDriverAgent/compare/v16.15.0...v16.15.1) (2026-10-16)
+
+### Bug Fixes
+
+* clean up AUT launches after session deletion ([#1297](https://github.com/appium/WebDriverAgent/issues/1297)) ([5139caf](https://github.com/appium/WebDriverAgent/commit/5139caf298b08cd22e4ed8ffc94ba74565783c52))
+
+## [16.15.0](https://github.com/appium/WebDriverAgent/compare/v16.14.2...v16.15.0) (2026-10-12)
+
+### Features
+
+* add asAppUnderTest flag to /wda/apps/launch ([#1289](https://github.com/appium/WebDriverAgent/issues/1289)) ([f5c0688](https://github.com/appium/WebDriverAgent/commit/f5c068873ff6dcd1ce444d26246c102cc379d5bf))
+
+## [16.14.2](https://github.com/appium/WebDriverAgent/compare/v16.14.1...v16.14.2) (2026-10-08)
+
+### Bug Fixes
+
+* align Duo W3C actions and scrolling ([#1288](https://github.com/appium/WebDriverAgent/issues/1288)) ([104a31c](https://github.com/appium/WebDriverAgent/commit/104a31ce9aca53222bb312103f485b59f52f9894)), closes [#1294](https://github.com/appium/WebDriverAgent/issues/1294) [#1292](https://github.com/appium/WebDriverAgent/issues/1292)
+
+## [16.14.1](https://github.com/appium/WebDriverAgent/compare/v16.14.0...v16.14.1) (2026-10-07)
+
+### Bug Fixes
+
+* report geometry for the selected display ([#1291](https://github.com/appium/WebDriverAgent/issues/1291)) ([43fa6da](https://github.com/appium/WebDriverAgent/commit/43fa6da647fb8adca21fdbd106d8f73d782d6717))
+* skip accessibility idle checks for WebKit services ([#1293](https://github.com/appium/WebDriverAgent/issues/1293)) ([9d06611](https://github.com/appium/WebDriverAgent/commit/9d06611d1f5d342fd16458f707dca3f3e3ec00fc))
+
+## [16.14.0](https://github.com/appium/WebDriverAgent/compare/v16.13.6...v16.14.0) (2026-10-04)
+
+### Features
+
+* support Duo hinge control and secondary display capture ([#1287](https://github.com/appium/WebDriverAgent/issues/1287)) ([76d6aa0](https://github.com/appium/WebDriverAgent/commit/76d6aa03e2423290bb05c436afc153bd32878ce0))
+
+## [16.13.6](https://github.com/appium/WebDriverAgent/compare/v16.13.5...v16.13.6) (2026-09-30)
+
+### Bug Fixes
+
+* restore stability wait settings when quiescence throws ([#1281](https://github.com/appium/WebDriverAgent/issues/1281)) ([bcc434c](https://github.com/appium/WebDriverAgent/commit/bcc434c08127c370c0cb05ce1dc9f4cea9f98559))
+
+## [16.13.5](https://github.com/appium/WebDriverAgent/compare/v16.13.4...v16.13.5) (2026-09-30)
+
+### Performance Improvements
+
+* stream page-source XML with exception-safe resource cleanup ([#1276](https://github.com/appium/WebDriverAgent/issues/1276)) ([4e8639b](https://github.com/appium/WebDriverAgent/commit/4e8639bf73f962591e3e7b3be211f289a19ebf84))
+
+## [16.13.4](https://github.com/appium/WebDriverAgent/compare/v16.13.3...v16.13.4) (2026-09-30)
+
+### Performance Improvements
+
+* use native predicates for accessibility id lookups ([#1286](https://github.com/appium/WebDriverAgent/issues/1286)) ([2ceb940](https://github.com/appium/WebDriverAgent/commit/2ceb940939c2033cb37b846962a966d42bb0ddab))
+
+## [16.13.3](https://github.com/appium/WebDriverAgent/compare/v16.13.2...v16.13.3) (2026-09-30)
+
+### Bug Fixes
+
+* reject stale sessions without retaining past responses ([#1282](https://github.com/appium/WebDriverAgent/issues/1282)) ([f245ffb](https://github.com/appium/WebDriverAgent/commit/f245ffb4e6906143384410cf312abc5bcedf5486))
+
+## [16.13.2](https://github.com/appium/WebDriverAgent/compare/v16.13.1...v16.13.2) (2026-09-30)
+
+### Bug Fixes
+
+* process received HTTP bytes before handling EOF ([#1277](https://github.com/appium/WebDriverAgent/issues/1277)) ([203fc4f](https://github.com/appium/WebDriverAgent/commit/203fc4f012ab1d90caf0127fe85f119ad85cb0e8))
+
+## [16.13.1](https://github.com/appium/WebDriverAgent/compare/v16.13.0...v16.13.1) (2026-09-30)
+
+### Performance Improvements
+
+* reuse sibling indices and geometry during XML serialization ([#1283](https://github.com/appium/WebDriverAgent/issues/1283)) ([f352660](https://github.com/appium/WebDriverAgent/commit/f352660deb52728c195a875b4172e38e1a1496b8))
+
+## [16.13.0](https://github.com/appium/WebDriverAgent/compare/v16.12.11...v16.13.0) (2026-09-30)
+
+### Features
+
+* add currentDisplayId setting for screenshots ([#1267](https://github.com/appium/WebDriverAgent/issues/1267)) ([c9366a2](https://github.com/appium/WebDriverAgent/commit/c9366a227b6de19381c96d56a548e9fb53d77dba))
+
+### Bug Fixes
+
+* apply screenshot scaling once when correcting orientation ([#1278](https://github.com/appium/WebDriverAgent/issues/1278)) ([17fd4d0](https://github.com/appium/WebDriverAgent/commit/17fd4d059c351d73384604be40bbade4a03be9a9))
+* avoid infinite-point assertion and hang in coordinate drag gestures ([#1270](https://github.com/appium/WebDriverAgent/issues/1270)) ([c9290a0](https://github.com/appium/WebDriverAgent/commit/c9290a01a63fa195c8aba35c9f0cdad1cd9a6d64)), closes [#1056](https://github.com/appium/WebDriverAgent/issues/1056)
+* cancel connections that end on the client side ([#1273](https://github.com/appium/WebDriverAgent/issues/1273)) ([261c08d](https://github.com/appium/WebDriverAgent/commit/261c08d53917b138eaf2f7d8a744d1151fe3bc8d))
+* isolate xcodebuild readiness state between launches ([#1275](https://github.com/appium/WebDriverAgent/issues/1275)) ([ccc46fe](https://github.com/appium/WebDriverAgent/commit/ccc46fe6de1871a020205488533c1d5b9b7dc756))
+* release LRU cache values when the cache is destroyed ([#1274](https://github.com/appium/WebDriverAgent/issues/1274)) ([fb52865](https://github.com/appium/WebDriverAgent/commit/fb5286515584157659ed86bccdbb64bc3094d91f))
+
+## [16.12.11](https://github.com/appium/WebDriverAgent/compare/v16.12.10...v16.12.11) (2026-09-28)
+
+### Bug Fixes
+
+* embed simulator XCTest dependencies with native copy phase ([#1271](https://github.com/appium/WebDriverAgent/issues/1271)) ([b884dc6](https://github.com/appium/WebDriverAgent/commit/b884dc609fa345bb725123666de5aa0368b34594))
+
+## [16.12.10](https://github.com/appium/WebDriverAgent/compare/v16.12.9...v16.12.10) (2026-09-21)
+
+### Miscellaneous Chores
+
+* remove unused appium-ios-simulator dependency ([#1265](https://github.com/appium/WebDriverAgent/issues/1265)) ([984de59](https://github.com/appium/WebDriverAgent/commit/984de59ee71f84eb83fce0762d394dea261edce0))
+
+## [16.12.9](https://github.com/appium/WebDriverAgent/compare/v16.12.8...v16.12.9) (2026-09-19)
+
+### Bug Fixes
+
+* resolve real device udid to xcodebuild's own case before building '-destination id=' ([#1260](https://github.com/appium/WebDriverAgent/issues/1260)) ([c220f4d](https://github.com/appium/WebDriverAgent/commit/c220f4d92a70761e0fe1df936740cc04d9bafdc4))
+
 ## [16.12.8](https://github.com/appium/WebDriverAgent/compare/v16.12.7...v16.12.8) (2026-09-11)
 
 ### Bug Fixes

@@ -70,6 +70,12 @@ type Driver struct {
 	// settleOff is set by a wait-for-idle timeout of 0: actions no longer
 	// wait for the screen to settle first (#212).
 	settleOff bool
+
+	// keyboardMayBeUp is set by a step that may have left the software
+	// keyboard up (core.MayLeaveIOSKeyboardUp) and cleared once the keyboard
+	// is seen gone. Only while it is set does a tap look for the keyboard
+	// first (aimClearOfKeyboard).
+	keyboardMayBeUp bool
 }
 
 // Crash-loop detection thresholds.
@@ -404,6 +410,9 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 		}
 	}
 
+	if core.MayLeaveIOSKeyboardUp(step, result) {
+		d.keyboardMayBeUp = true
+	}
 	result.Duration = time.Since(start)
 	d.trackCrashLoop(result)
 	return result

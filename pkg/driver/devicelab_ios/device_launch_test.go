@@ -319,3 +319,33 @@ func TestDeviceUnavailableSteps(t *testing.T) {
 		t.Fatalf("recording: %v", err)
 	}
 }
+
+// stopApp: false leaves a running app running: XCTest's launch would restart
+// it, so the agent brings it to the front instead.
+func TestDeviceLaunchAppStopAppFalseActivatesRunningApp(t *testing.T) {
+	for _, tc := range []struct {
+		state, want string
+	}{
+		{"foreground", "activate"},
+		{"background", "activate"},
+		{"notRunning", "launch"},
+	} {
+		d, fa, _, _ := newDeviceDriver(t, "", func(cmd string, a Args) (*Response, error) {
+			if cmd == "app" && a.Action == "state" {
+				return ok(&Payload{AppState: tc.state}), nil
+			}
+			return ok(&Payload{}), nil
+		})
+		res := d.Execute(&flow.LaunchAppStep{AppID: "com.example", StopApp: boolp(false)})
+		if !res.Success {
+			t.Fatal(res.Message)
+		}
+		var actions []string
+		for _, a := range fa.sent("app") {
+			actions = append(actions, a.Action)
+		}
+		if got := strings.Join(actions, ","); got != "state,"+tc.want {
+			t.Fatalf("%s: app actions = %s, want state,%s", tc.state, got, tc.want)
+		}
+	}
+}

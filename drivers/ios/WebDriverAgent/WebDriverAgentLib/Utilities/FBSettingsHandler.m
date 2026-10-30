@@ -8,10 +8,13 @@
 
 #import "FBSettingsHandler.h"
 
+#import <math.h>
+
 #import "FBActiveAppDetectionPoint.h"
 #import "FBClassChainQueryParser.h"
 #import "FBCommandStatus.h"
 #import "FBConfiguration.h"
+#import "FBScreen.h"
 #import "FBSession.h"
 #import "FBSettings.h"
 
@@ -33,6 +36,8 @@ static NSSet<NSString *> *FBNilClearableSettingKeys(void)
       FB_SETTING_ACCEPT_ALERT_BUTTON_SELECTOR,
       FB_SETTING_DISMISS_ALERT_BUTTON_SELECTOR,
       FB_SETTING_AUTO_CLICK_ALERT_SELECTOR,
+      FB_SETTING_CURRENT_DISPLAY_ID,
+      FB_SETTING_KEYBOARD_WAIT_TIMEOUT,
       nil];
   });
   return keys;
@@ -158,6 +163,24 @@ static NSSet<NSString *> *FBNilClearableSettingKeys(void)
       FBConfiguration.sharedInstance.maxTypingFrequency = [value unsignedIntegerValue];
       return nil;
     };
+    map[FB_SETTING_KEYBOARD_WAIT_TIMEOUT] = ^FBCommandStatus *(FBSession *session, id value) {
+      if (nil == value) {
+        FBConfiguration.sharedInstance.keyboardWaitTimeout = 0;
+        return nil;
+      }
+      if (![value isKindOfClass:NSNumber.class]
+          || CFGetTypeID((__bridge CFTypeRef)value) == CFBooleanGetTypeID()) {
+        return [FBCommandStatus invalidArgumentErrorWithMessage:@"keyboardWaitTimeout must be a non-negative number of seconds"
+                                                      traceback:nil];
+      }
+      double timeout = [(NSNumber *)value doubleValue];
+      if (timeout < 0 || !isfinite(timeout)) {
+        return [FBCommandStatus invalidArgumentErrorWithMessage:@"keyboardWaitTimeout must be a non-negative number of seconds"
+                                                      traceback:nil];
+      }
+      FBConfiguration.sharedInstance.keyboardWaitTimeout = timeout;
+      return nil;
+    };
     map[FB_SETTING_USE_CLEAR_TEXT_SHORTCUT] = ^FBCommandStatus *(FBSession *session, id value) {
       FBConfiguration.sharedInstance.useClearTextShortcut = [value boolValue];
       return nil;
@@ -188,6 +211,25 @@ static NSSet<NSString *> *FBNilClearableSettingKeys(void)
     };
     map[FB_SETTING_LIMIT_XPATH_CONTEXT_SCOPE] = ^FBCommandStatus *(FBSession *session, id value) {
       FBConfiguration.sharedInstance.limitXpathContextScope = [value boolValue];
+      return nil;
+    };
+    map[FB_SETTING_CURRENT_DISPLAY_ID] = ^FBCommandStatus *(FBSession *session, id value) {
+      if (nil == value) {
+        FBConfiguration.sharedInstance.currentDisplayId = nil;
+        return nil;
+      }
+      if (![value isKindOfClass:NSNumber.class]
+          || CFGetTypeID((__bridge CFTypeRef)value) == CFBooleanGetTypeID()
+          || [value compare:@([value longLongValue])] != NSOrderedSame) {
+        return [FBCommandStatus invalidArgumentErrorWithMessage:@"currentDisplayId must be an integer display id returned by /wda/screens"
+                                                      traceback:nil];
+      }
+      NSError *error;
+      if (nil == [FBScreen screenWithDisplayID:[value longLongValue] error:&error]) {
+        return [FBCommandStatus invalidArgumentErrorWithMessage:error.localizedDescription
+                                                      traceback:nil];
+      }
+      FBConfiguration.sharedInstance.currentDisplayId = @([value longLongValue]);
       return nil;
     };
 #if !TARGET_OS_TV && !TARGET_OS_WATCH
@@ -283,6 +325,9 @@ static NSSet<NSString *> *FBNilClearableSettingKeys(void)
     map[FB_SETTING_MAX_TYPING_FREQUENCY] = ^id(FBSession *session) {
       return @(FBConfiguration.sharedInstance.maxTypingFrequency);
     };
+    map[FB_SETTING_KEYBOARD_WAIT_TIMEOUT] = ^id(FBSession *session) {
+      return @(FBConfiguration.sharedInstance.keyboardWaitTimeout);
+    };
     map[FB_SETTING_RESPECT_SYSTEM_ALERTS] = ^id(FBSession *session) {
       return @(FBConfiguration.sharedInstance.shouldRespectSystemAlerts);
     };
@@ -309,6 +354,9 @@ static NSSet<NSString *> *FBNilClearableSettingKeys(void)
     };
     map[FB_SETTING_LIMIT_XPATH_CONTEXT_SCOPE] = ^id(FBSession *session) {
       return @(FBConfiguration.sharedInstance.limitXpathContextScope);
+    };
+    map[FB_SETTING_CURRENT_DISPLAY_ID] = ^id(FBSession *session) {
+      return FBConfiguration.sharedInstance.currentDisplayId ?: @([FBScreen displayID]);
     };
 #if !TARGET_OS_TV && !TARGET_OS_WATCH
     map[FB_SETTING_SCREENSHOT_ORIENTATION] = ^id(FBSession *session) {

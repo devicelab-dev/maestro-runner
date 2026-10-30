@@ -38,6 +38,16 @@ maestro-runner --platform ios --driver devicelab --team-id <TEAM_ID> \
 Regenerate `SigningStub.xcodeproj` from `signing-stub/project.yml` with
 `xcodegen generate`.
 
+## Access
+
+Each run starts the agent with a random token (`DL_AGENT_TOKEN`, through
+`SIMCTL_CHILD_` or the xctestrun's environment) and sends it on every request
+as `X-DeviceLab-Token`; an agent built with token support answers a request
+without it 401 and runs nothing. The token is saved, readable by the user only,
+in `~/.maestro-runner/cache/devicelab-ios-agent/<udid>/agent.json` so a later
+run can re-attach to a kept agent. The agent listens on 127.0.0.1 only: on a
+simulator that is the Mac, on a device the end of the usbmux forward.
+
 Overrides:
 
 - `DEVICELAB_IOS_AGENT_DIR` — use an agent build from another directory
@@ -49,3 +59,5 @@ Overrides:
 - `DEVICELAB_IOS_AGENT_BUNDLE_ID` — sign the agent on a device as another
   bundle id (a personal team cannot use the team wildcard App ID, and
   `dev.devicelab.agent` may already be registered elsewhere)
+- `DEVICELAB_IOS_AGENT_BIND=any` — on a device, have the agent listen on every
+  interface instead of loopback (the token is still required)

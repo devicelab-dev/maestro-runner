@@ -93,6 +93,7 @@ func (a *Agent) launchDevice(ctx context.Context) (*Client, error) {
 		return nil, err
 	}
 	c := NewClient(a.port)
+	c.SetToken(a.token)
 	var lastErr error
 	for attempt := 1; attempt <= deviceStartAttempts; attempt++ {
 		if attempt > 1 {
@@ -120,6 +121,9 @@ func (a *Agent) launchDevice(ctx context.Context) (*Client, error) {
 func (a *Agent) startDeviceOnce(ctx context.Context, c *Client, attempt int) error {
 	xctestrun, err := writeDeviceXctestrun(a.opts.Dir, a.port, a.ids)
 	if err != nil {
+		return &permanentStartError{err}
+	}
+	if err := setXctestrunEnv(xctestrun, deviceAgentEnv(a.token)); err != nil {
 		return &permanentStartError{err}
 	}
 	logDir := stateDir(a.opts.UDID)
@@ -297,6 +301,59 @@ func renderDeviceXctestrun(raw []byte, port int, ids bundleIDs) ([]byte, error) 
 		return nil, fmt.Errorf("xctestrun has no test target")
 	}
 	return plist.MarshalIndent(doc, plist.XMLFormat, "\t")
+}
+
+// deviceAgentBindEnv, when set, is passed to the agent on a device as
+// DL_AGENT_BIND: "any" makes it listen on every interface instead of the
+// device's loopback, should a usbmux forward ever fail to reach loopback.
+const deviceAgentBindEnv = "DEVICELAB_IOS_AGENT_BIND"
+
+// deviceAgentEnv is what an agent on a device is started with besides its
+// port: the run's token and any bind override.
+func deviceAgentEnv(token string) map[string]string {
+	env := map[string]string{agentTokenVar: token}
+	if v := os.Getenv(deviceAgentBindEnv); v != "" {
+		env["DL_AGENT_BIND"] = v
+	}
+	return env
+}
+
+// setXctestrunEnv sets vars in every test target's environment of the
+// xctestrun at path, and makes the file readable by this user only: it
+// holds the agent's token.
+func setXctestrunEnv(path string, vars map[string]string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var doc map[string]interface{}
+	if _, err := plist.Unmarshal(raw, &doc); err != nil {
+		return fmt.Errorf("bad xctestrun: %w", err)
+	}
+	for key, v := range doc {
+		target, ok := v.(map[string]interface{})
+		if !ok || key == "__xctestrun_metadata__" {
+			continue
+		}
+		for _, envKey := range []string{"EnvironmentVariables", "TestingEnvironmentVariables"} {
+			env, ok := target[envKey].(map[string]interface{})
+			if !ok {
+				env = map[string]interface{}{}
+				target[envKey] = env
+			}
+			for k, val := range vars {
+				env[k] = val
+			}
+		}
+	}
+	out, err := plist.MarshalIndent(doc, plist.XMLFormat, "\t")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
 }
 
 // startForward forwards 127.0.0.1:port to the same port on the device over

@@ -343,6 +343,7 @@ static NSString *const axSettingsClassName = @"AXSettings";
   self.shouldUseCompactResponses = YES;
   self.elementResponseAttributes = @"type,label";
   self.maxTypingFrequencyOverride = @(self.defaultTypingFrequency);
+  self.keyboardWaitTimeout = 0;
   self.screenshotQuality = 3;
   self.useFirstMatch = NO;
   self.boundElementsByIndex = NO;
@@ -357,6 +358,7 @@ static NSString *const axSettingsClassName = @"AXSettings";
   FBSetCustomParameterForElementSnapshot(FBSnapshotMaxChildrenKey, @INT_MAX);
   self.useClearTextShortcut = YES;
   self.limitXpathContextScope = YES;
+  self.currentDisplayId = nil;
 #if !TARGET_OS_TV && !TARGET_OS_WATCH
   self.screenshotOrientationStorage = UIInterfaceOrientationUnknown;
 #endif

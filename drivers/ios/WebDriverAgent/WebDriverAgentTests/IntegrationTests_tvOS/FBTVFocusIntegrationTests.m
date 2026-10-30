@@ -7,6 +7,8 @@
  */
 
 #import <XCTest/XCTest.h>
+#import "XCUIApplication+FBHelpers.h"
+#import "XCUIDevice+FBHelpers.h"
 
 #if TARGET_OS_TV
 
@@ -77,6 +79,25 @@
   XCTAssertFalse(result);
   XCTAssertNotNil(error);
   XCTAssertFalse(disabled.hasFocus);
+}
+
+- (void)testHomeAndInputAfterDeactivate
+{
+  NSError *error = nil;
+  XCTAssertTrue([XCUIDevice.sharedDevice fb_goToHomescreenWithError:&error], @"%@", error);
+  XCTAssertNotEqual(self.app.state, XCUIApplicationStateRunningForeground);
+  XCTAssertEqual(XCUIApplication.fb_systemApplication.state, XCUIApplicationStateRunningForeground);
+  [self.app activate];
+  for (NSNumber *duration in @[@0, @2]) {
+    [self.app launch];
+    XCTAssertTrue([self.app fb_deactivateWithDuration:duration.doubleValue error:&error], @"%@", error);
+    XCTAssertEqual(self.app.state, XCUIApplicationStateRunningForeground);
+    XCTAssertTrue([self.app.buttons[@"cell_1_2"] fb_selectWithError:&error], @"%@", error);
+    XCTNSPredicateExpectation *updated = [[XCTNSPredicateExpectation alloc]
+        initWithPredicate:[NSPredicate predicateWithFormat:@"label == %@", @"cell_1_2"]
+        object:self.app.staticTexts[@"lastSelectedLabel"]];
+    [self waitForExpectations:@[updated] timeout:5];
+  }
 }
 
 @end

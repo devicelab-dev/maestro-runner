@@ -9,7 +9,8 @@
 #import "FBElementCommands.h"
 
 #import "FBConfiguration.h"
-#import "FBKeyboard.h"
+#import "FBScreen.h"
+#import "XCUIScreen.h"
 #import "FBRoute.h"
 #import "FBRouteRequest.h"
 #import "FBRunLoopSpinner.h"
@@ -22,6 +23,7 @@
 #import "FBRuntimeUtils.h"
 #import "NSPredicate+FBFormat.h"
 #import "XCTestPrivateSymbols.h"
+#import "XCUIApplication+FBTouchAction.h"
 #import "XCUICoordinate.h"
 #import "XCUIDevice.h"
 #import "XCUIElement+FBIsVisible.h"
@@ -370,10 +372,14 @@
   if (nil == endCoordinate) {
     return FBResponseWithStatus([FBCommandStatus invalidElementStateErrorWithMessage:error.description traceback:nil]);
   }
-  [startCoordinate pressForDuration:[request.arguments[@"pressDuration"] doubleValue]
-               thenDragToCoordinate:endCoordinate
-                       withVelocity:[request.arguments[@"velocity"] doubleValue]
-                thenHoldForDuration:[request.arguments[@"holdDuration"] doubleValue]];
+  if (![application fb_pressAtCoordinate:startCoordinate
+                             forDuration:[request.arguments[@"pressDuration"] doubleValue]
+                    thenDragToCoordinate:endCoordinate
+                            withVelocity:[request.arguments[@"velocity"] doubleValue]
+                     thenHoldForDuration:[request.arguments[@"holdDuration"] doubleValue]
+                                   error:&error]) {
+    return FBResponseWithStatus([FBCommandStatus invalidElementStateErrorWithMessage:error.description traceback:nil]);
+  }
   return FBResponseWithOK();
 }
 
@@ -456,7 +462,17 @@
     return FBResponseWithStatus([FBCommandStatus invalidElementStateErrorWithMessage:error.description traceback:nil]);
   }
   NSTimeInterval duration = [request.arguments[@"duration"] doubleValue];
-  [startCoordinate pressForDuration:duration thenDragToCoordinate:endCoordinate];
+  XCUIApplication *application = [target isKindOfClass:XCUIApplication.class]
+    ? (XCUIApplication *)target
+    : target.application;
+  if (![application fb_pressAtCoordinate:startCoordinate
+                             forDuration:duration
+                    thenDragToCoordinate:endCoordinate
+                            withVelocity:XCUIGestureVelocityDefault
+                     thenHoldForDuration:0
+                                   error:&error]) {
+    return FBResponseWithStatus([FBCommandStatus invalidElementStateErrorWithMessage:error.description traceback:nil]);
+  }
   return FBResponseWithOK();
 }
 
@@ -539,6 +555,13 @@
   NSString *textToType = [request.arguments[@"value"] componentsJoinedByString:@""];
   NSUInteger frequency = [request.arguments[@"frequency"] unsignedIntegerValue] ?: FBConfiguration.sharedInstance.maxTypingFrequency;
   NSError *error;
+#if TARGET_OS_IOS
+  NSTimeInterval keyboardWait = FBConfiguration.sharedInstance.keyboardWaitTimeout;
+  if (keyboardWait > 0) {
+    XCUIApplication *application = request.session.activeApplication ?: XCUIApplication.fb_activeApplication;
+    FBWaitForHittableKey(application, keyboardWait);
+  }
+#endif
   if (!FBTypeText(textToType, frequency, &error)) {
     return FBResponseWithStatus([FBCommandStatus invalidElementStateErrorWithMessage:error.description
                                                                            traceback:nil]);
@@ -683,7 +706,34 @@ static const NSInteger DEFAULT_MAX_PICKER_ATTEMPTS = 25;
                                                   element:(XCUIElement *)element
                                                     error:(NSError **)error
 {
-  return FBCoordinateWithAnchorOffset(element, CGVectorMake(0, 0), offset, error);
+  if (element.elementType != XCUIElementTypeApplication) {
+    return FBCoordinateWithAnchorOffset(element, CGVectorMake(0, 0), offset, error);
+  }
+  XCUIScreen *screen = [FBScreen currentScreenWithError:error];
+  if (nil == screen) {
+    return nil;
+  }
+  if (screen.displayID == XCUIScreen.mainScreen.displayID) {
+    return FBCoordinateWithAnchorOffset(element, CGVectorMake(0, 0), offset, error);
+  }
+  // Application-root coordinates are rotated using the main display on Duo.
+  // A window coordinate keeps XCTest's display affinity and rotation intact.
+  // It is only a coordinate anchor, not a hit-test boundary. Preserve edge and
+  // outside offsets just as on the main display; XCTest handles their delivery.
+  CGPoint point = CGPointMake(offset.dx, offset.dy);
+  for (XCUIElement *window in [element childrenMatchingType:XCUIElementTypeWindow].allElementsBoundByIndex) {
+    // Resolve the window before reading its display affinity: an unresolved
+    // element may report displayID == 0.
+    (void)window.frame;
+    CGRect frame = window.wdFrame;
+    if (window.screen.displayID == screen.displayID && !CGRectIsEmpty(frame)) {
+      return FBCoordinateWithAnchorOffset(window, CGVectorMake(0, 0),
+        CGVectorMake(point.x - frame.origin.x, point.y - frame.origin.y), error);
+    }
+  }
+  [[[FBErrorBuilder builder] withDescriptionFormat:@"No non-empty application window on display %lld is available as a coordinate anchor", screen.displayID]
+    buildError:error];
+  return nil;
 }
 
 /**

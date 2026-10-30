@@ -70,6 +70,12 @@ type Driver struct {
 	promptLabels     core.IOSPromptLabels
 	promptLabelsOnce sync.Once
 	loadPromptLabels func() core.IOSPromptLabels
+	// keyboardMayBeUp is set by a step that may have left the software
+	// keyboard up (core.MayLeaveIOSKeyboardUp) and cleared once the keyboard
+	// is seen gone. Only while it is set does a tap look for the keyboard
+	// first (aimClearOfKeyboard).
+	keyboardMayBeUp bool
+
 	// step is the step Execute is running; a prompt it is aimed at
 	// (`tapOn: "Allow"`) is left to it.
 	step flow.Step
@@ -323,6 +329,9 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 		// for a prompt first.
 		d.alertWatchUntil = time.Now().Add(autoAlertLaunchWindow)
 	}
+	if core.MayLeaveIOSKeyboardUp(step, result) {
+		d.keyboardMayBeUp = true
+	}
 	result.Duration = time.Since(start)
 	return result
 }
@@ -409,9 +418,10 @@ func (d *Driver) execute(step flow.Step) *core.CommandResult {
 		return d.assertDarkMode(false)
 	case *flow.AddMediaStep:
 		return d.addMedia(s.Files)
-	case *flow.SetAirplaneModeStep, *flow.ToggleAirplaneModeStep:
-		err := fmt.Errorf("airplane mode is not available on the iOS simulator")
-		return core.ErrorResult(err, err.Error())
+	case *flow.SetAirplaneModeStep:
+		return d.setAirplaneMode(s.Enabled)
+	case *flow.ToggleAirplaneModeStep:
+		return d.toggleAirplaneMode()
 	default:
 		err := fmt.Errorf("%s is not supported by --driver devicelab on iOS", step.Type())
 		return core.ErrorResult(err, err.Error())
@@ -438,7 +448,8 @@ func movesScreen(step flow.Step) bool {
 		*flow.DragAndDropStep, *flow.SwipeStep, *flow.ScrollStep, *flow.ScrollUntilVisibleStep,
 		*flow.BackStep, *flow.PressKeyStep, *flow.InputTextStep, *flow.InputRandomStep,
 		*flow.EraseTextStep, *flow.HideKeyboardStep, *flow.LaunchAppStep, *flow.OpenLinkStep,
-		*flow.OpenBrowserStep, *flow.AcceptAlertStep, *flow.DismissAlertStep, *flow.SetOrientationStep:
+		*flow.OpenBrowserStep, *flow.AcceptAlertStep, *flow.DismissAlertStep, *flow.SetOrientationStep,
+		*flow.SetAirplaneModeStep, *flow.ToggleAirplaneModeStep:
 		return true
 	}
 	return false

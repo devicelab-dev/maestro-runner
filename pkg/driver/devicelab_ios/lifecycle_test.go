@@ -81,6 +81,23 @@ func TestLaunchAppDefaultsAndErrors(t *testing.T) {
 	}
 }
 
+// stopApp: false launches without --terminate-running-process: Maestro's
+// plain `simctl launch` brings a running app to the front, not a fresh start.
+func TestLaunchAppStopAppFalseKeepsRunningApp(t *testing.T) {
+	d, _, sl := newTestDriver(t, nil)
+	launched := fakeLaunch(t, nil)
+	res := d.Execute(&flow.LaunchAppStep{AppID: "com.x", StopApp: boolp(false)})
+	if !res.Success {
+		t.Fatal(res.Message)
+	}
+	if got := strings.Join(*launched, " "); got != "launch SIM-1 com.x" {
+		t.Fatalf("launch = %q", got)
+	}
+	if sl.has("terminate") {
+		t.Fatal("stopApp: false must not terminate")
+	}
+}
+
 func TestStopApp(t *testing.T) {
 	d, _, sl := newTestDriver(t, nil)
 	if res := d.Execute(&flow.StopAppStep{}); res.Success {

@@ -1218,39 +1218,6 @@ func TestGetIOSPermissions(t *testing.T) {
 }
 
 // =============================================================================
-// hideKeyboard test
-// =============================================================================
-
-// TestHideKeyboardSendsNewline tests that hideKeyboard sends a newline character.
-func TestHideKeyboardSendsNewline(t *testing.T) {
-	var keysSent string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if strings.Contains(r.URL.Path, "/wda/keys") {
-			body, _ := io.ReadAll(r.Body)
-			keysSent = string(body)
-			jsonResponse(w, map[string]interface{}{"status": 0})
-			return
-		}
-		jsonResponse(w, map[string]interface{}{"status": 0})
-	}))
-	defer server.Close()
-	driver := createTestDriver(server)
-
-	step := &flow.HideKeyboardStep{}
-	result := driver.hideKeyboard(step)
-
-	if !result.Success {
-		t.Errorf("Expected success, got: %s", result.Message)
-	}
-	// Verify a newline was sent
-	if !strings.Contains(keysSent, "\\n") {
-		// The body is JSON-encoded, so \n appears as \\n
-		t.Logf("Keys sent body: %s", keysSent)
-	}
-}
-
-// =============================================================================
 // openBrowser tests
 // =============================================================================
 
@@ -5438,5 +5405,45 @@ func TestAutoClickAlertSelectorLocalized(t *testing.T) {
 	}
 	if got := autoClickAlertSelector("accept", core.IOSPromptLabels{}); got != autoAcceptAlertSelector {
 		t.Errorf("English: got %q", got)
+	}
+}
+
+// An empty field reads as its placeholder: erasing part of it must clear the
+// field, not type the rest of the placeholder back in.
+func TestEraseTextEmptyFieldShowingPlaceholder(t *testing.T) {
+	var cleared bool
+	var typed []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		switch {
+		case strings.Contains(path, "/element/active"):
+			jsonResponse(w, map[string]interface{}{"value": map[string]interface{}{"ELEMENT": "field-1"}})
+		case strings.HasSuffix(path, "/text"):
+			jsonResponse(w, map[string]interface{}{"value": "Email address"})
+		case strings.HasSuffix(path, "/attribute/placeholderValue"):
+			jsonResponse(w, map[string]interface{}{"value": "Email address"})
+		case strings.HasSuffix(path, "/clear"):
+			cleared = true
+			jsonResponse(w, map[string]interface{}{"status": 0})
+		case strings.Contains(path, "/wda/keys"):
+			body, _ := io.ReadAll(r.Body)
+			typed = append(typed, string(body))
+			jsonResponse(w, map[string]interface{}{"status": 0})
+		default:
+			jsonResponse(w, map[string]interface{}{"status": 0})
+		}
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	if res := driver.eraseText(&flow.EraseTextStep{Characters: 5}); !res.Success {
+		t.Fatalf("eraseText: %s", res.Message)
+	}
+	if !cleared {
+		t.Error("expected the field to be cleared")
+	}
+	if len(typed) != 0 {
+		t.Errorf("typed into an empty field: %q", typed)
 	}
 }
