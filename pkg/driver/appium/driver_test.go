@@ -610,6 +610,10 @@ func TestExecuteAppiumSetLocationInvalid(t *testing.T) {
 
 // TestExecuteSetOrientation tests orientation setting
 func TestExecuteAppiumSetOrientation(t *testing.T) {
+	// The mock's window stays portrait, as an app locked to portrait does.
+	saved := rotationSettleTimeout
+	rotationSettleTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { rotationSettleTimeout = saved })
 	server := mockAppiumServerForDriver()
 	defer server.Close()
 	driver := createTestAppiumDriver(server)

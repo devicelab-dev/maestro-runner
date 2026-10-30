@@ -284,6 +284,38 @@ func (c *Client) fetchScreenSize() {
 	}
 }
 
+// readWindowSize reads the window size, ok false when the server gives none.
+func (c *Client) readWindowSize() (int, int, bool) {
+	resp, err := c.get(c.sessionPath() + "/window/rect")
+	if err != nil {
+		return 0, 0, false
+	}
+	value, _ := resp["value"].(map[string]interface{})
+	w, _ := value["width"].(float64)
+	h, _ := value["height"].(float64)
+	return int(w), int(h), w > 0 && h > 0
+}
+
+// WaitForScreenOrientation re-reads the window size until it is landscape
+// (wider than tall) or portrait, as asked, or timeout passes, and keeps the
+// last size read. The size read when the session started does not turn with
+// the display, and the on-screen filter and percentage points use it (#256).
+// A display that does not turn (an app locked to portrait) keeps its size.
+func (c *Client) WaitForScreenOrientation(landscape bool, timeout, interval time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for {
+		w, h, ok := c.readWindowSize()
+		if !ok {
+			return
+		}
+		c.screenW, c.screenH = w, h
+		if (w > h) == landscape || time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(interval)
+	}
+}
+
 // Element Operations
 
 // FindElement finds a single element.

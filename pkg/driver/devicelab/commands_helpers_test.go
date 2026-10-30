@@ -485,21 +485,25 @@ func TestSetClipboard(t *testing.T) {
 	}
 }
 
+// PORTRAIT and LANDSCAPE are set over adb like the other orientations, as
+// Maestro does: the agent's Device.setOrientation never turned the display
+// (#256). LANDSCAPE is LANDSCAPE_LEFT.
 func TestSetOrientation_PortraitLandscape(t *testing.T) {
-	client := newTrackingClient()
-	driver := New(client, &core.PlatformInfo{}, &mockShell{})
-
-	for _, in := range []string{"PORTRAIT", "portrait", "LANDSCAPE", "landscape"} {
+	for in, want := range map[string]string{"PORTRAIT": "user_rotation 0", "portrait": "user_rotation 0", "LANDSCAPE": "user_rotation 1", "landscape": "user_rotation 1"} {
+		shell := &mockShell{}
+		driver := New(newTrackingClient(), &core.PlatformInfo{}, shell)
 		res := driver.setOrientation(&flow.SetOrientationStep{Orientation: in})
 		if !res.Success {
 			t.Errorf("setOrientation(%q): %v", in, res.Error)
 		}
+		if len(shell.commands) < 2 || !strings.HasSuffix(shell.commands[1], want) {
+			t.Errorf("setOrientation(%q) ran %v, want settings put system %s", in, shell.commands, want)
+		}
 	}
-	// Client error
-	client.setOrientErr = errors.New("nope")
-	res := driver.setOrientation(&flow.SetOrientationStep{Orientation: "PORTRAIT"})
+	shell := &mockShell{err: errors.New("nope")}
+	res := New(newTrackingClient(), &core.PlatformInfo{}, shell).setOrientation(&flow.SetOrientationStep{Orientation: "PORTRAIT"})
 	if res.Success {
-		t.Error("setOrientation should propagate client error")
+		t.Error("setOrientation should fail when adb fails")
 	}
 }
 

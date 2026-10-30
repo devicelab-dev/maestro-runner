@@ -2911,16 +2911,14 @@ func (d *Driver) setClipboard(step *flow.SetClipboardStep) *core.CommandResult {
 func (d *Driver) setOrientation(step *flow.SetOrientationStep) *core.CommandResult {
 	orientation := strings.ToUpper(strings.ReplaceAll(step.Orientation, "_", ""))
 
-	if orientation == "PORTRAIT" || orientation == "LANDSCAPE" {
-		if err := d.client.SetOrientation(orientation); err != nil {
-			return errorResult(err, fmt.Sprintf("Failed to set orientation: %v", err))
-		}
-		return successResult(fmt.Sprintf("Set orientation to %s", orientation), nil)
-	}
-
+	// Every orientation is set over adb, as Maestro does: the agent's
+	// Device.setOrientation never turned the display, so PORTRAIT and
+	// LANDSCAPE did nothing (#256). LANDSCAPE is LANDSCAPE_LEFT.
 	var rotation string
 	switch orientation {
-	case "LANDSCAPELEFT":
+	case "PORTRAIT":
+		rotation = "0"
+	case "LANDSCAPE", "LANDSCAPELEFT":
 		rotation = "1"
 	case "UPSIDEDOWN":
 		rotation = "2"
@@ -2932,7 +2930,7 @@ func (d *Driver) setOrientation(step *flow.SetOrientationStep) *core.CommandResu
 	}
 
 	if d.device == nil {
-		return errorResult(fmt.Errorf("device not configured"), "Extended orientations require device access")
+		return errorResult(fmt.Errorf("device not configured"), "setOrientation requires device access")
 	}
 
 	if _, err := d.device.Shell("settings put system accelerometer_rotation 0"); err != nil {
@@ -2951,15 +2949,17 @@ func (d *Driver) setOrientation(step *flow.SetOrientationStep) *core.CommandResu
 	// worth saying.
 	want, _ := strconv.Atoi(rotation)
 	if err := core.WaitForDisplayRotation(d.device.Shell, want, rotationSettleTimeout, rotationPollInterval); err != nil {
+		d.noteRotation(core.DisplayRotation(d.device.Shell))
 		return successResult(fmt.Sprintf("Set orientation to %s (%v)", step.Orientation, err), nil)
 	}
+	d.noteRotation(want)
 
 	return successResult(fmt.Sprintf("Set orientation to %s", step.Orientation), nil)
 }
 
 // How long setOrientation waits for the display to report the new rotation
 // before moving on, and how often it looks.
-const (
+var (
 	rotationSettleTimeout = 5 * time.Second
 	rotationPollInterval  = 250 * time.Millisecond
 )
