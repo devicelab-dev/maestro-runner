@@ -1216,6 +1216,28 @@ func (d *Driver) findElementDirectWithContext(ctx context.Context, sel flow.Sele
 	}
 }
 
+// agentTextTiers is core.UiSelectorTextTiers with hints, plus errorMatches in
+// its last, ignore-case tier: the agent then also finds a field by its
+// validation error, as Maestro's text matching does (2.9+). Only the last tier
+// gets it, since that one matches whatever the case and each query is another
+// walk of the tree when nothing matches. errorMatches, like hintMatches, is a
+// DeviceLab-agent extension, in the agent this runner bundles (c9e34be on);
+// an older agent refuses that query.
+func agentTextTiers(text string) [][]string {
+	tiers := core.UiSelectorTextTiers(text, true)
+	if len(tiers) == 0 {
+		return tiers
+	}
+	last := len(tiers) - 1
+	for _, body := range tiers[last] {
+		if rest, ok := strings.CutPrefix(body, ".hintMatches("); ok {
+			tiers[last] = append(tiers[last], ".errorMatches("+rest)
+			break
+		}
+	}
+	return tiers
+}
+
 // buildClickableOnlyStrategies builds UiAutomator strategies that only match clickable elements.
 //
 // Every query matches the whole text, description or hint, as Maestro does
@@ -1228,7 +1250,7 @@ func (d *Driver) findElementDirectWithContext(ctx context.Context, sel flow.Sele
 func buildClickableOnlyStrategies(sel flow.Selector) ([]LocatorStrategy, error) {
 	var strategies []LocatorStrategy
 	filters := ".clickable(true)" + buildStateFilters(sel)
-	for _, tier := range core.UiSelectorTextTiers(sel.Text, true) {
+	for _, tier := range agentTextTiers(sel.Text) {
 		for _, body := range tier {
 			strategies = append(strategies, LocatorStrategy{
 				Strategy: uiautomator2.StrategyUIAutomator,
@@ -1935,7 +1957,7 @@ func buildSelectorsWithOptions(sel flow.Selector, timeoutMs int, preferClickable
 	// (#188). hintMatches is a DeviceLab-agent extension: it matches the
 	// EditText android:hint placeholder, so "tapOn: 'Email'" finds an empty
 	// field by hint.
-	textTiers := core.UiSelectorTextTiers(sel.Text, true)
+	textTiers := agentTextTiers(sel.Text)
 
 	// A selector naming both must match one element carrying both. Emitting the
 	// id-only and text-only queries as separate candidates made them an OR: the

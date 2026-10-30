@@ -28,7 +28,8 @@ func TestBuildSelectors_IDAndTextAreANDed(t *testing.T) {
 		hasID := strings.Contains(s.Value, "resourceId")
 		hasText := strings.Contains(s.Value, "text") ||
 			strings.Contains(s.Value, "description") ||
-			strings.Contains(s.Value, "hint")
+			strings.Contains(s.Value, "hint") ||
+			strings.Contains(s.Value, "error")
 		if !hasID || !hasText {
 			t.Errorf("every strategy must constrain both id and text, got: %s", s.Value)
 		}
@@ -55,11 +56,11 @@ func TestBuildSelectors_SingleAttributeUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildSelectors failed: %v", err)
 	}
-	// text/description equal to it, then text/description/hint matching it
-	// whole ignoring case. Plain text has no own-case regex tier: it would
-	// repeat the first.
-	if len(textOnly) != 5 {
-		t.Errorf("expected 5 text strategies, got %d", len(textOnly))
+	// text/description equal to it, then text/description/hint/error
+	// matching it whole ignoring case. Plain text has no own-case regex tier:
+	// it would repeat the first.
+	if len(textOnly) != 6 {
+		t.Errorf("expected 6 text strategies, got %d", len(textOnly))
 	}
 	for _, s := range textOnly {
 		if strings.Contains(s.Value, "resourceId") {
@@ -109,7 +110,7 @@ func TestTextStrategiesMatchWhole(t *testing.T) {
 		t.Errorf("first clickable strategy = %s, want %s", clickable[0].Value, want)
 	}
 	last := clickable[len(clickable)-1].Value
-	if want := `new UiSelector().hintMatches("(?ims)(?:Username)").clickable(true)`; last != want {
+	if want := `new UiSelector().errorMatches("(?ims)(?:Username)").clickable(true)`; last != want {
 		t.Errorf("last clickable strategy = %s, want %s", last, want)
 	}
 
@@ -142,6 +143,7 @@ func TestDottedTextStrategies(t *testing.T) {
 		`new UiSelector().textMatches("(?ims)(?:DDG.)").clickable(true)`,
 		`new UiSelector().descriptionMatches("(?ims)(?:DDG.)").clickable(true)`,
 		`new UiSelector().hintMatches("(?ims)(?:DDG.)").clickable(true)`,
+		`new UiSelector().errorMatches("(?ims)(?:DDG.)").clickable(true)`,
 	}
 	if len(clickable) != len(want) {
 		t.Fatalf("clickable strategies = %d, want %d: %v", len(clickable), len(want), clickable)

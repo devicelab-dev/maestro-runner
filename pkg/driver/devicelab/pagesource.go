@@ -17,18 +17,22 @@ type ParsedElement struct {
 	ResourceID  string
 	ContentDesc string
 	HintText    string // hint attribute for EditText fields
-	ClassName   string
-	Bounds      core.Bounds
-	Enabled     bool
-	Selected    bool
-	Checked     bool
-	Focused     bool
-	Displayed   bool
-	Clickable   bool
-	Scrollable  bool
-	Children    []*ParsedElement
-	Parent      *ParsedElement // parent element for clickable lookup
-	Depth       int            // depth in hierarchy (for deepestMatchingElement)
+	// ErrorText is the field's validation error (AccessibilityNodeInfo.getError),
+	// the `error` attribute the agent writes when one is set. A text selector
+	// matches it, as in Maestro since 2.9 and on the uiautomator2 driver.
+	ErrorText  string
+	ClassName  string
+	Bounds     core.Bounds
+	Enabled    bool
+	Selected   bool
+	Checked    bool
+	Focused    bool
+	Displayed  bool
+	Clickable  bool
+	Scrollable bool
+	Children   []*ParsedElement
+	Parent     *ParsedElement // parent element for clickable lookup
+	Depth      int            // depth in hierarchy (for deepestMatchingElement)
 }
 
 // ParsePageSource parses Android UI hierarchy XML into elements.
@@ -80,6 +84,8 @@ func ParsePageSource(xmlData string) ([]*ParsedElement, error) {
 					// — the gap only shows once the field has been typed into.
 					case "hint", "hint-text":
 						elem.HintText = attr.Value
+					case "error":
+						elem.ErrorText = attr.Value
 					case "class":
 						elem.ClassName = attr.Value // Override if class attr exists
 					case "bounds":
@@ -288,7 +294,7 @@ func matchesSelector(elem *ParsedElement, sel flow.Selector) bool {
 	// Text matching - supports regex patterns and literal contains
 	// Checks text, content-desc (accessibility text), and hint text
 	if sel.Text != "" {
-		if !matchesText(sel.Text, elem.Text, elem.ContentDesc, elem.HintText) {
+		if !matchesText(sel.Text, elem.Text, elem.ContentDesc, elem.HintText) && !matchesErrorText(sel.Text, elem.ErrorText) {
 			return false
 		}
 	}
@@ -741,6 +747,16 @@ func anyMatches(re *regexp.Regexp, texts []string) bool {
 		}
 	}
 	return false
+}
+
+// matchesErrorText matches a text selector against a field's validation
+// error. Usually there is none, and an empty string must never satisfy a
+// selector — `.*` would.
+func matchesErrorText(pattern, errorText string) bool {
+	if errorText == "" {
+		return false
+	}
+	return matchesText(pattern, errorText, "", "")
 }
 
 // regexTextsOf lists the attributes a text selector is matched against.
