@@ -181,3 +181,32 @@ SuiteResult
 | `errored` | Unexpected error occurred |
 | `skipped` | Skipped (condition not met) |
 | `warned` | Passed with warnings |
+
+## Speed Gate
+
+`tools/speedgate` fails when a command type got slower. It reads the reports of
+repeated runs of one suite (same device, same driver), takes the median duration
+of each command type over every passed step (container steps such as `repeat`
+count their children, not themselves), and compares it with
+`benchmarks/speed-baseline.json`. A type regresses when its median is slower by
+more than **both** `--threshold-pct` (default 20) and `--threshold-ms` (default
+50). Types with fewer than `--min-samples` (default 3) passed steps are not
+judged. Exit status: 0 no regression, 1 regression, 2 bad input or no baseline.
+
+The baseline is written by hand from real runs, since it needs a device:
+
+```bash
+make build
+for i in 1 2 3; do
+  maestro-runner --device <SERIAL> test --output /tmp/sg/$i \
+    /Users/omnarayan/work/temp/TestHive/maestro-tests/auth-suite.yaml
+done
+make speedgate REPORTS="/tmp/sg/1 /tmp/sg/2 /tmp/sg/3" WRITE=1   # write the baseline
+make speedgate REPORTS="/tmp/sg/1 /tmp/sg/2 /tmp/sg/3"           # compare against it
+```
+
+A baseline holds for the device, driver and suite it came from; the tool refuses
+to pool reports of different drivers or platforms, and warns when the baseline's
+differ from the reports'. Say which device and suite in the commit that adds or
+updates the baseline. Run it directly for other paths or thresholds:
+`go run ./tools/speedgate --baseline <file> --threshold-pct 30 <report-dir>...`.

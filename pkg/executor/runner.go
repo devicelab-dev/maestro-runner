@@ -61,10 +61,14 @@ type RunnerConfig struct {
 	Env map[string]string
 
 	// Driver settings
-	WaitForIdleTimeout int  // Global wait for idle timeout in ms
-	TypingFrequency    int  // Global WDA typing frequency in keys/sec (0 = WDA default)
-	ConditionTimeout   int  // Default timeout (ms) for when:/while: condition checks (0 = engine default)
-	Insecure           bool // Skip TLS verification for runScript http.* calls (--insecure)
+	WaitForIdleTimeout int // Global wait for idle timeout in ms
+	TypingFrequency    int // Global WDA typing frequency in keys/sec (0 = WDA default)
+	ConditionTimeout   int // Default timeout (ms) for when:/while: condition checks (0 = engine default)
+	// FindTimeout is the default element lookup timeout (ms) for steps that
+	// give no timeout of their own (--find-timeout). 0 keeps the driver's
+	// default. A flow's commandTimeout overrides it.
+	FindTimeout int
+	Insecure    bool // Skip TLS verification for runScript http.* calls (--insecure)
 	// DisableAnimations switches the device's system animations off for the
 	// run and restores them at the end (--disable-animations, or Maestro's
 	// workspace platform option). A flow's own disableAnimations overrides it.

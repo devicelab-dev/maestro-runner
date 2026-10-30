@@ -198,6 +198,7 @@ Examples:
 			devicesCommand,
 			doctorCommand,
 			screenshotCommand,
+			skillsCommand,
 		},
 	}
 

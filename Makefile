@@ -1,4 +1,4 @@
-.PHONY: build clean test test-race test-coverage test-coverage-check cover-gaps test-fuzz bench install check ci fmt fmt-check imports fumpt staticcheck revive vet errcheck nilaway gosec ineffassign deadcode govulncheck
+.PHONY: build clean test test-race test-coverage test-coverage-check cover-gaps test-fuzz bench speedgate install check ci fmt fmt-check imports fumpt staticcheck revive vet errcheck nilaway gosec ineffassign deadcode govulncheck
 
 # Build variables
 BINARY_NAME=maestro-runner
@@ -83,6 +83,13 @@ test-fuzz:
 
 bench:
 	$(GOTEST) -v -bench=. -benchmem ./...
+
+## speedgate: fail when a command type got slower than benchmarks/speed-baseline.json.
+## REPORTS = report dirs from repeated runs of one suite on one device and driver.
+## Add WRITE=1 to (re)write the baseline from them instead. See DEVELOPER.md.
+speedgate:
+	@test -n "$(REPORTS)" || { echo "usage: make speedgate REPORTS=\"/tmp/sg/1 /tmp/sg/2 /tmp/sg/3\" [WRITE=1]"; exit 2; }
+	$(GOCMD) run ./tools/speedgate $(if $(WRITE),--write-baseline) $(REPORTS)
 
 # Code quality tools
 fmt:
