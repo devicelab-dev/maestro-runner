@@ -28,6 +28,22 @@ func TestKeyboardDragStart(t *testing.T) {
 		}
 	})
 
+	t.Run("a bar the size of the screen is not a control", func(t *testing.T) {
+		// iOS 27 reports its floating bar container as a screen-sized Toolbar.
+		nodes := []ScreenNode{{Type: "XCUIElementTypeToolbar", Bounds: Bounds{0, 2, w, h - 2}}}
+		x, y, ok := KeyboardDragStart(nodes, w, h, kbTop)
+		if !ok || x != 200 || y != 400 {
+			t.Errorf("got (%d,%d) ok=%v, want (200,400)", x, y, ok)
+		}
+	})
+
+	t.Run("an ordinary bar is still a control", func(t *testing.T) {
+		nodes := []ScreenNode{{Type: "XCUIElementTypeToolbar", Bounds: Bounds{0, 380, w, 44}}}
+		if _, y, ok := KeyboardDragStart(nodes, w, h, kbTop); !ok || (y >= 372 && y < 432) {
+			t.Errorf("got y=%d ok=%v, want a start clear of the bar", y, ok)
+		}
+	})
+
 	t.Run("screen types are not controls", func(t *testing.T) {
 		nodes := []ScreenNode{
 			{Type: "XCUIElementTypeApplication", Bounds: Bounds{0, 0, w, h}},

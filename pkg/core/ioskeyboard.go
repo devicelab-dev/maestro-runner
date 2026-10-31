@@ -59,6 +59,10 @@ var (
 		"SegmentedControl": true, "PickerWheel": true, "MenuItem": true, "Key": true, "Keyboard": true,
 		"NavigationBar": true, "TabBar": true, "Toolbar": true,
 	}
+	// dragBarTypes are the bar types in dragControlTypes. iOS 27 reports its
+	// floating bar container (_UIFloatingBarContainerView) as a Toolbar the size
+	// of the screen, drawn over the content; a bar that big is not a bar.
+	dragBarTypes = map[string]bool{"NavigationBar": true, "TabBar": true, "Toolbar": true}
 	// dragScrollTypes scroll, so a short drag on them reads as the touch
 	// that sends the keyboard away.
 	dragScrollTypes = map[string]bool{"ScrollView": true, "Table": true, "CollectionView": true, "WebView": true}
@@ -93,6 +97,8 @@ func KeyboardDragStart(nodes []ScreenNode, screenW, screenH, keyboardTop int) (x
 		switch {
 		case dragScrollTypes[t]:
 			scrollers = append(scrollers, b)
+		case dragBarTypes[t] && b.Width*b.Height > merged:
+			continue
 		case dragControlTypes[t] || (n.Leaf && !dragContentTypes[t] && b.Width*b.Height <= merged):
 			controls = append(controls, Bounds{
 				X: b.X - controlClearance, Y: b.Y - controlClearance,
