@@ -82,6 +82,11 @@ func (d *Driver) launchApp(s *flow.LaunchAppStep) *core.CommandResult {
 			return res
 		}
 	}
+	if keepsRunningApp(s) && (len(s.Permissions) > 0 || s.ClearKeychain) {
+		// A permission change makes iOS kill the running app (tccd), and
+		// stopApp: false is there to keep it.
+		logger.Info("launchApp: stopApp: false keeps the running app, so its permissions and clearKeychain are not applied")
+	}
 	if !keepsRunningApp(s) {
 		d.applyLaunchPermissions(bid, s.Permissions)
 		if s.ClearKeychain {
