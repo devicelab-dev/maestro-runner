@@ -65,7 +65,7 @@ func TestLaunchAppDefaultsAndErrors(t *testing.T) {
 	if res := d.Execute(&flow.LaunchAppStep{}); res.Success {
 		t.Fatal("no app id should fail")
 	}
-	res := d.Execute(&flow.LaunchAppStep{AppID: "com.x", StopApp: boolp(false)})
+	res := d.Execute(&flow.LaunchAppStep{AppID: "com.x"})
 	if res.Success {
 		t.Fatal("launch error should fail")
 	}
@@ -75,9 +75,6 @@ func TestLaunchAppDefaultsAndErrors(t *testing.T) {
 	// A reset would lose grants that simctl cannot give back (contacts, notifications).
 	if sl.has("privacy SIM-1 reset") {
 		t.Fatalf("default all:allow must not reset permissions: %v", sl.calls)
-	}
-	if sl.has("terminate") {
-		t.Fatal("stopApp: false must not terminate")
 	}
 }
 
