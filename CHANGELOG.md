@@ -5,7 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.30] - 2026-11-02
+
+This release closes more gaps with Maestro: `index:` counts matches by their position on screen, a long press holds 3 s on every driver, a `${…}` that throws fails its step, and DeviceLab iOS `hideKeyboard` fails when the keyboard stays up. WDA can see and tap system permission prompts, can drive a WebDriverAgent that is already running (`--wda-url`) or keep one between runs (`--reuse-wda`), and reads typed text back to retype dropped characters. New options: `--pause-on-failure`, `--find-timeout` and `inputText` `retype: false`. The DeviceLab agents on Android and iOS now listen on loopback only and answer only the run that started them. Contributors sent 23 pull requests and many precise bug reports, credited at the end.
 
 ### ⚠️ Behaviour changes
 
@@ -112,6 +114,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **WDA: `inputText` into the focused field reads the field back and retypes dropped characters**, as `inputText` with a selector already did. Tapping a field and then typing is how most flows type, and a dropped character went unnoticed. The check is skipped when the text has a newline or a tab, when focus has moved to another field (code boxes, split date or card fields), and when the field gained a character that was not typed, as a mask or a formatter adds one; a field is retyped only when it holds what was typed with characters missing.
 - **DeviceLab iOS: the fast `clearState` (`DEVICELAB_IOS_FAST_CLEARSTATE=1`) clears the app's `UserDefaults` on a simulator.** It emptied the app's data container, plist included, but the simulator's preferences daemon (`cfprefsd`) kept the app's preferences in memory and served them to the next launch, so a flow that relied on the clear still saw its saved settings. The clear now restarts that daemon, after stopping the app and before emptying the container, so nothing it still held is written back; it costs one `simctl spawn` call. The daemon serves the whole simulator, so a preference another app had not yet written to disk is lost. A clear that cannot restart it now fails instead of leaving the values in place. The same applies to `--driver devicelab-legacy`. The default `clearState`, which reinstalls the app, and real devices are unchanged.
 - **`--driver devicelab-legacy` on iOS: a screen with a wide slider no longer wedges the runner.** A slider at least 160 pt wide (and 1.75× its height) counted as a collapsed tab bar, so every snapshot of that screen read each element of the app one attribute at a time on XCTest's main thread, which cannot be interrupted; on a crowded screen that could hold the runner long enough for it to be restarted as wedged (found and fixed in agent-device, whose runner ours derives from). Sliders no longer count, and a real collapsed tab bar or segmented control is read in one query, started only while the snapshot's 8 s budget still covers what reading the screen took; otherwise the snapshot is returned without those tabs and marked truncated.
+
+### Contributors
+
+[@luka-vladika-happening-xyz](https://github.com/luka-vladika-happening-xyz)
+1. `runScript` honours `when:` ([#238](https://github.com/devicelab-dev/maestro-runner/pull/238))
+2. `copyTextFrom` keeps the text and leaves the device clipboard alone ([#239](https://github.com/devicelab-dev/maestro-runner/pull/239))
+3. Relative selectors honour `focused`, `enabled`, `selected` and `checked` without text or id ([#240](https://github.com/devicelab-dev/maestro-runner/pull/240))
+4. `childOf`, `below` and the other relative selectors keep their anchor's index ([#241](https://github.com/devicelab-dev/maestro-runner/pull/241))
+5. Appium `launchApp` passes arguments and environment on iOS; `clearState` on a real iPhone reinstalls `--app-file` ([#244](https://github.com/devicelab-dev/maestro-runner/pull/244))
+6. Appium on iOS: `selected: true` matches a selected tab or segment ([#245](https://github.com/devicelab-dev/maestro-runner/pull/245))
+7. `inputText` `retype: false` ([#247](https://github.com/devicelab-dev/maestro-runner/pull/247))
+8. A `${…}` whose JavaScript throws fails its step ([#250](https://github.com/devicelab-dev/maestro-runner/pull/250))
+9. WDA `launchApp` right after a reinstall waits for iOS to register the app ([#251](https://github.com/devicelab-dev/maestro-runner/issues/251), [#257](https://github.com/devicelab-dev/maestro-runner/pull/257))
+10. Asked for pausing a flow at its failing step ([#246](https://github.com/devicelab-dev/maestro-runner/issues/246))
+
+[@bulatgaleev](https://github.com/bulatgaleev)
+1. The pre-session scan finds a `launchApp` in `retry` and `repeat` ([#216](https://github.com/devicelab-dev/maestro-runner/pull/216))
+2. WDA `clearState` on a real device without Xcode ([#217](https://github.com/devicelab-dev/maestro-runner/pull/217))
+3. WDA long press holds 3 s ([#218](https://github.com/devicelab-dev/maestro-runner/pull/218))
+4. WDA reads the focused field back after typing ([#219](https://github.com/devicelab-dev/maestro-runner/pull/219))
+5. WDA `copyTextFrom` never copies an empty string for a failed read ([#220](https://github.com/devicelab-dev/maestro-runner/pull/220))
+6. Hosted-frame correction (`MAESTRO_WDA_HOSTED_FRAMES`) ([#223](https://github.com/devicelab-dev/maestro-runner/pull/223), [#232](https://github.com/devicelab-dev/maestro-runner/pull/232))
+7. `--wda-url` for a WebDriverAgent already running ([#224](https://github.com/devicelab-dev/maestro-runner/pull/224), [#229](https://github.com/devicelab-dev/maestro-runner/pull/229), [#233](https://github.com/devicelab-dev/maestro-runner/pull/233))
+8. CI on Linux and cancellation tests ([#215](https://github.com/devicelab-dev/maestro-runner/pull/215), [#222](https://github.com/devicelab-dev/maestro-runner/pull/222))
+
+[@tSquaredd](https://github.com/tSquaredd)
+1. `launchApp: clearState` no longer loses its launch to Android's cleanup ([#225](https://github.com/devicelab-dev/maestro-runner/pull/225))
+2. `scrollUntilVisible` scrolls in a row that runs past its container ([#227](https://github.com/devicelab-dev/maestro-runner/pull/227))
+
+[@Nezz](https://github.com/Nezz)
+1. Reported WDA slow since 1.1.28 ([#212](https://github.com/devicelab-dev/maestro-runner/issues/212)), asked for WDA reuse ([#213](https://github.com/devicelab-dev/maestro-runner/issues/213)), reported simulator settings left changed ([#214](https://github.com/devicelab-dev/maestro-runner/issues/214)) and permission prompts WDA could not see ([#248](https://github.com/devicelab-dev/maestro-runner/issues/248))
+
+[@georgetarazi-swipejobs](https://github.com/georgetarazi-swipejobs)
+1. Asked for airplane mode on DeviceLab iOS ([#252](https://github.com/devicelab-dev/maestro-runner/issues/252)) and script-relative `require()` ([#253](https://github.com/devicelab-dev/maestro-runner/issues/253)), reported `hideKeyboard` leaving the keyboard up ([#259](https://github.com/devicelab-dev/maestro-runner/issues/259))
+
+[@JohnAtTimeless](https://github.com/JohnAtTimeless)
+1. Reported hidden web view content on DeviceLab iOS ([#211](https://github.com/devicelab-dev/maestro-runner/issues/211))
+
+[@debugholic](https://github.com/debugholic)
+1. Reported `index:` picking a different element than Maestro ([#254](https://github.com/devicelab-dev/maestro-runner/issues/254))
+
+[@wanglinyu12345-lab](https://github.com/wanglinyu12345-lab)
+1. Reported the screen size not following a rotation on Android ([#256](https://github.com/devicelab-dev/maestro-runner/issues/256))
+
+[@losey-kim](https://github.com/losey-kim)
+1. Reported DeviceLab Android `tapOn` ignoring `index:` ([#260](https://github.com/devicelab-dev/maestro-runner/issues/260))
+
+[@laiskajoonas](https://github.com/laiskajoonas)
+1. Reported a clipped sliver counted as visible by `scrollUntilVisible` ([#164](https://github.com/devicelab-dev/maestro-runner/issues/164))
 
 ## [1.1.29] - 2026-10-15
 
