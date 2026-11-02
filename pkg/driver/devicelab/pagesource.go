@@ -27,6 +27,7 @@ type ParsedElement struct {
 	Selected   bool
 	Checked    bool
 	Focused    bool
+	Password   bool // the field masks what is typed into it
 	Displayed  bool
 	Clickable  bool
 	Scrollable bool
@@ -98,6 +99,8 @@ func ParsePageSource(xmlData string) ([]*ParsedElement, error) {
 						elem.Checked = attr.Value == "true"
 					case "focused":
 						elem.Focused = attr.Value == "true"
+					case "password":
+						elem.Password = attr.Value == "true"
 					case "displayed":
 						elem.Displayed = attr.Value != "false"
 					case "clickable":
