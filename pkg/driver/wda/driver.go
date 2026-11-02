@@ -1201,10 +1201,13 @@ func (d *Driver) onScreenOf(ids []string) (*core.ElementInfo, error) {
 	return nil, lastErr
 }
 
-// deepestOf returns the first element that contains none of the others:
-// bounds containment stands in for ancestry, which the element API does not
-// expose.
+// deepestOf returns an element that contains none of the others: bounds
+// containment stands in for ancestry, which the element API does not expose.
+// Of those, a control comes first: a search field and its magnifier icon can
+// share an id side by side, and the icon, first in tree order, takes no
+// input (#259). Otherwise the first in tree order.
 func deepestOf(infos []*core.ElementInfo) *core.ElementInfo {
+	var first *core.ElementInfo
 	for _, a := range infos {
 		inner := false
 		for _, b := range infos {
@@ -1213,11 +1216,32 @@ func deepestOf(infos []*core.ElementInfo) *core.ElementInfo {
 				break
 			}
 		}
-		if !inner {
+		if inner {
+			continue
+		}
+		if isControl(a.Class) {
 			return a
 		}
+		if first == nil {
+			first = a
+		}
+	}
+	if first != nil {
+		return first
 	}
 	return infos[0]
+}
+
+// isControl reports whether an element type is one a user acts on: a field,
+// a button or another control, as opposed to an image, a label or a container.
+// The same list as the devicelab iOS driver's.
+func isControl(t string) bool {
+	switch strings.TrimPrefix(t, "XCUIElementType") {
+	case "TextField", "SecureTextField", "SearchField", "TextView", "Button", "Switch", "Toggle",
+		"Link", "Slider", "Stepper", "SegmentedControl", "Picker", "PickerWheel", "DatePicker":
+		return true
+	}
+	return false
 }
 
 // contains reports whether b lies entirely within a.
