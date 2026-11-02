@@ -20,7 +20,7 @@ func TestConnectSendsToken(t *testing.T) {
 		if err != nil {
 			return
 		}
-		conn.CloseNow()
+		_ = conn.CloseNow()
 	}))
 	defer server.Close()
 	_, portStr, _ := strings.Cut(strings.TrimPrefix(server.URL, "http://"), ":")
