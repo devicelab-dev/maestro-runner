@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -429,9 +430,12 @@ func TestSimulatorPrefsAreRestored(t *testing.T) {
 		"com.apple.WebUI AutoFillPasswords":           "",  // not set
 	}
 	var writes []string
+	var mu sync.Mutex // the prefs are applied side by side
 	orig := prefsSimctl
 	t.Cleanup(func() { prefsSimctl = orig })
 	prefsSimctl = func(args ...string) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
 		// spawn <udid> defaults <verb> <domain> <key> [kind value]
 		verb, k := args[3], args[4]+" "+args[5]
 		switch verb {

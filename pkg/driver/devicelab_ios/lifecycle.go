@@ -651,21 +651,34 @@ func ApplySimulatorPrefs(udid string) {
 	if os.Getenv(SimPrefsEnv) == "0" || udid == "" {
 		return
 	}
+	// Each simctl spawn takes about 0.3-0.7 s, so the prefs go side by side.
+	results := make([]*savedPref, len(simPrefs))
+	var wg sync.WaitGroup
+	for i, p := range simPrefs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			out, err := prefsSimctl("spawn", udid, "defaults", "read", p.domain, p.key)
+			old := strings.TrimSpace(out)
+			if err == nil && old == p.value {
+				return
+			}
+			if _, werr := prefsSimctl("spawn", udid, "defaults", "write", p.domain, p.key, p.kind, p.value); werr != nil {
+				logger.Warn("simulator pref %s.%s not set: %v", p.domain, p.key, werr)
+				return
+			}
+			// `defaults read` fails when the key is not set.
+			results[i] = &savedPref{domain: p.domain, key: p.key, kind: p.kind, value: old, absent: err != nil}
+		}()
+	}
+	wg.Wait()
 	var applied []string
 	var saved []savedPref
-	for _, p := range simPrefs {
-		out, err := prefsSimctl("spawn", udid, "defaults", "read", p.domain, p.key)
-		old := strings.TrimSpace(out)
-		if err == nil && old == p.value {
-			continue
+	for i, r := range results {
+		if r != nil {
+			saved = append(saved, *r)
+			applied = append(applied, simPrefs[i].why)
 		}
-		if _, err := prefsSimctl("spawn", udid, "defaults", "write", p.domain, p.key, p.kind, p.value); err != nil {
-			logger.Warn("simulator pref %s.%s not set: %v", p.domain, p.key, err)
-			continue
-		}
-		// `defaults read` fails when the key is not set.
-		saved = append(saved, savedPref{domain: p.domain, key: p.key, kind: p.kind, value: old, absent: err != nil})
-		applied = append(applied, p.why)
 	}
 	savedPrefsMu.Lock()
 	savedPrefs[udid] = append(savedPrefs[udid], saved...)
@@ -682,14 +695,19 @@ func RestoreSimulatorPrefs(udid string) {
 	saved := savedPrefs[udid]
 	delete(savedPrefs, udid)
 	savedPrefsMu.Unlock()
-	for i := len(saved) - 1; i >= 0; i-- {
-		p := saved[i]
-		args := []string{"spawn", udid, "defaults", "write", p.domain, p.key, p.kind, p.value}
-		if p.absent {
-			args = []string{"spawn", udid, "defaults", "delete", p.domain, p.key}
-		}
-		if _, err := prefsSimctl(args...); err != nil {
-			logger.Warn("simulator pref %s.%s not restored: %v", p.domain, p.key, err)
-		}
+	var wg sync.WaitGroup
+	for _, p := range saved {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			args := []string{"spawn", udid, "defaults", "write", p.domain, p.key, p.kind, p.value}
+			if p.absent {
+				args = []string{"spawn", udid, "defaults", "delete", p.domain, p.key}
+			}
+			if _, err := prefsSimctl(args...); err != nil {
+				logger.Warn("simulator pref %s.%s not restored: %v", p.domain, p.key, err)
+			}
+		}()
 	}
+	wg.Wait()
 }

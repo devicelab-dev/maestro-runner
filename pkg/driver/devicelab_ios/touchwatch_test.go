@@ -129,3 +129,14 @@ func TestActRedeliversALostTap(t *testing.T) {
 		t.Errorf("lost double tap: %d acts, want 1 (may be half delivered)", n)
 	}
 }
+
+func TestTaggedPredicateCarriesTag(t *testing.T) {
+	a, b := watchTag(), watchTag()
+	if a == b {
+		t.Fatalf("watchTag repeated %q", a)
+	}
+	p := taggedPredicate(a)
+	if !strings.HasPrefix(p, lostTouchPredicate) || !strings.Contains(p, `NOT eventMessage CONTAINS "`+a+`"`) {
+		t.Fatalf("taggedPredicate(%q) = %q", a, p)
+	}
+}

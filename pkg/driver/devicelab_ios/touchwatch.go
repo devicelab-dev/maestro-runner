@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -190,11 +191,31 @@ func (w *touchWatch) read(r io.Reader) {
 	}
 }
 
+// watchTag makes each stream's command line unique, so stopping it can find
+// the `log` process: it runs under the simulator's launchd, outside the
+// process group of the simctl that started it, and outlives simctl's death.
+func watchTag() string {
+	return fmt.Sprintf("dl-touchwatch-%d-%d", os.Getpid(), time.Now().UnixNano())
+}
+
+// taggedPredicate is lostTouchPredicate plus a clause that never matches,
+// carrying tag.
+func taggedPredicate(tag string) string {
+	return lostTouchPredicate + ` AND NOT eventMessage CONTAINS "` + tag + `"`
+}
+
+// killTagged ends the in-simulator processes whose command line holds tag;
+// tests replace it.
+var killTagged = func(tag string) {
+	_ = exec.Command("pkill", "-f", "--", tag).Run()
+}
+
 // startTouchWatch streams the simulator's backboardd log into a new watch.
 func startTouchWatch(udid string) (*touchWatch, error) {
+	tag := watchTag()
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, "xcrun", "simctl", "spawn", udid, "log", "stream",
-		"--style", "ndjson", "--predicate", lostTouchPredicate)
+		"--style", "ndjson", "--predicate", taggedPredicate(tag))
 	setProcessGroup(cmd)
 	out, err := cmd.StdoutPipe()
 	if err != nil {
@@ -209,12 +230,13 @@ func startTouchWatch(udid string) (*touchWatch, error) {
 	done := make(chan struct{})
 	go func() {
 		w.read(out)
-		_ = cmd.Wait()
 		close(done)
 	}()
 	w.stop = func() {
+		killTagged(tag)
 		killProcessGroup(cmd)
 		cancel()
+		_ = cmd.Wait() // closes out, which ends read
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
