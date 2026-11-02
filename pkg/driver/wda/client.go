@@ -596,6 +596,41 @@ func (c *Client) DismissAlert() error {
 	return err
 }
 
+// AlertText returns the open system alert's text. It fails when none is open.
+func (c *Client) AlertText() (string, error) {
+	resp, err := c.get(c.sessionPath("/alert/text"))
+	if err != nil {
+		return "", err
+	}
+	text, _ := resp["value"].(string)
+	if text == "" {
+		return "", fmt.Errorf("no system alert text")
+	}
+	return text, nil
+}
+
+// AlertButtons returns the labels of the open system alert's buttons.
+func (c *Client) AlertButtons() ([]string, error) {
+	resp, err := c.get(c.sessionPath("/wda/alert/buttons"))
+	if err != nil {
+		return nil, err
+	}
+	values, _ := resp["value"].([]interface{})
+	labels := make([]string, 0, len(values))
+	for _, v := range values {
+		if label, ok := v.(string); ok {
+			labels = append(labels, label)
+		}
+	}
+	return labels, nil
+}
+
+// TapAlertButton taps the open system alert's button with that label.
+func (c *Client) TapAlertButton(label string) error {
+	_, err := c.post(c.sessionPath("/alert/accept"), map[string]interface{}{"name": label})
+	return err
+}
+
 // GetOrientation returns the current orientation.
 func (c *Client) GetOrientation() (string, error) {
 	resp, err := c.get(c.sessionPath("/orientation"))

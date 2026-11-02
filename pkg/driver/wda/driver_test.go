@@ -95,7 +95,7 @@ func mockWDAServerForDriver() *httptest.Server {
 		}
 
 		// Element text
-		if strings.Contains(path, "/text") {
+		if strings.Contains(path, "/text") && !strings.Contains(path, "/alert/") {
 			jsonResponse(w, map[string]interface{}{"value": "Login"})
 			return
 		}

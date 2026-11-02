@@ -55,6 +55,14 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		return errorResult(err, fmt.Sprintf("Element not found: %s", selectorDesc(step.Selector)))
 	}
 
+	if info != nil && info.Class == systemAlertButtonClass {
+		label := info.Text
+		if err := d.answerAlert(func() error { return d.client.TapAlertButton(label) }); err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to tap system alert button: %s", label))
+		}
+		return successResult(fmt.Sprintf("Tapped system alert button: %s", info.Text), info)
+	}
+
 	// If Point is specified WITH selector, tap at relative position within element bounds
 	if step.Point != "" && info != nil && info.Bounds.Width > 0 {
 		px, py, parseErr := core.ParsePointCoords(step.Point, info.Bounds.Width, info.Bounds.Height)
@@ -941,13 +949,19 @@ func (d *Driver) waitForAlert(timeoutMs int, accept bool) *core.CommandResult {
 		case <-ctx.Done():
 			return successResult(fmt.Sprintf("No alert to %s", action), nil)
 		default:
-			var err error
+			answer := d.client.DismissAlert
 			if accept {
-				err = d.client.AcceptAlert()
-			} else {
-				err = d.client.DismissAlert()
+				answer = d.client.AcceptAlert
 			}
-			if err == nil {
+			if _, err := d.client.AlertText(); err == nil {
+				if err := d.answerAlert(answer); err != nil {
+					return errorResult(err, fmt.Sprintf("Failed to %s alert", action))
+				}
+				return successResult(fmt.Sprintf("Alert %sed", action), nil)
+			}
+			// /alert/text has failed: either no alert yet, or WDA can't read
+			// one it could still answer, as before.
+			if err := answer(); err == nil {
 				return successResult(fmt.Sprintf("Alert %sed", action), nil)
 			}
 			time.Sleep(500 * time.Millisecond)
@@ -1444,7 +1458,7 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 	}
 
 	if d.udid != "" {
-		d.alertAction = resolveAlertAction(permissions)
+		d.alertAction = d.flowAlertAction(permissions)
 	}
 
 	// Convert arguments map to iOS launch arguments format

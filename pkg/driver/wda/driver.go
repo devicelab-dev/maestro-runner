@@ -36,6 +36,11 @@ type Driver struct {
 
 	// WDA alert action for real device permission handling ("accept", "dismiss", or "")
 	alertAction string
+	// flowAnswersAlerts: the flow answers permission prompts itself, so WDA
+	// must not (see stepsAnswerAlerts).
+	flowAnswersAlerts bool
+	// alertLookup: what of a system alert the current step's selector may match.
+	alertLookup alertLookup
 
 	// promptLabels is how a simulator's language words the permission
 	// prompt buttons, read once on first use; loadPromptLabels reads it, and
@@ -117,12 +122,13 @@ func NewDriver(client *Client, info *core.PlatformInfo, udid string) *Driver {
 // at "", which means no monitor is registered and in-app dialogs aren't
 // auto-handled.
 func (d *Driver) PrepareForFlow(steps []flow.Step) {
+	d.flowAnswersAlerts = stepsAnswerAlerts(steps)
 	for _, s := range steps {
 		launchApp, ok := s.(*flow.LaunchAppStep)
 		if !ok {
 			continue
 		}
-		d.alertAction = resolveAlertAction(launchApp.Permissions)
+		d.alertAction = d.flowAlertAction(launchApp.Permissions)
 
 		// Real-device safety net (#108): system permission dialogs are
 		// auto-handled ONLY via WDA's defaultAlertAction, which needs a single
@@ -132,7 +138,7 @@ func (d *Driver) PrepareForFlow(steps []flow.Step) {
 		// doesn't hit this (permissions are pre-granted via simctl). Warn so the
 		// failure isn't silent. An explicit `unset` is an intentional opt-out and
 		// stays silent.
-		if d.alertAction == "" && d.info != nil && !d.info.IsSimulator &&
+		if d.alertAction == "" && !d.flowAnswersAlerts && d.info != nil && !d.info.IsSimulator &&
 			len(launchApp.Permissions) > 0 && !hasAllValue(launchApp.Permissions, "unset") {
 			logger.Warn("[wda] launchApp declares mixed permissions; on a real iOS device WDA can only auto-accept or auto-dismiss ALL permission dialogs, so they won't be auto-handled and may block the flow (and can wedge the device). Use permissions: { all: allow } (or { all: deny }), or add an explicit acceptAlert/dismissAlert step where the prompt appears.")
 		}
@@ -289,6 +295,7 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 		d.settleScreen()
 	}
 	d.screenMayMove = movesScreen(step)
+	d.alertLookup = alertLookupFor(step)
 
 	var result *core.CommandResult
 	switch s := step.(type) {
@@ -1370,6 +1377,9 @@ func (d *Driver) findElementByPageSourceOnce(sel flow.Selector) (*core.ElementIn
 	// rather than XCUITest's opinion. When accepting a visible="false" element
 	// we tag a MatchNote so the report records the override (see rescueNote).
 	if len(candidates) == 0 {
+		if info := d.findOnSystemAlert(sel); info != nil {
+			return info, nil
+		}
 		if sel.Text != "" {
 			if closest := ClosestTexts(allElements, sel.Text, 3); len(closest) > 0 {
 				return nil, notFound("no elements match selector; closest on-screen texts: %s", strings.Join(closest, ", "))
