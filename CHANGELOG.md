@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.31] - 2026-11-03
+
+A fix release for 1.1.30, whose GitHub release was withdrawn. Everything listed under 1.1.30 below ships in 1.1.31.
+
+### Fixed
+
+**DeviceLab iOS: `hideKeyboard` no longer swipes on the keyboard while it is still sliding in.** The iOS agent took the screen size from the keyboard's frame. Right after a field took focus, that frame still lay below the screen, so the dismiss swipes started at the centre of a screen twice as tall: on the keys, where they dismiss nothing. Since 1.1.30 fails the step when the keyboard stays up ([#259](https://github.com/devicelab-dev/maestro-runner/issues/259)), flows that passed in 1.1.29 failed there (React Native's RNTester `text.yml` on iOS 27, 4 of 6 runs). The agent now reads the screen size from the app, waits for the keyboard to stop moving, and never starts the swipes below the keyboard.
+
 ## [1.1.30] - 2026-11-02
 
 This release closes more gaps with Maestro: `index:` counts matches by their position on screen, a long press holds 3 s on every driver, a `${…}` that throws fails its step, and DeviceLab iOS `hideKeyboard` fails when the keyboard stays up. WDA can see and tap system permission prompts, can drive a WebDriverAgent that is already running (`--wda-url`) or keep one between runs (`--reuse-wda`), and reads typed text back to retype dropped characters. New options: `--pause-on-failure`, `--find-timeout` and `inputText` `retype: false`. The DeviceLab agents on Android and iOS now listen on loopback only and answer only the run that started them. Contributors sent 23 pull requests and many precise bug reports, credited at the end.
