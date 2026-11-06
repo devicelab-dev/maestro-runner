@@ -760,12 +760,12 @@ func (d *Driver) findElementForTapWithContext(ctx context.Context, sel flow.Sele
 			// name, and Maestro matches ids only through id: (#178).
 			exactPredicate := fmt.Sprintf("(label == '%s' OR value == '%s')%s",
 				sel.Text, sel.Text, stateFilter)
-			exactElemID, _ := d.client.FindElement("predicate string", exactPredicate)
+			exact, _ := d.client.FindElementWithFields("predicate string", exactPredicate)
 
 			// If exact predicate found element, try getElementInfo directly — avoids
 			// a full page source fetch when the element is already identified.
-			if exactElemID != "" {
-				if info, err := d.getElementInfo(exactElemID); err == nil {
+			if exact.ID != "" {
+				if info, err := d.elementInfo(exact); err == nil {
 					return info, nil
 				}
 			}
@@ -810,9 +810,9 @@ func (d *Driver) findElementForTapWithContext(ctx context.Context, sel flow.Sele
 // findInteractiveElementByWDA tries WDA queries for interactive element types in parallel.
 func (d *Driver) findInteractiveElementByWDA(sel flow.Selector, stateFilter string) (*core.ElementInfo, error) {
 	type queryResult struct {
-		elemID string
-		err    error
-		prio   int // lower = higher priority (TextField > SecureTextField > Button > fallback predicate)
+		elem Element
+		err  error
+		prio int // lower = higher priority (TextField > SecureTextField > Button > fallback predicate)
 	}
 
 	textFieldChain := fmt.Sprintf("**/XCUIElementTypeTextField[`(label CONTAINS[c] '%s' OR value CONTAINS[c] '%s' OR placeholderValue CONTAINS[c] '%s')%s`]", sel.Text, sel.Text, sel.Text, stateFilter)
@@ -843,27 +843,27 @@ func (d *Driver) findInteractiveElementByWDA(sel flow.Selector, stateFilter stri
 	ch := make(chan queryResult, len(queries))
 	for _, q := range queries {
 		go func(strategy, value string, prio int) {
-			elemID, err := d.client.FindElement(strategy, value)
-			if err != nil || elemID == "" {
-				ch <- queryResult{"", err, prio}
+			elem, err := d.client.FindElementWithFields(strategy, value)
+			if err != nil || elem.ID == "" {
+				ch <- queryResult{Element{}, err, prio}
 				return
 			}
-			ch <- queryResult{elemID, nil, prio}
+			ch <- queryResult{elem, nil, prio}
 		}(q.strategy, q.value, q.prio)
 	}
 
-	var bestID string
+	var best Element
 	bestPrio := len(queries) // higher than any valid prio
 	for i := 0; i < len(queries); i++ {
 		r := <-ch
-		if r.err == nil && r.elemID != "" && r.prio < bestPrio {
-			bestID = r.elemID
+		if r.err == nil && r.elem.ID != "" && r.prio < bestPrio {
+			best = r.elem
 			bestPrio = r.prio
 		}
 	}
 
-	if bestID != "" {
-		return d.getElementInfo(bestID)
+	if best.ID != "" {
+		return d.elementInfo(best)
 	}
 
 	return nil, fmt.Errorf("no interactive element found via WDA")
@@ -1019,8 +1019,8 @@ func (d *Driver) findElementByWDA(sel flow.Selector) (*core.ElementInfo, error) 
 		if looksLikeRegex(sel.ID) {
 			// Regex id: match against name via MATCHES.
 			query := fmt.Sprintf("**/XCUIElementTypeAny[`name MATCHES '%s'%s`]", sel.ID, stateFilter)
-			if elemID, err := d.client.FindElement("class chain", query); err == nil && elemID != "" {
-				return d.getElementInfo(elemID)
+			if elem, err := d.client.FindElementWithFields("class chain", query); err == nil && elem.ID != "" {
+				return d.elementInfo(elem)
 			}
 		} else {
 			// Literal id: prefer an EXACT name match, then fall back to
@@ -1046,8 +1046,8 @@ func (d *Driver) findElementByWDA(sel flow.Selector) (*core.ElementInfo, error) 
 		predicateBase := fmt.Sprintf("label CONTAINS[c] '%s' OR value CONTAINS[c] '%s'",
 			sel.Text, sel.Text)
 		predicate := "(" + predicateBase + ")" + stateFilter
-		if elemID, err := d.client.FindElement("predicate string", predicate); err == nil && elemID != "" {
-			return d.getElementInfo(elemID)
+		if elem, err := d.client.FindElementWithFields("predicate string", predicate); err == nil && elem.ID != "" {
+			return d.elementInfo(elem)
 		}
 	}
 
@@ -1067,6 +1067,14 @@ func (d *Driver) findElementByWDA(sel flow.Selector) (*core.ElementInfo, error) 
 //     → accept, set MatchNote noting we overrode XCUITest's opinion based on bounds
 //   - displayed=false AND bounds are off-screen → reject (genuinely not visible)
 func (d *Driver) getElementInfo(elemID string) (*core.ElementInfo, error) {
+	return d.elementInfo(Element{ID: elemID})
+}
+
+// elementInfo is getElementInfo for an element a find answered. When the
+// answer carried the element's fields (#258), it uses them and sends no
+// request; otherwise it reads them.
+func (d *Driver) elementInfo(elem Element) (*core.ElementInfo, error) {
+	elemID := elem.ID
 	info := &core.ElementInfo{
 		ID:      elemID,
 		Enabled: true, // WDA doesn't have separate enabled check
@@ -1081,24 +1089,29 @@ func (d *Driver) getElementInfo(elemID string) (*core.ElementInfo, error) {
 		wg                                 sync.WaitGroup
 	)
 
-	wg.Add(4)
-	go func() {
-		defer wg.Done()
-		text, textErr = d.client.ElementText(elemID)
-	}()
-	go func() {
-		defer wg.Done()
-		x, y, w, h, rectErr = d.client.ElementRect(elemID)
-	}()
-	go func() {
-		defer wg.Done()
-		displayed, dispErr = d.client.ElementDisplayed(elemID)
-	}()
-	go func() {
-		defer wg.Done()
-		elemName, nameErr = d.client.ElementName(elemID)
-	}()
-	wg.Wait()
+	if f := elem.Fields; f != nil {
+		text, elemName, displayed = f.Text, f.Name, f.Displayed
+		x, y, w, h = f.X, f.Y, f.Width, f.Height
+	} else {
+		wg.Add(4)
+		go func() {
+			defer wg.Done()
+			text, textErr = d.client.ElementText(elemID)
+		}()
+		go func() {
+			defer wg.Done()
+			x, y, w, h, rectErr = d.client.ElementRect(elemID)
+		}()
+		go func() {
+			defer wg.Done()
+			displayed, dispErr = d.client.ElementDisplayed(elemID)
+		}()
+		go func() {
+			defer wg.Done()
+			elemName, nameErr = d.client.ElementName(elemID)
+		}()
+		wg.Wait()
+	}
 
 	if rectErr != nil {
 		return nil, fmt.Errorf("element bounds unavailable: %w", rectErr)
@@ -1141,24 +1154,24 @@ func (d *Driver) getElementInfo(elemID string) (*core.ElementInfo, error) {
 // element when several match (onScreenOf). found is false when nothing
 // matched. A WDA that cannot list elements gets the single-element query.
 func (d *Driver) findByIDQuery(query string) (*core.ElementInfo, error, bool) { //nolint:revive,staticcheck // found last reads naturally at call sites
-	ids, err := d.client.FindElements("class chain", query)
+	elems, err := d.client.FindElementsWithFields("class chain", query)
 	if err != nil {
-		elemID, ferr := d.client.FindElement("class chain", query)
-		if ferr != nil || elemID == "" {
+		elem, ferr := d.client.FindElementWithFields("class chain", query)
+		if ferr != nil || elem.ID == "" {
 			return nil, nil, false
 		}
-		info, ierr := d.getElementInfo(elemID)
+		info, ierr := d.elementInfo(elem)
 		return info, ierr, true
 	}
-	if len(ids) == 0 {
+	if len(elems) == 0 {
 		return nil, nil, false
 	}
-	info, ierr := d.onScreenOf(ids)
+	info, ierr := d.onScreenOf(elems)
 	return info, ierr, true
 }
 
 // maxIDCandidates caps how many same-id elements are inspected; each costs
-// the element calls in getElementInfo.
+// the element calls in getElementInfo when the find's answer has no fields.
 const maxIDCandidates = 5
 
 // onScreenOf picks among elements sharing an id: the first XCUITest reports
@@ -1171,15 +1184,15 @@ const maxIDCandidates = 5
 // for the one inside it, as Maestro takes the deepest match: a SwiftUI
 // Toggle is a row-wide switch holding the real switch, both with the same
 // id, and the row's centre is its label, where a tap flips nothing.
-func (d *Driver) onScreenOf(ids []string) (*core.ElementInfo, error) {
+func (d *Driver) onScreenOf(elems []Element) (*core.ElementInfo, error) {
 	var fallback *core.ElementInfo
 	var visible []*core.ElementInfo
 	var lastErr error
-	for i, id := range ids {
+	for i, elem := range elems {
 		if i == maxIDCandidates {
 			break
 		}
-		info, err := d.getElementInfo(id)
+		info, err := d.elementInfo(elem)
 		if err != nil {
 			lastErr = err
 			continue

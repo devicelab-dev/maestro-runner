@@ -39,7 +39,7 @@ func TestNewClient(t *testing.T) {
 
 // TestCreateSession tests session creation
 func TestCreateSession(t *testing.T) {
-	var sawSnapshotDepth bool
+	var sawSnapshotDepth, sawElementFields bool
 	server := mockWDAServer(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == "POST" && r.URL.Path == "/session":
@@ -56,6 +56,11 @@ func TestCreateSession(t *testing.T) {
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			if _, ok := body.Settings["snapshotMaxDepth"]; ok {
 				sawSnapshotDepth = true
+			}
+			// ...and asks finds for the fields getElementInfo reads (#258).
+			if body.Settings["shouldUseCompactResponses"] == false &&
+				body.Settings["elementResponseAttributes"] == "name,text,rect,displayed" {
+				sawElementFields = true
 			}
 			jsonResponse(w, map[string]interface{}{"value": map[string]interface{}{}})
 		default:
@@ -79,6 +84,9 @@ func TestCreateSession(t *testing.T) {
 	}
 	if !sawSnapshotDepth {
 		t.Error("CreateSession should raise snapshotMaxDepth so deep RN trees are not clipped")
+	}
+	if !sawElementFields {
+		t.Error("CreateSession should ask WDA for the element fields in each find's answer")
 	}
 }
 
