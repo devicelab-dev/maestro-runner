@@ -169,7 +169,16 @@ func (c *Client) CreateSession(bundleID string, alertAction string) error {
 	// even though stock Maestro's XCTest traversal (no such cap) sees them
 	// (#171). Applied here so every session — the primary one and the one
 	// launchApp recreates — gets it.
-	_ = c.UpdateSettings(map[string]interface{}{"snapshotMaxDepth": wdaSnapshotMaxDepth()})
+	//
+	// The other two make every find answer with the element's type, text,
+	// rect and visibility, which getElementInfo would otherwise read with
+	// four more requests (#258). WebDriverAgent ignores a setting it does not
+	// know, and keeps all of them process-wide, not per session.
+	_ = c.UpdateSettings(map[string]interface{}{
+		"snapshotMaxDepth":          wdaSnapshotMaxDepth(),
+		"shouldUseCompactResponses": false,
+		"elementResponseAttributes": elementResponseAttributes,
+	})
 
 	return nil
 }
@@ -662,32 +671,124 @@ func (c *Client) DeepLink(url string) error {
 
 // Element finding
 
+// elementResponseAttributes are the fields a find's answer carries for each
+// element once CreateSession's settings are in (#258): the same values as
+// GET /element/{id}/name, /text, /rect and /displayed, read from the find's
+// own snapshot (FBDictionaryResponseWithElement in FBResponsePayload.m).
+const elementResponseAttributes = "name,text,rect,displayed"
+
+// Element is an element as a find answers it.
+type Element struct {
+	ID string
+	// Fields is nil when the answer did not carry all four fields: a
+	// WebDriverAgent without the settings, or another session that turned
+	// them off. getElementInfo then reads them.
+	Fields *ElementFields
+}
+
+// ElementFields are an element's fields from a find's answer.
+type ElementFields struct {
+	Name                string // the element type, as GET /name
+	Text                string // the value, else the label, as GET /text
+	X, Y, Width, Height int
+	Displayed           bool
+}
+
+// fieldKeys are the keys of a find's answer that are fields, not the id.
+var fieldKeys = map[string]bool{"name": true, "text": true, "rect": true, "displayed": true, "error": true}
+
+// elementFromAnswer reads one element of a find's answer: its id, as
+// JSONWP's ELEMENT or the W3C key, and the fields when all four are there.
+func elementFromAnswer(m map[string]interface{}) (Element, bool) {
+	id, ok := m["ELEMENT"].(string)
+	if !ok {
+		// W3C format
+		for k, v := range m {
+			if str, isStr := v.(string); isStr && !fieldKeys[k] {
+				id, ok = str, true
+				break
+			}
+		}
+	}
+	if !ok {
+		return Element{}, false
+	}
+	return Element{ID: id, Fields: fieldsFromAnswer(m)}, true
+}
+
+func fieldsFromAnswer(m map[string]interface{}) *ElementFields {
+	name, okName := m["name"].(string)
+	text, okText := m["text"]
+	rect, okRect := m["rect"].(map[string]interface{})
+	displayed, okDisp := m["displayed"].(bool)
+	if !okName || !okText || !okRect || !okDisp {
+		return nil
+	}
+	x, y, w, h, okRect := rectFromAnswer(rect)
+	if !okRect {
+		return nil
+	}
+	f := &ElementFields{Name: name, X: x, Y: y, Width: w, Height: h, Displayed: displayed}
+	// null when the element has neither value nor label; GET /text says "".
+	f.Text, _ = text.(string)
+	return f
+}
+
+// rectFromAnswer reads a rect as WebDriverAgent writes one; ok is false
+// when one of its four numbers is missing.
+func rectFromAnswer(r map[string]interface{}) (x, y, width, height int, ok bool) {
+	vals := [4]int{}
+	for i, k := range [4]string{"x", "y", "width", "height"} {
+		v, isNum := r[k].(float64)
+		if !isNum {
+			return 0, 0, 0, 0, false
+		}
+		vals[i] = int(v)
+	}
+	return vals[0], vals[1], vals[2], vals[3], true
+}
+
 // FindElement finds a single element.
 func (c *Client) FindElement(using, value string) (string, error) {
+	el, err := c.FindElementWithFields(using, value)
+	return el.ID, err
+}
+
+// FindElementWithFields finds a single element, with its fields when the
+// answer carries them.
+func (c *Client) FindElementWithFields(using, value string) (Element, error) {
 	resp, err := c.post(c.sessionPath("/element"), map[string]interface{}{
 		"using": using,
 		"value": value,
 	})
 	if err != nil {
-		return "", err
+		return Element{}, err
 	}
 
 	if val, ok := resp["value"].(map[string]interface{}); ok {
-		if elem, ok := val["ELEMENT"].(string); ok {
-			return elem, nil
-		}
-		// W3C format
-		for k, v := range val {
-			if str, ok := v.(string); ok && k != "error" {
-				return str, nil
-			}
+		if el, ok := elementFromAnswer(val); ok {
+			return el, nil
 		}
 	}
-	return "", fmt.Errorf("element not found")
+	return Element{}, fmt.Errorf("element not found")
 }
 
 // FindElements finds multiple elements.
 func (c *Client) FindElements(using, value string) ([]string, error) {
+	els, err := c.FindElementsWithFields(using, value)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, el := range els {
+		ids = append(ids, el.ID)
+	}
+	return ids, nil
+}
+
+// FindElementsWithFields finds multiple elements, with their fields when
+// the answer carries them.
+func (c *Client) FindElementsWithFields(using, value string) ([]Element, error) {
 	resp, err := c.post(c.sessionPath("/elements"), map[string]interface{}{
 		"using": using,
 		"value": value,
@@ -696,20 +797,12 @@ func (c *Client) FindElements(using, value string) ([]string, error) {
 		return nil, err
 	}
 
-	var elements []string
+	var elements []Element
 	if val, ok := resp["value"].([]interface{}); ok {
 		for _, elem := range val {
 			if m, ok := elem.(map[string]interface{}); ok {
-				if id, ok := m["ELEMENT"].(string); ok {
-					elements = append(elements, id)
-				} else {
-					// W3C format
-					for _, v := range m {
-						if str, ok := v.(string); ok {
-							elements = append(elements, str)
-							break
-						}
-					}
+				if el, ok := elementFromAnswer(m); ok {
+					elements = append(elements, el)
 				}
 			}
 		}
