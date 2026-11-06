@@ -1273,7 +1273,7 @@ func (d *Driver) findElementRelativeWithContext(ctx context.Context, sel flow.Se
 
 // findElementRelativeOnce performs a single attempt to find element with relative selector.
 func (d *Driver) findElementRelativeOnce(sel flow.Selector) (*core.ElementInfo, error) {
-	pageSource, err := d.client.Source()
+	pageSource, err := d.client.LookupSource()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get page source: %w", err)
 	}
@@ -1377,7 +1377,7 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector, allElements []*Parse
 
 // findElementByPageSourceOnce performs a single page source search.
 func (d *Driver) findElementByPageSourceOnce(sel flow.Selector) (*core.ElementInfo, error) {
-	pageSource, err := d.client.Source()
+	pageSource, err := d.client.LookupSource()
 	if err != nil {
 		return nil, err
 	}

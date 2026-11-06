@@ -498,15 +498,31 @@ func (c *Client) Screenshot() ([]byte, error) {
 	return nil, fmt.Errorf("invalid screenshot response")
 }
 
-// Source returns the UI hierarchy as XML.
+// Source returns the UI hierarchy as XML, with every attribute WDA writes.
 func (c *Client) Source() (string, error) {
-	source, err := c.source()
+	source, err := c.source("/source")
 	c.noteSource(err)
 	return source, err
 }
 
-func (c *Client) source() (string, error) {
-	resp, err := c.get(c.sessionPath("/source"))
+// lookupSourceExcluded are the attributes a lookup's page source leaves out.
+// WebDriverAgent computes both for every element of the tree, `visible` with an
+// accessibility call each, and the page-source matcher reads neither: it
+// decides by bounds. On a screen of a few thousand elements the source took
+// 23 s with them and 2.5 s without (an iPhone 17, iOS 27). Appium's
+// pageSourceExcludedAttributes setting exists for the same reason.
+const lookupSourceExcluded = "visible,accessible"
+
+// LookupSource is Source for a lookup: the hierarchy without the attributes
+// in lookupSourceExcluded. Every element of it parses as displayed.
+func (c *Client) LookupSource() (string, error) {
+	source, err := c.source("/source?excluded_attributes=" + lookupSourceExcluded)
+	c.noteSource(err)
+	return source, err
+}
+
+func (c *Client) source(path string) (string, error) {
+	resp, err := c.get(c.sessionPath(path))
 	if err != nil {
 		// A snapshot taken while the accessibility tree is mutating can fail
 		// with a transient kAXErrorInvalidUIElement (-25202): an element ref
@@ -514,7 +530,7 @@ func (c *Client) source() (string, error) {
 		// before surfacing it (mirrors Maestro's #3430 recovery).
 		if isTransientAXError(err) {
 			time.Sleep(150 * time.Millisecond)
-			resp, err = c.get(c.sessionPath("/source"))
+			resp, err = c.get(c.sessionPath(path))
 		}
 		if err != nil {
 			return "", err
