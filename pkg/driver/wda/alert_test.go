@@ -248,3 +248,89 @@ func TestAlertThatNeverClosesFailsTheStep(t *testing.T) {
 		}
 	}
 }
+
+func TestPromptButtonsNamed(t *testing.T) {
+	optional := &flow.TapOnStep{Selector: textSelector("Ask app not to track")}
+	optional.Optional = true
+	names, any := promptButtonsNamed([]flow.Step{
+		&flow.TapOnStep{Selector: textSelector("Continue")},
+		&flow.RunFlowStep{When: &flow.Condition{}, Steps: []flow.Step{optional}},
+		&flow.RetryStep{Steps: []flow.Step{&flow.TapOnStep{Selector: textSelector("Don’t Allow")}}},
+	})
+	if any || len(names) != 2 || names[0] != "Ask app not to track" || names[1] != "Don’t Allow" {
+		t.Errorf("names = %q, any = %v", names, any)
+	}
+	if _, any := promptButtonsNamed([]flow.Step{&flow.RepeatStep{Steps: []flow.Step{&flow.DismissAlertStep{}}}}); !any {
+		t.Error("a dismissAlert answers any prompt")
+	}
+}
+
+// lookFor runs an assertVisible of an id the fake app does not have: a lookup
+// that finds nothing.
+func lookFor(d *Driver) {
+	step := &flow.AssertVisibleStep{Selector: flow.Selector{ID: "home"}}
+	step.TimeoutMs = 300
+	d.Execute(step)
+}
+
+// A flow that answers the tracking prompt itself still gets the notification
+// prompt answered: WDA's monitor is off for the whole flow, so a lookup that
+// finds nothing answers a prompt whose buttons the flow never names.
+func TestLookupAnswersAPromptTheFlowDoesNotName(t *testing.T) {
+	d, accepted := alertServer(t, true, "Don’t Allow", "Allow")
+	tapTracking := &flow.TapOnStep{Selector: textSelector("Ask app not to track")}
+	tapTracking.Optional = true
+	d.PrepareForFlow([]flow.Step{&flow.LaunchAppStep{}, tapTracking})
+	if d.alertAction != "" || d.promptAction != "accept" {
+		t.Fatalf("alertAction = %q, promptAction = %q", d.alertAction, d.promptAction)
+	}
+	lookFor(d)
+	if len(*accepted) != 1 || (*accepted)[0] != "Allow" {
+		t.Errorf("accepted = %v, want [Allow]", *accepted)
+	}
+}
+
+// The prompt the flow answers itself is left to it, as is every prompt for a
+// flow with an acceptAlert or dismissAlert.
+func TestLookupLeavesTheFlowsOwnPrompts(t *testing.T) {
+	d, accepted := alertServer(t, true, "Ask App Not to Track", "Allow")
+	d.PrepareForFlow([]flow.Step{&flow.LaunchAppStep{}, &flow.TapOnStep{Selector: textSelector("Ask app not to track")}})
+	lookFor(d)
+	if len(*accepted) != 0 {
+		t.Errorf("the flow's own prompt was answered: %v", *accepted)
+	}
+
+	d, accepted = alertServer(t, true, "Don’t Allow", "Allow")
+	d.PrepareForFlow([]flow.Step{&flow.LaunchAppStep{}, &flow.AcceptAlertStep{}})
+	lookFor(d)
+	if len(*accepted) != 0 || d.promptAction != "" {
+		t.Errorf("a flow with acceptAlert: accepted %v, promptAction %q", *accepted, d.promptAction)
+	}
+}
+
+// launchApp's permissions decide the answer, as they decide WDA's.
+func TestLookupAnswersAnUnnamedPromptAsThePermissionsSay(t *testing.T) {
+	d, accepted := alertServer(t, true, "Don’t Allow", "Allow")
+	d.PrepareForFlow([]flow.Step{
+		&flow.LaunchAppStep{Permissions: map[string]string{"all": "deny"}},
+		&flow.TapOnStep{Selector: textSelector("Ask App Not to Track")},
+	})
+	lookFor(d)
+	if len(*accepted) != 1 || (*accepted)[0] != "Don’t Allow" {
+		t.Errorf("accepted = %v, want [Don’t Allow]", *accepted)
+	}
+}
+
+// Without a prompt tap of its own a flow keeps WDA's monitor, and a lookup
+// answers nothing itself.
+func TestLookupAnswersNothingWhenWDAAnswers(t *testing.T) {
+	d, accepted := alertServer(t, true, "Don’t Allow", "Allow")
+	d.PrepareForFlow([]flow.Step{&flow.LaunchAppStep{}})
+	if d.alertAction != "accept" || d.promptAction != "" {
+		t.Fatalf("alertAction = %q, promptAction = %q", d.alertAction, d.promptAction)
+	}
+	lookFor(d)
+	if len(*accepted) != 0 {
+		t.Errorf("accepted = %v, want none", *accepted)
+	}
+}

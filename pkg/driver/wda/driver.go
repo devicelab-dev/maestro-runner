@@ -39,6 +39,15 @@ type Driver struct {
 	// flowAnswersAlerts: the flow answers permission prompts itself, so WDA
 	// must not (see stepsAnswerAlerts).
 	flowAnswersAlerts bool
+	// flowPromptButtons: the prompt buttons the flow's taps name; a prompt
+	// with one of them is the flow's to answer. flowAnswersAnyPrompt: the
+	// flow has an acceptAlert or dismissAlert, which may be meant for any
+	// prompt. promptAction: what WDA would have answered the flow's other
+	// prompts with ("accept", "dismiss" or "") had the flow named none, which
+	// a lookup that finds nothing answers them with (answerUnnamedPrompt).
+	flowPromptButtons    []string
+	flowAnswersAnyPrompt bool
+	promptAction         string
 	// alertLookup: what of a system alert the current step's selector may match.
 	alertLookup alertLookup
 
@@ -125,7 +134,8 @@ func NewDriver(client *Client, info *core.PlatformInfo, udid string) *Driver {
 // at "", which means no monitor is registered and in-app dialogs aren't
 // auto-handled.
 func (d *Driver) PrepareForFlow(steps []flow.Step) {
-	d.flowAnswersAlerts = stepsAnswerAlerts(steps)
+	d.flowPromptButtons, d.flowAnswersAnyPrompt = promptButtonsNamed(steps)
+	d.flowAnswersAlerts = d.flowAnswersAnyPrompt || len(d.flowPromptButtons) > 0
 	for _, s := range steps {
 		launchApp, ok := s.(*flow.LaunchAppStep)
 		if !ok {
@@ -1413,6 +1423,9 @@ func (d *Driver) findElementByPageSourceOnce(sel flow.Selector) (*core.ElementIn
 	if len(candidates) == 0 {
 		if info := d.findOnSystemAlert(sel); info != nil {
 			return info, nil
+		}
+		if d.answerUnnamedPrompt() {
+			return nil, notFound("a permission prompt the flow does not answer was over the app: answered, looking again")
 		}
 		if sel.Text != "" {
 			if closest := ClosestTexts(allElements, sel.Text, 3); len(closest) > 0 {

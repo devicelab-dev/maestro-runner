@@ -141,29 +141,91 @@ func (d *Driver) answerAlert(tap func() error) error {
 // an acceptAlert or dismissAlert, or a tapOn naming a prompt's button, in its
 // own steps or inline ones. A flow in another file (runFlow: file:) isn't seen.
 func stepsAnswerAlerts(steps []flow.Step) bool {
-	for _, step := range steps {
-		switch s := step.(type) {
-		case *flow.AcceptAlertStep, *flow.DismissAlertStep:
-			return true
-		case *flow.TapOnStep:
-			if namesPromptButton(s.Selector.Text) {
-				return true
-			}
-		case *flow.RunFlowStep:
-			if stepsAnswerAlerts(s.Steps) || stepsAnswerAlerts(s.ElseSteps) {
-				return true
-			}
-		case *flow.RepeatStep:
-			if stepsAnswerAlerts(s.Steps) {
-				return true
-			}
-		case *flow.RetryStep:
-			if stepsAnswerAlerts(s.Steps) {
-				return true
+	names, any := promptButtonsNamed(steps)
+	return any || len(names) > 0
+}
+
+// promptButtonsNamed returns the prompt buttons a flow's taps name, in its own
+// steps or inline ones, and whether it has an acceptAlert or dismissAlert,
+// which answers whatever prompt is up. A flow in another file (runFlow:
+// file:) isn't seen.
+func promptButtonsNamed(steps []flow.Step) (names []string, any bool) {
+	var walk func([]flow.Step)
+	walk = func(steps []flow.Step) {
+		for _, step := range steps {
+			switch s := step.(type) {
+			case *flow.AcceptAlertStep, *flow.DismissAlertStep:
+				any = true
+			case *flow.TapOnStep:
+				if namesPromptButton(s.Selector.Text) {
+					names = append(names, s.Selector.Text)
+				}
+			case *flow.RunFlowStep:
+				walk(s.Steps)
+				walk(s.ElseSteps)
+			case *flow.RepeatStep:
+				walk(s.Steps)
+			case *flow.RetryStep:
+				walk(s.Steps)
 			}
 		}
 	}
-	return false
+	walk(steps)
+	return names, any
+}
+
+// answerUnnamedPrompt answers the open permission prompt as WDA would have,
+// when the flow answers some prompts itself and this one is not among them.
+// WDA's alert monitor is all or nothing for a session, so a flow that taps one
+// prompt's button (the tracking prompt's "Ask App Not to Track", say) turned it
+// off for every prompt, and a later one the flow never meant to answer (the
+// notification prompt) stayed up over the app. A lookup that finds nothing
+// calls this: it leaves the prompt to the flow when one of its buttons is one
+// the flow taps, or when the flow has an acceptAlert or dismissAlert; else it
+// taps the button WDA's own answer would have (autoClickAlertSelector's) and
+// reports whether it did, so the lookup looks again.
+func (d *Driver) answerUnnamedPrompt() bool {
+	if !d.flowAnswersAlerts || d.flowAnswersAnyPrompt || d.promptAction == "" {
+		return false
+	}
+	text, err := d.client.AlertText()
+	if err != nil {
+		return false
+	}
+	buttons, err := d.client.AlertButtons()
+	if err != nil {
+		return false
+	}
+	for _, name := range d.flowPromptButtons {
+		if _, ok := pickAlertButton(name, buttons); ok {
+			return false
+		}
+	}
+	label := ""
+	for _, b := range buttons {
+		t := strings.ToLower(straightQuotes(b))
+		if d.promptAction == "accept" && strings.HasPrefix(t, "allow") ||
+			d.promptAction == "dismiss" && (strings.HasPrefix(t, "don't allow") || strings.HasPrefix(t, "ask app not")) {
+			label = b
+			break
+		}
+	}
+	if label == "" {
+		return false
+	}
+	if err := d.answerAlert(func() error { return d.client.TapAlertButton(label) }); err != nil {
+		logger.Warn("[wda] a permission prompt the flow does not answer itself stayed up after %q: %v", label, err)
+		return false
+	}
+	logger.Info("[wda] answered a permission prompt the flow does not answer itself with %q: %q", label, firstLine(text))
+	return true
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 // namesPromptButton reports whether a selector's text is one of the buttons
@@ -176,7 +238,11 @@ func namesPromptButton(text string) bool {
 // flowAlertAction is the alert action for launchApp's permissions: none when
 // the flow answers prompts itself, since WDA would answer them first.
 func (d *Driver) flowAlertAction(permissions map[string]string) string {
+	d.promptAction = ""
 	if d.flowAnswersAlerts {
+		if !d.flowAnswersAnyPrompt {
+			d.promptAction = resolveAlertAction(permissions)
+		}
 		logger.Info("[wda] the flow answers permission prompts itself, leaving them for its steps")
 		return ""
 	}
