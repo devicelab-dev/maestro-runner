@@ -1700,19 +1700,13 @@ func TestApplyIOSPermissionUnset(t *testing.T) {
 // SetWaitForIdleTimeout test
 // =============================================================================
 
-// TestSetWaitForIdleTimeoutEnable tests that SetWaitForIdleTimeout enables quiescence for values > 200.
-func TestSetWaitForIdleTimeoutEnable(t *testing.T) {
-	var settingsReceived map[string]interface{}
+// TestSetWaitForIdleTimeoutAboveZero: a value above 0 sends nothing and keeps
+// the settle on. WebDriverAgent ignored the settings it used to send (#267).
+func TestSetWaitForIdleTimeoutAboveZero(t *testing.T) {
+	called := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "POST" && strings.Contains(r.URL.Path, "/appium/settings") {
-			body, _ := io.ReadAll(r.Body)
-			var req map[string]interface{}
-			_ = json.Unmarshal(body, &req)
-			if s, ok := req["settings"].(map[string]interface{}); ok {
-				settingsReceived = s
-			}
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"value": nil, "sessionId": "s1"})
-			return
+			called = true
 		}
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{"value": nil, "sessionId": "s1"})
 	}))
@@ -1721,18 +1715,14 @@ func TestSetWaitForIdleTimeoutEnable(t *testing.T) {
 	client := &Client{baseURL: server.URL, sessionID: "s1", httpClient: server.Client()}
 	driver := &Driver{client: client, info: &core.PlatformInfo{Platform: "ios"}}
 
-	err := driver.SetWaitForIdleTimeout(5000)
-	if err != nil {
+	if err := driver.SetWaitForIdleTimeout(5000); err != nil {
 		t.Fatalf("SetWaitForIdleTimeout(5000) returned error: %v", err)
 	}
-	if settingsReceived == nil {
-		t.Fatal("Expected settings to be sent to WDA")
+	if called {
+		t.Error("a value above 0 sent settings WebDriverAgent ignores")
 	}
-	if v, ok := settingsReceived["shouldWaitForQuiescence"]; !ok || v != true {
-		t.Errorf("Expected shouldWaitForQuiescence=true, got %v", v)
-	}
-	if v, ok := settingsReceived["waitForIdleTimeout"]; !ok || v != float64(5000) {
-		t.Errorf("Expected waitForIdleTimeout=5000, got %v", v)
+	if driver.settleOff {
+		t.Error("a value above 0 turned the settle off")
 	}
 }
 

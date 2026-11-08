@@ -166,7 +166,7 @@ MAESTRO_RUNNER_NO_UPDATE_CHECK=1 to skip the check; on CI the notice is not prin
 		// Driver settings
 		&cli.IntFlag{
 			Name:    "wait-for-idle-timeout",
-			Usage:   "Wait for device idle in ms (0 = disabled, default 200)",
+			Usage:   "Wait for device idle in ms (0 = disabled, default 200). On iOS WDA only 0 has an effect: it turns off the settle before each action",
 			Value:   200,
 			EnvVars: []string{"MAESTRO_WAIT_FOR_IDLE_TIMEOUT"},
 		},

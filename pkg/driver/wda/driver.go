@@ -237,28 +237,21 @@ func (d *Driver) SetAppFile(path string) {
 	d.appFile = path
 }
 
-// SetWaitForIdleTimeout sets the wait for idle timeout.
-// Quiescence is disabled by default on iOS because it can cause XCTest crashes
-// on apps with continuous animations. It is only enabled when the user explicitly
-// sets a timeout > 200ms (the CLI default), indicating they want idle waiting.
-// Negative values and 0 disable quiescence. Values 1-200 are a no-op (keep session default).
-// Values > 200 enable quiescence — minimum effective value is 200ms.
+// SetWaitForIdleTimeout applies --wait-for-idle-timeout. On WDA only 0 (or
+// less) does anything: it turns off the settle before an action (#212), which
+// on a screen that never stops changing (a looping Rive or Lottie view) cost
+// its full 3s cap on every action.
 //
-// 0 also turns off the settle before an action (#212): on a screen that never
-// stops changing (a looping Rive or Lottie view) it cost its full 3s cap on
-// every action, and 0 is documented as "disabled".
+// A value above 0 changes nothing (#267). WebDriverAgent's idle wait stays
+// off: it can crash XCTest on apps with continuous animations, sessions are
+// created without it, and WebDriverAgent reads shouldWaitForQuiescence only
+// at session creation. Even on, it waits when the app launches or comes to
+// the front, not inside a find or a page source.
 func (d *Driver) SetWaitForIdleTimeout(ms int) error {
 	d.settleOff = ms <= 0
-	if ms > 200 {
-		return d.client.UpdateSettings(map[string]interface{}{
-			"shouldWaitForQuiescence": true,
-			"waitForIdleTimeout":      ms,
-		})
-	}
 	if ms <= 0 {
 		return d.client.DisableQuiescence()
 	}
-	// ms 1-200 (default range): keep quiescence disabled (session default)
 	return nil
 }
 
