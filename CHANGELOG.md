@@ -7,11 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.1.31] - 2026-11-03
 
-A fix release for 1.1.30, whose GitHub release was withdrawn. Everything listed under 1.1.30 below ships in 1.1.31.
+A fix release for 1.1.30, whose GitHub release was withdrawn. Everything listed under 1.1.30 below ships in 1.1.31. On top of it: WDA answers the permission prompts a flow does not tap (a 1.1.30 regression), WDA lookups on real iPhones are much faster, and a few smaller fixes.
+
+### Changed
+
+**WDA: element checks and page-source lookups are much faster on real iPhones.** An element check sent four more requests after its find (the element's text, frame, visibility and type), each answered one after another. The session now asks WebDriverAgent to put those fields in the find's answer, so a check by id on a busy screen went from 7.4 s to 2.45 s on an iPhone 17 ([#263](https://github.com/devicelab-dev/maestro-runner/pull/263), [#258](https://github.com/devicelab-dev/maestro-runner/issues/258)). A lookup that falls back to the page source (a selector not on screen yet, an optional step, `when: visible`, relative selectors, `index:`, `copyTextFrom`) now asks for it without the `visible` and `accessible` attributes, which WebDriverAgent computes for every element with an accessibility call each and the matcher never reads: on a heavy screen a page source went from about 25 s to 2.4 s ([#266](https://github.com/devicelab-dev/maestro-runner/pull/266)). The report and the `hierarchy` command still get every attribute.
+
+**WDA: `--wait-for-idle-timeout` above 0 no longer sends settings WebDriverAgent ignores ([#267](https://github.com/devicelab-dev/maestro-runner/issues/267)).** The value never changed anything on WDA: WebDriverAgent reads `shouldWaitForQuiescence` only when a session starts, takes `waitForIdleTimeout` in seconds, and every `launchApp` set it back to 0. On WDA only `0` has an effect, turning off the settle before each action, and the flag's help now says so.
 
 ### Fixed
 
+**WDA: a flow that taps one permission prompt's button still gets the other prompts answered ([#264](https://github.com/devicelab-dev/maestro-runner/issues/264), [#265](https://github.com/devicelab-dev/maestro-runner/pull/265)).** Since 1.1.30, a flow that taps a prompt's button itself (`tapOn: "Ask App Not to Track"`) turned off WDA's automatic answer for the whole session, so a later prompt the flow never meant to answer (notifications) stayed up over the app and every later step failed behind it. A lookup that finds nothing now answers such a prompt as WDA would have (`Allow…`, or `Don't Allow…` with `permissions: {all: deny}`) and looks again. The prompts the flow taps are still left to it, and a flow with `acceptAlert` or `dismissAlert` is unchanged.
+
+**WDA: `kAXErrorServerNotFound` fails the step at once and says what it is ([#268](https://github.com/devicelab-dev/maestro-runner/issues/268)).** On real iPhones, after a `clearState` reinstall, the app sometimes runs without its accessibility server, and every page source fails with this error. A lookup polled to its timeout, each poll a page source of 8 to 10 s, and failed with "not visible within 30s", which read like a slow screen. The condition does not clear within a flow, so the step now fails at the first such read with "the app's accessibility server is not running (kAXErrorServerNotFound): WDA can reach the device but not the app; a relaunch does not help, restarting the device does".
+
+**DeviceLab iOS: `launchApp` with `stopApp: false` keeps the running app ([#261](https://github.com/devicelab-dev/maestro-runner/pull/261)).** The launch applied the default permissions first, and iOS kills an app whose permissions change, so the app restarted and lost its state. With `stopApp: false`, permissions and `clearKeychain` are no longer applied (a log line says so when the flow gives them).
+
 **DeviceLab iOS: `hideKeyboard` no longer swipes on the keyboard while it is still sliding in.** The iOS agent took the screen size from the keyboard's frame. Right after a field took focus, that frame still lay below the screen, so the dismiss swipes started at the centre of a screen twice as tall: on the keys, where they dismiss nothing. Since 1.1.30 fails the step when the keyboard stays up ([#259](https://github.com/devicelab-dev/maestro-runner/issues/259)), flows that passed in 1.1.29 failed there (React Native's RNTester `text.yml` on iOS 27, 4 of 6 runs). The agent now reads the screen size from the app, waits for the keyboard to stop moving, and never starts the swipes below the keyboard.
+
+### Contributors
+
+[@luka-vladika-happening-xyz](https://github.com/luka-vladika-happening-xyz)
+1. WDA answers the permission prompts a flow does not tap ([#264](https://github.com/devicelab-dev/maestro-runner/issues/264), [#265](https://github.com/devicelab-dev/maestro-runner/pull/265))
+2. WDA element checks take their fields from the find's answer ([#258](https://github.com/devicelab-dev/maestro-runner/issues/258), [#263](https://github.com/devicelab-dev/maestro-runner/pull/263))
+3. WDA lookups read the page source without `visible` and `accessible` ([#266](https://github.com/devicelab-dev/maestro-runner/pull/266))
+4. Reported `--wait-for-idle-timeout` doing nothing on WDA ([#267](https://github.com/devicelab-dev/maestro-runner/issues/267)) and `kAXErrorServerNotFound` ([#268](https://github.com/devicelab-dev/maestro-runner/issues/268))
+
+[@benalbrecht](https://github.com/benalbrecht)
+1. DeviceLab iOS `launchApp` with `stopApp: false` keeps the running app ([#261](https://github.com/devicelab-dev/maestro-runner/pull/261))
+
+[@emil-doychev-bijenkorf](https://github.com/emil-doychev-bijenkorf)
+1. Reported `copyTextFrom` ignoring a `childOf` anchor's index on 1.1.29 ([#262](https://github.com/devicelab-dev/maestro-runner/issues/262)), fixed by #241 in 1.1.30
 
 ## [1.1.30] - 2026-11-02
 
