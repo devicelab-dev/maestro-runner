@@ -430,6 +430,9 @@ func (d *Driver) assertVisible(step *flow.AssertVisibleStep) *core.CommandResult
 
 	info, err := d.findElement(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
+		if axServerDown(err) {
+			return errorResult(err, fmt.Sprintf("Element not visible: %s: %v", selectorDesc(step.Selector), err))
+		}
 		return errorResult(err, fmt.Sprintf("Element not visible: %s", selectorDesc(step.Selector)))
 	}
 
@@ -526,7 +529,7 @@ func (d *Driver) assertNotVisible(step *flow.AssertNotVisibleStep) *core.Command
 			return successResult("Element is not visible", nil)
 		}
 
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) || axServerDown(err) {
 			if err != nil {
 				return errorResult(err, fmt.Sprintf("Could not check that %s is not visible: %v", selectorDesc(step.Selector), err))
 			}
@@ -2033,6 +2036,9 @@ func (d *Driver) waitUntil(step *flow.WaitUntilStep) *core.CommandResult {
 				if err == nil && info != nil {
 					return successResult("Element became visible", info)
 				}
+				if axServerDown(err) {
+					return errorResult(err, fmt.Sprintf("Could not wait for '%s': %v", selector.Describe(), err))
+				}
 			} else {
 				// Single attempt for not visible check. Only a lookup that
 				// read the screen and found no match means the element is
@@ -2040,6 +2046,9 @@ func (d *Driver) waitUntil(step *flow.WaitUntilStep) *core.CommandResult {
 				info, err := d.findElementOnce(*step.NotVisible)
 				if isNotFound(err) || (err == nil && info == nil) {
 					return successResult("Element became not visible", nil)
+				}
+				if axServerDown(err) {
+					return errorResult(err, fmt.Sprintf("Could not check that '%s' is not visible: %v", selector.Describe(), err))
 				}
 				unreadable = err
 				if unreadable != nil {

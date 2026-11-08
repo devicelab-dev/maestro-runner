@@ -553,6 +553,9 @@ func (c *Client) source(path string) (string, error) {
 			resp, err = c.get(c.sessionPath(path))
 		}
 		if err != nil {
+			if strings.Contains(err.Error(), "kAXErrorServerNotFound") {
+				return "", fmt.Errorf("%w (WDA: %v)", ErrAXServerNotFound, err)
+			}
 			return "", err
 		}
 	}
@@ -561,6 +564,20 @@ func (c *Client) source(path string) (string, error) {
 		return value, nil
 	}
 	return "", fmt.Errorf("invalid source response")
+}
+
+// ErrAXServerNotFound is a page source that failed with kAXErrorServerNotFound:
+// the app runs but its accessibility server does not, so WDA cannot read it.
+// Seen on real iPhones after a clearState reinstall, when cfprefsd refused the
+// reinstalled app's preferences. It does not clear within a flow (#268), so a
+// lookup stops at once instead of polling page sources of several seconds
+// each to its timeout.
+var ErrAXServerNotFound = errors.New("the app's accessibility server is not running (kAXErrorServerNotFound): " +
+	"WDA can reach the device but not the app; a relaunch does not help, restarting the device does")
+
+// axServerDown reports whether err is ErrAXServerNotFound.
+func axServerDown(err error) bool {
+	return errors.Is(err, ErrAXServerNotFound)
 }
 
 // isTransientAXError reports whether a WDA error is the transient

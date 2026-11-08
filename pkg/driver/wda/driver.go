@@ -674,6 +674,8 @@ func (d *Driver) findElementWithContext(ctx context.Context, sel flow.Selector) 
 			// Fallback to page source parsing
 			if info, err := d.findElementByPageSourceOnce(sel); err == nil {
 				return info, nil
+			} else if axServerDown(err) {
+				return nil, err
 			} else {
 				lastErr = err
 			}
@@ -756,6 +758,9 @@ func (d *Driver) findElementForTapWithContext(ctx context.Context, sel flow.Sele
 				if err == nil {
 					return info, nil
 				}
+				if axServerDown(err) {
+					return nil, err
+				}
 				lastErr = fmt.Errorf("selector %q not found in page source: %w", sel.Text, err)
 				time.Sleep(50 * time.Millisecond)
 				continue
@@ -794,6 +799,9 @@ func (d *Driver) findElementForTapWithContext(ctx context.Context, sel flow.Sele
 				info, psErr := d.findElementByPageSourceOnce(sel)
 				if psErr == nil {
 					return info, nil
+				}
+				if axServerDown(psErr) {
+					return nil, psErr
 				}
 				// Still not found - keep polling. Surface both failures:
 				// the page-source reason (with closest-text hints) is the
@@ -1277,6 +1285,9 @@ func (d *Driver) findElementRelativeWithContext(ctx context.Context, sel flow.Se
 			info, err := d.findElementRelativeOnce(sel)
 			if err == nil {
 				return info, nil
+			}
+			if axServerDown(err) {
+				return nil, err
 			}
 			lastErr = err
 			// HTTP round-trip is natural rate limit, no sleep needed
