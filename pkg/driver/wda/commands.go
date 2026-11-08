@@ -55,6 +55,20 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		return errorResult(err, fmt.Sprintf("Element not found: %s", selectorDesc(step.Selector)))
 	}
 
+	// A prompt over the app takes the tap, and the element was found in the
+	// app beneath it: answer the prompt first and look again. Asked here,
+	// after the find, since a find answers once the app does, and an alert
+	// check sent while the app is still launching held WDA for 19 s.
+	if info != nil && info.Class != systemAlertButtonClass && d.answerPromptsBeforeTap() {
+		if fresh, findErr := d.findElementForTap(step.Selector, step.Optional, step.TimeoutMs); findErr == nil && fresh != nil {
+			info = fresh
+		} else if step.Optional {
+			return successResult("Optional element not found after a permission prompt was answered, skipping tap", nil)
+		} else {
+			return errorResult(findErr, fmt.Sprintf("Element not found after a permission prompt was answered: %s", selectorDesc(step.Selector)))
+		}
+	}
+
 	if info != nil && info.Class == systemAlertButtonClass {
 		label := info.Text
 		if err := d.answerAlert(func() error { return d.client.TapAlertButton(label) }); err != nil {
