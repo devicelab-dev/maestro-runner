@@ -294,7 +294,14 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	if d.screenMayMove && !d.settleOff && actsOnScreen(step) && !flow.RepeatTapAfterFirst(step) {
 		d.settleScreen()
 	}
-	d.screenMayMove = movesScreen(step)
+	// A step that neither acts nor moves the screen (an assert, a script, a
+	// flow's condition) leaves the flag as it was, so the next action still
+	// settles: a tap, a check that answered while the sheet the tap opened
+	// was still sliding up, then a tap on that sheet went out mid-slide and
+	// was lost (WDA reports the sheet's final frame while it moves).
+	if movesScreen(step) || actsOnScreen(step) {
+		d.screenMayMove = movesScreen(step)
+	}
 	d.alertLookup = alertLookupFor(step)
 
 	var result *core.CommandResult
