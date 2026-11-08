@@ -7,11 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.1.31] - 2026-11-03
 
-A fix release for 1.1.30, whose GitHub release was withdrawn. Everything listed under 1.1.30 below ships in 1.1.31. On top of it: WDA answers the permission prompts a flow does not tap (a 1.1.30 regression), WDA lookups on real iPhones are much faster, and a few smaller fixes.
+A fix release for 1.1.30, whose GitHub release was withdrawn. Everything listed under 1.1.30 below ships in 1.1.31. On top of it: WDA answers the permission prompts a flow does not tap (a 1.1.30 regression), WDA page-source lookups on real iPhones are much faster, and a few smaller fixes.
 
 ### Changed
 
-**WDA: element checks and page-source lookups are much faster on real iPhones.** An element check sent four more requests after its find (the element's text, frame, visibility and type), each answered one after another. The session now asks WebDriverAgent to put those fields in the find's answer, so a check by id on a busy screen went from 7.4 s to 2.45 s on an iPhone 17 ([#263](https://github.com/devicelab-dev/maestro-runner/pull/263), [#258](https://github.com/devicelab-dev/maestro-runner/issues/258)). A lookup that falls back to the page source (a selector not on screen yet, an optional step, `when: visible`, relative selectors, `index:`, `copyTextFrom`) now asks for it without the `visible` and `accessible` attributes, which WebDriverAgent computes for every element with an accessibility call each and the matcher never reads: on a heavy screen a page source went from about 25 s to 2.4 s ([#266](https://github.com/devicelab-dev/maestro-runner/pull/266)). The report and the `hierarchy` command still get every attribute.
+**WDA: page-source lookups are much faster on real iPhones ([#266](https://github.com/devicelab-dev/maestro-runner/pull/266)).** A lookup that falls back to the page source (a selector not on screen yet, an optional step, `when: visible`, relative selectors, `index:`, `copyTextFrom`) now asks for it without the `visible` and `accessible` attributes, which WebDriverAgent computes for every element with an accessibility call each and the matcher never reads: on a heavy screen a page source went from about 25 s to 2.4 s. The report and the `hierarchy` command still get every attribute.
 
 **WDA: `--wait-for-idle-timeout` above 0 no longer sends settings WebDriverAgent ignores ([#267](https://github.com/devicelab-dev/maestro-runner/issues/267)).** The value never changed anything on WDA: WebDriverAgent reads `shouldWaitForQuiescence` only when a session starts, takes `waitForIdleTimeout` in seconds, and every `launchApp` set it back to 0. On WDA only `0` has an effect, turning off the settle before each action, and the flag's help now says so.
 
@@ -29,9 +29,8 @@ A fix release for 1.1.30, whose GitHub release was withdrawn. Everything listed 
 
 [@luka-vladika-happening-xyz](https://github.com/luka-vladika-happening-xyz)
 1. WDA answers the permission prompts a flow does not tap ([#264](https://github.com/devicelab-dev/maestro-runner/issues/264), [#265](https://github.com/devicelab-dev/maestro-runner/pull/265))
-2. WDA element checks take their fields from the find's answer ([#258](https://github.com/devicelab-dev/maestro-runner/issues/258), [#263](https://github.com/devicelab-dev/maestro-runner/pull/263))
-3. WDA lookups read the page source without `visible` and `accessible` ([#266](https://github.com/devicelab-dev/maestro-runner/pull/266))
-4. Reported `--wait-for-idle-timeout` doing nothing on WDA ([#267](https://github.com/devicelab-dev/maestro-runner/issues/267)) and `kAXErrorServerNotFound` ([#268](https://github.com/devicelab-dev/maestro-runner/issues/268))
+2. WDA lookups read the page source without `visible` and `accessible` ([#266](https://github.com/devicelab-dev/maestro-runner/pull/266))
+3. Reported `--wait-for-idle-timeout` doing nothing on WDA ([#267](https://github.com/devicelab-dev/maestro-runner/issues/267)) and `kAXErrorServerNotFound` ([#268](https://github.com/devicelab-dev/maestro-runner/issues/268))
 
 [@benalbrecht](https://github.com/benalbrecht)
 1. DeviceLab iOS `launchApp` with `stopApp: false` keeps the running app ([#261](https://github.com/devicelab-dev/maestro-runner/pull/261))
