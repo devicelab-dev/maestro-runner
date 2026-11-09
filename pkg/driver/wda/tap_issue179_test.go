@@ -190,13 +190,52 @@ func TestExecuteSettlesOnlyAfterMovingStep(t *testing.T) {
 	if shots != 0 {
 		t.Fatalf("a non-acting step settled (%d screenshots)", shots)
 	}
-	d.Execute(&flow.SwipeStep{Direction: "up"}) // previous step moved nothing
-	if shots != 0 {
-		t.Fatalf("settled after a step that moves nothing (%d screenshots)", shots)
-	}
-	d.Execute(&flow.SwipeStep{Direction: "up"}) // previous step was a swipe
+	d.Execute(&flow.SwipeStep{Direction: "up"}) // the swipe before it is still settling: no action since
 	if shots != 2 {
-		t.Errorf("screenshots = %d, want 2 (one settle after the swipe)", shots)
+		t.Fatalf("screenshots = %d, want 2 (the first swipe's settle, kept over the clipboard step)", shots)
+	}
+	d.Execute(&flow.SetClipboardStep{Text: "x"})
+	d.Execute(&flow.CopyTextFromStep{Selector: flow.Selector{ID: "x"}}) // acts, moves nothing
+	if shots != 4 {
+		t.Fatalf("screenshots = %d, want 4 (a settle before the copy)", shots)
+	}
+	d.Execute(&flow.SwipeStep{Direction: "up"}) // previous action moved nothing
+	if shots != 4 {
+		t.Errorf("settled after an action that moves nothing (%d screenshots)", shots)
+	}
+}
+
+// A tap, then a check, then a tap: the second tap settles though a check came
+// between (login_to_registration: the check answered while the sheet the first
+// tap opened still slid up, and the tap on the sheet was lost).
+func TestExecuteSettlesAfterACheckBetweenTaps(t *testing.T) {
+	var mu sync.Mutex
+	shots := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/screenshot") {
+			mu.Lock()
+			shots++
+			mu.Unlock()
+			jsonResponse(w, map[string]interface{}{"value": base64.StdEncoding.EncodeToString([]byte("same"))})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": 0})
+	}))
+	defer server.Close()
+	d := createTestDriver(server)
+
+	d.Execute(&flow.TapOnPointStep{Point: "50%,50%"})
+	check := &flow.AssertVisibleStep{Selector: flow.Selector{ID: "x"}}
+	check.TimeoutMs = 100
+	d.Execute(check)
+	d.Execute(&flow.RunScriptStep{Script: "x.js"})
+	if shots != 0 {
+		t.Fatalf("a check or a script settled (%d screenshots)", shots)
+	}
+	d.Execute(&flow.TapOnPointStep{Point: "50%,50%"})
+	if shots != 2 {
+		t.Errorf("screenshots = %d, want 2 (the tap after the check settles)", shots)
 	}
 }
 
