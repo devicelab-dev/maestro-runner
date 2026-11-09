@@ -82,10 +82,12 @@ func (d *Driver) launchApp(s *flow.LaunchAppStep) *core.CommandResult {
 			return res
 		}
 	}
-	d.applyLaunchPermissions(bid, s.Permissions)
-	if s.ClearKeychain {
-		if _, err := d.runSimctl("keychain", d.udid, "reset"); err != nil {
-			logger.Warn("launchApp: clearKeychain skipped: %v", err)
+	if !keepsRunningApp(s) {
+		d.applyLaunchPermissions(bid, s.Permissions)
+		if s.ClearKeychain {
+			if _, err := d.runSimctl("keychain", d.udid, "reset"); err != nil {
+				logger.Warn("launchApp: clearKeychain skipped: %v", err)
+			}
 		}
 	}
 	args := []string{"launch", "--terminate-running-process", d.udid, bid}
