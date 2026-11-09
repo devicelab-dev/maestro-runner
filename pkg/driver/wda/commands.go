@@ -226,7 +226,7 @@ func (d *Driver) aimClearOfKeyboard(sel flow.Selector, info *core.ElementInfo, x
 // keyboard (a key, its return button), read from the page source; false when
 // the source cannot be read.
 func (d *Driver) onKeyboard(b core.Bounds) bool {
-	src, err := d.client.Source()
+	src, err := d.client.LookupSource()
 	if err != nil {
 		return false
 	}
@@ -491,7 +491,7 @@ func (d *Driver) assertVisibleCount(step *flow.AssertVisibleStep, want int) *cor
 // countVisibleMatchesOnce takes one page-source snapshot and counts the
 // selector's visible matches.
 func (d *Driver) countVisibleMatchesOnce(sel flow.Selector) (int, error) {
-	pageSource, err := d.client.Source()
+	pageSource, err := d.client.LookupSource()
 	if err != nil {
 		return 0, err
 	}
@@ -887,7 +887,7 @@ func (d *Driver) dismissKeyboard(kb *core.Bounds) bool {
 		keyboardTop = kb.Y
 	}
 	sx, sy, ok := w/2, h/2, true
-	if src, err := d.client.Source(); err == nil {
+	if src, err := d.client.LookupSource(); err == nil {
 		if elems, err := ParsePageSource(src); err == nil {
 			elems = FilterOutOfBounds(elems, w, h)
 			nodes := make([]core.ScreenNode, 0, len(elems))
@@ -1822,7 +1822,7 @@ func (d *Driver) copyTextFrom(step *flow.CopyTextFromStep) *core.CommandResult {
 // lookup returns an element id, and those are plain text and id selectors, so
 // there is no relative selector to resolve here.
 func (d *Driver) pageSourceText(sel flow.Selector, want core.Bounds) (string, error) {
-	pageSource, err := d.client.Source()
+	pageSource, err := d.client.LookupSource()
 	if err != nil {
 		return "", err
 	}
