@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.1.31] - 2026-11-03
 
-A fix release for 1.1.30, whose GitHub release was withdrawn. Everything listed under 1.1.30 below ships in 1.1.31. On top of it: WDA answers the permission prompts a flow does not tap (a 1.1.30 regression), WDA page-source lookups on real iPhones are much faster, and a few smaller fixes.
+A fix release for 1.1.30, whose GitHub release was withdrawn. Everything listed under 1.1.30 below ships in 1.1.31. On top of it: WDA answers the permission prompts a flow does not tap (a 1.1.30 regression), taps after a check wait for the screen to settle, WDA page-source lookups on real iPhones are much faster, and a few smaller fixes.
 
 ### Changed
 
@@ -21,6 +21,10 @@ A fix release for 1.1.30, whose GitHub release was withdrawn. Everything listed 
 
 **WDA: `kAXErrorServerNotFound` fails the step at once and says what it is ([#268](https://github.com/devicelab-dev/maestro-runner/issues/268)).** On real iPhones, after a `clearState` reinstall, the app sometimes runs without its accessibility server, and every page source fails with this error. A lookup polled to its timeout, each poll a page source of 8 to 10 s, and failed with "not visible within 30s", which read like a slow screen. The condition does not clear within a flow, so the step now fails at the first such read with "the app's accessibility server is not running (kAXErrorServerNotFound): WDA can reach the device but not the app; a relaunch does not help, restarting the device does".
 
+**WDA: a tap after a check waits for the screen to settle ([#269](https://github.com/devicelab-dev/maestro-runner/pull/269)).** The driver settles before an action when the step before it may have moved the screen, but any other step cleared that, so a check or a script between two taps made the second tap skip it. When a tap opened a sheet, the check passed while the sheet was still sliding up (WebDriverAgent reports its final frame), and the next tap on the sheet went out mid-slide and was lost. A step that neither acts nor moves the screen (an assert, a script, a condition) now leaves it as it was.
+
+**WDA: `eraseText` on a simulator no longer hides the keyboard for the rest of the run ([#270](https://github.com/devicelab-dev/maestro-runner/pull/270)).** WebDriverAgent cleared a field with a hardware keyboard's Clear key. On a simulator iOS then took a hardware keyboard as attached and kept the software keyboard off screen whenever a field had focus, so anything an app shows with the keyboard never appeared. On a simulator the field is now cleared with typed backspaces, as Maestro does; a real iPhone keeps the Clear key.
+
 **DeviceLab iOS: `launchApp` with `stopApp: false` keeps the running app ([#261](https://github.com/devicelab-dev/maestro-runner/pull/261)).** The launch applied the default permissions first, and iOS kills an app whose permissions change, so the app restarted and lost its state. With `stopApp: false`, permissions and `clearKeychain` are no longer applied (a log line says so when the flow gives them).
 
 **DeviceLab iOS: `hideKeyboard` no longer swipes on the keyboard while it is still sliding in.** The iOS agent took the screen size from the keyboard's frame. Right after a field took focus, that frame still lay below the screen, so the dismiss swipes started at the centre of a screen twice as tall: on the keys, where they dismiss nothing. Since 1.1.30 fails the step when the keyboard stays up ([#259](https://github.com/devicelab-dev/maestro-runner/issues/259)), flows that passed in 1.1.29 failed there (React Native's RNTester `text.yml` on iOS 27, 4 of 6 runs). The agent now reads the screen size from the app, waits for the keyboard to stop moving, and never starts the swipes below the keyboard.
@@ -30,7 +34,9 @@ A fix release for 1.1.30, whose GitHub release was withdrawn. Everything listed 
 [@luka-vladika-happening-xyz](https://github.com/luka-vladika-happening-xyz)
 1. WDA answers the permission prompts a flow does not tap ([#264](https://github.com/devicelab-dev/maestro-runner/issues/264), [#265](https://github.com/devicelab-dev/maestro-runner/pull/265))
 2. WDA lookups read the page source without `visible` and `accessible` ([#266](https://github.com/devicelab-dev/maestro-runner/pull/266))
-3. Reported `--wait-for-idle-timeout` doing nothing on WDA ([#267](https://github.com/devicelab-dev/maestro-runner/issues/267)) and `kAXErrorServerNotFound` ([#268](https://github.com/devicelab-dev/maestro-runner/issues/268))
+3. WDA settles before a tap that follows a check ([#269](https://github.com/devicelab-dev/maestro-runner/pull/269))
+4. WDA `eraseText` on a simulator keeps the keyboard on screen ([#270](https://github.com/devicelab-dev/maestro-runner/pull/270))
+5. Reported `--wait-for-idle-timeout` doing nothing on WDA ([#267](https://github.com/devicelab-dev/maestro-runner/issues/267)) and `kAXErrorServerNotFound` ([#268](https://github.com/devicelab-dev/maestro-runner/issues/268))
 
 [@benalbrecht](https://github.com/benalbrecht)
 1. DeviceLab iOS `launchApp` with `stopApp: false` keeps the running app ([#261](https://github.com/devicelab-dev/maestro-runner/pull/261))
