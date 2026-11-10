@@ -210,6 +210,31 @@ func wdaSnapshotMaxDepth() int {
 	return defaultDepth
 }
 
+// gesture posts a coordinate gesture (a tap, press or drag at x,y) with
+// WebDriverAgent's snapshotMaxDepth at 1. WebDriverAgent makes the point an
+// XCUICoordinate on the app, and XCTest snapshots the app down to
+// snapshotMaxDepth before it touches, though the touch needs only the app's
+// frame. On a heavy screen that snapshot takes seconds on a real iPhone,
+// before every touch: from a long live list a /wda/tap took
+// 3.5-4.1 s at depth 50 on an iPhone 13 (iOS 18) and 0.9 s at depth 1, and on
+// iOS 17 each such tap froze the app for seconds. The depth goes back to
+// wdaSnapshotMaxDepth() after the gesture, so finds and page sources still
+// see the whole tree. If WebDriverAgent refuses the setting, the gesture goes
+// as before.
+func (c *Client) gesture(path string, body map[string]interface{}) error {
+	lowered := c.UpdateSettings(map[string]interface{}{"snapshotMaxDepth": 1}) == nil
+	_, err := c.post(c.sessionPath(path), body)
+	if lowered {
+		depth := map[string]interface{}{"snapshotMaxDepth": wdaSnapshotMaxDepth()}
+		if restoreErr := c.UpdateSettings(depth); restoreErr != nil {
+			if restoreErr = c.UpdateSettings(depth); restoreErr != nil {
+				logger.Warn("WDA: snapshotMaxDepth stayed 1 after a gesture, so finds see only the app: %v", restoreErr)
+			}
+		}
+	}
+	return err
+}
+
 // UpdateSettings updates WDA session settings.
 // Supports keys like shouldWaitForQuiescence, waitForIdleTimeout, etc.
 func (c *Client) UpdateSettings(settings map[string]interface{}) error {
@@ -364,30 +389,27 @@ func (c *Client) ActivateApp(bundleID string) error {
 
 // Tap performs a tap at coordinates.
 func (c *Client) Tap(x, y float64) error {
-	_, err := c.post(c.sessionPath("/wda/tap"), map[string]interface{}{
+	return c.gesture("/wda/tap", map[string]interface{}{
 		"x": x,
 		"y": y,
 	})
-	return err
 }
 
 // DoubleTap performs a double tap at coordinates.
 func (c *Client) DoubleTap(x, y float64) error {
-	_, err := c.post(c.sessionPath("/wda/doubleTap"), map[string]interface{}{
+	return c.gesture("/wda/doubleTap", map[string]interface{}{
 		"x": x,
 		"y": y,
 	})
-	return err
 }
 
 // LongPress performs a long press at coordinates.
 func (c *Client) LongPress(x, y float64, durationSec float64) error {
-	_, err := c.post(c.sessionPath("/wda/touchAndHold"), map[string]interface{}{
+	return c.gesture("/wda/touchAndHold", map[string]interface{}{
 		"x":        x,
 		"y":        y,
 		"duration": durationSec,
 	})
-	return err
 }
 
 // swipeMoveMs is how long the finger takes to travel from start to end.
@@ -417,7 +439,7 @@ func (c *Client) pointerDrag(fromX, fromY, toX, toY float64, moveMs, restMs int)
 	if restMs < 0 {
 		restMs = 0
 	}
-	_, err := c.post(c.sessionPath("/actions"), map[string]interface{}{
+	return c.gesture("/actions", map[string]interface{}{
 		"actions": []interface{}{
 			map[string]interface{}{
 				"type":       "pointer",
@@ -433,7 +455,6 @@ func (c *Client) pointerDrag(fromX, fromY, toX, toY float64, moveMs, restMs int)
 			},
 		},
 	})
-	return err
 }
 
 // DragFromTo presses at the start point, holds, then drags to the end point.
@@ -441,14 +462,13 @@ func (c *Client) pointerDrag(fromX, fromY, toX, toY float64, moveMs, restMs int)
 // pressDurationSec is the hold before the move — the lift gesture reorder UIs
 // wait for. XCUITest paces the move itself; the drag speed is not ours to set.
 func (c *Client) DragFromTo(fromX, fromY, toX, toY, pressDurationSec float64) error {
-	_, err := c.post(c.sessionPath("/wda/dragfromtoforduration"), map[string]interface{}{
+	return c.gesture("/wda/dragfromtoforduration", map[string]interface{}{
 		"fromX":    fromX,
 		"fromY":    fromY,
 		"toX":      toX,
 		"toY":      toY,
 		"duration": pressDurationSec,
 	})
-	return err
 }
 
 // Input
