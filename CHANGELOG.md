@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.31] - 2026-11-03
+## [1.1.31] - 2026-11-11
 
 A fix release for 1.1.30, whose GitHub release was withdrawn. Everything listed under 1.1.30 below ships in 1.1.31. On top of it: WDA answers the permission prompts a flow does not tap (a 1.1.30 regression), taps after a check wait for the screen to settle, WDA page-source lookups on real iPhones are much faster, and a few smaller fixes.
 
