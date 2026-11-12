@@ -13,8 +13,15 @@ import (
 // (pkg/driver/wda/commands.go), with two additions: it reads the switch again
 // after the tap and fails the step if it did not move, and it brings the app
 // that was in front back with `app activate` (XCUIApplication.activate: a
-// running app comes forward as it was, it is not relaunched). Simulators have
-// no airplane mode; the step is skipped there, as on WDA.
+// running app comes forward as it was, it is not relaunched), then waits for
+// the agent to report that app in front. Simulators have no airplane mode;
+// the step is skipped there, as on WDA.
+//
+// Back-to-back airplane steps (#252): the agent went on reporting Settings
+// in front for a moment after the activate, so the next step, starting 3ms
+// later, read Settings as the app to return to, skipped the return, and left
+// Settings in front for the rest of the flow. A step now waits until the app
+// it brought back is reported in front, and fails if it never is.
 
 const (
 	settingsBundle = "com.apple.Preferences"
@@ -23,11 +30,13 @@ const (
 	airplaneModeLabel = "Airplane Mode"
 )
 
-// Budgets for finding the switch after Settings comes forward and for the
-// switch to show the new state after the tap; tests shorten them.
+// Budgets for finding the switch after Settings comes forward, for the
+// switch to show the new state after the tap and for the app brought back to
+// be reported in front; tests shorten them.
 var (
 	airplaneFindTimeout   = 6 * time.Second
 	airplaneVerifyTimeout = 3 * time.Second
+	airplaneReturnTimeout = 3 * time.Second
 	airplanePoll          = 250 * time.Millisecond
 )
 
@@ -139,26 +148,48 @@ func (d *Driver) waitAirplaneState(want bool) error {
 // frontmost bundle, else the app under test. SpringBoard and Settings itself
 // are nothing to return to.
 func (d *Driver) frontmostApp() string {
-	front := ""
-	if resp, err := d.call("snapshot", &Args{MaxNodes: 1}); err == nil {
-		front = resp.payload().BundleID
-	}
-	switch front {
+	switch front := d.frontBundle(); front {
 	case "":
 		return d.appID
 	case springboardBundle, settingsBundle:
 		return ""
+	default:
+		return front
 	}
-	return front
 }
 
-// returnToApp brings bid back to the front without relaunching it.
+// frontBundle is the bundle the agent reports in front, "" when unknown.
+func (d *Driver) frontBundle() string {
+	resp, err := d.call("snapshot", &Args{MaxNodes: 1})
+	if err != nil {
+		return ""
+	}
+	return resp.payload().BundleID
+}
+
+// returnToApp brings bid back to the front without relaunching it and waits
+// until the agent reports it in front, so the next step does not start in
+// Settings.
 func (d *Driver) returnToApp(bid string) error {
 	if bid == "" {
 		return nil
 	}
-	_, err := d.call("app", &Args{Action: "activate", BundleID: bid})
-	return err
+	if _, err := d.call("app", &Args{Action: "activate", BundleID: bid}); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(airplaneReturnTimeout)
+	front := d.frontBundle()
+	for front != bid && time.Now().Before(deadline) && d.context().Err() == nil {
+		time.Sleep(airplanePoll)
+		front = d.frontBundle()
+	}
+	if front != bid {
+		if front == "" {
+			front = "an unknown app"
+		}
+		return fmt.Errorf("%s is in front after %v", front, airplaneReturnTimeout)
+	}
+	return nil
 }
 
 // airplaneTapPoint is on the toggle at the right end of the row: the switch's

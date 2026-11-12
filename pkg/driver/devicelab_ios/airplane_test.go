@@ -16,6 +16,11 @@ type fakeSettings struct {
 	front    string // frontmost bundle the agent reports
 	activate []string
 	order    []string
+	// lag is how many front reads after an activate still report the app
+	// that was in front before it, as the agent did on a real iPhone (#252).
+	lag     int
+	stale   string
+	pending int
 }
 
 func (f *fakeSettings) handle(cmd string, a Args) (*Response, error) {
@@ -30,10 +35,15 @@ func (f *fakeSettings) handle(cmd string, a Args) (*Response, error) {
 		sw.ID, sw.Value = airplaneModeID, v
 		return tree(node(0, "StaticText", "Settings", 16, 100, 200, 40), sw), nil
 	case cmd == "snapshot":
+		if f.pending > 0 {
+			f.pending--
+			return ok(&Payload{BundleID: f.stale}), nil
+		}
 		return ok(&Payload{BundleID: f.front}), nil
 	case cmd == "app" && a.Action == "activate":
 		f.activate = append(f.activate, a.BundleID)
 		f.order = append(f.order, "activate "+a.BundleID)
+		f.stale, f.pending = f.front, f.lag
 		f.front = a.BundleID
 	case cmd == "act":
 		f.order = append(f.order, "tap")
@@ -47,11 +57,11 @@ func (f *fakeSettings) handle(cmd string, a Args) (*Response, error) {
 // shortAirplaneBudgets makes the polls fast for one test.
 func shortAirplaneBudgets(t *testing.T) {
 	t.Helper()
-	for _, v := range []*time.Duration{&airplaneFindTimeout, &airplaneVerifyTimeout, &airplanePoll} {
+	for _, v := range []*time.Duration{&airplaneFindTimeout, &airplaneVerifyTimeout, &airplaneReturnTimeout, &airplanePoll} {
 		orig := *v
 		t.Cleanup(func() { *v = orig })
 	}
-	airplaneFindTimeout, airplaneVerifyTimeout, airplanePoll = 50*time.Millisecond, 50*time.Millisecond, 5*time.Millisecond
+	airplaneFindTimeout, airplaneVerifyTimeout, airplaneReturnTimeout, airplanePoll = 50*time.Millisecond, 50*time.Millisecond, 50*time.Millisecond, 5*time.Millisecond
 }
 
 func newAirplaneDriver(t *testing.T, f *fakeSettings) (*Driver, *fakeAgent) {
@@ -225,5 +235,47 @@ func TestSwitchOnAndTapPoint(t *testing.T) {
 	}
 	if x, _ := airplaneTapPoint(Node{X: 10, W: 50, H: 20}); x != 35 {
 		t.Errorf("narrow switch tap x = %v, want its centre", x)
+	}
+}
+
+// #252: three toggles back to back each bring the app back, though the
+// agent goes on reporting Settings in front for a moment after each
+// activate. Before, the 2nd and 3rd read Settings as the app to return to
+// and left Settings in front.
+func TestAirplaneModeBackToBackReturnsEachTime(t *testing.T) {
+	f := &fakeSettings{front: "com.example.app", lag: 3}
+	d, _ := newAirplaneDriver(t, f)
+	for i := 0; i < 3; i++ {
+		if res := d.Execute(&flow.ToggleAirplaneModeStep{}); !res.Success {
+			t.Fatalf("toggle %d: %q", i+1, res.Message)
+		}
+	}
+	want := strings.Repeat(settingsBundle+",com.example.app,", 3)
+	if got := strings.Join(f.activate, ",") + ","; got != want {
+		t.Fatalf("activate = %s, want %s", got, want)
+	}
+	if f.front != "com.example.app" || f.on != true {
+		t.Fatalf("front = %s on = %v, want the app in front and airplane mode on", f.front, f.on)
+	}
+}
+
+// A step waits until the app it brought back is reported in front, so the
+// next step does not start in Settings; if it never is, the step fails.
+func TestAirplaneModeReturnWaitsForTheApp(t *testing.T) {
+	f := &fakeSettings{front: "com.example.app", lag: 2}
+	d, _ := newAirplaneDriver(t, f)
+	if res := d.Execute(&flow.SetAirplaneModeStep{Enabled: true}); !res.Success {
+		t.Fatalf("%q", res.Message)
+	}
+	if f.pending != 0 {
+		t.Fatalf("the step returned before the app was reported in front (%d stale reads left)", f.pending)
+	}
+
+	f = &fakeSettings{front: "com.example.app", lag: 1000}
+	d, _ = newAirplaneDriver(t, f)
+	res := d.Execute(&flow.SetAirplaneModeStep{Enabled: true})
+	if res.Success || !strings.Contains(res.Message, "bringing com.example.app back to the front failed") ||
+		!strings.Contains(res.Message, settingsBundle+" is in front") {
+		t.Fatalf("%v %q", res.Success, res.Message)
 	}
 }
