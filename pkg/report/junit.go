@@ -182,6 +182,14 @@ func buildTestCase(entry *FlowEntry, detail *FlowDetail, index *Index) string {
 			))
 		}
 	}
+	// Flow tags as one property, as Maestro writes them: name="tags", the
+	// tags joined with ", " (JUnitTestSuiteReporter.kt).
+	if len(entry.Tags) > 0 {
+		b.WriteString(fmt.Sprintf(
+			`        <property name="tags" value="%s"/>`+"\n",
+			xmlEscape(strings.Join(entry.Tags, ", ")),
+		))
+	}
 	if entry.Attempts > 1 {
 		b.WriteString(fmt.Sprintf(`        <property name="attempts" value="%d"/>`+"\n", entry.Attempts))
 	}

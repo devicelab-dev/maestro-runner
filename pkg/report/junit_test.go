@@ -862,3 +862,26 @@ func TestJUnitEarlierAttempts(t *testing.T) {
 		t.Errorf("no retries: %q", got)
 	}
 }
+
+// A flow's tags go in its <properties> as Maestro writes them: one
+// property named "tags", joined with ", ". A flow without tags gets none.
+func TestJUnit_TagsProperty(t *testing.T) {
+	dur := int64(10)
+	index := &Index{
+		StartTime: time.Now(),
+		Summary:   Summary{Total: 2, Passed: 2},
+		Flows: []FlowEntry{
+			{Name: "tagged", SourceFile: "a.yaml", Status: StatusPassed, Duration: &dur, Tags: []string{"smoke", "a&b"}},
+			{Name: "untagged", SourceFile: "b.yaml", Status: StatusPassed, Duration: &dur},
+		},
+	}
+
+	xml := buildJUnitXML(index, []FlowDetail{{Name: "tagged"}, {Name: "untagged"}})
+
+	if want := `<property name="tags" value="smoke, a&amp;b"/>`; !strings.Contains(xml, want) {
+		t.Errorf("missing %q in:\n%s", want, xml)
+	}
+	if n := strings.Count(xml, `name="tags"`); n != 1 {
+		t.Errorf(`name="tags" appears %d times, want 1 (the untagged flow has none)`, n)
+	}
+}
