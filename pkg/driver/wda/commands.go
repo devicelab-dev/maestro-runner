@@ -1539,7 +1539,7 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 	// a flow checking what survives a restart tested nothing.
 	resuming := false
 	if hasArgs || step.StopApp == nil || *step.StopApp {
-		_ = d.client.TerminateApp(bundleID)
+		_ = d.terminateApp(bundleID)
 	} else {
 		resuming = d.inBackground(bundleID)
 	}
@@ -1587,13 +1587,21 @@ func (d *Driver) killApp(step *flow.KillAppStep) *core.CommandResult {
 // (e.g. "- stopApp" as the first step in a flow).
 func (d *Driver) terminateApp(bundleID string) error {
 	if d.client.HasSession() {
+		// On a simulator simctl stops the app in 0.2 s, where WebDriverAgent's
+		// XCTest terminate took 1.1-2.1 s; WebDriverAgent's terminate after it
+		// returns at once and keeps the session's bookkeeping (an app of the
+		// session stopped behind its back reads as crashed at the next request).
+		if d.info != nil && d.info.IsSimulator && d.udid != "" {
+			if output, err := execCommand("xcrun", "simctl", "terminate", d.udid, bundleID).CombinedOutput(); err != nil {
+				logger.Debug("simctl terminate %s: %v: %s", bundleID, err, string(output))
+			}
+		}
 		return d.client.TerminateApp(bundleID)
 	}
 
 	// No WDA session — fall back to device-level terminate
 	if d.info != nil && d.info.IsSimulator {
-		cmd := exec.Command("xcrun", "simctl", "terminate", d.udid, bundleID)
-		if output, err := cmd.CombinedOutput(); err != nil {
+		if output, err := execCommand("xcrun", "simctl", "terminate", d.udid, bundleID).CombinedOutput(); err != nil {
 			// Ignore errors — app might not be running
 			logger.Debug("simctl terminate %s: %v: %s", bundleID, err, string(output))
 		}

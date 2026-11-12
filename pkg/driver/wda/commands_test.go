@@ -5437,3 +5437,41 @@ func TestEraseTextEmptyFieldShowingPlaceholder(t *testing.T) {
 		t.Errorf("typed into an empty field: %q", typed)
 	}
 }
+
+// On a simulator an app is stopped with simctl first (0.2 s; WebDriverAgent's
+// XCTest terminate took 1.1-2.1 s), then through WebDriverAgent, which keeps
+// its session's bookkeeping; a real device stops it through WebDriverAgent only.
+func TestTerminateAppOnASimulatorUsesSimctlFirst(t *testing.T) {
+	var calls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/wda/apps/terminate") {
+			calls = append(calls, "wda terminate")
+		}
+		jsonResponse(w, map[string]interface{}{"value": true})
+	}))
+	defer server.Close()
+
+	var got [][]string
+	withFakeExec(t, &got, false)
+	d := createTestDriver(server)
+	d.info.IsSimulator, d.udid = true, "SIM-UDID"
+	if err := d.terminateApp("com.example.app"); err != nil {
+		t.Fatalf("terminateApp: %v", err)
+	}
+	want := []string{"xcrun", "simctl", "terminate", "SIM-UDID", "com.example.app"}
+	if len(got) != 1 || strings.Join(got[0], " ") != strings.Join(want, " ") {
+		t.Errorf("exec calls = %v, want one %v", got, want)
+	}
+	if len(calls) != 1 {
+		t.Errorf("WDA terminate calls = %d, want 1 (its bookkeeping)", len(calls))
+	}
+
+	got, calls = nil, nil
+	d.info.IsSimulator, d.udid = false, "DEVICE-UDID"
+	if err := d.terminateApp("com.example.app"); err != nil {
+		t.Fatalf("terminateApp on a device: %v", err)
+	}
+	if len(got) != 0 || len(calls) != 1 {
+		t.Errorf("a device: exec calls %v, WDA terminate calls %d; want none and 1", got, len(calls))
+	}
+}
