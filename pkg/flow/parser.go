@@ -1191,6 +1191,7 @@ func parseRepeatStep(valueNode *yaml.Node, sourcePath string) (Step, error) {
 	var raw struct {
 		Times    string      `yaml:"times"` // String for variable support
 		While    Condition   `yaml:"while"`
+		Timeout  string      `yaml:"timeout"` // ms; string for variable support
 		Commands []yaml.Node `yaml:"commands"`
 		Optional bool        `yaml:"optional"`
 		Label    string      `yaml:"label"`
@@ -1206,8 +1207,9 @@ func parseRepeatStep(valueNode *yaml.Node, sourcePath string) (Step, error) {
 			Optional:  raw.Optional,
 			StepLabel: raw.Label,
 		},
-		Times: raw.Times,
-		While: raw.While,
+		Times:   raw.Times,
+		While:   raw.While,
+		Timeout: raw.Timeout,
 	}
 
 	for _, cmdNode := range raw.Commands {

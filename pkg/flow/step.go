@@ -702,7 +702,10 @@ type RepeatStep struct {
 	BaseStep `yaml:",inline"`
 	Times    string    `yaml:"times"` // String for variable support
 	While    Condition `yaml:"while"`
-	Steps    []Step    `yaml:"-"`
+	// Timeout (ms, string for variable support) ends the loop once that much
+	// time has passed: no new iteration starts after it. The repeat passes.
+	Timeout string `yaml:"timeout"`
+	Steps   []Step `yaml:"-"`
 }
 
 // RetryStep retries steps on failure.

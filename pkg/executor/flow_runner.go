@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -1143,13 +1144,41 @@ func (fr *FlowRunner) collectStepsForPrepare() []flow.Step {
 	return out
 }
 
+// maxWhileIterations caps a while loop that has neither times nor timeout.
+// Maestro has no cap (Int.MAX_VALUE); ours stops a loop whose condition
+// never changes, and says so.
+const maxWhileIterations = 1000
+
 // executeRepeat handles repeat step execution.
+//
+// timeout (ms) ends the loop once that much time has passed since it
+// started: no new iteration starts after it, the one running finishes, and
+// the repeat passes. It works with times and with while; with while and no
+// times it replaces the maxWhileIterations cap.
 func (fr *FlowRunner) executeRepeat(step *flow.RepeatStep) *core.CommandResult {
 	hasWhile := step.While.Visible != nil || step.While.NotVisible != nil || step.While.Script != ""
 
+	timeoutMs, err := fr.script.ParseIntStrict(step.Timeout, 0)
+	if err != nil || timeoutMs < 0 {
+		if err == nil {
+			err = fmt.Errorf("must not be negative, got %d", timeoutMs)
+		}
+		return &core.CommandResult{
+			Success: false,
+			Error:   err,
+			Message: fmt.Sprintf("repeat: invalid 'timeout' value: %v", err),
+		}
+	}
+
 	defaultTimes := 1
+	capped := false
 	if hasWhile && step.Times == "" {
-		defaultTimes = 1000 // Max iterations for while loops without explicit times
+		if timeoutMs > 0 {
+			defaultTimes = math.MaxInt
+		} else {
+			defaultTimes = maxWhileIterations
+			capped = true
+		}
 	}
 	times, err := fr.script.ParseIntStrict(step.Times, defaultTimes)
 	if err != nil {
@@ -1163,13 +1192,23 @@ func (fr *FlowRunner) executeRepeat(step *flow.RepeatStep) *core.CommandResult {
 		times = 1
 	}
 
-	for i := 0; i < times; i++ {
+	start := time.Now()
+	timeout := time.Duration(timeoutMs) * time.Millisecond
+	ran := 0
+	for ; ran < times; ran++ {
 		// Check context
 		if fr.ctx.Err() != nil {
 			return &core.CommandResult{
 				Success: false,
 				Error:   fr.ctx.Err(),
 				Message: "Repeat cancelled",
+			}
+		}
+
+		if timeout > 0 && ran > 0 && time.Since(start) >= timeout {
+			return &core.CommandResult{
+				Success: true,
+				Message: fmt.Sprintf("Repeat stopped at its %dms timeout (%d iterations)", timeoutMs, ran),
 			}
 		}
 
@@ -1206,9 +1245,16 @@ func (fr *FlowRunner) executeRepeat(step *flow.RepeatStep) *core.CommandResult {
 		}
 	}
 
+	if capped && ran == times {
+		logger.Warn("repeat: while condition still true after %d iterations; stopped (set times: or timeout: to change this)", maxWhileIterations)
+		return &core.CommandResult{
+			Success: true,
+			Message: fmt.Sprintf("Repeat stopped after %d iterations with its while condition still true", ran),
+		}
+	}
 	return &core.CommandResult{
 		Success: true,
-		Message: fmt.Sprintf("Repeat completed (%d iterations)", times),
+		Message: fmt.Sprintf("Repeat completed (%d iterations)", ran),
 	}
 }
 
