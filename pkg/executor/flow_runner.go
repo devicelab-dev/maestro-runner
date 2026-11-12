@@ -737,6 +737,7 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 	}
 
 	fr.flowWriter.CommandLogs(idx, fr.script.TakeConsoleLogs())
+	fr.flowWriter.CommandMessage(idx, outcomeMessage(step, result))
 
 	// Update report - use CommandEndWithSubs for compound steps
 	switch step.(type) {
@@ -1142,6 +1143,22 @@ func (fr *FlowRunner) collectStepsForPrepare() []flow.Step {
 	expand(fr.flow.Config.OnFlowStart, fr.script.FlowDir(), 0)
 	expand(fr.flow.Steps, fr.script.FlowDir(), 0)
 	return out
+}
+
+// outcomeMessage is the message of a passed step whose outcome passing alone
+// does not tell: an airplane mode step that found the switch already in the
+// wanted state, or was skipped on a simulator (#252). It goes in the report
+// and the console output; "" for any other step.
+func outcomeMessage(step flow.Step, result *core.CommandResult) string {
+	if result == nil || !result.Success || result.Message == "" {
+		return ""
+	}
+	switch step.(type) {
+	case *flow.SetAirplaneModeStep, *flow.ToggleAirplaneModeStep:
+		logger.Info("%s: %s", step.Type(), result.Message)
+		return result.Message
+	}
+	return ""
 }
 
 // maxWhileIterations caps a while loop that has neither times nor timeout.
@@ -1892,6 +1909,7 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 		cmd.SubCommands = nestedSubCommands
 	}
 	cmd.Logs = fr.script.TakeConsoleLogs()
+	cmd.Message = outcomeMessage(step, result)
 
 	// A failed nested step (inside runFlow / repeat / retry) now gets its own
 	// screenshot + hierarchy, the same post-mortem a failed top-level step has.
