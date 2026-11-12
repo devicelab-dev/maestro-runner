@@ -91,7 +91,8 @@ func TestHasTapOptions(t *testing.T) {
 		{"repeat=2", tapOptions{Repeat: 2}, true},
 		{"delay only", tapOptions{DelayMs: 100}, true},
 		{"retry true", tapOptions{RetryTapIfNoChange: boolPtr(true)}, true},
-		{"retry false", tapOptions{RetryTapIfNoChange: boolPtr(false)}, true},
+		{"retry false", tapOptions{RetryTapIfNoChange: boolPtr(false)}, false},
+		{"retry false with repeat", tapOptions{RetryTapIfNoChange: boolPtr(false), Repeat: 2}, true},
 		{"settle timeout", tapOptions{WaitToSettleTimeoutMs: 1000}, true},
 	}
 	for _, tt := range tests {
@@ -421,5 +422,67 @@ func TestExecuteTapWithOptions_RepeatDelayAfterSlowFirstTap(t *testing.T) {
 	fr.executeTapWithOptions(&flow.TapOnStep{}, tapOptions{Repeat: 2, DelayMs: 200})
 	if gap := at[1].Sub(at[0]); gap < 200*time.Millisecond {
 		t.Errorf("taps %v apart, want at least the 200ms delay", gap)
+	}
+}
+
+// retryTapIfNoChange: false (Maestro's default) reads no hierarchy and taps
+// once, with or without other tap options.
+func TestExecuteTapWithOptions_RetryFalseReadsNoHierarchy(t *testing.T) {
+	for _, opts := range []tapOptions{
+		{RetryTapIfNoChange: boolPtr(false)},
+		{RetryTapIfNoChange: boolPtr(false), Repeat: 2, DelayMs: 1},
+		{Repeat: 2, DelayMs: 1},
+	} {
+		var execCount, hierarchyCalls int32
+		driver := &mockDriver{
+			executeFunc: func(step flow.Step) *core.CommandResult {
+				atomic.AddInt32(&execCount, 1)
+				return &core.CommandResult{Success: true}
+			},
+			hierarchyFunc: func() ([]byte, error) {
+				atomic.AddInt32(&hierarchyCalls, 1)
+				return []byte("unchanged"), nil
+			},
+		}
+		fr := &FlowRunner{ctx: context.Background(), driver: driver}
+
+		if res := fr.executeTapWithOptions(&flow.TapOnStep{}, opts); !res.Success {
+			t.Fatalf("%+v: expected success", opts)
+		}
+		want := int32(1)
+		if opts.Repeat > 1 {
+			want = int32(opts.Repeat)
+		}
+		if execCount != want {
+			t.Errorf("%+v: execCount=%d, want %d (no retry)", opts, execCount, want)
+		}
+		if hierarchyCalls != 0 {
+			t.Errorf("%+v: hierarchy read %d times, want 0", opts, hierarchyCalls)
+		}
+	}
+}
+
+// retryTapIfNoChange: false with a native settle returns after the settle
+// and reads no hierarchy.
+func TestExecuteTapWithOptions_RetryFalseNativeSettle(t *testing.T) {
+	var hierarchyCalls int32
+	driver := &nativeSettleDriver{mockDriver: &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult { return &core.CommandResult{Success: true} },
+		hierarchyFunc: func() ([]byte, error) {
+			atomic.AddInt32(&hierarchyCalls, 1)
+			return []byte("stable"), nil
+		},
+	}}
+	fr := &FlowRunner{ctx: context.Background(), driver: driver}
+
+	opts := tapOptions{RetryTapIfNoChange: boolPtr(false), WaitToSettleTimeoutMs: 1000}
+	if res := fr.executeTapWithOptions(&flow.TapOnStep{}, opts); !res.Success {
+		t.Fatal("expected success")
+	}
+	if driver.settles != 1 {
+		t.Errorf("native settles=%d, want 1", driver.settles)
+	}
+	if n := atomic.LoadInt32(&hierarchyCalls); n != 0 {
+		t.Errorf("hierarchy read %d times, want 0", n)
 	}
 }
