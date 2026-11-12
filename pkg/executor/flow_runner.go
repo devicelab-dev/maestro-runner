@@ -93,19 +93,7 @@ func (fr *FlowRunner) Run() FlowResult {
 		fr.script.SetPlatform(info.Platform)
 	}
 
-	// Apply flow config variables (takes precedence over CLI env)
-	// Expand the appId first so that `appId: ${APP_ID}` resolves using CLI -e values
-	if fr.flow.Config.AppID != "" {
-		expanded := fr.script.ExpandVariables(fr.flow.Config.AppID)
-		fr.flow.Config.AppID = expanded
-	}
-	if appID := fr.flow.Config.EffectiveAppID(); appID != "" {
-		fr.script.SetVariable("APP_ID", appID)
-	}
-	// Expand flow config env values to support ${VAR || "default"} syntax
-	for k, v := range fr.flow.Config.Env {
-		fr.script.SetVariable(k, fr.script.ExpandVariables(v))
-	}
+	fr.applyFlowConfigVariables()
 
 	// Default find timeout: the flow's commandTimeout, else --find-timeout,
 	// else the driver's own default (left untouched).
@@ -2173,6 +2161,27 @@ func (fr *FlowRunner) stepNames(step flow.Step) (describe, title string) {
 		return describe, fr.maskTypedName(step, fr.script.DisplayText(label))
 	}
 	return describe, describe
+}
+
+// applyFlowConfigVariables applies the flow's env: block and its appId.
+// Flow env values take precedence over -e / --env-file values (they are set
+// after them, as in Maestro) and may use them: ${VAR || "default"}.
+// The appId is expanded after the env: block so `appId: ${X}` can use an X
+// the same flow defines. APP_ID then holds the appId, unless the flow's env:
+// sets APP_ID itself.
+func (fr *FlowRunner) applyFlowConfigVariables() {
+	for k, v := range fr.flow.Config.Env {
+		fr.script.SetVariable(k, fr.script.ExpandVariables(v))
+	}
+	if fr.flow.Config.AppID != "" {
+		fr.flow.Config.AppID = fr.script.ExpandVariables(fr.flow.Config.AppID)
+	}
+	if _, ok := fr.flow.Config.Env["APP_ID"]; ok {
+		return
+	}
+	if appID := fr.flow.Config.EffectiveAppID(); appID != "" {
+		fr.script.SetVariable("APP_ID", appID)
+	}
 }
 
 // effectiveFindTimeout picks the default element lookup timeout (ms) for a
