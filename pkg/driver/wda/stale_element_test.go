@@ -44,6 +44,8 @@ func TestTapOnStaleElementRecovery(t *testing.T) {
 					}
 					taps <- [2]float64{point.X, point.Y}
 					jsonResponse(w, map[string]any{"value": nil})
+				case strings.HasSuffix(r.URL.Path, "/appium/settings"): // the tap's depth
+					jsonResponse(w, map[string]any{"value": nil})
 				case strings.HasSuffix(r.URL.Path, "/window/size"):
 					jsonResponse(w, map[string]any{"value": map[string]int{"width": 390, "height": 844}})
 				default:
