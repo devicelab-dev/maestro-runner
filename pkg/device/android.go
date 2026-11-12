@@ -3,6 +3,7 @@ package device
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -94,7 +95,10 @@ func (e *NoDevicesError) Error() string {
 // If no devices found, returns NoDevicesError with helpful suggestions.
 func detectDeviceSerial(adbPath string) (string, error) {
 	cmd := execCommand(adbPath, "devices")
-	out, err := cmd.Output()
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	err := runTimeout(cmd, adbTimeout, "adb devices")
+	out := stdout.Bytes()
 	if err != nil {
 		return "", fmt.Errorf("adb devices failed: %w\nHint: Is adb server running? Try: adb start-server", err)
 	}
@@ -165,14 +169,15 @@ func listAvailableAVDs() []string {
 
 	// Run emulator -list-avds
 	cmd := execCommand(emulatorPath, "-list-avds")
-	out, err := cmd.Output()
-	if err != nil {
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := runTimeout(cmd, adbTimeout, "emulator -list-avds"); err != nil {
 		return nil
 	}
 
 	// Parse output (one AVD per line)
 	var avds []string
-	lines := strings.Split(string(out), "\n")
+	lines := strings.Split(stdout.String(), "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line != "" {
@@ -226,7 +231,7 @@ func (d *AndroidDevice) Screenshot() ([]byte, error) {
 
 // Install installs an APK on the device.
 func (d *AndroidDevice) Install(apkPath string) error {
-	_, err := d.adb("install", "-r", "-g", apkPath)
+	_, err := d.adbRun(adbTransferTimeout, "install", "-r", "-g", apkPath)
 	return err
 }
 
@@ -238,13 +243,13 @@ func (d *AndroidDevice) Uninstall(pkg string) error {
 
 // Push copies a local file to the device via `adb push`.
 func (d *AndroidDevice) Push(localPath, remotePath string) error {
-	_, err := d.adb("push", localPath, remotePath)
+	_, err := d.adbRun(adbTransferTimeout, "push", localPath, remotePath)
 	return err
 }
 
 // Pull copies a file from the device to the host.
 func (d *AndroidDevice) Pull(remotePath, localPath string) error {
-	_, err := d.adb("pull", remotePath, localPath)
+	_, err := d.adbRun(adbTransferTimeout, "pull", remotePath, localPath)
 	return err
 }
 
@@ -451,45 +456,35 @@ func (d *AndroidDevice) Info() (DeviceInfo, error) {
 	return info, nil
 }
 
-// adb executes an ADB command.
 // ShellTimeout runs an adb shell command, killing adb if it runs past
 // timeout. Output is returned even when the command fails or times out.
-// Plain Shell has no deadline, and a launch fallback once blocked a run
-// for ten minutes on a device call that never returned.
+// Shell has the default adbTimeout; this is for a caller that wants a
+// shorter one (a launch fallback once blocked a run for ten minutes on a
+// device call that never returned).
 func (d *AndroidDevice) ShellTimeout(cmd string, timeout time.Duration) (string, error) {
-	args := make([]string, 0, 4)
-	if d.serial != "" {
-		args = append(args, "-s", d.serial)
-	}
-	args = append(args, "shell", cmd)
-	c := execCommand(d.adbPath, args...)
-	var stdout, stderr bytes.Buffer
-	c.Stdout = &stdout
-	c.Stderr = &stderr
-	if err := c.Start(); err != nil {
-		return "", fmt.Errorf("adb shell %s: %w", cmd, err)
-	}
-	done := make(chan error, 1)
-	go func() { done <- c.Wait() }()
-	select {
-	case err := <-done:
-		if err != nil {
-			return stdout.String(), fmt.Errorf("adb shell %s: %w: %s", cmd, err, stderr.String())
-		}
-		return stdout.String(), nil
-	case <-time.After(timeout):
-		_ = c.Process.Kill()
-		<-done
-		return stdout.String(), fmt.Errorf("adb shell %s: timed out after %v", cmd, timeout)
-	}
+	out, err := d.adbRun(timeout, "shell", cmd)
+	return string(out), err
 }
 
+// adb executes an ADB command with the default adbTimeout.
 func (d *AndroidDevice) adb(args ...string) (string, error) {
 	out, err := d.adbOutput(args...)
 	return string(out), err
 }
 
+// adbOutput runs an ADB command with the default adbTimeout and returns its
+// stdout.
 func (d *AndroidDevice) adbOutput(args ...string) ([]byte, error) {
+	out, err := d.adbRun(adbTimeout, args...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// adbRun runs an ADB command, killing it past timeout (0 = no limit). Stdout
+// is returned even on failure; the error names the adb command.
+func (d *AndroidDevice) adbRun(timeout time.Duration, args ...string) ([]byte, error) {
 	cmdArgs := make([]string, 0, len(args)+2)
 	if d.serial != "" {
 		cmdArgs = append(cmdArgs, "-s", d.serial)
@@ -501,12 +496,16 @@ func (d *AndroidDevice) adbOutput(args ...string) ([]byte, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
+	desc := "adb " + strings.Join(args, " ")
+	if err := runTimeout(cmd, timeout, desc); err != nil {
+		if errors.Is(err, errTimedOut) {
+			return stdout.Bytes(), err
+		}
 		errMsg := stderr.String()
 		if errMsg == "" {
 			errMsg = stdout.String()
 		}
-		return nil, fmt.Errorf("adb %s: %w: %s", strings.Join(args, " "), err, errMsg)
+		return stdout.Bytes(), fmt.Errorf("%s: %w: %s", desc, err, errMsg)
 	}
 
 	return stdout.Bytes(), nil

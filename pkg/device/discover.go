@@ -23,7 +23,7 @@ func ListDevices() ([]ConnectedDevice, error) {
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 
-	if err := cmd.Run(); err != nil {
+	if err := runTimeout(cmd, adbTimeout, "adb devices"); err != nil {
 		return nil, err
 	}
 
