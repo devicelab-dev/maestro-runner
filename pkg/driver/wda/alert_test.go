@@ -290,14 +290,19 @@ func TestLookupAnswersAPromptTheFlowDoesNotName(t *testing.T) {
 	}
 }
 
-// The prompt the flow answers itself is left to it, as is every prompt for a
-// flow with an acceptAlert or dismissAlert.
-func TestLookupLeavesTheFlowsOwnPrompts(t *testing.T) {
+// A prompt is left to the step aimed at it (a tap on one of its buttons, a
+// check of its text), as DeviceLab's driver leaves it; every prompt is left to
+// a flow with an acceptAlert or dismissAlert.
+func TestLookupLeavesThePromptToTheStepAimedAtIt(t *testing.T) {
 	d, accepted := alertServer(t, true, "Ask App Not to Track", "Allow")
 	d.PrepareForFlow([]flow.Step{&flow.LaunchAppStep{}, &flow.TapOnStep{Selector: textSelector("Ask app not to track")}})
-	lookFor(d)
+	check := &flow.AssertVisibleStep{Selector: textSelector("Ask App Not to Track")}
+	check.TimeoutMs = 300
+	if res := d.Execute(check); !res.Success {
+		t.Errorf("the check of the prompt's button failed: %s", res.Message)
+	}
 	if len(*accepted) != 0 {
-		t.Errorf("the flow's own prompt was answered: %v", *accepted)
+		t.Errorf("the prompt the step checks was answered: %v", *accepted)
 	}
 
 	d, accepted = alertServer(t, true, "Don’t Allow", "Allow")
@@ -305,6 +310,18 @@ func TestLookupLeavesTheFlowsOwnPrompts(t *testing.T) {
 	lookFor(d)
 	if len(*accepted) != 0 || d.promptAction != "" {
 		t.Errorf("a flow with acceptAlert: accepted %v, promptAction %q", *accepted, d.promptAction)
+	}
+}
+
+// A prompt whose button the flow taps elsewhere is still answered for a step
+// aimed at something else, as DeviceLab's driver answers it: the tracking
+// prompt over the onboarding held a 10 s wait for the screen beneath it.
+func TestLookupAnswersAPromptTheFlowAnswersElsewhere(t *testing.T) {
+	d, accepted := alertServer(t, true, "Ask App Not to Track", "Allow")
+	d.PrepareForFlow([]flow.Step{&flow.LaunchAppStep{}, &flow.TapOnStep{Selector: textSelector("Ask app not to track")}})
+	lookFor(d)
+	if len(*accepted) != 1 || (*accepted)[0] != "Allow" {
+		t.Errorf("accepted = %v, want [Allow]", *accepted)
 	}
 }
 
@@ -332,5 +349,129 @@ func TestLookupAnswersNothingWhenWDAAnswers(t *testing.T) {
 	lookFor(d)
 	if len(*accepted) != 0 {
 		t.Errorf("accepted = %v, want none", *accepted)
+	}
+}
+
+// promptOverAppServer is a WDA whose app has the element "next" under an open
+// notification prompt. It records each WDA call in order, so a test can tell
+// whether the prompt was answered before the tap.
+func promptOverAppServer(t *testing.T) (*Driver, *[]string) {
+	t.Helper()
+	open := true
+	var calls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		p := r.URL.Path
+		noAlert := map[string]interface{}{"value": map[string]interface{}{"error": "no such alert", "message": "no alert"}}
+		switch {
+		case strings.HasSuffix(p, "/alert/text"):
+			calls = append(calls, "alert/text")
+			if !open {
+				w.WriteHeader(http.StatusNotFound)
+				jsonResponse(w, noAlert)
+				return
+			}
+			jsonResponse(w, map[string]interface{}{"value": "“Lab” Would Like to Send You Notifications"})
+		case strings.HasSuffix(p, "/wda/alert/buttons"):
+			jsonResponse(w, map[string]interface{}{"value": []string{"Don’t Allow", "Allow"}})
+		case strings.HasSuffix(p, "/alert/accept"):
+			calls = append(calls, "accept")
+			open = false
+			jsonResponse(w, map[string]interface{}{"value": nil})
+		case strings.HasSuffix(p, "/wda/tap"):
+			if open {
+				calls = append(calls, "tap under the prompt")
+			} else {
+				calls = append(calls, "tap")
+			}
+			jsonResponse(w, map[string]interface{}{"value": nil})
+		case strings.HasSuffix(p, "/screenshot"):
+			jsonResponse(w, map[string]interface{}{"value": "c2FtZQ=="})
+		case strings.HasSuffix(p, "/elements"):
+			jsonResponse(w, map[string]interface{}{"value": []map[string]interface{}{{
+				"ELEMENT": "next", "name": "next", "text": "Next", "displayed": true,
+				"rect": map[string]interface{}{"x": 100, "y": 700, "width": 150, "height": 40},
+			}}})
+		// The element's fields, for a driver that reads them after the find.
+		case strings.HasSuffix(p, "/element/next/rect"):
+			jsonResponse(w, map[string]interface{}{"value": map[string]interface{}{"x": 100, "y": 700, "width": 150, "height": 40}})
+		case strings.HasSuffix(p, "/element/next/text"):
+			jsonResponse(w, map[string]interface{}{"value": "Next"})
+		case strings.HasSuffix(p, "/element/next/displayed"):
+			jsonResponse(w, map[string]interface{}{"value": true})
+		case strings.HasSuffix(p, "/element/next/name"):
+			jsonResponse(w, map[string]interface{}{"value": "next"})
+		default:
+			jsonResponse(w, map[string]interface{}{"value": nil})
+		}
+	}))
+	t.Cleanup(server.Close)
+	return createTestDriver(server), &calls
+}
+
+func tapCalls(calls []string) []string {
+	var out []string
+	for _, c := range calls {
+		if c != "alert/text" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// A flow that answers the tracking prompt itself gets the notification prompt
+// answered before its next tap, not after a lookup under the prompt misses:
+// the tap went to the prompt and was lost (G15's late answer).
+func TestTapAnswersAnUnnamedPromptFirst(t *testing.T) {
+	d, calls := promptOverAppServer(t)
+	tracking := &flow.TapOnStep{Selector: textSelector("Ask App Not to Track")}
+	tracking.Optional = true
+	d.PrepareForFlow([]flow.Step{&flow.LaunchAppStep{}, tracking})
+	d.watchForPrompts(promptLaunchWindow) // as launchApp does
+	res := d.Execute(&flow.TapOnStep{Selector: flow.Selector{ID: "next"}})
+	if !res.Success {
+		t.Fatalf("tap failed: %s", res.Message)
+	}
+	if got := strings.Join(tapCalls(*calls), ", "); got != "accept, tap" {
+		t.Errorf("calls = %s, want the prompt answered, then the tap", got)
+	}
+}
+
+// A flow that leaves prompts to WDA's monitor asks for no alert before a tap.
+func TestTapAsksForNoAlertWhenWDAAnswers(t *testing.T) {
+	d, calls := promptOverAppServer(t)
+	d.PrepareForFlow([]flow.Step{&flow.LaunchAppStep{}})
+	d.Execute(&flow.TapOnStep{Selector: flow.Selector{ID: "next"}})
+	for _, c := range *calls {
+		if c == "alert/text" || c == "accept" {
+			t.Fatalf("calls = %v: a flow WDA answers prompts for asked for the alert", *calls)
+		}
+	}
+}
+
+// Outside the watch after a launch or an answered prompt, a step asks for no
+// alert before it acts; inside it, at most once per promptCheckEvery.
+func TestTapAsksForPromptsOnlyInTheWatch(t *testing.T) {
+	d, calls := promptOverAppServer(t)
+	tracking := &flow.TapOnStep{Selector: textSelector("Ask App Not to Track")}
+	tracking.Optional = true
+	d.PrepareForFlow([]flow.Step{&flow.LaunchAppStep{}, tracking})
+	next := &flow.TapOnStep{Selector: flow.Selector{ID: "next"}}
+	d.Execute(next)
+	if got := strings.Join(*calls, ", "); got != "tap under the prompt" {
+		t.Errorf("before any launch: calls = %s, want only the tap", got)
+	}
+	d.watchForPrompts(promptLaunchWindow)
+	*calls = nil
+	d.Execute(next)
+	if got := strings.Join(tapCalls(*calls), ", "); got != "accept, tap" {
+		t.Errorf("in the watch: calls = %s, want the prompt answered, then the tap", got)
+	}
+	*calls = nil
+	d.Execute(next) // within promptCheckEvery of the last ask
+	for _, c := range *calls {
+		if c == "alert/text" {
+			t.Errorf("asked again within %v: %v", promptCheckEvery, *calls)
+		}
 	}
 }
