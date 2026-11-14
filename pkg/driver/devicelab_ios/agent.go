@@ -250,10 +250,13 @@ func StartAgent(ctx context.Context, opts AgentOptions) (*Agent, *Client, error)
 	if err := a.install(ctx, m.Version); err != nil {
 		return nil, nil, err
 	}
+	// The launch sends the app in front to the background (front.go).
+	front, why := frontApp(ctx, opts.UDID)
 	c, err := a.launch(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
+	a.bringBack(ctx, front, why)
 	c.SetReviver(a.revive)
 	return a, c, nil
 }
