@@ -34,8 +34,8 @@ type FlowRunner struct {
 	stepsFailed  int
 	stepsSkipped int
 
-	// Set when a runFlow's or runScript's when: skipped it; markInteraction
-	// consumes it
+	// Set when a runFlow's or runScript's when: skipped it: the step is
+	// reported skipped, and markInteraction consumes it
 	conditionSkipped bool
 	// Sub-command tracking for compound steps (runFlow, repeat, retry)
 	subCommands []report.Command
@@ -401,7 +401,7 @@ func (fr *FlowRunner) runTopLevelStep(idx int, step flow.Step) (report.Status, s
 
 	// Notify step complete
 	if fr.config.OnStepComplete != nil {
-		fr.config.OnStepComplete(idx, desc, stepStatus == report.StatusPassed, stepDuration, stepError)
+		fr.config.OnStepComplete(idx, desc, stepStatus != report.StatusFailed, stepDuration, stepError)
 	}
 
 	// Track step counts (compound steps like runFlow/repeat/retry don't count themselves,
@@ -695,7 +695,12 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 	var errorInfo *report.Error
 	var errorMsg string
 
-	if result.Success {
+	if result.Success && fr.conditionSkipped {
+		// Its when: was false. Maestro reports the step skipped, not passed
+		// (CommandSkipped in Orchestra.kt's runFlowCommand and runScriptCommand).
+		status = report.StatusSkipped
+		logger.Debug("Step %d skipped (when condition not met): %s", idx, fr.maskTypedName(step, step.Describe()))
+	} else if result.Success {
 		status = report.StatusPassed
 		logger.Debug("Step %d completed successfully (%dms): %s", idx, stepDuration, fr.maskTypedName(step, step.Describe()))
 	} else {
@@ -1799,11 +1804,17 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 		result = fr.enrichTimeoutError(result)
 	}
 
+	// Its when: was false: skipped, as at the top level.
+	skipped := result.Success && fr.conditionSkipped
+
 	// Track nested step counts (compound steps like runFlow/repeat/retry don't count themselves)
 	if !isCompoundStep {
-		if result.Success {
+		switch {
+		case skipped:
+			fr.stepsSkipped++
+		case result.Success:
 			fr.stepsPassed++
-		} else {
+		default:
 			fr.stepsFailed++
 		}
 	}
@@ -1831,7 +1842,9 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 
 	// Add to parent's sub-commands for report
 	status := report.StatusPassed
-	if !result.Success {
+	if skipped {
+		status = report.StatusSkipped
+	} else if !result.Success {
 		status = report.StatusFailed
 	}
 
