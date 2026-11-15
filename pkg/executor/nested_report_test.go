@@ -3,8 +3,10 @@ package executor
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
 	"github.com/devicelab-dev/maestro-runner/pkg/report"
 )
@@ -102,5 +104,77 @@ func TestConsoleLogsAreReportedPerStep(t *testing.T) {
 	}
 	if len(cmds[1].Logs) != 0 || len(cmds[2].Logs) != 0 {
 		t.Errorf("runFlow logs %q, tapOn logs %q: want none", cmds[1].Logs, cmds[2].Logs)
+	}
+}
+
+// A runFlow's steps are in the report while they run, each as it starts and
+// as it ends, the nested runFlow's too: they used to arrive with its end.
+func TestRunFlowStepsAreReportedAsTheyRun(t *testing.T) {
+	dir := t.TempDir()
+	var shape func(cs []report.Command) string
+	shape = func(cs []report.Command) string {
+		var out []string
+		for _, c := range cs {
+			s := c.Type + ":" + string(c.Status)
+			if len(c.SubCommands) > 0 {
+				s += "[" + shape(c.SubCommands) + "]"
+			}
+			out = append(out, s)
+		}
+		return strings.Join(out, ",")
+	}
+	seen := map[string]string{} // a tap's id → its runFlow's steps in the report as it ran
+	driver := &mockDriver{executeFunc: func(step flow.Step) *core.CommandResult {
+		if tap, ok := step.(*flow.TapOnStep); ok {
+			d, err := report.ReadFlowDetail(filepath.Join(dir, "flows", "flow-000.json"))
+			if err != nil {
+				t.Errorf("read the report while %s runs: %v", tap.Selector.ID, err)
+			} else {
+				seen[tap.Selector.ID] = shape(d.Commands[0].SubCommands)
+			}
+		}
+		return &core.CommandResult{Success: true}
+	}}
+	tap := func(id string) *flow.TapOnStep {
+		return &flow.TapOnStep{BaseStep: flow.BaseStep{StepType: flow.StepTapOn}, Selector: flow.Selector{ID: id}}
+	}
+	runner := New(driver, RunnerConfig{
+		OutputDir: dir,
+		Artifacts: ArtifactNever,
+		Device:    report.Device{ID: "test", Platform: "android"},
+	})
+	f := flow.Flow{
+		SourcePath: "test.yaml",
+		Config:     flow.Config{Name: "live steps"},
+		Steps: []flow.Step{
+			&flow.RunFlowStep{
+				BaseStep: flow.BaseStep{StepType: flow.StepRunFlow},
+				Steps: []flow.Step{
+					tap("a"),
+					&flow.RunFlowStep{BaseStep: flow.BaseStep{StepType: flow.StepRunFlow}, Steps: []flow.Step{tap("b")}},
+					tap("c"),
+				},
+			},
+		},
+	}
+	if _, err := runner.Run(context.Background(), []flow.Flow{f}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	want := map[string]string{
+		"a": "tapOn:running",
+		"b": "tapOn:passed,runFlow:running[tapOn:running]",
+		"c": "tapOn:passed,runFlow:passed[tapOn:passed],tapOn:running",
+	}
+	for id, w := range want {
+		if seen[id] != w {
+			t.Errorf("while %s ran the report had %q, want %q", id, seen[id], w)
+		}
+	}
+	d, err := report.ReadFlowDetail(filepath.Join(dir, "flows", "flow-000.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, w := shape(d.Commands[0].SubCommands), "tapOn:passed,runFlow:passed[tapOn:passed],tapOn:passed"; got != w {
+		t.Errorf("at the end the report has %q, want %q", got, w)
 	}
 }

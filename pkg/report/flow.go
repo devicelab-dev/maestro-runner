@@ -91,6 +91,19 @@ func (w *FlowWriter) CommandEndWithSubs(cmdIndex int, status Status, element *El
 	w.updateIndexProgress()
 }
 
+// CommandSubs writes a running command's sub-commands so far: the steps of a
+// runFlow, repeat or retry that ended, and the ones running now, so a reader
+// of the report sees them before the command ends. CommandEndWithSubs writes
+// the final list.
+func (w *FlowWriter) CommandSubs(cmdIndex int, subCommands []Command) {
+	if cmdIndex < 0 || cmdIndex >= len(w.flow.Commands) {
+		return
+	}
+	w.flow.Commands[cmdIndex].SubCommands = subCommands
+	w.flush()
+	w.updateIndexProgress()
+}
+
 // CommandYAML replaces the command's description, written when the report
 // was built, with the one known once it ran.
 func (w *FlowWriter) CommandYAML(cmdIndex int, yaml string) {

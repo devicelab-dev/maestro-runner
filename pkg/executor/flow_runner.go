@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +41,9 @@ type FlowRunner struct {
 	conditionSkipped bool
 	// Sub-command tracking for compound steps (runFlow, repeat, retry)
 	subCommands []report.Command
+	// live is the top-level compound step that runs now, whose steps go to
+	// the report as they start and end (liveSubs); nil between them.
+	live *liveSteps
 	// nestedArtifactSeq numbers failure artifacts captured for nested steps
 	// (runFlow / repeat / retry), which have no top-level command index.
 	nestedArtifactSeq int
@@ -679,7 +683,12 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 	if err := fr.script.ExpandStep(step); err != nil {
 		result = expressionFailed(err)
 	} else {
+		switch step.(type) {
+		case *flow.RepeatStep, *flow.RetryStep, *flow.RunFlowStep:
+			fr.live = &liveSteps{cmd: idx}
+		}
 		result = fr.runStep(idx, step, &artifacts)
+		fr.live = nil
 	}
 	result = fr.maskTypedResult(step, result)
 
@@ -1838,6 +1847,17 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 	// inside a runFlow showed the password itself.
 	describe, desc := fr.stepNames(step)
 
+	// The step as it starts, in the report while it runs (liveSubs).
+	running := report.Command{
+		ID:        fmt.Sprintf("sub-%d", len(fr.subCommands)),
+		Index:     len(fr.subCommands),
+		Type:      string(step.Type()),
+		Label:     step.Label(),
+		YAML:      describe,
+		Status:    report.StatusRunning,
+		StartTime: &start,
+	}
+
 	// For nested compound steps, we need to track their sub-commands separately
 	var nestedSubCommands, parentSubCommands []report.Command
 	isCompoundStep := false
@@ -1848,6 +1868,8 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 		parentSubCommands = fr.subCommands
 		fr.subCommands = nil
 	}
+	fr.live.begin(isCompoundStep, parentSubCommands, running)
+	fr.liveSubs()
 
 	// Expand once, before the handler, as executeStep does: a ${...} that
 	// throws fails the step and nothing runs.
@@ -1900,6 +1922,7 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 		nestedSubCommands = fr.subCommands
 		fr.subCommands = parentSubCommands
 	}
+	fr.live.end(isCompoundStep)
 
 	// Add to parent's sub-commands for report
 	status := report.StatusPassed
@@ -1952,8 +1975,68 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 	}
 
 	fr.subCommands = append(fr.subCommands, cmd)
+	fr.liveSubs()
 
 	return result
+}
+
+// liveSteps is a top-level runFlow, repeat or retry while it runs: the
+// compound steps running inside it, outermost first, each with the list it
+// goes into once it ends, and the step running in the innermost one.
+type liveSteps struct {
+	cmd    int
+	frames []liveFrame
+	step   *report.Command
+}
+
+type liveFrame struct {
+	parent []report.Command
+	cmd    report.Command
+}
+
+// begin records a nested step that starts: a compound one with the list it
+// goes into (its parent's), another as the step running.
+func (l *liveSteps) begin(compound bool, parent []report.Command, c report.Command) {
+	if l == nil {
+		return
+	}
+	if compound {
+		l.frames = append(l.frames, liveFrame{parent: parent, cmd: c})
+	} else {
+		l.step = &c
+	}
+}
+
+// end forgets the nested step begin recorded last, which ended.
+func (l *liveSteps) end(compound bool) {
+	if l == nil {
+		return
+	}
+	if compound {
+		l.frames = l.frames[:len(l.frames)-1]
+	} else {
+		l.step = nil
+	}
+}
+
+// liveSubs writes the steps of the top-level compound step that runs now to
+// the report as far as they got: those that ended and those running, so a
+// runFlow's steps can be followed while it runs and not only once it ended.
+func (fr *FlowRunner) liveSubs() {
+	l := fr.live
+	if l == nil || fr.flowWriter == nil {
+		return
+	}
+	list := slices.Clone(fr.subCommands)
+	if l.step != nil {
+		list = append(list, *l.step)
+	}
+	for i := len(l.frames) - 1; i >= 0; i-- {
+		c := l.frames[i].cmd
+		c.SubCommands = list
+		list = append(slices.Clone(l.frames[i].parent), c)
+	}
+	fr.flowWriter.CommandSubs(l.cmd, list)
 }
 
 // executeSubFlow executes a sub-flow without separate report tracking.
