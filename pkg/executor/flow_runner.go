@@ -1125,7 +1125,11 @@ func (fr *FlowRunner) collectStepsForPrepare() []flow.Step {
 		}
 		seen[path] = true
 		if sub, err := flow.ParseFile(path); err == nil {
+			// A file run by runFlow or retry runs its own hooks around its
+			// steps (executeSubFlow), so a launchApp in them is scanned too.
+			expand(sub.Config.OnFlowStart, filepath.Dir(path), depth+1)
 			expand(sub.Steps, filepath.Dir(path), depth+1)
+			expand(sub.Config.OnFlowComplete, filepath.Dir(path), depth+1)
 		}
 	}
 	expand = func(steps []flow.Step, dir string, depth int) {
@@ -1897,9 +1901,37 @@ func (fr *FlowRunner) executeSubFlow(subFlow flow.Flow) *core.CommandResult {
 		return expressionFailed(err)
 	}
 
-	// Execute steps
+	// The file's own onFlowStart runs before its steps and its onFlowComplete
+	// after them, as Maestro's runSubFlow runs the file of a runFlow or a
+	// retry (Orchestra.kt): a failing onFlowStart skips the steps, the steps
+	// failing still run onFlowComplete, and the sub-flow fails when a hook
+	// fails. The first failure is the sub-flow's, as for a flow's own hooks.
+	// Once the run is cancelled or a runFlow's timeout: has passed,
+	// runSubFlowSteps runs nothing more, onFlowComplete included; Maestro too
+	// skips it on a cancel. Maestro also skips the steps when onFlowStart
+	// changed nothing on screen (runSubFlow reads executeSubflowCommands'
+	// "screen changed" as success); here they run.
+	result := fr.runSubFlowSteps(subFlow, subFlow.Config.OnFlowStart, "onFlowStart failed: ")
+	if result == nil {
+		result = fr.runSubFlowSteps(subFlow, subFlow.Steps, "")
+	}
+	if done := fr.runSubFlowSteps(subFlow, subFlow.Config.OnFlowComplete, "onFlowComplete failed: "); result == nil {
+		result = done
+	}
+	if result != nil {
+		return result
+	}
+	return &core.CommandResult{
+		Success: true,
+		Message: fmt.Sprintf("Sub-flow '%s' completed", subFlow.Config.Name),
+	}
+}
+
+// runSubFlowSteps runs steps of subFlow as nested steps and returns the
+// result of the first that fails it (its message after prefix), or nil.
+func (fr *FlowRunner) runSubFlowSteps(subFlow flow.Flow, steps []flow.Step, prefix string) *core.CommandResult {
 	var lastStepDesc string
-	for _, step := range subFlow.Steps {
+	for _, step := range steps {
 		if fr.ctx.Err() != nil {
 			msg := "Sub-flow cancelled"
 			if lastStepDesc != "" {
@@ -1935,14 +1967,13 @@ func (fr *FlowRunner) executeSubFlow(subFlow flow.Flow) *core.CommandResult {
 
 		result := fr.executeNestedStep(step)
 		if !result.Success && !optionalFailure(step, result) {
+			if prefix != "" {
+				result = &core.CommandResult{Success: false, Error: result.Error, Message: prefix + result.Message}
+			}
 			return result
 		}
 	}
-
-	return &core.CommandResult{
-		Success: true,
-		Message: fmt.Sprintf("Sub-flow '%s' completed", subFlow.Config.Name),
-	}
+	return nil
 }
 
 // executeSubFlowWithRetry runs a sub-flow up to attempts times, until it passes.
