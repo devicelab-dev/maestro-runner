@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
@@ -4491,8 +4492,9 @@ func movingList(captures *int) string {
 }
 
 func TestScrollUntilVisibleStopsWhenScreenStopsMoving(t *testing.T) {
-	// The same capture on every read: a list at its end. Two scrolls that
-	// change nothing are proof enough — the loop must not spend the other 18.
+	// The same capture on every read: a list at its end. For a step without a
+	// timeout of its own, two scrolls that change nothing are proof enough —
+	// the loop must not spend the other 18.
 	client := &MockUIA2Client{
 		sourceFunc: func() (string, error) {
 			return `<?xml version="1.0" encoding="UTF-8"?>
@@ -4508,7 +4510,6 @@ func TestScrollUntilVisibleStopsWhenScreenStopsMoving(t *testing.T) {
 	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
 		Element:   flow.Selector{Text: "NonExistent"},
 		Direction: "down",
-		BaseStep:  flow.BaseStep{TimeoutMs: 60000},
 	})
 
 	if result.Success {
@@ -4519,5 +4520,70 @@ func TestScrollUntilVisibleStopsWhenScreenStopsMoving(t *testing.T) {
 	}
 	if !strings.Contains(result.Message, "made no progress") {
 		t.Errorf("message should name the reason, got %q", result.Message)
+	}
+}
+
+// fillsLateSource is a page source that stays the same, a list still loading,
+// until the shownAfter'th scroll, and then has the target row on screen.
+func fillsLateSource(scrolls, shownAfter int) string {
+	row := `<android.widget.ProgressBar class="android.widget.ProgressBar" displayed="true" enabled="true" bounds="[490,1150][590,1250]"/>`
+	if scrolls >= shownAfter {
+		row = `<android.widget.TextView class="android.widget.TextView" text="Target" displayed="true" enabled="true" bounds="[100,1000][500,1100]"/>`
+	}
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <android.widget.FrameLayout class="android.widget.FrameLayout" displayed="true" enabled="true" bounds="[0,0][1080,2400]">
+    ` + row + `
+  </android.widget.FrameLayout>
+</hierarchy>`
+}
+
+func TestScrollUntilVisibleWithTimeoutWaitsForListThatFillsLate(t *testing.T) {
+	// The screen does not change for four scrolls (the list is still
+	// loading), then the target is there. A step with its own timeout looks
+	// until that timeout, as Maestro does: a still screen is not proof that
+	// the content has ended.
+	client := &MockUIA2Client{}
+	client.sourceFunc = func() (string, error) { return fillsLateSource(len(client.scrollCalls), 4), nil }
+	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, nil)
+
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:   flow.Selector{Text: "Target"},
+		Direction: "down",
+		BaseStep:  flow.BaseStep{TimeoutMs: 20000},
+	})
+
+	if !result.Success {
+		t.Fatalf("expected the target once the list filled, got %q", result.Message)
+	}
+	if got := len(client.scrollCalls); got < 4 {
+		t.Errorf("expected at least 4 scrolls before the target showed, got %d", got)
+	}
+}
+
+func TestScrollUntilVisibleWithTimeoutRunsToItOnStillScreen(t *testing.T) {
+	// A screen that never changes and a step with its own timeout: the step
+	// keeps scrolling until the timeout, then fails in Maestro's words.
+	client := &MockUIA2Client{sourceFunc: func() (string, error) { return fillsLateSource(0, 1), nil }}
+	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, nil)
+
+	start := time.Now()
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:   flow.Selector{Text: "NonExistent"},
+		Direction: "down",
+		BaseStep:  flow.BaseStep{TimeoutMs: 5000},
+	})
+
+	if result.Success {
+		t.Fatal("expected failure when the element never shows")
+	}
+	if elapsed := time.Since(start); elapsed < 5*time.Second {
+		t.Errorf("gave up after %v, before the 5s timeout", elapsed)
+	}
+	if got := len(client.scrollCalls); got <= 2 {
+		t.Errorf("expected more scrolls than the no-progress stop's 2, got %d", got)
+	}
+	if !strings.Contains(result.Message, "No visible element found") {
+		t.Errorf("message should be Maestro's, got %q", result.Message)
 	}
 }

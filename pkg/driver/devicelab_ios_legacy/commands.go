@@ -844,7 +844,9 @@ func (d *Driver) handleScrollUntilVisible(s *flow.ScrollUntilVisibleStep) *core.
 			if node := d.scrollTargetIn(nodes, s.Element, s.VisibilityPercentage); node != nil {
 				return core.SuccessResult("element found after scrolling", toElementInfo(node))
 			}
-			if sig, ok := scrollSurfaceSignature(nodes); ok && progress.Observe(sig) {
+			// A step with its own timeout looks until it passes, as in
+			// Maestro: a list still filling reads as stuck too.
+			if sig, ok := scrollSurfaceSignature(nodes); ok && progress.Observe(sig) && !core.ScrollLooksUntilTimeout(s) {
 				return core.ErrorResult(
 					fmt.Errorf("element not found after %d scrolls", i),
 					fmt.Sprintf("scroll target not found: scrolling %s made no progress (end of content?)", direction),
@@ -859,6 +861,12 @@ func (d *Driver) handleScrollUntilVisible(s *flow.ScrollUntilVisibleStep) *core.
 		// after every swipe: a list still coasting reads as a different
 		// screen each time and its rows are not where they will stop.
 		d.settleScreen(settleCapMs(deadline))
+	}
+	if !time.Now().Before(deadline) {
+		return core.ErrorResult(
+			fmt.Errorf("element not found after scrolling"),
+			core.ScrollTimeoutMessage(describeSelector(s.Element), direction, timeout),
+		)
 	}
 	return core.ErrorResult(
 		fmt.Errorf("element not found after scrolling"),

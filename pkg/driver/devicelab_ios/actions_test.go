@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
 )
@@ -223,6 +224,70 @@ func TestScrollUntilVisibleStopsWithoutProgress(t *testing.T) {
 	}
 	if n := len(fa.sent("act")); n != 3 {
 		t.Fatalf("scrolls = %d, want 3", n)
+	}
+}
+
+func TestScrollUntilVisibleWithTimeoutWaitsForListThatFillsLate(t *testing.T) {
+	// The screen does not change for four scrolls (the list is still
+	// loading), then the target is there. A step with its own timeout looks
+	// until that timeout, as Maestro does: a still screen is not proof that
+	// the content has ended.
+	var scrolls atomic.Int32
+	d, _, _ := newTestDriver(t, func(cmd string, _ Args) (*Response, error) {
+		filled := scrolls.Load() >= 4
+		switch cmd {
+		case "act":
+			scrolls.Add(1)
+		case "find":
+			if filled {
+				return tree(node(1, "Cell", "Target", 0, 300, 400, 50)), nil
+			}
+			return tree(), nil
+		case "settle":
+			if filled {
+				return ok(&Payload{ScreenHash: "list"}), nil
+			}
+			return ok(&Payload{ScreenHash: "loading"}), nil
+		}
+		return ok(nil), nil
+	})
+	res := d.Execute(&flow.ScrollUntilVisibleStep{
+		Element:  flow.Selector{Text: "Target"},
+		BaseStep: flow.BaseStep{TimeoutMs: 20000},
+	})
+	if !res.Success || scrolls.Load() < 4 {
+		t.Fatalf("res=%+v scrolls=%d, want the target after at least 4 scrolls", res, scrolls.Load())
+	}
+}
+
+func TestScrollUntilVisibleWithTimeoutRunsToItOnStillScreen(t *testing.T) {
+	// A screen that never changes and a step with its own timeout: the step
+	// keeps scrolling until the timeout, then fails in Maestro's words.
+	d, fa, _ := newTestDriver(t, func(cmd string, _ Args) (*Response, error) {
+		switch cmd {
+		case "settle":
+			return ok(&Payload{ScreenHash: "same"}), nil
+		case "find":
+			return tree(), nil
+		}
+		return ok(nil), nil
+	})
+	start := time.Now()
+	res := d.Execute(&flow.ScrollUntilVisibleStep{
+		Element:  flow.Selector{Text: "Missing"},
+		BaseStep: flow.BaseStep{TimeoutMs: 1000},
+	})
+	if res.Success || !strings.Contains(res.Message, "No visible element found") {
+		t.Fatalf("res = %+v, want Maestro's message", res)
+	}
+	if res.Error == nil || !strings.Contains(res.Error.Error(), "not found") {
+		t.Errorf("cause = %v, want a not-found cause, as the other drivers give", res.Error)
+	}
+	if elapsed := time.Since(start); elapsed < time.Second {
+		t.Errorf("gave up after %v, before the 1s timeout", elapsed)
+	}
+	if n := len(fa.sent("act")); n <= 3 {
+		t.Errorf("scrolls = %d, want more than the no-progress stop's 3", n)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -124,7 +125,8 @@ func TestScrollUntilVisibleSettlesAfterEachSwipe(t *testing.T) {
 	}
 }
 
-// A screen that stops moving ends the loop early with a clear reason.
+// A screen that stops moving ends the loop early with a clear reason, for a
+// step without a timeout of its own.
 func TestScrollUntilVisibleStopsWhenNothingMoves(t *testing.T) {
 	info := &core.PlatformInfo{ScreenWidth: 400, ScreenHeight: 800}
 	r := &settleRunner{settled: true, nodesFn: func(int) []SnapshotNode {
@@ -132,14 +134,64 @@ func TestScrollUntilVisibleStopsWhenNothingMoves(t *testing.T) {
 	}}
 	d := r.driver(t, info)
 	res := d.handleScrollUntilVisible(&flow.ScrollUntilVisibleStep{
-		Element:  flow.Selector{ID: "missing"},
-		BaseStep: flow.BaseStep{TimeoutMs: 20000},
+		Element: flow.Selector{ID: "missing"},
 	})
 	if res.Success {
 		t.Fatal("found an element that is not there")
 	}
 	if r.drags > 4 {
 		t.Errorf("kept scrolling a still screen: %d drags", r.drags)
+	}
+}
+
+// A step with its own timeout looks until that timeout, as Maestro does: a
+// screen that does not change for four scrolls (the list is still loading)
+// and then shows the target is found.
+func TestScrollUntilVisibleWithTimeoutWaitsForListThatFillsLate(t *testing.T) {
+	info := &core.PlatformInfo{ScreenWidth: 400, ScreenHeight: 800}
+	r := &settleRunner{settled: true, nodesFn: func(drags int) []SnapshotNode {
+		if drags < 4 {
+			return []SnapshotNode{{Type: "ActivityIndicator", Label: "loading", Rect: SnapshotRect{X: 180, Y: 380, Width: 40, Height: 40}}}
+		}
+		return []SnapshotNode{{Type: "Cell", Identifier: "target", Rect: SnapshotRect{X: 0, Y: 300, Width: 100, Height: 40}}}
+	}}
+	d := r.driver(t, info)
+	res := d.handleScrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:  flow.Selector{ID: "target"},
+		BaseStep: flow.BaseStep{TimeoutMs: 20000},
+	})
+	if !res.Success {
+		t.Fatalf("expected the target once the list filled, got %q", res.Message)
+	}
+	if r.drags < 4 {
+		t.Errorf("drags = %d, want at least 4 before the target showed", r.drags)
+	}
+}
+
+// A screen that never changes and a step with its own timeout: the step keeps
+// scrolling until the timeout, then fails in Maestro's words.
+func TestScrollUntilVisibleWithTimeoutRunsToItOnStillScreen(t *testing.T) {
+	info := &core.PlatformInfo{ScreenWidth: 400, ScreenHeight: 800}
+	r := &settleRunner{settled: true, nodesFn: func(int) []SnapshotNode {
+		return []SnapshotNode{{Type: "Other", Label: "end of list", Rect: SnapshotRect{Width: 400, Height: 40}}}
+	}}
+	d := r.driver(t, info)
+	start := time.Now()
+	res := d.handleScrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:  flow.Selector{ID: "missing"},
+		BaseStep: flow.BaseStep{TimeoutMs: 1000},
+	})
+	if res.Success {
+		t.Fatal("found an element that is not there")
+	}
+	if elapsed := time.Since(start); elapsed < time.Second {
+		t.Errorf("gave up after %v, before the 1s timeout", elapsed)
+	}
+	if r.drags <= 4 {
+		t.Errorf("drags = %d, want more than the no-progress stop's", r.drags)
+	}
+	if !strings.Contains(res.Message, "No visible element found") {
+		t.Errorf("message should be Maestro's, got %q", res.Message)
 	}
 }
 

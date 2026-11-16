@@ -476,11 +476,15 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 			if hanging != nil {
 				return successResult("Element visible (end of content, partly past its scroll container)", hanging)
 			}
-			reason := fmt.Sprintf("scrolling %s made no progress after %d scrolls (end of content?)", direction, i)
-			if partiallyVisible {
-				return errorResult(fmt.Errorf("element found but never sufficiently visible after scrolling"), reason)
+			// A step with its own timeout looks until it passes, as in Maestro:
+			// a list still filling reads as stuck too.
+			if !core.ScrollLooksUntilTimeout(step) {
+				reason := fmt.Sprintf("scrolling %s made no progress after %d scrolls (end of content?)", direction, i)
+				if partiallyVisible {
+					return errorResult(fmt.Errorf("element found but never sufficiently visible after scrolling"), reason)
+				}
+				return errorResult(fmt.Errorf("element not found after scrolling"), reason)
 			}
-			return errorResult(fmt.Errorf("element not found after scrolling"), reason)
 		}
 
 		// Scroll. A failed scroll ends the step with its reason; ignoring it
@@ -497,10 +501,14 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	if hanging != nil {
 		return successResult("Element visible (scrolls ran out, partly past its scroll container)", hanging)
 	}
-	if partiallyVisible {
-		return errorResult(fmt.Errorf("element found but never sufficiently visible after scrolling"), "")
+	reason := ""
+	if !time.Now().Before(deadline) {
+		reason = core.ScrollTimeoutMessage(step.Element.Describe(), direction, timeout)
 	}
-	return errorResult(fmt.Errorf("element not found after scrolling"), "")
+	if partiallyVisible {
+		return errorResult(fmt.Errorf("element found but never sufficiently visible after scrolling"), reason)
+	}
+	return errorResult(fmt.Errorf("element not found after scrolling"), reason)
 }
 
 // scrollSurfaceSignature reduces the current page source to a key for

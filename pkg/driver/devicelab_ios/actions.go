@@ -354,11 +354,21 @@ func (d *Driver) scrollUntilVisible(s *flow.ScrollUntilVisibleStep) *core.Comman
 				if shown != nil {
 					return core.SuccessResult("element visible at the end of the content", toElementInfo(shown))
 				}
-				err := fmt.Errorf("%s not visible: scrolling %s made no progress after %d scrolls (end of content?)",
-					describe(s.Element), direction, i+1)
-				return core.ErrorResult(err, err.Error())
+				// A step with its own timeout looks until it passes, as in
+				// Maestro: a list still filling reads as stuck too.
+				if !core.ScrollLooksUntilTimeout(s) {
+					err := fmt.Errorf("%s not visible: scrolling %s made no progress after %d scrolls (end of content?)",
+						describe(s.Element), direction, i+1)
+					return core.ErrorResult(err, err.Error())
+				}
 			}
 		}
+	}
+	if time.Now().After(deadline) {
+		// A "not found" cause, as the other drivers give, files the failure
+		// as element_not_found, which is what Maestro's ElementNotFound is.
+		err := fmt.Errorf("%s not found after scrolling %s", describe(s.Element), direction)
+		return core.ErrorResult(err, core.ScrollTimeoutMessage(describe(s.Element), direction, timeout))
 	}
 	err := fmt.Errorf("%s not visible after scrolling %s", describe(s.Element), direction)
 	return core.ErrorResult(err, err.Error())

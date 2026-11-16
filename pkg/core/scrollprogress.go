@@ -3,6 +3,9 @@ package core
 import (
 	"fmt"
 	"hash/fnv"
+	"time"
+
+	"github.com/devicelab-dev/maestro-runner/pkg/flow"
 )
 
 // scrollStuckWindow is how many consecutive captures the stuck check keeps.
@@ -71,4 +74,33 @@ func ScrollSignature(capture string) string {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(capture))
 	return fmt.Sprintf("%016x", h.Sum64())
+}
+
+// ScrollLooksUntilTimeout reports whether a scrollUntilVisible step that has
+// not found its element keeps looking after the surface stops moving: it does
+// when the flow gave the step its own `timeout:`. That timeout is the step's
+// budget, as in Maestro, which swipes until it passes whatever the screen
+// does. A list that fills late (empty, or still loading its rows, when the
+// step starts) reads to ScrollProgress exactly like a list at its end, and
+// stopping there fails a step whose author gave it time to wait.
+//
+// A step without a timeout keeps the early stop, so a target that is not in
+// the list does not cost the whole default timeout. The end-of-content
+// answers for an element already found (on screen but not yet centred, or
+// partly past its container's edge) do not depend on this: they still end
+// the step as soon as the surface stops.
+func ScrollLooksUntilTimeout(step *flow.ScrollUntilVisibleStep) bool {
+	return step.TimeoutMs > 0
+}
+
+// ScrollTimeoutMessage is the failure message of a scrollUntilVisible step
+// whose timeout passed before its element was visible enough, led by
+// Maestro's words for it ("No visible element found: ..."). selector is the
+// driver's description of the element; an empty one is left out.
+func ScrollTimeoutMessage(selector, direction string, timeout time.Duration) string {
+	found := "No visible element found"
+	if selector != "" {
+		found += ": " + selector
+	}
+	return fmt.Sprintf("%s (scrolling %s until the %dms timeout)", found, direction, timeout.Milliseconds())
 }

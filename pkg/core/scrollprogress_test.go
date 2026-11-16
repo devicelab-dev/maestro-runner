@@ -1,6 +1,12 @@
 package core
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/devicelab-dev/maestro-runner/pkg/flow"
+)
 
 func TestScrollProgressObserve(t *testing.T) {
 	cases := []struct {
@@ -47,5 +53,26 @@ func TestScrollSignature(t *testing.T) {
 	}
 	if len(a) != 16 {
 		t.Errorf("signature length = %d, want 16 hex chars", len(a))
+	}
+}
+
+func TestScrollLooksUntilTimeout(t *testing.T) {
+	if ScrollLooksUntilTimeout(&flow.ScrollUntilVisibleStep{}) {
+		t.Error("a step without a timeout of its own keeps the early stop")
+	}
+	if !ScrollLooksUntilTimeout(&flow.ScrollUntilVisibleStep{BaseStep: flow.BaseStep{TimeoutMs: 30000}}) {
+		t.Error("a step with its own timeout looks until it passes")
+	}
+}
+
+func TestScrollTimeoutMessage(t *testing.T) {
+	got := ScrollTimeoutMessage(`id="row"`, "down", 30*time.Second)
+	if !strings.HasPrefix(got, `No visible element found: id="row"`) || !strings.Contains(got, "30000ms") {
+		t.Errorf("message = %q", got)
+	}
+	// A selector the driver cannot describe (only a relative or a state
+	// filter) leaves no dangling colon.
+	if got := ScrollTimeoutMessage("", "down", time.Second); got != "No visible element found (scrolling down until the 1000ms timeout)" {
+		t.Errorf("message without a description = %q", got)
 	}
 }
