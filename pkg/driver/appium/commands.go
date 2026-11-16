@@ -3,6 +3,7 @@ package appium
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -389,6 +390,11 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	maxScrolls := 20
 	if step.MaxScrolls > 0 {
 		maxScrolls = step.MaxScrolls
+	} else if core.ScrollLooksUntilTimeout(step) {
+		// The step's own timeout is its budget, as in Maestro and on the iOS
+		// drivers: the default count does not cut it short. At about a
+		// second a scroll, 20 scrolls ended a 30s step at about 20s.
+		maxScrolls = math.MaxInt
 	}
 
 	partiallyVisible := false

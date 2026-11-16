@@ -190,8 +190,8 @@ func TestScrollUntilVisibleDefaultMaxScrolls(t *testing.T) {
 	step := &flow.ScrollUntilVisibleStep{
 		Element:   flow.Selector{Text: "NonExistent"},
 		Direction: "down",
-		BaseStep:  flow.BaseStep{TimeoutMs: 60000}, // long timeout
-		// MaxScrolls not set — defaults to 20
+		// No timeout of its own (the default 30s outlasts 20 scrolls here)
+		// and MaxScrolls not set — defaults to 20
 	}
 
 	result := driver.scrollUntilVisible(step)
@@ -201,6 +201,46 @@ func TestScrollUntilVisibleDefaultMaxScrolls(t *testing.T) {
 	}
 	if client.scrollCalls != 20 {
 		t.Errorf("Expected default 20 scrolls, got %d", client.scrollCalls)
+	}
+}
+
+// growingList is a list that moves on every capture, with the target row
+// partly below the screen's bottom edge until the shownAfter'th scroll, and
+// fully on screen from then on. A partly visible match is found at once, so
+// each round costs only the scroll's settle.
+func growingList(scrolls, shownAfter int) string {
+	top := 2350
+	if scrolls >= shownAfter {
+		top = 1000
+	}
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <android.widget.FrameLayout class="android.widget.FrameLayout" displayed="true" enabled="true" bounds="[0,0][1080,2400]">
+    <android.widget.TextView class="android.widget.TextView" text="Row %d" displayed="true" enabled="true" bounds="[100,100][500,200]"/>
+    <android.widget.TextView class="android.widget.TextView" text="Target" displayed="true" enabled="true" bounds="[100,%d][500,%d]"/>
+  </android.widget.FrameLayout>
+</hierarchy>`, scrolls, top, top+100)
+}
+
+func TestScrollUntilVisibleWithTimeoutIsNotCutAtDefaultMaxScrolls(t *testing.T) {
+	// The target comes on screen after the 21st scroll. A step with its own
+	// timeout scrolls until that timeout, as Maestro does; the default of 20
+	// scrolls only caps a step without one.
+	client := &mockDeviceLabClient{}
+	client.sourceFunc = func() (string, error) { return growingList(client.scrollCalls, 21), nil }
+	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, nil)
+
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:   flow.Selector{Text: "Target"},
+		Direction: "down",
+		BaseStep:  flow.BaseStep{TimeoutMs: 60000},
+	})
+
+	if !result.Success {
+		t.Fatalf("expected the target after 21 scrolls, got %q", result.Message)
+	}
+	if got := client.scrollCalls; got != 21 {
+		t.Errorf("expected 21 scrolls, got %d", got)
 	}
 }
 

@@ -3095,3 +3095,56 @@ func TestAppiumScrollUntilVisibleWithTimeoutRunsToItOnStillScreen(t *testing.T) 
 		t.Errorf("message should be Maestro's, got %q", result.Message)
 	}
 }
+
+func TestAppiumScrollUntilVisibleWithTimeoutIsNotCutAtDefaultMaxScrolls(t *testing.T) {
+	// The target comes on screen after the 21st scroll; until then the list
+	// moves and the target sits partly below the screen's bottom edge. A step
+	// with its own timeout scrolls until that timeout, as Maestro does; the
+	// default of 20 scrolls only caps a step without one.
+	var scrolls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		switch {
+		case strings.HasSuffix(path, "/source"):
+			n := scrolls.Load()
+			top := 2290
+			if n >= 21 {
+				top = 1000
+			}
+			writeJSON(w, map[string]interface{}{
+				"value": fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <android.widget.FrameLayout bounds="[0,0][1080,2340]">
+    <android.widget.TextView text="Row %d" bounds="[100,100][500,200]"/>
+    <android.widget.TextView text="Target" bounds="[100,%d][500,%d]"/>
+  </android.widget.FrameLayout>
+</hierarchy>`, n, top, top+100),
+			})
+		case strings.Contains(path, "/actions") && r.Method == "POST":
+			scrolls.Add(1)
+			writeJSON(w, map[string]interface{}{"value": nil})
+		case strings.Contains(path, "/window/rect"):
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 1080.0, "height": 2340.0, "x": 0.0, "y": 0.0},
+			})
+		default:
+			writeJSON(w, map[string]interface{}{"value": nil})
+		}
+	}))
+	defer server.Close()
+	driver := createTestAppiumDriver(server)
+
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:   flow.Selector{Text: "Target"},
+		Direction: "down",
+		BaseStep:  flow.BaseStep{TimeoutMs: 60000},
+	})
+
+	if !result.Success {
+		t.Fatalf("expected the target after 21 scrolls, got %q", result.Message)
+	}
+	if got := scrolls.Load(); got != 21 {
+		t.Errorf("expected 21 scrolls, got %d", got)
+	}
+}
