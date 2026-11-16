@@ -448,9 +448,15 @@ type expressionError struct{ error }
 func (e expressionError) Unwrap() error { return e.error }
 
 // expressionFailed is the result of a step whose ${...} threw: the step fails
-// with the JavaScript error and does not run, as in Maestro.
+// with the JavaScript error and does not run, as in Maestro. A timeout whose
+// ${...} is not a number fails it the same way, but an optional step's
+// failure lets the flow go on, as Maestro's InvalidCommand does (a warning
+// there): see numberError.
 func expressionFailed(err error) *core.CommandResult {
-	err = expressionError{err}
+	var number numberError
+	if !errors.As(err, &number) || !number.optionalForgives {
+		err = expressionError{err}
+	}
 	return &core.CommandResult{Success: false, Error: err, Message: err.Error()}
 }
 

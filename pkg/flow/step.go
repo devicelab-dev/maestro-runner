@@ -143,6 +143,12 @@ type BaseStep struct {
 	Optional  bool     `yaml:"optional"`
 	StepLabel string   `yaml:"label"`
 	TimeoutMs int      `yaml:"timeout"`
+	// TimeoutExpr is `timeout:` written as a ${...} expression, kept for the
+	// expand pass to resolve into TimeoutMs when the step runs. Maestro reads
+	// extendedWaitUntil's, waitForAnimationToEnd's and scrollUntilVisible's
+	// timeout as text and evaluates it with the step's other scripts, so only
+	// those steps set it (see numberExpression).
+	TimeoutExpr string `yaml:"-"`
 	// Platform restricts this step to a single platform; when set and it
 	// doesn't match the running driver, the step is skipped (Maestro #1353).
 	Platform string `yaml:"platform"`
@@ -341,6 +347,9 @@ type ScrollUntilVisibleStep struct {
 	WaitToSettleTimeoutMs int      `yaml:"waitToSettleTimeoutMs"`
 	// Engine selects the scroll backend. See ScrollStep.Engine.
 	Engine string `yaml:"engine"`
+	// SpeedExpr is `speed:` written as a ${...} expression, which the expand
+	// pass resolves into Speed when the step runs, as Maestro evaluates it.
+	SpeedExpr string `yaml:"-"`
 }
 
 // BackStep presses back.

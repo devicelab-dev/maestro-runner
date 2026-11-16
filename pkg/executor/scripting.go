@@ -846,6 +846,85 @@ func (x *expansion) text(s string) string {
 	return out
 }
 
+// numberError is a number field whose ${...} resolved to something that is
+// not a number the field takes. The step fails with it without running.
+// optionalForgives is true where Maestro lets an optional step's failure go
+// (a warning there; here the step is reported failed and the flow goes on):
+// its timeout error is an InvalidCommand, which optional downgrades; a bad
+// scroll speed is an InvalidNumericFieldValue, which it never does, and
+// waitForAnimationToEnd's timeout fails as a NumberFormatException
+// (Orchestra.kt executeCommands, Commands.kt).
+type numberError struct {
+	msg              string
+	optionalForgives bool
+}
+
+func (e numberError) Error() string { return e.msg }
+
+// number expands a number field's ${...} expression and returns its value,
+// trimmed. ok is false when the expression threw; the error is kept.
+func (x *expansion) number(expr string) (string, bool) {
+	out, err := x.se.expand(expr)
+	if err != nil {
+		if x.err == nil {
+			x.err = err
+		}
+		return "", false
+	}
+	return strings.TrimSpace(out), true
+}
+
+func (x *expansion) fail(err error) {
+	if x.err == nil {
+		x.err = err
+	}
+}
+
+// timeout resolves a `timeout:` written as a ${...} expression into
+// TimeoutMs, read as Maestro's parseTimeoutMs reads it: a whole number of
+// milliseconds, `_` allowed (Maestro's extendedWaitUntil drops it; its
+// scrollUntilVisible and waitForAnimationToEnd fail on it, so there this is
+// lenient), surrounding spaces trimmed. A non-positive one is then the
+// step's default, as when it is written as a literal. The expression is
+// kept, so the step resolves it again each time it runs.
+func (x *expansion) timeout(b *flow.BaseStep, optionalForgives bool) {
+	if b.TimeoutExpr == "" {
+		return
+	}
+	v, ok := x.number(b.TimeoutExpr)
+	if !ok {
+		return
+	}
+	ms, err := strconv.Atoi(strings.ReplaceAll(v, "_", ""))
+	if err != nil {
+		x.fail(numberError{
+			msg:              fmt.Sprintf("%s timeout: %s is %q, not a number of milliseconds", b.StepType, b.TimeoutExpr, v),
+			optionalForgives: optionalForgives,
+		})
+		return
+	}
+	b.TimeoutMs = ms
+}
+
+// scrollSpeed resolves scrollUntilVisible's `speed:` written as a ${...}
+// expression into Speed: a whole number from 0 to 100, as Maestro's
+// parseScrollSpeed takes and as a literal speed is checked at parse time.
+func (x *expansion) scrollSpeed(s *flow.ScrollUntilVisibleStep) {
+	if s.SpeedExpr == "" {
+		return
+	}
+	v, ok := x.number(s.SpeedExpr)
+	if !ok {
+		return
+	}
+	speed, err := strconv.Atoi(v)
+	if err != nil || speed < 0 || speed > 100 {
+		x.fail(numberError{msg: fmt.Sprintf("scrollUntilVisible speed: %s is %q, not a number between 0 and 100", s.SpeedExpr, v)})
+		return
+	}
+	s.Speed = speed
+}
+
 // envMap expands `${VAR}` / `${VAR || "default"}` in every value of a YAML
 // `env:` map, in place.
 func (x *expansion) envMap(env map[string]string) {
@@ -899,9 +978,16 @@ func (se *ScriptEngine) ExpandStep(step flow.Step) error {
 		if s.NotVisible != nil {
 			s.NotVisible = x.selector(s.NotVisible)
 		}
+		x.timeout(&s.BaseStep, true)
 	case *flow.ScrollUntilVisibleStep:
 		s.Element = *x.selector(&s.Element)
 		s.Direction = x.text(s.Direction)
+		// Speed first, as Maestro evaluates it (ScrollUntilVisibleCommand
+		// evaluateScripts): with both bad, the speed's error is the step's.
+		x.scrollSpeed(s)
+		x.timeout(&s.BaseStep, true)
+	case *flow.WaitForAnimationToEndStep:
+		x.timeout(&s.BaseStep, false)
 	case *flow.SetAirplaneModeStep:
 		if str, ok := s.EnabledRaw.(string); ok {
 			s.Enabled = parseBoolExpr(x.text(str))
