@@ -1609,8 +1609,8 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 		maxScrolls = step.MaxScrolls
 	} else if core.ScrollLooksUntilTimeout(step) {
 		// The step's own timeout is its budget, as in Maestro and on the iOS
-		// drivers: the default count does not cut it short. At about a
-		// second a scroll, 20 scrolls ended a 30s step at about 20s.
+		// drivers: the default count, which could end the step before that
+		// timeout, does not apply.
 		maxScrolls = math.MaxInt
 	}
 	timeout := 30 * time.Second
