@@ -1669,6 +1669,11 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	for i := 0; i < maxScrolls && time.Now().Before(deadline); i++ {
 		wasHanging := hanging
 		hanging = nil
+		// A cancelled run stops here: with a timeout of its own the step
+		// would otherwise swipe on a still screen until that timeout.
+		if err := d.parentContext().Err(); err != nil {
+			return errorResult(fmt.Errorf("scroll cancelled: %w", err), "")
+		}
 		_, info, err := d.findElement(step.Element, true, 1000)
 		if err == nil && info != nil {
 			if decided, done := centering.Check(step.CenterElement, info.Bounds, direction, width, height); decided {

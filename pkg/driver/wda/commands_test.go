@@ -1,8 +1,10 @@
 package wda
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -5426,6 +5428,36 @@ func TestScrollUntilVisibleWithoutTimeoutKeepsItsMessageAtTheDeadline(t *testing
 	want := fmt.Sprintf("Element not found: %s", selectorDesc(step.Element))
 	if result.Message != want || result.Error == nil || result.Error.Error() != "element not found after scrolling" {
 		t.Errorf("a step without a timeout of its own should keep its message %q, got %q (%v)", want, result.Message, result.Error)
+	}
+}
+
+func TestScrollUntilVisibleStopsWhenRunIsCancelled(t *testing.T) {
+	// The run is cancelled (a runFlow's timeout, a caller's cancel) while a
+	// step with its own timeout looks on a still screen: it stops at once
+	// instead of swiping on until that timeout.
+	var scrolls atomic.Int32
+	server := fillsLateWDAServer(&scrolls, 1<<30)
+	defer server.Close()
+	driver := createTestDriver(server)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	driver.SetContext(ctx)
+
+	start := time.Now()
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:   flow.Selector{Text: "NonExistent"},
+		Direction: "down",
+		BaseStep:  flow.BaseStep{TimeoutMs: 5000},
+	})
+
+	if result.Success || !errors.Is(result.Error, context.Canceled) {
+		t.Fatalf("expected the cancel as the cause, got %q (%v)", result.Message, result.Error)
+	}
+	if got := scrolls.Load(); got != 0 {
+		t.Errorf("expected no scroll after the cancel, got %d", got)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("stopped after %v; want at once", elapsed)
 	}
 }
 

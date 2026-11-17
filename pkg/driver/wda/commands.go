@@ -1083,6 +1083,11 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	var shown *core.ElementInfo
 
 	for i := 0; i < maxScrolls && time.Now().Before(deadline); i++ {
+		// A cancelled run stops here: with a timeout of its own the step
+		// would otherwise swipe on a still screen until that timeout.
+		if err := d.parentContext().Err(); err != nil {
+			return errorResult(fmt.Errorf("scroll cancelled: %w", err), "")
+		}
 		info, err := d.findElement(step.Element, true, 1000)
 		if err == nil && info != nil {
 			// Found in the tree is not enough: an element half-hidden behind
