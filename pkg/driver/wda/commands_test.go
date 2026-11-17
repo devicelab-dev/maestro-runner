@@ -5369,6 +5369,66 @@ func TestScrollUntilVisibleWithTimeoutRunsToItOnStillScreen(t *testing.T) {
 	}
 }
 
+// movingWDAServer is a WebDriverAgent whose screen moves on every scroll,
+// a list that keeps going without the target. It counts the scrolls (W3C
+// actions).
+func movingWDAServer(scrolls *atomic.Int32) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		switch {
+		case strings.Contains(path, "/actions"):
+			scrolls.Add(1)
+			jsonResponse(w, map[string]interface{}{"status": 0})
+		case strings.HasSuffix(path, "/screenshot"):
+			picture := fmt.Sprintf("list after %d scrolls", scrolls.Load())
+			jsonResponse(w, map[string]interface{}{"value": base64.StdEncoding.EncodeToString([]byte(picture))})
+		case strings.HasSuffix(path, "/source"):
+			jsonResponse(w, map[string]interface{}{
+				"value": fmt.Sprintf(`<AppiumAUT>
+  <XCUIElementTypeApplication name="TestApp" enabled="true" visible="true" x="0" y="0" width="390" height="844">
+    <XCUIElementTypeStaticText name="Other" label="Other" enabled="true" visible="true" x="20" y="%d" width="200" height="40"/>
+  </XCUIElementTypeApplication>
+</AppiumAUT>`, 100+scrolls.Load()),
+			})
+		case strings.Contains(path, "/window/size"):
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 390.0, "height": 844.0},
+			})
+		default:
+			jsonResponse(w, map[string]interface{}{"status": 0})
+		}
+	}))
+}
+
+func TestScrollUntilVisibleWithoutTimeoutKeepsItsMessageAtTheDeadline(t *testing.T) {
+	// A step without a timeout of its own that runs into the default 30s (a
+	// list that keeps moving) keeps the message it had: Maestro's words are
+	// for a step that set its timeout.
+	var scrolls atomic.Int32
+	server := movingWDAServer(&scrolls)
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.ScrollUntilVisibleStep{
+		Element:   flow.Selector{Text: "NonExistent"},
+		Direction: "down",
+	}
+	start := time.Now()
+	result := driver.scrollUntilVisible(step)
+
+	if result.Success {
+		t.Fatal("expected failure when the element never shows")
+	}
+	if elapsed := time.Since(start); elapsed < 30*time.Second {
+		t.Fatalf("ended after %v, before the default 30s timeout", elapsed)
+	}
+	want := fmt.Sprintf("Element not found: %s", selectorDesc(step.Element))
+	if result.Message != want || result.Error == nil || result.Error.Error() != "element not found after scrolling" {
+		t.Errorf("a step without a timeout of its own should keep its message %q, got %q (%v)", want, result.Message, result.Error)
+	}
+}
+
 // =============================================================================
 // autoClickAlertSelector: permission prompts only, not the app's own alerts
 // =============================================================================

@@ -862,7 +862,9 @@ func (d *Driver) handleScrollUntilVisible(s *flow.ScrollUntilVisibleStep) *core.
 		// screen each time and its rows are not where they will stop.
 		d.settleScreen(settleCapMs(deadline))
 	}
-	if !time.Now().Before(deadline) {
+	// A step with its own timeout that ran out of it fails in Maestro's
+	// words; one without keeps its message, however its loop ended.
+	if core.ScrollLooksUntilTimeout(s) && !time.Now().Before(deadline) {
 		return core.ErrorResult(
 			fmt.Errorf("element not found after scrolling"),
 			core.ScrollTimeoutMessage(describeSelector(s.Element), direction, timeout),

@@ -3096,6 +3096,64 @@ func TestAppiumScrollUntilVisibleWithTimeoutRunsToItOnStillScreen(t *testing.T) 
 	}
 }
 
+// movingServer is an Appium server whose page source moves on every scroll,
+// a list that keeps going without the target. It counts the scrolls (W3C
+// actions).
+func movingServer(scrolls *atomic.Int32) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		switch {
+		case strings.HasSuffix(path, "/source"):
+			y := 100 + scrolls.Load()
+			writeJSON(w, map[string]interface{}{
+				"value": fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <android.widget.FrameLayout bounds="[0,0][1080,2340]">
+    <android.widget.TextView text="Other" bounds="[100,%d][300,%d]"/>
+  </android.widget.FrameLayout>
+</hierarchy>`, y, y+50),
+			})
+		case strings.Contains(path, "/actions") && r.Method == "POST":
+			scrolls.Add(1)
+			writeJSON(w, map[string]interface{}{"value": nil})
+		case strings.Contains(path, "/window/rect"):
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 1080.0, "height": 2340.0, "x": 0.0, "y": 0.0},
+			})
+		default:
+			writeJSON(w, map[string]interface{}{"value": nil})
+		}
+	}))
+}
+
+func TestAppiumScrollUntilVisibleWithoutTimeoutKeepsItsMessageAtTheDeadline(t *testing.T) {
+	// A step without a timeout of its own that runs into the default 30s (a
+	// list that keeps moving, a maxScrolls it never reaches) keeps the message
+	// it had: Maestro's words are for a step that set its timeout.
+	var scrolls atomic.Int32
+	server := movingServer(&scrolls)
+	defer server.Close()
+	driver := createTestAppiumDriver(server)
+
+	start := time.Now()
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:    flow.Selector{Text: "NonExistent"},
+		Direction:  "down",
+		MaxScrolls: 1000,
+	})
+
+	if result.Success {
+		t.Fatal("expected failure when the element never shows")
+	}
+	if elapsed := time.Since(start); elapsed < 30*time.Second {
+		t.Fatalf("ended after %v, before the default 30s timeout", elapsed)
+	}
+	if result.Message != "element not found after scrolling" || result.Error == nil || result.Error.Error() != "element not found after scrolling" {
+		t.Errorf("a step without a timeout of its own should keep its message, got %q (%v)", result.Message, result.Error)
+	}
+}
+
 func TestAppiumScrollUntilVisibleWithTimeoutIsNotCutAtDefaultMaxScrolls(t *testing.T) {
 	// The target comes on screen after the 21st scroll; until then the list
 	// moves and the target sits partly below the screen's bottom edge. A step

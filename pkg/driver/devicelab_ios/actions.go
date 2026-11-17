@@ -364,9 +364,11 @@ func (d *Driver) scrollUntilVisible(s *flow.ScrollUntilVisibleStep) *core.Comman
 			}
 		}
 	}
-	if time.Now().After(deadline) {
-		// A "not found" cause, as the other drivers give, files the failure
-		// as element_not_found, which is what Maestro's ElementNotFound is.
+	if core.ScrollLooksUntilTimeout(s) && time.Now().After(deadline) {
+		// A step with its own timeout that ran out of it fails in Maestro's
+		// words, with a "not found" cause, as the other drivers give: the
+		// report files it as element_not_found, which is what Maestro's
+		// ElementNotFound is. One without keeps its message.
 		err := fmt.Errorf("%s not found after scrolling %s", describe(s.Element), direction)
 		return core.ErrorResult(err, core.ScrollTimeoutMessage(describe(s.Element), direction, timeout))
 	}

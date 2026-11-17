@@ -4627,3 +4627,29 @@ func TestScrollUntilVisibleWithTimeoutRunsToItOnStillScreen(t *testing.T) {
 		t.Errorf("message should be Maestro's, got %q", result.Message)
 	}
 }
+
+func TestScrollUntilVisibleWithoutTimeoutKeepsItsMessageAtTheDeadline(t *testing.T) {
+	// A step without a timeout of its own that runs into the default 30s (a
+	// list that keeps moving, a maxScrolls it never reaches) keeps the message
+	// it had: Maestro's words are for a step that set its timeout.
+	captures := 0
+	client := &MockUIA2Client{sourceFunc: func() (string, error) { return movingList(&captures), nil }}
+	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, nil)
+
+	start := time.Now()
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:    flow.Selector{Text: "NonExistent"},
+		Direction:  "down",
+		MaxScrolls: 1000,
+	})
+
+	if result.Success {
+		t.Fatal("expected failure when the element never shows")
+	}
+	if elapsed := time.Since(start); elapsed < 30*time.Second {
+		t.Fatalf("ended after %v, before the default 30s timeout", elapsed)
+	}
+	if result.Message != "Element not found after 1000 scrolls" || result.Error == nil || result.Error.Error() != "element not found" {
+		t.Errorf("a step without a timeout of its own should keep its message, got %q (%v)", result.Message, result.Error)
+	}
+}

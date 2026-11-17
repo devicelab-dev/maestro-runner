@@ -1753,7 +1753,9 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	if hanging != nil {
 		return successResult("Element visible (scrolls ran out, partly past its scroll container)", hanging)
 	}
-	if !time.Now().Before(deadline) {
+	// A step with its own timeout that ran out of it fails in Maestro's
+	// words; one without keeps its message, however its loop ended.
+	if core.ScrollLooksUntilTimeout(step) && !time.Now().Before(deadline) {
 		return errorResult(fmt.Errorf("element not found"), core.ScrollTimeoutMessage(step.Element.Describe(), direction, timeout))
 	}
 	return errorResult(fmt.Errorf("element not found"), fmt.Sprintf("Element not found after %d scrolls", maxScrolls))

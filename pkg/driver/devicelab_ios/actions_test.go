@@ -3,6 +3,7 @@ package devicelab_ios
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -288,6 +289,37 @@ func TestScrollUntilVisibleWithTimeoutRunsToItOnStillScreen(t *testing.T) {
 	}
 	if n := len(fa.sent("act")); n <= 3 {
 		t.Errorf("scrolls = %d, want more than the no-progress stop's 3", n)
+	}
+}
+
+func TestScrollUntilVisibleWithoutTimeoutKeepsItsMessageAtTheDeadline(t *testing.T) {
+	// A step without a timeout of its own that runs into the default 30s (a
+	// screen that moves after every scroll) keeps the message and the cause
+	// it had: Maestro's words are for a step that set its timeout.
+	var scrolls atomic.Int32
+	d, _, _ := newTestDriver(t, func(cmd string, _ Args) (*Response, error) {
+		switch cmd {
+		case "act":
+			scrolls.Add(1)
+		case "find":
+			return tree(), nil
+		case "settle":
+			return ok(&Payload{ScreenHash: fmt.Sprintf("list after %d scrolls", scrolls.Load())}), nil
+		}
+		return ok(nil), nil
+	})
+	sel := flow.Selector{Text: "Missing"}
+	start := time.Now()
+	res := d.Execute(&flow.ScrollUntilVisibleStep{Element: sel})
+	if res.Success {
+		t.Fatal("found an element that is not there")
+	}
+	if elapsed := time.Since(start); elapsed < 30*time.Second {
+		t.Fatalf("ended after %v, before the default 30s timeout", elapsed)
+	}
+	want := fmt.Sprintf("%s not visible after scrolling down", describe(sel))
+	if res.Message != want || res.Error == nil || res.Error.Error() != want {
+		t.Errorf("a step without a timeout of its own should keep %q, got %q (%v)", want, res.Message, res.Error)
 	}
 }
 

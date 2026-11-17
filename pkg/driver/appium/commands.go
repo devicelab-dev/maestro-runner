@@ -507,8 +507,10 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	if hanging != nil {
 		return successResult("Element visible (scrolls ran out, partly past its scroll container)", hanging)
 	}
+	// A step with its own timeout that ran out of it fails in Maestro's
+	// words; one without keeps its message, however its loop ended.
 	reason := ""
-	if !time.Now().Before(deadline) {
+	if core.ScrollLooksUntilTimeout(step) && !time.Now().Before(deadline) {
 		reason = core.ScrollTimeoutMessage(step.Element.Describe(), direction, timeout)
 	}
 	if partiallyVisible {
