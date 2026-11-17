@@ -2,6 +2,7 @@ package devicelab
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
@@ -70,6 +71,40 @@ func TestScrollUntilVisibleAcceptsHangingRowAtListEnd(t *testing.T) {
 	}
 	if client.scrollCalls != 1 {
 		t.Errorf("expected 1 scroll, got %d", client.scrollCalls)
+	}
+}
+
+// A step with its own timeout still takes a row partly past its list's edge
+// at the end of the content: only the not-found failure waits for the
+// timeout. The find's look of each round comes first; while the list still
+// coasted (the first two rounds) it did not see the row, and the captures
+// after it show the list at rest, the row hanging, three times the same.
+func TestScrollUntilVisibleWithTimeoutAcceptsHangingRowAtEndOfContent(t *testing.T) {
+	client := &mockDeviceLabClient{}
+	round, reads := -1, 0
+	client.sourceFunc = func() (string, error) {
+		if n := client.scrollCalls; n != round {
+			round, reads = n, 0
+		}
+		reads++
+		if reads == 1 && round < 2 {
+			return sheetRow(2420, 2500), nil // the find's look: the row not in yet
+		}
+		return sheetRow(2295, 2400), nil // at rest: the row hangs past the list's edge
+	}
+	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, nil)
+
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:   flow.Selector{Text: "Target"},
+		Direction: "down",
+		BaseStep:  flow.BaseStep{TimeoutMs: 20000},
+	})
+
+	if !result.Success || !strings.Contains(result.Message, "end of content, partly past its scroll container") {
+		t.Fatalf("expected the row at the end of the content, got %q (%v)", result.Message, result.Error)
+	}
+	if got := client.scrollCalls; got != 2 {
+		t.Errorf("expected the 2 scrolls that show the end of the content, got %d", got)
 	}
 }
 
