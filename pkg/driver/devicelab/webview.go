@@ -70,6 +70,13 @@ type webViewManager struct {
 	// (re)connect.
 	helperBroken bool
 
+	// preexistingTabs holds the page targets Chrome listed the first time
+	// this manager read them: tabs the runner did not open (the device
+	// user's own), which closeOtherTabs never closes. nil until that first
+	// read; disconnect and cleanup keep it, since openLink disconnects every
+	// time.
+	preexistingTabs map[string]bool
+
 	forwarder CDPForwarder
 }
 
@@ -955,8 +962,9 @@ func (m *webViewManager) connectBrowserViaHTTP(cdpInfo *core.CDPInfo, cdpType st
 	}
 	logger.Info("[cdp:5-discover] found page target: id=%s title=%q url=%s", pageTarget.ID, pageTarget.Title, pageTarget.URL)
 
-	// Close all other tabs to prevent tab accumulation and stale connections.
-	// Each openLink creates a new Chrome tab; without cleanup, tabs pile up indefinitely.
+	// Close the other tabs this runner opened, to prevent tab accumulation and
+	// stale connections: each openLink creates a new Chrome tab, and without
+	// cleanup they pile up indefinitely. Tabs that were open before are left.
 	m.closeOtherTabs(socketPath, targets, pageTarget.ID)
 
 	// Step 6: Connect WebSocket to PAGE-level endpoint (not browser level)
@@ -1059,9 +1067,24 @@ func (m *webViewManager) fetchCDPTargets(socketPath string) ([]cdpTarget, error)
 	return targets, nil
 }
 
-// closeOtherTabs closes all Chrome tabs except the one we're connecting to.
-// Uses HTTP /json/close/<id> via the forwarded Unix socket. Best-effort — errors are logged but ignored.
+// closeOtherTabs closes the Chrome tabs this runner opened except the one
+// we're connecting to. A tab that was already open the first time the runner
+// read Chrome's targets is not one it opened, and is never closed: the first
+// call only remembers those, every later one closes the rest. Uses HTTP
+// /json/close/<id> via the forwarded Unix socket. Best-effort — errors are
+// logged but ignored. Called with m.mu held.
 func (m *webViewManager) closeOtherTabs(socketPath string, targets []cdpTarget, keepID string) {
+	if m.preexistingTabs == nil {
+		m.preexistingTabs = map[string]bool{}
+		for _, t := range targets {
+			if t.Type == "page" {
+				m.preexistingTabs[t.ID] = true
+			}
+		}
+		logger.Info("[cdp:5-cleanup] %d tab(s) were open at the first look; they stay open", len(m.preexistingTabs))
+		return
+	}
+
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			var dialer net.Dialer
@@ -1072,7 +1095,7 @@ func (m *webViewManager) closeOtherTabs(socketPath string, targets []cdpTarget, 
 
 	closed := 0
 	for _, t := range targets {
-		if t.ID == keepID || t.Type != "page" {
+		if t.ID == keepID || t.Type != "page" || m.preexistingTabs[t.ID] {
 			continue
 		}
 		resp, err := httpClient.Get(fmt.Sprintf("http://localhost/json/close/%s", t.ID))
