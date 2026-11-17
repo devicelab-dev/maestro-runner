@@ -633,9 +633,19 @@ func (a *Agent) stopXcodebuild() {
 func simctl(ctx context.Context, timeout time.Duration, args ...string) (string, error) {
 	c, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	out, err := exec.CommandContext(c, "xcrun", append([]string{"simctl"}, args...)...).CombinedOutput()
+	cmd := exec.CommandContext(c, "xcrun", append([]string{"simctl"}, args...)...)
+	// simctl spawn hands its output to the process it starts in the
+	// simulator, which the deadline's kill of xcrun does not reach: without
+	// a bound on the wait for that output, a wedged simulator held the call
+	// past its timeout.
+	cmd.WaitDelay = simctlWaitDelay
+	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
+
+// simctlWaitDelay bounds how long simctl waits for its output once xcrun has
+// exited or been killed at the deadline.
+const simctlWaitDelay = 2 * time.Second
 
 // oneLine is s up to its first line break, for a one-line console note.
 func oneLine(s string) string {
