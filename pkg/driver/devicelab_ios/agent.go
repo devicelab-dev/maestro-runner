@@ -252,7 +252,7 @@ func StartAgent(ctx context.Context, opts AgentOptions) (*Agent, *Client, error)
 	}
 	// The launch sends the app in front to the background (front.go).
 	front, why := frontApp(ctx, opts.UDID)
-	c, err := a.launch(ctx)
+	c, err := launchAgent(a, ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -345,6 +345,9 @@ func fileSHA256(path string) string {
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
+
+// launchAgent is (*Agent).launch, StartAgent's fresh start; tests replace it.
+var launchAgent = (*Agent).launch
 
 // launch starts the agent on a free port, by simctl launch and, failing that
 // (auto mode), by xcodebuild test-without-building.

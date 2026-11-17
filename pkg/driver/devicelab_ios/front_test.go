@@ -3,6 +3,7 @@ package devicelab_ios
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -289,5 +290,82 @@ func TestBringBack(t *testing.T) {
 	}
 	if !strings.Contains(log(), "not brought back: simctl launch com.apple.Preferences: exit status 4") {
 		t.Errorf("a failed launch: log %q", log())
+	}
+}
+
+// A fresh start reads the app in front before it launches the agent, and
+// brings that app back once the agent answers.
+func TestStartAgentBringsBackTheFrontApp(t *testing.T) {
+	t.Setenv("MAESTRO_RUNNER_HOME", t.TempDir())
+	captureFront(t)
+	// The simulator holds this build of the agent: the start installs nothing.
+	dir, container := t.TempDir(), t.TempDir()
+	bin := filepath.Join(container, strings.TrimPrefix(agentBinary, runnerAppName+"/"))
+	if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin, []byte("agent build"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(manifest{Version: "abc123", Protocol: "1.0", Files: map[string]string{agentBinary: fileSHA256(bin)}})
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	savedContainer, savedLaunch := appContainer, launchAgent
+	t.Cleanup(func() { appContainer, launchAgent = savedContainer, savedLaunch })
+	appContainer = func(context.Context, string, string) (string, error) { return container, nil }
+
+	var mu sync.Mutex
+	var steps []string
+	step := func(s string) { mu.Lock(); steps = append(steps, s); mu.Unlock() }
+	f := &fakeFront{list: launchdList, apps: listApps, pri: priorities(map[int]int{settings: 47, safari: 4})}
+	f.install(t)
+	simctl := frontSimctl
+	frontSimctl = func(ctx context.Context, timeout time.Duration, args ...string) (string, error) {
+		step("simctl " + strings.Join(args, " "))
+		return simctl(ctx, timeout, args...)
+	}
+	launchAgent = func(a *Agent, _ context.Context) (*Client, error) {
+		step("agent launch")
+		a.mode = ModeSimctl
+		return NewClient(0), nil
+	}
+
+	if _, _, err := StartAgent(context.Background(), AgentOptions{UDID: "SIM-1", Dir: dir}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"simctl spawn SIM-1 launchctl list",
+		"simctl listapps SIM-1",
+		"agent launch",
+		"simctl launch SIM-1 com.apple.Preferences",
+	}
+	if strings.Join(steps, "\n") != strings.Join(want, "\n") {
+		t.Errorf("steps:\n  %s\nwant:\n  %s", strings.Join(steps, "\n  "), strings.Join(want, "\n  "))
+	}
+}
+
+// A run that re-attaches to an agent left running launches none, so it
+// neither reads the app in front nor brings one back.
+func TestStartAgentReattachLeavesTheFrontApp(t *testing.T) {
+	t.Setenv("MAESTRO_RUNNER_HOME", t.TempDir())
+	dir := t.TempDir()
+	writeManifest(t, dir, "1.0")
+	port := tokenAgent(t, "tok")
+	saveState("SIM-1", agentState{Port: port, Version: "abc123", Token: "tok"})
+	savedSimctl, savedLaunch := frontSimctl, launchAgent
+	t.Cleanup(func() { frontSimctl, launchAgent = savedSimctl, savedLaunch })
+	frontSimctl = func(_ context.Context, _ time.Duration, args ...string) (string, error) {
+		t.Errorf("simctl %s on a re-attach", strings.Join(args, " "))
+		return "", errors.New("unexpected")
+	}
+	launchAgent = func(*Agent, context.Context) (*Client, error) {
+		t.Error("an agent launched on a re-attach")
+		return nil, errors.New("unexpected")
+	}
+
+	a, _, err := StartAgent(context.Background(), AgentOptions{UDID: "SIM-1", Dir: dir})
+	if err != nil || a.Mode() != "reattached" {
+		t.Fatalf("a=%+v err=%v; want a re-attach", a, err)
 	}
 }
