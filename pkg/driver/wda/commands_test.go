@@ -5461,6 +5461,55 @@ func TestScrollUntilVisibleStopsWhenRunIsCancelled(t *testing.T) {
 	}
 }
 
+func TestScrollUntilVisibleWithTimeoutAcceptsUncentredElementAtEndOfContent(t *testing.T) {
+	// centerElement on the last row of a list: it is on screen but can never
+	// reach the middle, and the screen stops moving. A step with its own
+	// timeout still takes it at the end of the content, as one without does:
+	// only the not-found failure waits for the timeout.
+	var scrolls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		switch {
+		case strings.Contains(path, "/actions"):
+			scrolls.Add(1)
+			jsonResponse(w, map[string]interface{}{"status": 0})
+		case strings.HasSuffix(path, "/screenshot"):
+			jsonResponse(w, map[string]interface{}{"value": base64.StdEncoding.EncodeToString([]byte("end of the list"))})
+		case strings.HasSuffix(path, "/source"):
+			jsonResponse(w, map[string]interface{}{
+				"value": `<AppiumAUT>
+  <XCUIElementTypeApplication name="TestApp" enabled="true" visible="true" x="0" y="0" width="390" height="844">
+    <XCUIElementTypeStaticText name="Target" label="Target" enabled="true" visible="true" x="20" y="760" width="200" height="40"/>
+  </XCUIElementTypeApplication>
+</AppiumAUT>`,
+			})
+		case strings.Contains(path, "/window/size"):
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 390.0, "height": 844.0},
+			})
+		default:
+			jsonResponse(w, map[string]interface{}{"status": 0})
+		}
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:       flow.Selector{Text: "Target"},
+		Direction:     "down",
+		CenterElement: true,
+		BaseStep:      flow.BaseStep{TimeoutMs: 20000},
+	})
+
+	if !result.Success || !strings.Contains(result.Message, "end of content before centring") {
+		t.Fatalf("expected the element at the end of the content, got %q (%v)", result.Message, result.Error)
+	}
+	if got := scrolls.Load(); got != 3 {
+		t.Errorf("expected the 3 scrolls that show the end of the content, got %d", got)
+	}
+}
+
 // =============================================================================
 // autoClickAlertSelector: permission prompts only, not the app's own alerts
 // =============================================================================

@@ -817,6 +817,33 @@ func TestScrollUntilVisibleCenterStopsAtEndOfContent(t *testing.T) {
 	}
 }
 
+func TestScrollUntilVisibleWithTimeoutCenterStopsAtEndOfContent(t *testing.T) {
+	// The last item of a list cannot reach the middle and the screen stops
+	// moving: a step with its own timeout still takes the visible element at
+	// the end of the content, as one without does; only the not-found
+	// failure waits for the timeout.
+	d, fa, _ := newTestDriver(t, func(cmd string, _ Args) (*Response, error) {
+		switch cmd {
+		case "find":
+			return tree(node(1, "StaticText", "Last", 84, 770, 82, 20)), nil
+		case "settle":
+			return ok(&Payload{ScreenHash: "same"}), nil
+		}
+		return ok(nil), nil
+	})
+	res := d.Execute(&flow.ScrollUntilVisibleStep{
+		Element:       flow.Selector{Text: "Last"},
+		CenterElement: true,
+		BaseStep:      flow.BaseStep{TimeoutMs: 20000},
+	})
+	if !res.Success || res.Message != "element visible at the end of the content" {
+		t.Fatalf("res = %+v, want the element at the end of the content", res)
+	}
+	if n := len(fa.sent("act")); n != 3 {
+		t.Errorf("scrolls = %d, want the 3 that show the end of the content", n)
+	}
+}
+
 func TestScrollUsesMaestroDefaultDuration(t *testing.T) {
 	d, fa, _ := newTestDriver(t, screenOf())
 	if res := d.Execute(&flow.ScrollStep{Direction: "down"}); !res.Success {

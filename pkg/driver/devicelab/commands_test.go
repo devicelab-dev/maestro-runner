@@ -206,8 +206,10 @@ func TestScrollUntilVisibleDefaultMaxScrolls(t *testing.T) {
 
 // growingList is a list that moves on every capture, with the target row
 // partly below the screen's bottom edge until the shownAfter'th scroll, and
-// fully on screen from then on. A partly visible match is found at once, so
-// each round costs only the scroll's settle.
+// fully on screen from then on. Each round spends the find's 1s budget (the
+// mock answers no locator, so the find reads the page source at the end of
+// it, whether the match is partly visible or not) and the scroll's 300ms
+// settle: about 1.35s a round, 28s for 21 scrolls.
 func growingList(scrolls, shownAfter int) string {
 	top := 2350
 	if scrolls >= shownAfter {
@@ -514,5 +516,35 @@ func TestScrollUntilVisibleStopsWhenRunIsCancelled(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Errorf("stopped after %v; want at once", elapsed)
+	}
+}
+
+func TestScrollUntilVisibleWithTimeoutAcceptsUncentredElementAtEndOfContent(t *testing.T) {
+	// centerElement on the last row of a list: it is on screen but can never
+	// reach the middle, and the screen stops moving. A step with its own
+	// timeout still takes it at the end of the content, as one without does:
+	// only the not-found failure waits for the timeout.
+	client := &mockDeviceLabClient{sourceFunc: func() (string, error) {
+		return `<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <android.widget.FrameLayout class="android.widget.FrameLayout" displayed="true" enabled="true" bounds="[0,0][1080,2400]">
+    <android.widget.TextView class="android.widget.TextView" text="Target" displayed="true" enabled="true" bounds="[100,2200][500,2300]"/>
+  </android.widget.FrameLayout>
+</hierarchy>`, nil
+	}}
+	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, nil)
+
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:       flow.Selector{Text: "Target"},
+		Direction:     "down",
+		CenterElement: true,
+		BaseStep:      flow.BaseStep{TimeoutMs: 20000},
+	})
+
+	if !result.Success || !strings.Contains(result.Message, "end of content before centring") {
+		t.Fatalf("expected the element at the end of the content, got %q (%v)", result.Message, result.Error)
+	}
+	if got := client.scrollCalls; got != 2 {
+		t.Errorf("expected the 2 scrolls that show the end of the content, got %d", got)
 	}
 }
