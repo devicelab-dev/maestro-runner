@@ -2047,6 +2047,24 @@ func (fr *FlowRunner) runSubFlowSteps(subFlow flow.Flow, steps []flow.Step, pref
 	return nil
 }
 
+// hookNamedError is a failed sub-flow's error, led by the hook that failed
+// ("onFlowComplete failed: ") when one did. runSubFlowSteps puts the hook's
+// name only in the result's Message, and a retry's final result keeps only
+// the last attempt's Error, so without this the name was lost.
+func hookNamedError(result *core.CommandResult) error {
+	for _, prefix := range []string{"onFlowStart failed: ", "onFlowComplete failed: "} {
+		if strings.HasPrefix(result.Message, prefix) {
+			if result.Error == nil {
+				return errors.New(result.Message)
+			}
+			if !strings.HasPrefix(result.Error.Error(), prefix) {
+				return fmt.Errorf("%s%w", prefix, result.Error)
+			}
+		}
+	}
+	return result.Error
+}
+
 // executeSubFlowWithRetry runs a sub-flow up to attempts times, until it passes.
 func (fr *FlowRunner) executeSubFlowWithRetry(subFlow flow.Flow, attempts int) *core.CommandResult {
 	var lastErr error
@@ -2067,7 +2085,7 @@ func (fr *FlowRunner) executeSubFlowWithRetry(subFlow flow.Flow, attempts int) *
 				Message: fmt.Sprintf("Retry succeeded on attempt %d", attempt),
 			}
 		}
-		lastErr = result.Error
+		lastErr = hookNamedError(result)
 	}
 
 	return retryExhausted(lastErr, attempts)
