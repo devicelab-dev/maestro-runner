@@ -342,6 +342,46 @@ func dropNonNumericScalar(node *yaml.Node, key string) {
 	}
 }
 
+// numberExpression prepares a number field that Maestro reads as text and
+// evaluates when the step runs: extendedWaitUntil's, waitForAnimationToEnd's
+// and scrollUntilVisible's timeout, and scrollUntilVisible's speed (Strings
+// in Maestro's YAML model, resolved by the commands' evaluateScripts). Here
+// those fields are ints, so `timeout: ${PAUSE_MS}` failed the whole flow at
+// parse time, and with it every other flow of the run.
+//
+// A value holding a ${...} expression is taken out of the mapping and
+// returned, for the expand pass to resolve. A number, quoted ("3000") or not,
+// is read as Maestro reads it: in decimal, so "0100" is 100 where YAML would
+// read octal 64, and for a timeout (underscores true) with its underscores
+// dropped ("3_000"), as Maestro's extendedWaitUntil drops them
+// (parseTimeoutMs); its scrollUntilVisible and waitForAnimationToEnd fail on
+// one when the step runs (toLong), so there this is lenient. Anything else
+// is left for the decoder, which refuses it before a device is touched.
+func numberExpression(node *yaml.Node, key string, underscores bool) string {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return ""
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		k, v := node.Content[i], node.Content[i+1]
+		if k.Value != key || v.Kind != yaml.ScalarNode {
+			continue
+		}
+		if strings.Contains(v.Value, "${") {
+			node.Content = append(node.Content[:i], node.Content[i+2:]...)
+			return v.Value
+		}
+		digits := v.Value
+		if underscores {
+			digits = strings.ReplaceAll(digits, "_", "")
+		}
+		if n, err := strconv.Atoi(digits); err == nil {
+			v.Tag, v.Style, v.Value = "!!int", 0, strconv.Itoa(n)
+		}
+		return ""
+	}
+	return ""
+}
+
 func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Step, error) {
 	switch stepType {
 	case StepTapOn:
@@ -411,6 +451,8 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 
 	case StepScrollUntilVisible:
 		var s ScrollUntilVisibleStep
+		s.TimeoutExpr = numberExpression(valueNode, "timeout", true)
+		s.SpeedExpr = numberExpression(valueNode, "speed", false)
 		if valueNode.Kind == yaml.ScalarNode {
 			s.Element.Text = valueNode.Value
 		} else if err := valueNode.Decode(&s); err != nil {
@@ -620,6 +662,7 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 
 	case StepWaitUntil:
 		var s WaitUntilStep
+		s.TimeoutExpr = numberExpression(valueNode, "timeout", true)
 		if err := valueNode.Decode(&s); err != nil {
 			return nil, wrapParseError(sourcePath, valueNode.Line, err)
 		}
@@ -1133,6 +1176,7 @@ func decodeStep(stepType StepType, valueNode *yaml.Node, sourcePath string) (Ste
 
 	case StepWaitForAnimationToEnd:
 		var s WaitForAnimationToEndStep
+		s.TimeoutExpr = numberExpression(valueNode, "timeout", true)
 		if err := valueNode.Decode(&s); err != nil {
 			return nil, wrapParseError(sourcePath, valueNode.Line, err)
 		}
