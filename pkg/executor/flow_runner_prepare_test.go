@@ -243,3 +243,36 @@ func TestCollectStepsForPrepare_NestedFileResolvesFromItsOwnDirectory(t *testing
 		}
 	}
 }
+
+// A file run by runFlow or retry runs its own onFlowStart and onFlowComplete
+// (executeSubFlow), so the pre-session scan reads them too, in the order they
+// run: a launchApp in a sub-file's onFlowStart comes before the file's steps.
+func TestCollectStepsForPrepare_SubFlowFileHooks(t *testing.T) {
+	dir := t.TempDir()
+	part := "appId: x\nonFlowStart:\n  - launchApp:\n      permissions:\n        all: deny\nonFlowComplete:\n  - launchApp\n---\n- tapOn: a\n"
+	if err := os.WriteFile(filepath.Join(dir, "part.yaml"), []byte(part), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := flow.Flow{
+		SourcePath: filepath.Join(dir, "main.yaml"),
+		Steps: []flow.Step{
+			&flow.RunFlowStep{File: "part.yaml"},
+			&flow.RetryStep{File: "part.yaml"},
+			&flow.TapOnStep{},
+		},
+	}
+	fr := newPrepareTestRunner(f)
+	defer fr.script.Close()
+
+	steps := fr.collectStepsForPrepare()
+	n, perms := countLaunchApps(steps)
+	if n != 2 {
+		t.Fatalf("expected the sub-file's two hook launchApps scanned, got %d", n)
+	}
+	if perms["all"] != "deny" {
+		t.Errorf("expected the onFlowStart launchApp {all: deny} first, got %v", perms)
+	}
+	if _, ok := steps[0].(*flow.LaunchAppStep); !ok {
+		t.Errorf("expected onFlowStart's launchApp before the file's steps, first is %T", steps[0])
+	}
+}
