@@ -99,6 +99,8 @@ func (pr *ParallelRunner) Run(ctx context.Context, flows []flow.Flow) (*RunResul
 	if len(pr.workers) == 0 {
 		return nil, fmt.Errorf("no workers available")
 	}
+	// Split suite files (suite: true) as the sequential runner does
+	flows = expandSuites(flows)
 
 	// Read the previous run's timings before the skeleton below overwrites
 	// the report this reads.

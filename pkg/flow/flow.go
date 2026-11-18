@@ -1,6 +1,8 @@
 // Package flow handles parsing and representation of Maestro YAML flow files.
 package flow
 
+import "fmt"
+
 // Flow represents a parsed Maestro flow file.
 type Flow struct {
 	SourcePath string // Path to the source file
@@ -8,35 +10,45 @@ type Flow struct {
 	Steps      []Step // Steps to execute
 }
 
-// IsSuite returns true if this flow is a suite file (only contains runFlow steps with file references).
-// Suite files orchestrate multiple test cases; each runFlow represents a test case.
-// Requires at least 2 runFlow steps with file references to be considered a suite.
-// A single runFlow is just a wrapper, not a suite.
-// A runFlow with inline commands, a `when` condition or an else branch is part of the flow itself, not a
-// test case: expanding the file would drop the commands and run conditional files unconditionally, so a
-// flow that has one is not a suite.
-// onFlowStart/onFlowComplete hooks are ignored for detection as they're setup/teardown.
+// IsSuite reports whether this flow runs as a suite: its header says `suite: true` and its steps can be split
+// (SuiteProblem is ""). Each runFlow of a suite then runs as a flow of its own, a test case, with the suite's
+// appId and env. Any other flow, one made only of runFlow steps included, is one flow, its runFlows nested in
+// it, as Maestro runs every flow file.
 func (f *Flow) IsSuite() bool {
+	return f.Config.Suite && f.SuiteProblem() == ""
+}
+
+// SuiteProblem says why this flow's steps cannot be split into a suite's test cases, or "" when they can.
+// A suite is made only of runFlow steps with file references, at least 2 of them: a single runFlow is just a
+// wrapper. A runFlow with inline commands, a `when` condition or an else branch is part of the flow itself, not a
+// test case: splitting the file would drop the commands and run conditional files unconditionally.
+// onFlowStart/onFlowComplete hooks are ignored for detection as they're setup/teardown.
+func (f *Flow) SuiteProblem() string {
 	if len(f.Steps) == 0 {
-		return false
+		return "it has no steps"
 	}
 
 	runFlowWithFileCount := 0
-	for _, step := range f.Steps {
+	for i, step := range f.Steps {
 		if step.Type() != StepRunFlow {
-			// Any non-runFlow step means it's not a pure suite
-			return false
+			return fmt.Sprintf("step %d is %s, not a runFlow", i+1, step.Type())
 		}
 		rf, ok := step.(*RunFlowStep)
-		if !ok || rf.File == "" || rf.When != nil || rf.ElseFile != "" || len(rf.ElseSteps) > 0 {
-			return false
+		switch {
+		case !ok || rf.File == "":
+			return fmt.Sprintf("step %d is a runFlow with inline commands", i+1)
+		case rf.When != nil:
+			return fmt.Sprintf("step %d is a runFlow with a when: condition", i+1)
+		case rf.ElseFile != "" || len(rf.ElseSteps) > 0:
+			return fmt.Sprintf("step %d is a runFlow with an else", i+1)
 		}
 		runFlowWithFileCount++
 	}
 
-	// Must have at least 2 runFlow steps with file references to be a suite
-	// A single runFlow is just a wrapper, not a test suite
-	return runFlowWithFileCount >= 2
+	if runFlowWithFileCount < 2 {
+		return "it has only one runFlow"
+	}
+	return ""
 }
 
 // GetTestCases returns the runFlow steps if this is a suite, empty slice otherwise.
@@ -79,6 +91,7 @@ type Config struct {
 	StepDelay          *int              `yaml:"stepDelay"`          // Pause between top-level steps in ms (nil = use global, 0 = none)
 	Properties         map[string]string `yaml:"properties"`         // Custom key/values emitted as JUnit testcase properties (#84)
 	FailOnConsoleError bool              `yaml:"failOnConsoleError"` // Web only: auto-fail the flow if any console.error / uncaught JS exception is captured
+	Suite              bool              `yaml:"suite"`              // Run each runFlow as a flow of its own (see Flow.IsSuite); Maestro keeps the key and runs the file as one flow
 	OnFlowStart        []Step            `yaml:"-"`                  // Lifecycle hook: runs before commands
 	OnFlowComplete     []Step            `yaml:"-"`                  // Lifecycle hook: runs after commands
 }

@@ -141,7 +141,7 @@ func New(driver core.Driver, cfg RunnerConfig) *Runner {
 
 // Run executes all flows and generates reports.
 func (r *Runner) Run(ctx context.Context, flows []flow.Flow) (*RunResult, error) {
-	// Expand suites into individual test case flows
+	// Split suite files (suite: true) into their test case flows
 	expandedFlows := expandSuites(flows)
 
 	// Build report skeleton
@@ -353,20 +353,28 @@ func (r *Runner) buildRunResult(flowResults []FlowResult) *RunResult {
 }
 
 // expandSuites expands suite files into individual test case flows.
-// A suite is a flow that only contains runFlow steps - each runFlow becomes a separate flow.
-// Non-suite flows pass through unchanged.
+// A suite is a flow whose header says `suite: true` and that only contains runFlow steps of files
+// (flow.IsSuite) - each runFlow becomes a separate flow. Other flows pass through unchanged: a flow made
+// only of runFlow steps without the key is one flow, as in Maestro. Each case is logged, so a run that
+// splits a file, or does not, says why.
 func expandSuites(flows []flow.Flow) []flow.Flow {
 	var expanded []flow.Flow
 
 	for _, f := range flows {
 		if !f.IsSuite() {
-			// Not a suite, keep as-is
+			switch problem := f.SuiteProblem(); {
+			case f.Config.Suite:
+				logger.Warn("%s has suite: true, but %s: running it as one flow", f.SourcePath, problem)
+			case problem == "":
+				logger.Info("%s is made only of runFlow steps: running it as one flow (suite: true in its header runs each as a flow of its own)", f.SourcePath)
+			}
 			expanded = append(expanded, f)
 			continue
 		}
 
-		// Suite detected - expand each runFlow into a separate flow
+		// Suite - expand each runFlow into a separate flow
 		testCases := f.GetTestCases()
+		logger.Info("%s has suite: true: running its %d runFlow files as separate flows", f.SourcePath, len(testCases))
 		suiteDir := ""
 		if f.SourcePath != "" {
 			suiteDir = filepath.Dir(f.SourcePath)

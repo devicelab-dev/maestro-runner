@@ -1546,3 +1546,45 @@ func writeFile(t *testing.T, path, body string) {
 		t.Fatal(err)
 	}
 }
+
+// suite: true says the file's runFlows run as flows of their own. A file
+// that cannot be split that way is refused before the run, naming the step
+// that stops it; one that can is a test case like any other.
+func TestValidate_SuiteKey(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"suite.yaml":  "appId: x\nsuite: true\n---\n- runFlow: a.yaml\n- runFlow: b.yaml\n",
+		"broken.yaml": "appId: x\nsuite: true\n---\n- runFlow: a.yaml\n- runFlow: b.yaml\n- tapOn: Done\n",
+		"a.yaml":      "appId: x\n---\n- tapOn: A\n",
+		"b.yaml":      "appId: x\n---\n- tapOn: B\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result := New(nil, nil).Validate(filepath.Join(dir, "suite.yaml"))
+	if !result.IsValid() || len(result.TestCases) != 1 {
+		t.Errorf("suite.yaml: errors %v, %d test cases; want valid with 1", result.Errors, len(result.TestCases))
+	}
+
+	result = New(nil, nil).Validate(filepath.Join(dir, "broken.yaml"))
+	if result.IsValid() || len(result.TestCases) != 0 {
+		t.Fatalf("broken.yaml: errors %v, %d test cases; want an error and none", result.Errors, len(result.TestCases))
+	}
+	want := "suite: true, but step 3 is tapOn, not a runFlow; a suite has only runFlow steps of files, two or more, without when:, else or inline commands"
+	if got := result.Errors[0].Error(); !strings.HasSuffix(got, want) {
+		t.Errorf("error = %q, want it to end %q", got, want)
+	}
+
+	// Reached by runFlow, a file's suite: true changes nothing: it runs
+	// nested, as any runFlow's file does.
+	if err := os.WriteFile(filepath.Join(dir, "main.yaml"), []byte("appId: x\n---\n- runFlow: broken.yaml\n- tapOn: C\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result = New(nil, nil).Validate(filepath.Join(dir, "main.yaml"))
+	if !result.IsValid() {
+		t.Errorf("main.yaml: errors %v, want none", result.Errors)
+	}
+}
