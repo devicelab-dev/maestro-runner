@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+**A file reached by `runFlow` or `retry` runs its own `onFlowStart` and `onFlowComplete`, as in Maestro ([#277](https://github.com/devicelab-dev/maestro-runner/pull/277)).** Only its `env:` was applied before. Maestro runs a sub-flow's hooks around its commands, so a file written as a shared part (log in, open a screen) can set itself up and clean up after itself. A failing `onFlowStart` skips the file's steps, failing steps still run `onFlowComplete`, and a failing hook fails the `runFlow` (in a `retry`, the attempt). **This changes existing flows:** a `runFlow` of a file that has hooks now runs them.
+
+**A `runFlow` or `runScript` skipped by its `when:` is reported as skipped, not passed ([#275](https://github.com/devicelab-dev/maestro-runner/pull/275)).** The report could not tell a branch that did not run from one that did. The flow's own status is unchanged: a flow with a skipped step still passes. A step skipped by `platform:` no longer prints ✗ in the console.
+
+**`retryTapIfNoChange: false` reads no hierarchy.** It was treated like `true` for the reads around a tap: two hierarchy reads per tap for nothing. Unset is still off, as in Maestro.
+
+### Added
+
+**`repeat` takes `timeout:` (ms).** Once it has passed, no new round starts; the round running finishes and the step passes. It takes `${...}`. A `while` without `times` or `timeout` still stops at 1000 rounds, and now says so.
+
+**A `timeout` or a scroll `speed` may be a `${...}` expression, as in Maestro ([#279](https://github.com/devicelab-dev/maestro-runner/pull/279)).** `extendedWaitUntil`, `waitForAnimationToEnd` and `scrollUntilVisible` failed validation with one. A value that is not a number fails the step and names what it resolved to.
+
+**JUnit carries each flow's tags** as `<property name="tags" value="smoke, auth"/>`, as Maestro writes them. `report.json` is unchanged.
+
+### Fixed
+
+**`appId: ${X}` can use an `X` from the flow's own `env:`.** The appId was expanded before the flow's `env:` was applied, so it read "undefined"; only `-e` worked.
+
+**Android: adb calls time out instead of hanging the run.** A call to adb that never answered (a device dropping off USB, a stuck `adbd`) hung the whole run. Calls now stop after 60 s with an error naming the adb command; installs, push and pull get 10 minutes.
+
+**DeviceLab iOS: back-to-back airplane mode steps each bring the app back ([#252](https://github.com/devicelab-dev/maestro-runner/issues/252)).** The next step started while Settings was still in front, so only the first toggle returned to the app. The step now waits up to 3 s for the app to be in front again. An airplane mode step's outcome ("already enabled", …) now shows in the console and the reports.
+
 ## [1.1.31] - 2026-11-11
 
 A fix release for 1.1.30, whose GitHub release was withdrawn. Everything listed under 1.1.30 below ships in 1.1.31. On top of it: WDA answers the permission prompts a flow does not tap (a 1.1.30 regression), taps after a check wait for the screen to settle, WDA page-source lookups on real iPhones are much faster, and a few smaller fixes.
