@@ -178,6 +178,11 @@ func TestScrollUntilVisibleRespectsTimeout(t *testing.T) {
 }
 
 func TestScrollUntilVisibleDefaultMaxScrolls(t *testing.T) {
+	// 20 rounds of about 1.3s here end within 4s of the default 30s timeout:
+	// a minute keeps the cap, not the deadline, the limit.
+	defaultTimeout := core.ScrollUntilVisibleDefaultTimeout
+	core.ScrollUntilVisibleDefaultTimeout = time.Minute
+	t.Cleanup(func() { core.ScrollUntilVisibleDefaultTimeout = defaultTimeout })
 	captures := 0
 	client := &mockDeviceLabClient{
 		sourceFunc: func() (string, error) {
@@ -190,8 +195,7 @@ func TestScrollUntilVisibleDefaultMaxScrolls(t *testing.T) {
 	step := &flow.ScrollUntilVisibleStep{
 		Element:   flow.Selector{Text: "NonExistent"},
 		Direction: "down",
-		// No timeout of its own (the default 30s outlasts 20 scrolls here)
-		// and MaxScrolls not set — defaults to 20
+		// No timeout of its own and MaxScrolls not set — defaults to 20
 	}
 
 	result := driver.scrollUntilVisible(step)
