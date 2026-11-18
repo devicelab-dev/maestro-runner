@@ -62,7 +62,7 @@ func (fr *FlowRunner) Run() FlowResult {
 	logger.Info("Total steps: %d", len(fr.flow.Steps))
 
 	// Create flow writer for this flow's updates
-	fr.flowWriter = report.NewFlowWriter(fr.detail, fr.config.OutputDir, fr.indexWriter)
+	fr.flowWriter = newFlowWriter(fr.detail, fr.config.OutputDir, fr.indexWriter)
 
 	// Initialize script engine
 	fr.script = NewScriptEngine()
@@ -2001,7 +2001,7 @@ func (l *liveSteps) begin(compound bool, parent []report.Command, c report.Comma
 		return
 	}
 	if compound {
-		l.frames = append(l.frames, liveFrame{parent: parent, cmd: c})
+		l.frames = append(l.frames, liveFrame{parent: parent[:len(parent):len(parent)], cmd: c})
 	} else {
 		l.step = &c
 	}
@@ -2022,22 +2022,39 @@ func (l *liveSteps) end(compound bool) {
 // liveSubs writes the steps of the top-level compound step that runs now to
 // the report as far as they got: those that ended and those running, so a
 // runFlow's steps can be followed while it runs and not only once it ended.
+//
+// The writer writes at most every so often (CommandSubs), and builds the
+// list only then, maybe on its timer's goroutine, so what it is built from is
+// taken here as it is now, without copying the steps: a step that ended is
+// never changed, and the next ones are appended past the lengths taken here.
 func (fr *FlowRunner) liveSubs() {
 	l := fr.live
 	if l == nil || fr.flowWriter == nil {
 		return
 	}
-	list := slices.Clone(fr.subCommands)
+	done := fr.subCommands[:len(fr.subCommands):len(fr.subCommands)]
+	var step *report.Command
 	if l.step != nil {
-		list = append(list, *l.step)
+		s := *l.step
+		step = &s
 	}
-	for i := len(l.frames) - 1; i >= 0; i-- {
-		c := l.frames[i].cmd
-		c.SubCommands = list
-		list = append(slices.Clone(l.frames[i].parent), c)
-	}
-	fr.flowWriter.CommandSubs(l.cmd, list)
+	frames := slices.Clone(l.frames)
+	fr.flowWriter.CommandSubs(l.cmd, func() []report.Command {
+		list := slices.Clone(done)
+		if step != nil {
+			list = append(list, *step)
+		}
+		for i := len(frames) - 1; i >= 0; i-- {
+			c := frames[i].cmd
+			c.SubCommands = list
+			list = append(slices.Clone(frames[i].parent), c)
+		}
+		return list
+	})
 }
+
+// newFlowWriter makes a flow's writer; a variable so tests can see it.
+var newFlowWriter = report.NewFlowWriter
 
 // executeSubFlow executes a sub-flow without separate report tracking.
 func (fr *FlowRunner) executeSubFlow(subFlow flow.Flow) *core.CommandResult {
