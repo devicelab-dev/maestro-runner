@@ -1341,7 +1341,7 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector, allElements []*Parse
 	// Apply relative filters
 	anchorSelector, filterType := getRelativeFilter(sel)
 	if anchorSelector != nil {
-		anchors, err := core.PickAnchor(FilterBySelector(allElements, *anchorSelector), anchorSelector.Index, elementBounds)
+		anchors, err := core.PickAnchor(anchorMatches(allElements, *anchorSelector), anchorSelector.Index, elementBounds)
 		if err != nil {
 			return nil, err
 		}

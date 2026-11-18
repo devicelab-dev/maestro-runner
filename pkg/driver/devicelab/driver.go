@@ -1651,7 +1651,7 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector) (*core.ElementInfo, 
 				}}
 			}
 		} else {
-			picked, err := core.PickAnchor(FilterBySelector(allElements, *anchorSelector), anchorSelector.Index, elementBounds)
+			picked, err := core.PickAnchor(anchorMatches(allElements, *anchorSelector), anchorSelector.Index, elementBounds)
 			if err != nil {
 				return nil, err
 			}
@@ -1735,7 +1735,7 @@ func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements 
 				}}
 			}
 		} else {
-			picked, err := core.PickAnchor(FilterBySelector(allElements, *anchorSelector), anchorSelector.Index, elementBounds)
+			picked, err := core.PickAnchor(anchorMatches(allElements, *anchorSelector), anchorSelector.Index, elementBounds)
 			if err != nil {
 				return nil, nil, err
 			}
