@@ -3070,6 +3070,8 @@ func TestAppiumScrollUntilVisibleWithTimeoutWaitsForListThatFillsLate(t *testing
 func TestAppiumScrollUntilVisibleWithTimeoutRunsToItOnStillScreen(t *testing.T) {
 	// A screen that never changes and a step with its own timeout: the step
 	// keeps scrolling until the timeout, then fails in Maestro's words.
+	// A round that finds nothing costs about 1.3s here, and the no-progress
+	// stop comes in the third: 3s is the least that tells the two apart.
 	var scrolls atomic.Int32
 	server := fillsLateServer(&scrolls, 1<<30)
 	defer server.Close()
@@ -3079,14 +3081,14 @@ func TestAppiumScrollUntilVisibleWithTimeoutRunsToItOnStillScreen(t *testing.T) 
 	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
 		Element:   flow.Selector{Text: "NonExistent"},
 		Direction: "down",
-		BaseStep:  flow.BaseStep{TimeoutMs: 5000},
+		BaseStep:  flow.BaseStep{TimeoutMs: 3000},
 	})
 
 	if result.Success {
 		t.Fatal("expected failure when the element never shows")
 	}
-	if elapsed := time.Since(start); elapsed < 5*time.Second {
-		t.Errorf("gave up after %v, before the 5s timeout", elapsed)
+	if elapsed := time.Since(start); elapsed < 3*time.Second {
+		t.Errorf("gave up after %v, before the 3s timeout", elapsed)
 	}
 	if got := scrolls.Load(); got <= 2 {
 		t.Errorf("expected more scrolls than the no-progress stop's 2, got %d", got)
@@ -3128,9 +3130,13 @@ func movingServer(scrolls *atomic.Int32) *httptest.Server {
 }
 
 func TestAppiumScrollUntilVisibleWithoutTimeoutKeepsItsMessageAtTheDeadline(t *testing.T) {
-	// A step without a timeout of its own that runs into the default 30s (a
+	// A step without a timeout of its own that runs into the default timeout (a
 	// list that keeps moving, a maxScrolls it never reaches) keeps the message
 	// it had: Maestro's words are for a step that set its timeout.
+	// The default is 30s; a second is enough to run into it.
+	defaultTimeout := core.ScrollUntilVisibleDefaultTimeout
+	core.ScrollUntilVisibleDefaultTimeout = time.Second
+	t.Cleanup(func() { core.ScrollUntilVisibleDefaultTimeout = defaultTimeout })
 	var scrolls atomic.Int32
 	server := movingServer(&scrolls)
 	defer server.Close()
@@ -3146,8 +3152,8 @@ func TestAppiumScrollUntilVisibleWithoutTimeoutKeepsItsMessageAtTheDeadline(t *t
 	if result.Success {
 		t.Fatal("expected failure when the element never shows")
 	}
-	if elapsed := time.Since(start); elapsed < 30*time.Second {
-		t.Fatalf("ended after %v, before the default 30s timeout", elapsed)
+	if elapsed := time.Since(start); elapsed < core.ScrollUntilVisibleDefaultTimeout {
+		t.Fatalf("ended after %v, before the default timeout", elapsed)
 	}
 	if result.Message != "element not found after scrolling" || result.Error == nil || result.Error.Error() != "element not found after scrolling" {
 		t.Errorf("a step without a timeout of its own should keep its message, got %q (%v)", result.Message, result.Error)
@@ -3155,10 +3161,16 @@ func TestAppiumScrollUntilVisibleWithoutTimeoutKeepsItsMessageAtTheDeadline(t *t
 }
 
 func TestAppiumScrollUntilVisibleWithTimeoutIsNotCutAtDefaultMaxScrolls(t *testing.T) {
-	// The target comes on screen after the 21st scroll; until then the list
-	// moves and the target sits partly below the screen's bottom edge. A step
-	// with its own timeout scrolls until that timeout, as Maestro does; the
-	// default of 20 scrolls only caps a step without one.
+	// The target comes on screen after the scroll past the default cap; until
+	// then the list moves and the target sits partly below the screen's bottom
+	// edge. A step with its own timeout scrolls until that timeout, as Maestro
+	// does; the default cap only applies to a step without one.
+
+	// The default cap is 20 scrolls; 2 is enough to show that it does not
+	// apply, and it saves the 20 rounds the real cap would cost.
+	defaultMaxScrolls := core.ScrollUntilVisibleDefaultMaxScrolls
+	core.ScrollUntilVisibleDefaultMaxScrolls = 2
+	t.Cleanup(func() { core.ScrollUntilVisibleDefaultMaxScrolls = defaultMaxScrolls })
 	var scrolls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -3167,7 +3179,7 @@ func TestAppiumScrollUntilVisibleWithTimeoutIsNotCutAtDefaultMaxScrolls(t *testi
 		case strings.HasSuffix(path, "/source"):
 			n := scrolls.Load()
 			top := 2290
-			if n >= 21 {
+			if n >= 3 {
 				top = 1000
 			}
 			writeJSON(w, map[string]interface{}{
@@ -3200,9 +3212,9 @@ func TestAppiumScrollUntilVisibleWithTimeoutIsNotCutAtDefaultMaxScrolls(t *testi
 	})
 
 	if !result.Success {
-		t.Fatalf("expected the target after 21 scrolls, got %q", result.Message)
+		t.Fatalf("expected the target after 3 scrolls, got %q", result.Message)
 	}
-	if got := scrolls.Load(); got != 21 {
-		t.Errorf("expected 21 scrolls, got %d", got)
+	if got := scrolls.Load(); got != 3 {
+		t.Errorf("expected 3 scrolls, got %d", got)
 	}
 }

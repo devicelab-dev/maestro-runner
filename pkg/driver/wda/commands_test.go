@@ -5345,6 +5345,9 @@ func TestScrollUntilVisibleWithTimeoutWaitsForListThatFillsLate(t *testing.T) {
 func TestScrollUntilVisibleWithTimeoutRunsToItOnStillScreen(t *testing.T) {
 	// A screen that never changes and a step with its own timeout: the step
 	// keeps scrolling until the timeout, then fails in Maestro's words.
+	// A round that finds nothing costs about 1s here, and the no-progress
+	// stop comes in the fourth: 3.5s is about the least that tells the two
+	// apart.
 	var scrolls atomic.Int32
 	server := fillsLateWDAServer(&scrolls, 1<<30)
 	defer server.Close()
@@ -5354,14 +5357,14 @@ func TestScrollUntilVisibleWithTimeoutRunsToItOnStillScreen(t *testing.T) {
 	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
 		Element:   flow.Selector{Text: "NonExistent"},
 		Direction: "down",
-		BaseStep:  flow.BaseStep{TimeoutMs: 5000},
+		BaseStep:  flow.BaseStep{TimeoutMs: 3500},
 	})
 
 	if result.Success {
 		t.Fatal("expected failure when the element never shows")
 	}
-	if elapsed := time.Since(start); elapsed < 5*time.Second {
-		t.Errorf("gave up after %v, before the 5s timeout", elapsed)
+	if elapsed := time.Since(start); elapsed < 3500*time.Millisecond {
+		t.Errorf("gave up after %v, before the 3.5s timeout", elapsed)
 	}
 	if got := scrolls.Load(); got <= 3 {
 		t.Errorf("expected more scrolls than the no-progress stop's 3, got %d", got)
@@ -5404,9 +5407,13 @@ func movingWDAServer(scrolls *atomic.Int32) *httptest.Server {
 }
 
 func TestScrollUntilVisibleWithoutTimeoutKeepsItsMessageAtTheDeadline(t *testing.T) {
-	// A step without a timeout of its own that runs into the default 30s (a
+	// A step without a timeout of its own that runs into the default timeout (a
 	// list that keeps moving) keeps the message it had: Maestro's words are
 	// for a step that set its timeout.
+	// The default is 30s; a second is enough to run into it.
+	defaultTimeout := core.ScrollUntilVisibleDefaultTimeout
+	core.ScrollUntilVisibleDefaultTimeout = time.Second
+	t.Cleanup(func() { core.ScrollUntilVisibleDefaultTimeout = defaultTimeout })
 	var scrolls atomic.Int32
 	server := movingWDAServer(&scrolls)
 	defer server.Close()
@@ -5422,8 +5429,8 @@ func TestScrollUntilVisibleWithoutTimeoutKeepsItsMessageAtTheDeadline(t *testing
 	if result.Success {
 		t.Fatal("expected failure when the element never shows")
 	}
-	if elapsed := time.Since(start); elapsed < 30*time.Second {
-		t.Fatalf("ended after %v, before the default 30s timeout", elapsed)
+	if elapsed := time.Since(start); elapsed < core.ScrollUntilVisibleDefaultTimeout {
+		t.Fatalf("ended after %v, before the default timeout", elapsed)
 	}
 	want := fmt.Sprintf("Element not found: %s", selectorDesc(step.Element))
 	if result.Message != want || result.Error == nil || result.Error.Error() != "element not found after scrolling" {

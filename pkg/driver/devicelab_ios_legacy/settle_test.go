@@ -196,10 +196,14 @@ func TestScrollUntilVisibleWithTimeoutRunsToItOnStillScreen(t *testing.T) {
 	}
 }
 
-// A step without a timeout of its own that runs into the default 30s (a screen
+// A step without a timeout of its own that runs into the default timeout (a screen
 // that moves after every swipe) keeps the message it had: Maestro's words are
 // for a step that set its timeout.
 func TestScrollUntilVisibleWithoutTimeoutKeepsItsMessageAtTheDeadline(t *testing.T) {
+	// The default is 30s; a second is enough to run into it.
+	defaultTimeout := core.ScrollUntilVisibleDefaultTimeout
+	core.ScrollUntilVisibleDefaultTimeout = time.Second
+	t.Cleanup(func() { core.ScrollUntilVisibleDefaultTimeout = defaultTimeout })
 	info := &core.PlatformInfo{ScreenWidth: 400, ScreenHeight: 800}
 	r := &settleRunner{settled: true, nodesFn: func(drags int) []SnapshotNode {
 		return []SnapshotNode{{Type: "Other", Label: fmt.Sprintf("row %d", drags), Rect: SnapshotRect{Width: 400, Height: 40}}}
@@ -210,8 +214,8 @@ func TestScrollUntilVisibleWithoutTimeoutKeepsItsMessageAtTheDeadline(t *testing
 	if res.Success {
 		t.Fatal("found an element that is not there")
 	}
-	if elapsed := time.Since(start); elapsed < 30*time.Second {
-		t.Fatalf("ended after %v, before the default 30s timeout", elapsed)
+	if elapsed := time.Since(start); elapsed < core.ScrollUntilVisibleDefaultTimeout {
+		t.Fatalf("ended after %v, before the default timeout", elapsed)
 	}
 	if res.Message != "scroll target not found" || res.Error == nil || res.Error.Error() != "element not found after scrolling" {
 		t.Errorf("a step without a timeout of its own should keep its message, got %q (%v)", res.Message, res.Error)

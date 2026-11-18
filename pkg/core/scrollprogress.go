@@ -76,6 +76,16 @@ func ScrollSignature(capture string) string {
 	return fmt.Sprintf("%016x", h.Sum64())
 }
 
+// ScrollUntilVisibleDefaultTimeout is a scrollUntilVisible step's timeout
+// when the flow gives it none. It is a variable so that tests can shorten it.
+var ScrollUntilVisibleDefaultTimeout = 30 * time.Second
+
+// ScrollUntilVisibleDefaultMaxScrolls is the scroll count that caps a
+// scrollUntilVisible step with neither `maxScrolls:` nor a timeout of its own,
+// on the drivers that cap one (uiautomator2, devicelab, appium). It is a
+// variable so that tests can shorten it.
+var ScrollUntilVisibleDefaultMaxScrolls = 20
+
 // ScrollLooksUntilTimeout reports whether a scrollUntilVisible step that has
 // not found its element keeps looking after the surface stops moving: it does
 // when the flow gave the step its own `timeout:`. That timeout is the step's

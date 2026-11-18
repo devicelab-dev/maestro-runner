@@ -296,7 +296,7 @@ func (d *Driver) scrollUntilVisible(s *flow.ScrollUntilVisibleStep) *core.Comman
 		return core.ErrorResult(err, err.Error()+" — it currently works on the uiautomator2 driver")
 	}
 	var progress core.ScrollProgress
-	timeout := 30 * time.Second
+	timeout := core.ScrollUntilVisibleDefaultTimeout
 	if s.TimeoutMs > 0 {
 		timeout = time.Duration(s.TimeoutMs) * time.Millisecond
 	}

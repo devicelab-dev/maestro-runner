@@ -4167,7 +4167,7 @@ func TestScrollUntilVisibleDefaultMaxScrolls(t *testing.T) {
 // fully on screen from then on. Each round spends the find's 1s budget (the
 // mock answers no locator, so the find reads the page source at the end of
 // it, whether the match is partly visible or not) and the scroll's 300ms
-// settle: about 1.35s a round, 28s for 21 scrolls.
+// settle: about 1.35s a round.
 func growingList(scrolls, shownAfter int) string {
 	top := 2350
 	if scrolls >= shownAfter {
@@ -4183,11 +4183,17 @@ func growingList(scrolls, shownAfter int) string {
 }
 
 func TestScrollUntilVisibleWithTimeoutIsNotCutAtDefaultMaxScrolls(t *testing.T) {
-	// The target comes on screen after the 21st scroll. A step with its own
-	// timeout scrolls until that timeout, as Maestro does; the default of 20
-	// scrolls only caps a step without one.
+	// The target comes on screen after the scroll past the default cap. A
+	// step with its own timeout scrolls until that timeout, as Maestro does;
+	// the default cap only applies to a step without one.
+
+	// The default cap is 20 scrolls; 2 is enough to show that it does not
+	// apply, and it saves the 20 rounds the real cap would cost.
+	defaultMaxScrolls := core.ScrollUntilVisibleDefaultMaxScrolls
+	core.ScrollUntilVisibleDefaultMaxScrolls = 2
+	t.Cleanup(func() { core.ScrollUntilVisibleDefaultMaxScrolls = defaultMaxScrolls })
 	client := &MockUIA2Client{}
-	client.sourceFunc = func() (string, error) { return growingList(len(client.scrollCalls), 21), nil }
+	client.sourceFunc = func() (string, error) { return growingList(len(client.scrollCalls), 3), nil }
 	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, nil)
 
 	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
@@ -4197,10 +4203,10 @@ func TestScrollUntilVisibleWithTimeoutIsNotCutAtDefaultMaxScrolls(t *testing.T) 
 	})
 
 	if !result.Success {
-		t.Fatalf("expected the target after 21 scrolls, got %q", result.Message)
+		t.Fatalf("expected the target after 3 scrolls, got %q", result.Message)
 	}
-	if got := len(client.scrollCalls); got != 21 {
-		t.Errorf("expected 21 scrolls, got %d", got)
+	if got := len(client.scrollCalls); got != 3 {
+		t.Errorf("expected 3 scrolls, got %d", got)
 	}
 }
 
@@ -4606,6 +4612,9 @@ func TestScrollUntilVisibleWithTimeoutWaitsForListThatFillsLate(t *testing.T) {
 func TestScrollUntilVisibleWithTimeoutRunsToItOnStillScreen(t *testing.T) {
 	// A screen that never changes and a step with its own timeout: the step
 	// keeps scrolling until the timeout, then fails in Maestro's words.
+	// A round that finds nothing costs about 1.3s here (the find's 1s budget
+	// and the 300ms settle), and the no-progress stop comes in the third: 3s
+	// is the least that tells the two apart.
 	client := &MockUIA2Client{sourceFunc: func() (string, error) { return fillsLateSource(0, 1), nil }}
 	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, nil)
 
@@ -4613,14 +4622,14 @@ func TestScrollUntilVisibleWithTimeoutRunsToItOnStillScreen(t *testing.T) {
 	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
 		Element:   flow.Selector{Text: "NonExistent"},
 		Direction: "down",
-		BaseStep:  flow.BaseStep{TimeoutMs: 5000},
+		BaseStep:  flow.BaseStep{TimeoutMs: 3000},
 	})
 
 	if result.Success {
 		t.Fatal("expected failure when the element never shows")
 	}
-	if elapsed := time.Since(start); elapsed < 5*time.Second {
-		t.Errorf("gave up after %v, before the 5s timeout", elapsed)
+	if elapsed := time.Since(start); elapsed < 3*time.Second {
+		t.Errorf("gave up after %v, before the 3s timeout", elapsed)
 	}
 	if got := len(client.scrollCalls); got <= 2 {
 		t.Errorf("expected more scrolls than the no-progress stop's 2, got %d", got)
@@ -4631,9 +4640,13 @@ func TestScrollUntilVisibleWithTimeoutRunsToItOnStillScreen(t *testing.T) {
 }
 
 func TestScrollUntilVisibleWithoutTimeoutKeepsItsMessageAtTheDeadline(t *testing.T) {
-	// A step without a timeout of its own that runs into the default 30s (a
+	// A step without a timeout of its own that runs into the default timeout (a
 	// list that keeps moving, a maxScrolls it never reaches) keeps the message
 	// it had: Maestro's words are for a step that set its timeout.
+	// The default is 30s; a second is enough to run into it.
+	defaultTimeout := core.ScrollUntilVisibleDefaultTimeout
+	core.ScrollUntilVisibleDefaultTimeout = time.Second
+	t.Cleanup(func() { core.ScrollUntilVisibleDefaultTimeout = defaultTimeout })
 	captures := 0
 	client := &MockUIA2Client{sourceFunc: func() (string, error) { return movingList(&captures), nil }}
 	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, nil)
@@ -4648,8 +4661,8 @@ func TestScrollUntilVisibleWithoutTimeoutKeepsItsMessageAtTheDeadline(t *testing
 	if result.Success {
 		t.Fatal("expected failure when the element never shows")
 	}
-	if elapsed := time.Since(start); elapsed < 30*time.Second {
-		t.Fatalf("ended after %v, before the default 30s timeout", elapsed)
+	if elapsed := time.Since(start); elapsed < core.ScrollUntilVisibleDefaultTimeout {
+		t.Fatalf("ended after %v, before the default timeout", elapsed)
 	}
 	if result.Message != "Element not found after 1000 scrolls" || result.Error == nil || result.Error.Error() != "element not found" {
 		t.Errorf("a step without a timeout of its own should keep its message, got %q (%v)", result.Message, result.Error)

@@ -383,11 +383,11 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 
 	timeout := time.Duration(step.TimeoutMs) * time.Millisecond
 	if timeout <= 0 {
-		timeout = 30 * time.Second
+		timeout = core.ScrollUntilVisibleDefaultTimeout
 	}
 
 	deadline := time.Now().Add(timeout)
-	maxScrolls := 20
+	maxScrolls := core.ScrollUntilVisibleDefaultMaxScrolls
 	if step.MaxScrolls > 0 {
 		maxScrolls = step.MaxScrolls
 	} else if core.ScrollLooksUntilTimeout(step) {

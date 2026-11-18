@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
 )
 
@@ -293,9 +294,13 @@ func TestScrollUntilVisibleWithTimeoutRunsToItOnStillScreen(t *testing.T) {
 }
 
 func TestScrollUntilVisibleWithoutTimeoutKeepsItsMessageAtTheDeadline(t *testing.T) {
-	// A step without a timeout of its own that runs into the default 30s (a
+	// A step without a timeout of its own that runs into the default timeout (a
 	// screen that moves after every scroll) keeps the message and the cause
 	// it had: Maestro's words are for a step that set its timeout.
+	// The default is 30s; a second is enough to run into it.
+	defaultTimeout := core.ScrollUntilVisibleDefaultTimeout
+	core.ScrollUntilVisibleDefaultTimeout = time.Second
+	t.Cleanup(func() { core.ScrollUntilVisibleDefaultTimeout = defaultTimeout })
 	var scrolls atomic.Int32
 	d, _, _ := newTestDriver(t, func(cmd string, _ Args) (*Response, error) {
 		switch cmd {
@@ -314,8 +319,8 @@ func TestScrollUntilVisibleWithoutTimeoutKeepsItsMessageAtTheDeadline(t *testing
 	if res.Success {
 		t.Fatal("found an element that is not there")
 	}
-	if elapsed := time.Since(start); elapsed < 30*time.Second {
-		t.Fatalf("ended after %v, before the default 30s timeout", elapsed)
+	if elapsed := time.Since(start); elapsed < core.ScrollUntilVisibleDefaultTimeout {
+		t.Fatalf("ended after %v, before the default timeout", elapsed)
 	}
 	want := fmt.Sprintf("%s not visible after scrolling down", describe(sel))
 	if res.Message != want || res.Error == nil || res.Error.Error() != want {
