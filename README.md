@@ -159,6 +159,17 @@ waitForIdleTimeout: 3000    # Device idle wait (ms), 0 to disable
 - assertVisible: "Welcome"
 ```
 
+A flow file is one test, as in Maestro, also when its steps are all `runFlow`s: what one sub-flow keeps in `output` the next one reads, and a failing one ends the test. To run each `runFlow` of such a file as a test of its own instead, say so in its header (Maestro keeps the key and runs the file as one flow):
+
+```yaml
+suite: true                 # Each runFlow below runs as a flow of its own
+---
+- runFlow: login.yaml
+- runFlow: checkout.yaml
+```
+
+A suite holds only `runFlow` steps of files, two or more, without `when:`, an else or inline `commands:`; a file that says `suite: true` and holds anything else fails validation. Each part takes the suite's `appId` and `env`, and its `runFlow`'s `env`. A folder of flows, or `flows:` in `config.yaml`, also runs several tests together.
+
 ## Visual Regression (`assertScreenshot`)
 
 `assertScreenshot` compares the current screen (optionally cropped with `cropOn`) against a reference PNG.
