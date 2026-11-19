@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2961,8 +2962,9 @@ func TestAccessibilityLabelOf(t *testing.T) {
 }
 
 func TestAppiumScrollUntilVisibleStopsWhenScreenStopsMoving(t *testing.T) {
-	// The same source on every read: a list at its end. Two scrolls that
-	// change nothing are proof enough — the loop must not spend the other 18.
+	// The same source on every read: a list at its end. For a step without a
+	// timeout of its own, two scrolls that change nothing are proof enough —
+	// the loop must not spend the other 18.
 	scrollCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -2994,7 +2996,6 @@ func TestAppiumScrollUntilVisibleStopsWhenScreenStopsMoving(t *testing.T) {
 	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
 		Element:   flow.Selector{Text: "NonExistent"},
 		Direction: "down",
-		BaseStep:  flow.BaseStep{TimeoutMs: 60000},
 	})
 
 	if result.Success {
@@ -3005,5 +3006,215 @@ func TestAppiumScrollUntilVisibleStopsWhenScreenStopsMoving(t *testing.T) {
 	}
 	if !strings.Contains(result.Message, "made no progress") {
 		t.Errorf("message should name the reason, got %q", result.Message)
+	}
+}
+
+// fillsLateServer is an Appium server whose page source stays the same, a
+// list still loading, until the shownAfter'th scroll, and then has the target
+// row on screen. It counts the scrolls (W3C actions).
+func fillsLateServer(scrolls *atomic.Int32, shownAfter int32) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		switch {
+		case strings.HasSuffix(path, "/source"):
+			row := `<android.widget.ProgressBar bounds="[490,1120][590,1220]"/>`
+			if scrolls.Load() >= shownAfter {
+				row = `<android.widget.TextView text="Target" bounds="[100,1000][500,1100]"/>`
+			}
+			writeJSON(w, map[string]interface{}{
+				"value": `<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <android.widget.FrameLayout bounds="[0,0][1080,2340]">
+    ` + row + `
+  </android.widget.FrameLayout>
+</hierarchy>`,
+			})
+		case strings.Contains(path, "/actions") && r.Method == "POST":
+			scrolls.Add(1)
+			writeJSON(w, map[string]interface{}{"value": nil})
+		case strings.Contains(path, "/window/rect"):
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 1080.0, "height": 2340.0, "x": 0.0, "y": 0.0},
+			})
+		default:
+			writeJSON(w, map[string]interface{}{"value": nil})
+		}
+	}))
+}
+
+func TestAppiumScrollUntilVisibleWithTimeoutWaitsForListThatFillsLate(t *testing.T) {
+	// The screen does not change for four scrolls (the list is still
+	// loading), then the target is there. A step with its own timeout looks
+	// until that timeout, as Maestro does: a still screen is not proof that
+	// the content has ended.
+	var scrolls atomic.Int32
+	server := fillsLateServer(&scrolls, 4)
+	defer server.Close()
+	driver := createTestAppiumDriver(server)
+
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:   flow.Selector{Text: "Target"},
+		Direction: "down",
+		BaseStep:  flow.BaseStep{TimeoutMs: 20000},
+	})
+
+	if !result.Success {
+		t.Fatalf("expected the target once the list filled, got %q", result.Message)
+	}
+	if got := scrolls.Load(); got < 4 {
+		t.Errorf("expected at least 4 scrolls before the target showed, got %d", got)
+	}
+}
+
+func TestAppiumScrollUntilVisibleWithTimeoutRunsToItOnStillScreen(t *testing.T) {
+	// A screen that never changes and a step with its own timeout: the step
+	// keeps scrolling until the timeout, then fails in Maestro's words.
+	// A round that finds nothing costs about 1.3s here, and the no-progress
+	// stop comes in the third: 3s is the least that tells the two apart.
+	var scrolls atomic.Int32
+	server := fillsLateServer(&scrolls, 1<<30)
+	defer server.Close()
+	driver := createTestAppiumDriver(server)
+
+	start := time.Now()
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:   flow.Selector{Text: "NonExistent"},
+		Direction: "down",
+		BaseStep:  flow.BaseStep{TimeoutMs: 3000},
+	})
+
+	if result.Success {
+		t.Fatal("expected failure when the element never shows")
+	}
+	if elapsed := time.Since(start); elapsed < 3*time.Second {
+		t.Errorf("gave up after %v, before the 3s timeout", elapsed)
+	}
+	if got := scrolls.Load(); got <= 2 {
+		t.Errorf("expected more scrolls than the no-progress stop's 2, got %d", got)
+	}
+	if !strings.Contains(result.Message, "No visible element found") {
+		t.Errorf("message should be Maestro's, got %q", result.Message)
+	}
+}
+
+// movingServer is an Appium server whose page source moves on every scroll,
+// a list that keeps going without the target. It counts the scrolls (W3C
+// actions).
+func movingServer(scrolls *atomic.Int32) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		switch {
+		case strings.HasSuffix(path, "/source"):
+			y := 100 + scrolls.Load()
+			writeJSON(w, map[string]interface{}{
+				"value": fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <android.widget.FrameLayout bounds="[0,0][1080,2340]">
+    <android.widget.TextView text="Other" bounds="[100,%d][300,%d]"/>
+  </android.widget.FrameLayout>
+</hierarchy>`, y, y+50),
+			})
+		case strings.Contains(path, "/actions") && r.Method == "POST":
+			scrolls.Add(1)
+			writeJSON(w, map[string]interface{}{"value": nil})
+		case strings.Contains(path, "/window/rect"):
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 1080.0, "height": 2340.0, "x": 0.0, "y": 0.0},
+			})
+		default:
+			writeJSON(w, map[string]interface{}{"value": nil})
+		}
+	}))
+}
+
+func TestAppiumScrollUntilVisibleWithoutTimeoutKeepsItsMessageAtTheDeadline(t *testing.T) {
+	// A step without a timeout of its own that runs into the default timeout (a
+	// list that keeps moving, a maxScrolls it never reaches) keeps the message
+	// it had: Maestro's words are for a step that set its timeout.
+	// The default is 30s; a second is enough to run into it.
+	defaultTimeout := core.ScrollUntilVisibleDefaultTimeout
+	core.ScrollUntilVisibleDefaultTimeout = time.Second
+	t.Cleanup(func() { core.ScrollUntilVisibleDefaultTimeout = defaultTimeout })
+	var scrolls atomic.Int32
+	server := movingServer(&scrolls)
+	defer server.Close()
+	driver := createTestAppiumDriver(server)
+
+	start := time.Now()
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:    flow.Selector{Text: "NonExistent"},
+		Direction:  "down",
+		MaxScrolls: 1000,
+	})
+
+	if result.Success {
+		t.Fatal("expected failure when the element never shows")
+	}
+	if elapsed := time.Since(start); elapsed < core.ScrollUntilVisibleDefaultTimeout {
+		t.Fatalf("ended after %v, before the default timeout", elapsed)
+	}
+	if result.Message != "element not found after scrolling" || result.Error == nil || result.Error.Error() != "element not found after scrolling" {
+		t.Errorf("a step without a timeout of its own should keep its message, got %q (%v)", result.Message, result.Error)
+	}
+}
+
+func TestAppiumScrollUntilVisibleWithTimeoutIsNotCutAtDefaultMaxScrolls(t *testing.T) {
+	// The target comes on screen after the scroll past the default cap; until
+	// then the list moves and the target sits partly below the screen's bottom
+	// edge. A step with its own timeout scrolls until that timeout, as Maestro
+	// does; the default cap only applies to a step without one.
+
+	// The default cap is 20 scrolls; 2 is enough to show that it does not
+	// apply, and it saves the 20 rounds the real cap would cost.
+	defaultMaxScrolls := core.ScrollUntilVisibleDefaultMaxScrolls
+	core.ScrollUntilVisibleDefaultMaxScrolls = 2
+	t.Cleanup(func() { core.ScrollUntilVisibleDefaultMaxScrolls = defaultMaxScrolls })
+	var scrolls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		switch {
+		case strings.HasSuffix(path, "/source"):
+			n := scrolls.Load()
+			top := 2290
+			if n >= 3 {
+				top = 1000
+			}
+			writeJSON(w, map[string]interface{}{
+				"value": fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <android.widget.FrameLayout bounds="[0,0][1080,2340]">
+    <android.widget.TextView text="Row %d" bounds="[100,100][500,200]"/>
+    <android.widget.TextView text="Target" bounds="[100,%d][500,%d]"/>
+  </android.widget.FrameLayout>
+</hierarchy>`, n, top, top+100),
+			})
+		case strings.Contains(path, "/actions") && r.Method == "POST":
+			scrolls.Add(1)
+			writeJSON(w, map[string]interface{}{"value": nil})
+		case strings.Contains(path, "/window/rect"):
+			writeJSON(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 1080.0, "height": 2340.0, "x": 0.0, "y": 0.0},
+			})
+		default:
+			writeJSON(w, map[string]interface{}{"value": nil})
+		}
+	}))
+	defer server.Close()
+	driver := createTestAppiumDriver(server)
+
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:   flow.Selector{Text: "Target"},
+		Direction: "down",
+		BaseStep:  flow.BaseStep{TimeoutMs: 60000},
+	})
+
+	if !result.Success {
+		t.Fatalf("expected the target after 3 scrolls, got %q", result.Message)
+	}
+	if got := scrolls.Load(); got != 3 {
+		t.Errorf("expected 3 scrolls, got %d", got)
 	}
 }

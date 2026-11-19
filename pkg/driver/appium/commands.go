@@ -3,6 +3,7 @@ package appium
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -382,13 +383,18 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 
 	timeout := time.Duration(step.TimeoutMs) * time.Millisecond
 	if timeout <= 0 {
-		timeout = 30 * time.Second
+		timeout = core.ScrollUntilVisibleDefaultTimeout
 	}
 
 	deadline := time.Now().Add(timeout)
-	maxScrolls := 20
+	maxScrolls := core.ScrollUntilVisibleDefaultMaxScrolls
 	if step.MaxScrolls > 0 {
 		maxScrolls = step.MaxScrolls
+	} else if core.ScrollLooksUntilTimeout(step) {
+		// The step's own timeout is its budget, as in Maestro and on the iOS
+		// drivers: the default count, which could end the step before that
+		// timeout, does not apply.
+		maxScrolls = math.MaxInt
 	}
 
 	partiallyVisible := false
@@ -476,11 +482,15 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 			if hanging != nil {
 				return successResult("Element visible (end of content, partly past its scroll container)", hanging)
 			}
-			reason := fmt.Sprintf("scrolling %s made no progress after %d scrolls (end of content?)", direction, i)
-			if partiallyVisible {
-				return errorResult(fmt.Errorf("element found but never sufficiently visible after scrolling"), reason)
+			// A step with its own timeout looks until it passes, as in Maestro:
+			// a list still filling reads as stuck too.
+			if !core.ScrollLooksUntilTimeout(step) {
+				reason := fmt.Sprintf("scrolling %s made no progress after %d scrolls (end of content?)", direction, i)
+				if partiallyVisible {
+					return errorResult(fmt.Errorf("element found but never sufficiently visible after scrolling"), reason)
+				}
+				return errorResult(fmt.Errorf("element not found after scrolling"), reason)
 			}
-			return errorResult(fmt.Errorf("element not found after scrolling"), reason)
 		}
 
 		// Scroll. A failed scroll ends the step with its reason; ignoring it
@@ -497,10 +507,16 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	if hanging != nil {
 		return successResult("Element visible (scrolls ran out, partly past its scroll container)", hanging)
 	}
-	if partiallyVisible {
-		return errorResult(fmt.Errorf("element found but never sufficiently visible after scrolling"), "")
+	// A step with its own timeout that ran out of it fails in Maestro's
+	// words; one without keeps its message, however its loop ended.
+	reason := ""
+	if core.ScrollLooksUntilTimeout(step) && !time.Now().Before(deadline) {
+		reason = core.ScrollTimeoutMessage(step.Element.Describe(), direction, timeout)
 	}
-	return errorResult(fmt.Errorf("element not found after scrolling"), "")
+	if partiallyVisible {
+		return errorResult(fmt.Errorf("element found but never sufficiently visible after scrolling"), reason)
+	}
+	return errorResult(fmt.Errorf("element not found after scrolling"), reason)
 }
 
 // scrollSurfaceSignature reduces the current page source to a key for

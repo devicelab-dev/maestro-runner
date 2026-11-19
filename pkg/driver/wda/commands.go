@@ -1067,7 +1067,7 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	if step.MaxScrolls > 0 {
 		maxScrolls = step.MaxScrolls
 	}
-	timeout := 30 * time.Second
+	timeout := core.ScrollUntilVisibleDefaultTimeout
 	if step.TimeoutMs > 0 {
 		timeout = time.Duration(step.TimeoutMs) * time.Millisecond
 	}
@@ -1083,6 +1083,11 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	var shown *core.ElementInfo
 
 	for i := 0; i < maxScrolls && time.Now().Before(deadline); i++ {
+		// A cancelled run stops here: with a timeout of its own the step
+		// would otherwise swipe on a still screen until that timeout.
+		if err := d.parentContext().Err(); err != nil {
+			return errorResult(fmt.Errorf("scroll cancelled: %w", err), "")
+		}
 		info, err := d.findElement(step.Element, true, 1000)
 		if err == nil && info != nil {
 			// Found in the tree is not enough: an element half-hidden behind
@@ -1132,12 +1137,21 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 			if shown != nil {
 				return successResult("Element visible after scrolling (end of content before centring)", shown)
 			}
-			return errorResult(fmt.Errorf("element not found after scrolling"), fmt.Sprintf("Element not found: %s — scrolling %s made no progress after %d scrolls (end of content?)", selectorDesc(step.Element), direction, i+1))
+			// A step with its own timeout looks until it passes, as in Maestro:
+			// a list still filling reads as stuck too.
+			if !core.ScrollLooksUntilTimeout(step) {
+				return errorResult(fmt.Errorf("element not found after scrolling"), fmt.Sprintf("Element not found: %s — scrolling %s made no progress after %d scrolls (end of content?)", selectorDesc(step.Element), direction, i+1))
+			}
 		}
 	}
 
 	if shown != nil {
 		return successResult("Element visible after scrolling (scrolls ran out before centring)", shown)
+	}
+	// A step with its own timeout that ran out of it fails in Maestro's
+	// words; one without keeps its message, however its loop ended.
+	if core.ScrollLooksUntilTimeout(step) && !time.Now().Before(deadline) {
+		return errorResult(fmt.Errorf("element not found after scrolling"), core.ScrollTimeoutMessage(selectorDesc(step.Element), direction, timeout))
 	}
 	return errorResult(fmt.Errorf("element not found after scrolling"), fmt.Sprintf("Element not found: %s", selectorDesc(step.Element)))
 }

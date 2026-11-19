@@ -1,15 +1,19 @@
 package wda
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
@@ -5226,9 +5230,9 @@ func TestSwipeFromElementPointStartsAtPoint(t *testing.T) {
 }
 
 func TestScrollUntilVisibleStopsWhenScreenStopsMoving(t *testing.T) {
-	// The same picture after every scroll: a list at its end. Three settled
-	// screenshots that match are proof enough — the loop must not spend the
-	// other 17 scrolls.
+	// The same picture after every scroll: a list at its end. For a step
+	// without a timeout of its own, three settled screenshots that match are
+	// proof enough — the loop must not spend the rest of the default timeout.
 	scrollCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -5261,7 +5265,6 @@ func TestScrollUntilVisibleStopsWhenScreenStopsMoving(t *testing.T) {
 	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
 		Element:   flow.Selector{Text: "NonExistent"},
 		Direction: "down",
-		BaseStep:  flow.BaseStep{TimeoutMs: 60000},
 	})
 
 	if result.Success {
@@ -5272,6 +5275,245 @@ func TestScrollUntilVisibleStopsWhenScreenStopsMoving(t *testing.T) {
 	}
 	if !strings.Contains(result.Message, "made no progress") {
 		t.Errorf("message should name the reason, got %q", result.Message)
+	}
+}
+
+// fillsLateWDAServer is a WebDriverAgent whose screen stays the same, a list
+// still loading, until the shownAfter'th scroll, and then shows the target
+// row. It counts the scrolls (W3C actions).
+func fillsLateWDAServer(scrolls *atomic.Int32, shownAfter int32) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		filled := scrolls.Load() >= shownAfter
+		switch {
+		case strings.Contains(path, "/actions"):
+			scrolls.Add(1)
+			jsonResponse(w, map[string]interface{}{"status": 0})
+		case strings.HasSuffix(path, "/screenshot"):
+			picture := "loading"
+			if filled {
+				picture = "list"
+			}
+			jsonResponse(w, map[string]interface{}{"value": base64.StdEncoding.EncodeToString([]byte(picture))})
+		case strings.HasSuffix(path, "/source"):
+			row := `<XCUIElementTypeActivityIndicator name="In progress" enabled="true" visible="true" x="175" y="400" width="40" height="40"/>`
+			if filled {
+				row = `<XCUIElementTypeStaticText name="Target" label="Target" enabled="true" visible="true" x="20" y="400" width="200" height="40"/>`
+			}
+			jsonResponse(w, map[string]interface{}{
+				"value": `<AppiumAUT>
+  <XCUIElementTypeApplication name="TestApp" enabled="true" visible="true" x="0" y="0" width="390" height="844">
+    ` + row + `
+  </XCUIElementTypeApplication>
+</AppiumAUT>`,
+			})
+		case strings.Contains(path, "/window/size"):
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 390.0, "height": 844.0},
+			})
+		default:
+			jsonResponse(w, map[string]interface{}{"status": 0})
+		}
+	}))
+}
+
+func TestScrollUntilVisibleWithTimeoutWaitsForListThatFillsLate(t *testing.T) {
+	// The screen does not change for four scrolls (the list is still
+	// loading), then the target is there. A step with its own timeout looks
+	// until that timeout, as Maestro does: a still screen is not proof that
+	// the content has ended.
+	var scrolls atomic.Int32
+	server := fillsLateWDAServer(&scrolls, 4)
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:   flow.Selector{Text: "Target"},
+		Direction: "down",
+		BaseStep:  flow.BaseStep{TimeoutMs: 20000},
+	})
+
+	if !result.Success {
+		t.Fatalf("expected the target once the list filled, got %q", result.Message)
+	}
+	if got := scrolls.Load(); got < 4 {
+		t.Errorf("expected at least 4 scrolls before the target showed, got %d", got)
+	}
+}
+
+func TestScrollUntilVisibleWithTimeoutRunsToItOnStillScreen(t *testing.T) {
+	// A screen that never changes and a step with its own timeout: the step
+	// keeps scrolling until the timeout, then fails in Maestro's words.
+	// A round that finds nothing costs about 1s here, and the no-progress
+	// stop comes in the fourth: 3.5s is about the least that tells the two
+	// apart.
+	var scrolls atomic.Int32
+	server := fillsLateWDAServer(&scrolls, 1<<30)
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	start := time.Now()
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:   flow.Selector{Text: "NonExistent"},
+		Direction: "down",
+		BaseStep:  flow.BaseStep{TimeoutMs: 3500},
+	})
+
+	if result.Success {
+		t.Fatal("expected failure when the element never shows")
+	}
+	if elapsed := time.Since(start); elapsed < 3500*time.Millisecond {
+		t.Errorf("gave up after %v, before the 3.5s timeout", elapsed)
+	}
+	if got := scrolls.Load(); got <= 3 {
+		t.Errorf("expected more scrolls than the no-progress stop's 3, got %d", got)
+	}
+	if !strings.Contains(result.Message, "No visible element found") {
+		t.Errorf("message should be Maestro's, got %q", result.Message)
+	}
+}
+
+// movingWDAServer is a WebDriverAgent whose screen moves on every scroll,
+// a list that keeps going without the target. It counts the scrolls (W3C
+// actions).
+func movingWDAServer(scrolls *atomic.Int32) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		switch {
+		case strings.Contains(path, "/actions"):
+			scrolls.Add(1)
+			jsonResponse(w, map[string]interface{}{"status": 0})
+		case strings.HasSuffix(path, "/screenshot"):
+			picture := fmt.Sprintf("list after %d scrolls", scrolls.Load())
+			jsonResponse(w, map[string]interface{}{"value": base64.StdEncoding.EncodeToString([]byte(picture))})
+		case strings.HasSuffix(path, "/source"):
+			jsonResponse(w, map[string]interface{}{
+				"value": fmt.Sprintf(`<AppiumAUT>
+  <XCUIElementTypeApplication name="TestApp" enabled="true" visible="true" x="0" y="0" width="390" height="844">
+    <XCUIElementTypeStaticText name="Other" label="Other" enabled="true" visible="true" x="20" y="%d" width="200" height="40"/>
+  </XCUIElementTypeApplication>
+</AppiumAUT>`, 100+scrolls.Load()),
+			})
+		case strings.Contains(path, "/window/size"):
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 390.0, "height": 844.0},
+			})
+		default:
+			jsonResponse(w, map[string]interface{}{"status": 0})
+		}
+	}))
+}
+
+func TestScrollUntilVisibleWithoutTimeoutKeepsItsMessageAtTheDeadline(t *testing.T) {
+	// A step without a timeout of its own that runs into the default timeout (a
+	// list that keeps moving) keeps the message it had: Maestro's words are
+	// for a step that set its timeout.
+	// The default is 30s; a second is enough to run into it.
+	defaultTimeout := core.ScrollUntilVisibleDefaultTimeout
+	core.ScrollUntilVisibleDefaultTimeout = time.Second
+	t.Cleanup(func() { core.ScrollUntilVisibleDefaultTimeout = defaultTimeout })
+	var scrolls atomic.Int32
+	server := movingWDAServer(&scrolls)
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	step := &flow.ScrollUntilVisibleStep{
+		Element:   flow.Selector{Text: "NonExistent"},
+		Direction: "down",
+	}
+	start := time.Now()
+	result := driver.scrollUntilVisible(step)
+
+	if result.Success {
+		t.Fatal("expected failure when the element never shows")
+	}
+	if elapsed := time.Since(start); elapsed < core.ScrollUntilVisibleDefaultTimeout {
+		t.Fatalf("ended after %v, before the default timeout", elapsed)
+	}
+	want := fmt.Sprintf("Element not found: %s", selectorDesc(step.Element))
+	if result.Message != want || result.Error == nil || result.Error.Error() != "element not found after scrolling" {
+		t.Errorf("a step without a timeout of its own should keep its message %q, got %q (%v)", want, result.Message, result.Error)
+	}
+}
+
+func TestScrollUntilVisibleStopsWhenRunIsCancelled(t *testing.T) {
+	// The run is cancelled (a runFlow's timeout, a caller's cancel) while a
+	// step with its own timeout looks on a still screen: it stops at once
+	// instead of swiping on until that timeout.
+	var scrolls atomic.Int32
+	server := fillsLateWDAServer(&scrolls, 1<<30)
+	defer server.Close()
+	driver := createTestDriver(server)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	driver.SetContext(ctx)
+
+	start := time.Now()
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:   flow.Selector{Text: "NonExistent"},
+		Direction: "down",
+		BaseStep:  flow.BaseStep{TimeoutMs: 5000},
+	})
+
+	if result.Success || !errors.Is(result.Error, context.Canceled) {
+		t.Fatalf("expected the cancel as the cause, got %q (%v)", result.Message, result.Error)
+	}
+	if got := scrolls.Load(); got != 0 {
+		t.Errorf("expected no scroll after the cancel, got %d", got)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("stopped after %v; want at once", elapsed)
+	}
+}
+
+func TestScrollUntilVisibleWithTimeoutAcceptsUncentredElementAtEndOfContent(t *testing.T) {
+	// centerElement on the last row of a list: it is on screen but can never
+	// reach the middle, and the screen stops moving. A step with its own
+	// timeout still takes it at the end of the content, as one without does:
+	// only the not-found failure waits for the timeout.
+	var scrolls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		switch {
+		case strings.Contains(path, "/actions"):
+			scrolls.Add(1)
+			jsonResponse(w, map[string]interface{}{"status": 0})
+		case strings.HasSuffix(path, "/screenshot"):
+			jsonResponse(w, map[string]interface{}{"value": base64.StdEncoding.EncodeToString([]byte("end of the list"))})
+		case strings.HasSuffix(path, "/source"):
+			jsonResponse(w, map[string]interface{}{
+				"value": `<AppiumAUT>
+  <XCUIElementTypeApplication name="TestApp" enabled="true" visible="true" x="0" y="0" width="390" height="844">
+    <XCUIElementTypeStaticText name="Target" label="Target" enabled="true" visible="true" x="20" y="760" width="200" height="40"/>
+  </XCUIElementTypeApplication>
+</AppiumAUT>`,
+			})
+		case strings.Contains(path, "/window/size"):
+			jsonResponse(w, map[string]interface{}{
+				"value": map[string]interface{}{"width": 390.0, "height": 844.0},
+			})
+		default:
+			jsonResponse(w, map[string]interface{}{"status": 0})
+		}
+	}))
+	defer server.Close()
+	driver := createTestDriver(server)
+
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:       flow.Selector{Text: "Target"},
+		Direction:     "down",
+		CenterElement: true,
+		BaseStep:      flow.BaseStep{TimeoutMs: 20000},
+	})
+
+	if !result.Success || !strings.Contains(result.Message, "end of content before centring") {
+		t.Fatalf("expected the element at the end of the content, got %q (%v)", result.Message, result.Error)
+	}
+	if got := scrolls.Load(); got != 3 {
+		t.Errorf("expected the 3 scrolls that show the end of the content, got %d", got)
 	}
 }
 
