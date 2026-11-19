@@ -250,10 +250,13 @@ func StartAgent(ctx context.Context, opts AgentOptions) (*Agent, *Client, error)
 	if err := a.install(ctx, m.Version); err != nil {
 		return nil, nil, err
 	}
-	c, err := a.launch(ctx)
+	// The launch sends the app in front to the background (front.go).
+	front, why := frontApp(ctx, opts.UDID)
+	c, err := launchAgent(a, ctx)
 	if err != nil {
 		return nil, nil, err
 	}
+	a.bringBack(ctx, front, why)
 	c.SetReviver(a.revive)
 	return a, c, nil
 }
@@ -342,6 +345,9 @@ func fileSHA256(path string) string {
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
+
+// launchAgent is (*Agent).launch, StartAgent's fresh start; tests replace it.
+var launchAgent = (*Agent).launch
 
 // launch starts the agent on a free port, by simctl launch and, failing that
 // (auto mode), by xcodebuild test-without-building.
@@ -630,9 +636,19 @@ func (a *Agent) stopXcodebuild() {
 func simctl(ctx context.Context, timeout time.Duration, args ...string) (string, error) {
 	c, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	out, err := exec.CommandContext(c, "xcrun", append([]string{"simctl"}, args...)...).CombinedOutput()
+	cmd := exec.CommandContext(c, "xcrun", append([]string{"simctl"}, args...)...)
+	// simctl spawn hands its output to the process it starts in the
+	// simulator, which the deadline's kill of xcrun does not reach: without
+	// a bound on the wait for that output, a wedged simulator held the call
+	// past its timeout.
+	cmd.WaitDelay = simctlWaitDelay
+	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
+
+// simctlWaitDelay bounds how long simctl waits for its output once xcrun has
+// exited or been killed at the deadline.
+const simctlWaitDelay = 2 * time.Second
 
 // oneLine is s up to its first line break, for a one-line console note.
 func oneLine(s string) string {
