@@ -193,6 +193,23 @@ func (w *FlowWriter) applyLive() {
 	}
 }
 
+// Stop stops CommandSubs' timer and drops the list it left waiting, so
+// nothing more is written for a running command's sub-commands: not by the
+// timer once Stop returns, nor for a later call. End does the same after
+// its write; Stop is for a flow that may not reach End (a step that
+// panicked). It may be called more than once, and after End.
+func (w *FlowWriter) Stop() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.ended = true
+	w.live = nil
+	if w.liveTimer != nil {
+		w.liveTimer.Stop()
+		w.liveTimer = nil
+	}
+	w.liveGen++
+}
+
 // Writes returns how many times the flow's file was written so far.
 func (w *FlowWriter) Writes() int {
 	w.mu.Lock()

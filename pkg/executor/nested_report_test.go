@@ -311,3 +311,51 @@ func TestLongRepeatWritesTheFlowFileAtMostEveryInterval(t *testing.T) {
 		})
 	}
 }
+
+// A step that panics skips the flow's end, so its writer is stopped when Run
+// returns: a runFlow's steps left waiting for CommandSubs' timer are not
+// written to the flow's file and the index after the run ended, nor is a
+// list given later.
+func TestNoLiveWriteAfterAStepPanics(t *testing.T) {
+	dir := t.TempDir()
+	var w *report.FlowWriter
+	orig := newFlowWriter
+	newFlowWriter = func(d *report.FlowDetail, outputDir string, index *report.IndexWriter) *report.FlowWriter {
+		w = orig(d, outputDir, index)
+		return w
+	}
+	t.Cleanup(func() { newFlowWriter = orig })
+	driver := &mockDriver{executeFunc: func(step flow.Step) *core.CommandResult {
+		if tap, ok := step.(*flow.TapOnStep); ok && tap.Selector.ID == "boom" {
+			panic("nil pointer dereference in a dependency")
+		}
+		return &core.CommandResult{Success: true}
+	}}
+	runner := New(driver, RunnerConfig{
+		OutputDir: dir,
+		Artifacts: ArtifactNever,
+		Device:    report.Device{ID: "test", Platform: "android"},
+	})
+	f := flow.Flow{
+		SourcePath: "test.yaml",
+		Config:     flow.Config{Name: "panic in a runFlow"},
+		Steps:      []flow.Step{liveRunFlow(liveTap("a"), liveTap("boom"))},
+	}
+	result, err := runner.Run(context.Background(), []flow.Flow{f})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Status != report.StatusFailed {
+		t.Fatalf("status = %v, want failed", result.Status)
+	}
+	after := w.Writes()
+	time.Sleep(2 * report.LiveWriteInterval)
+	if got := w.Writes() - after; got != 0 {
+		t.Errorf("the flow's file was written %d times after Run returned, want 0", got)
+	}
+	w.CommandSubs(0, func() []report.Command { return nil })
+	time.Sleep(2 * report.LiveWriteInterval)
+	if got := w.Writes() - after; got != 0 {
+		t.Errorf("a list given after Run returned was written %d times, want 0", got)
+	}
+}

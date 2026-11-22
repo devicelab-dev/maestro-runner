@@ -63,6 +63,9 @@ func (fr *FlowRunner) Run() FlowResult {
 
 	// Create flow writer for this flow's updates
 	fr.flowWriter = newFlowWriter(fr.detail, fr.config.OutputDir, fr.indexWriter)
+	// A step that panics skips End below: nothing is written for the
+	// running step's sub-commands after Run returns.
+	defer fr.flowWriter.Stop()
 
 	// Initialize script engine
 	fr.script = NewScriptEngine()

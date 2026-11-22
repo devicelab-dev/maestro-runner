@@ -645,6 +645,35 @@ func TestFlowWriter_CommandSubs_NoWriteAfterEnd(t *testing.T) {
 	}
 }
 
+// Stop drops a list left waiting and stops its timer, so nothing is written
+// for the flow from CommandSubs once it returns, a later list included, with
+// or without End. It may be called again, and after End.
+func TestFlowWriter_Stop(t *testing.T) {
+	for _, end := range []bool{false, true} {
+		fw, iw, tmpDir := createTestFlowWriter(t)
+		fw.liveEvery = 50 * time.Millisecond
+
+		fw.Start()
+		var built int
+		fw.CommandSubs(1, subsOf(&built, Command{Type: "tapOn", Status: StatusRunning}))
+		if end {
+			fw.End(StatusPassed)
+		}
+		fw.Stop()
+		after := fw.Writes()
+		fw.CommandSubs(1, subsOf(&built, Command{Type: "tapOn", Status: StatusPassed}))
+		fw.Stop()
+		time.Sleep(150 * time.Millisecond)
+		if got := fw.Writes() - after; got != 0 {
+			t.Errorf("end %v: the file was written %d times after Stop, want 0", end, got)
+		}
+		if subs := readSubs(t, tmpDir); end != (len(subs) == 1) {
+			t.Errorf("end %v: the file has %+v", end, subs)
+		}
+		iw.Close()
+	}
+}
+
 // With no interval each call writes, as before.
 func TestFlowWriter_CommandSubs_NoInterval(t *testing.T) {
 	fw, iw, _ := createTestFlowWriter(t)
