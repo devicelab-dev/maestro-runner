@@ -168,7 +168,7 @@ suite: true                 # Each runFlow below runs as a flow of its own
 - runFlow: checkout.yaml
 ```
 
-A suite holds only `runFlow` steps of files, two or more, without `when:`, an else or inline `commands:`, and has no `onFlowStart` or `onFlowComplete` of its own (its parts run as flows of their own, so those would never run); a file that says `suite: true` and holds anything else fails validation. Each part takes the suite's `appId` and `env`, and its `runFlow`'s `env`. A folder of flows, or `flows:` in `config.yaml`, also runs several tests together.
+A suite holds only `runFlow` steps of files, two or more, without `when:`, an else or inline `commands:`, and has no `onFlowStart` or `onFlowComplete` of its own (its parts run as flows of their own, so those would never run); a file that says `suite: true` and holds anything else fails validation. Each part takes the suite's `appId` and `env`, and its `runFlow`'s `env`. The key splits only a file the run starts with: a file that a `runFlow` or `retry` runs is one sub-flow, `suite: true` or not, and the run's log warns. A folder of flows, or `flows:` in `config.yaml`, also runs several tests together.
 
 ## Visual Regression (`assertScreenshot`)
 

@@ -1887,6 +1887,12 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 
 // executeSubFlow executes a sub-flow without separate report tracking.
 func (fr *FlowRunner) executeSubFlow(subFlow flow.Flow) *core.CommandResult {
+	// suite: true splits only a file the run starts with; reached by a
+	// runFlow or a retry, the file runs nested, as any sub-flow.
+	if subFlow.Config.Suite {
+		logger.Warn("%s has suite: true, but a runFlow or retry runs it: running it as one sub-flow (suite: true splits only a top-level flow file)", subFlow.SourcePath)
+	}
+
 	// Save current flow dir
 	prevDir := fr.script.flowDir
 	if subFlow.SourcePath != "" {
