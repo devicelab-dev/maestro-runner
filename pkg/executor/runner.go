@@ -61,10 +61,14 @@ type RunnerConfig struct {
 	Env map[string]string
 
 	// Driver settings
-	WaitForIdleTimeout int  // Global wait for idle timeout in ms
-	TypingFrequency    int  // Global WDA typing frequency in keys/sec (0 = WDA default)
-	ConditionTimeout   int  // Default timeout (ms) for when:/while: condition checks (0 = engine default)
-	Insecure           bool // Skip TLS verification for runScript http.* calls (--insecure)
+	WaitForIdleTimeout int // Global wait for idle timeout in ms
+	TypingFrequency    int // Global WDA typing frequency in keys/sec (0 = WDA default)
+	ConditionTimeout   int // Default timeout (ms) for when:/while: condition checks (0 = engine default)
+	// FindTimeout is the default element lookup timeout (ms) for steps that
+	// give no timeout of their own (--find-timeout). 0 keeps the driver's
+	// default. A flow's commandTimeout overrides it.
+	FindTimeout int
+	Insecure    bool // Skip TLS verification for runScript http.* calls (--insecure)
 	// DisableAnimations switches the device's system animations off for the
 	// run and restores them at the end (--disable-animations, or Maestro's
 	// workspace platform option). A flow's own disableAnimations overrides it.
@@ -72,6 +76,12 @@ type RunnerConfig struct {
 	// StepDelay pauses between top-level steps (ms). Flow config overrides it.
 	// For pacing demos and apps whose animations outrun the assertions.
 	StepDelay int
+
+	// Pauser, when set, is asked what to do when a step fails the flow, with
+	// the device left as the failure left it (--pause-on-failure, #246). Nil
+	// (the default) never pauses. Sequential runs only: ParallelRunner
+	// ignores it.
+	Pauser FailurePauser
 
 	// Device information (set by executor)
 	DeviceInfo *report.Device

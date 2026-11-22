@@ -4,8 +4,7 @@ import {WebDriverProxy} from '@appium/base-driver';
 import {strongbox} from '@appium/strongbox';
 import {fs, util} from '@appium/support';
 import type {AppiumLogger, StringRecord} from '@appium/types';
-import AsyncLock from 'async-lock';
-import {waitForCondition} from 'asyncbox';
+import {AsyncLock, waitForCondition} from 'asyncbox';
 
 import {WDA_RUNNER_BUNDLE_ID, WDA_BASE_URL, DEFAULT_TEST_BUNDLE_SUFFIX} from './constants.js';
 import {log as defaultLogger} from './logger.js';

@@ -133,6 +133,9 @@ static NSString *const FBServerURLEndMarker = @"<-ServerURLHere";
   self.mjpegServer = [[FBMjpegServer alloc] init];
   self.screenshotsBroadcaster = [[FBTCPSocket alloc]
                                  initWithPort:(uint16_t)FBConfiguration.sharedInstance.mjpegServerPort];
+  // Bind to the same address as the HTTP server when USE_IP is set.
+  // nil (the default) keeps listening on all interfaces.
+  self.screenshotsBroadcaster.interface = FBConfiguration.sharedInstance.bindingIPAddress;
   self.mjpegServer.socket = self.screenshotsBroadcaster;
   self.screenshotsBroadcaster.delegate = self.mjpegServer;
   NSError *error;
@@ -265,7 +268,7 @@ static NSString *const FBServerURLEndMarker = @"<-ServerURLHere";
 
 - (void)registerServerKeyRouteHandlers
 {
-  [self.server get:@"/health" withBlock:^(RouteRequest *request, RouteResponse *response) {
+  [self.server handleMethod:@"GET" withPath:@"/health" standalone:YES block:^(RouteRequest *request, RouteResponse *response) {
     [response respondWithString:@"<!DOCTYPE html><html><title>Health Check</title><body><p>I-AM-ALIVE</p></body></html>"];
   }];
 

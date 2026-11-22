@@ -30,7 +30,12 @@ type Driver struct {
 	warnedFields              map[string]bool
 	appVersion                string // version name, supplied by the caller
 	appBuild                  string // build number, supplied by the caller
+	appFile                   string // --app-file: what clearState reinstalls on a real iPhone
 }
+
+// SetAppFile names the app file (--app-file) that clearState reinstalls on a
+// real iPhone, where XCUITest cannot clear an app's data.
+func (d *Driver) SetAppFile(path string) { d.appFile = path }
 
 // NewDriver creates a new Appium driver.
 func NewDriver(serverURL string, capabilities map[string]interface{}) (*Driver, error) {
@@ -571,8 +576,8 @@ func (d *Driver) findElementByPageSource(sel flow.Selector) (*core.ElementInfo, 
 		return nil, fmt.Errorf("no elements match selector")
 	}
 
-	// Prioritize clickable, then select by index or deepest
-	candidates = SortClickableFirst(candidates)
+	// Clickable first (by position when an index is given), then select by index or deepest
+	candidates = SortCandidates(candidates, sel.Index)
 	if err := core.IndexError(len(candidates), sel.Index); err != nil {
 		return nil, err
 	}
@@ -627,6 +632,7 @@ func (d *Driver) findElementForTap(sel flow.Selector, timeout time.Duration) (*c
 	}
 
 	deadline := time.Now().Add(timeout)
+	var zeroAreaErr error
 
 	for {
 		if err := d.parentContext().Err(); err != nil {
@@ -653,11 +659,23 @@ func (d *Driver) findElementForTap(sel flow.Selector, timeout time.Duration) (*c
 			info, err = d.findElementDirect(sel)
 		}
 
+		// An element with no area has only its origin to tap, a point on
+		// whatever else is drawn there. Maestro never finds one
+		// (filterOutOfBounds); keep polling in case it is laid out yet.
+		// Android only: on iOS the tap goes to the element itself.
+		if err == nil && info != nil && d.platform != "ios" && core.ZeroArea(info.Bounds) {
+			zeroAreaErr = core.ZeroAreaTapError(info.Bounds)
+			err, info = zeroAreaErr, nil
+		}
+
 		if err == nil && info != nil {
 			return info, nil
 		}
 
 		if time.Now().After(deadline) {
+			if zeroAreaErr != nil {
+				return nil, fmt.Errorf("element not found: %s: %w", sel.Describe(), zeroAreaErr)
+			}
 			return nil, fmt.Errorf("element not found: %s", sel.Describe())
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -746,7 +764,7 @@ func (d *Driver) findElementForTapDirect(sel flow.Selector) (*core.ElementInfo, 
 //
 // Step 2: Fall back to page source which has clickable prioritization
 //
-//	(SortClickableFirst + GetClickableElement).
+//	(SortCandidates + GetClickableElement).
 func (d *Driver) findElementForTapIOS(sel flow.Selector) (*core.ElementInfo, error) {
 	// Step 1: Try the whole text (fast path — returns Appium element ID)
 	if core.IsPlainSelectorText(sel.Text) {
@@ -939,7 +957,11 @@ func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements 
 				}}
 			}
 		} else {
-			anchors = FilterBySelector(allElements, *anchorSelector, platform)
+			picked, err := core.PickAnchor(anchorMatches(allElements, *anchorSelector, platform), anchorSelector.Index, elementBounds)
+			if err != nil {
+				return nil, err
+			}
+			anchors = picked
 		}
 	}
 
@@ -967,8 +989,8 @@ func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements 
 		return nil, fmt.Errorf("no elements match relative criteria")
 	}
 
-	// Prioritize and select
-	candidates = SortClickableFirst(candidates)
+	// Clickable first, or by position when an index is given, then select
+	candidates = SortCandidates(candidates, sel.Index)
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no candidates after sorting")
 	}

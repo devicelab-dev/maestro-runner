@@ -119,6 +119,10 @@ func pick(sc *screen, sel flow.Selector) (*Node, error) {
 		// it, and the tap on the row's centre hit the label: DDG's
 		// Application Lock never turned on.
 		matches = innermost(matches)
+		// Maestro then counts the matches by their place on screen, top to
+		// bottom, then left to right, not in tree order (#254): a tab bar
+		// early in the tree is at the bottom of the screen.
+		matches = core.SortByPosition(matches, nodeBounds)
 		i, err := strconv.Atoi(strings.TrimSpace(sel.Index))
 		if err != nil {
 			return nil, fmt.Errorf("index %q is not a number", sel.Index)
@@ -132,6 +136,11 @@ func pick(sc *screen, sel flow.Selector) (*Node, error) {
 		return &matches[i], nil
 	}
 	return &deepest(matches, sel)[0], nil
+}
+
+// nodeBounds is a node's frame in whole points, for core.SortByPosition.
+func nodeBounds(n Node) core.Bounds {
+	return core.Bounds{X: int(n.X), Y: int(n.Y), Width: int(n.W), Height: int(n.H)}
 }
 
 // matchAll returns every node the selector matches, in tree order.

@@ -3,6 +3,8 @@ package appium
 import (
 	"context"
 	"fmt"
+	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -381,13 +383,18 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 
 	timeout := time.Duration(step.TimeoutMs) * time.Millisecond
 	if timeout <= 0 {
-		timeout = 30 * time.Second
+		timeout = core.ScrollUntilVisibleDefaultTimeout
 	}
 
 	deadline := time.Now().Add(timeout)
-	maxScrolls := 20
+	maxScrolls := core.ScrollUntilVisibleDefaultMaxScrolls
 	if step.MaxScrolls > 0 {
 		maxScrolls = step.MaxScrolls
+	} else if core.ScrollLooksUntilTimeout(step) {
+		// The step's own timeout is its budget, as in Maestro and on the iOS
+		// drivers: the default count, which could end the step before that
+		// timeout, does not apply.
+		maxScrolls = math.MaxInt
 	}
 
 	partiallyVisible := false
@@ -475,11 +482,15 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 			if hanging != nil {
 				return successResult("Element visible (end of content, partly past its scroll container)", hanging)
 			}
-			reason := fmt.Sprintf("scrolling %s made no progress after %d scrolls (end of content?)", direction, i)
-			if partiallyVisible {
-				return errorResult(fmt.Errorf("element found but never sufficiently visible after scrolling"), reason)
+			// A step with its own timeout looks until it passes, as in Maestro:
+			// a list still filling reads as stuck too.
+			if !core.ScrollLooksUntilTimeout(step) {
+				reason := fmt.Sprintf("scrolling %s made no progress after %d scrolls (end of content?)", direction, i)
+				if partiallyVisible {
+					return errorResult(fmt.Errorf("element found but never sufficiently visible after scrolling"), reason)
+				}
+				return errorResult(fmt.Errorf("element not found after scrolling"), reason)
 			}
-			return errorResult(fmt.Errorf("element not found after scrolling"), reason)
 		}
 
 		// Scroll. A failed scroll ends the step with its reason; ignoring it
@@ -496,10 +507,16 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	if hanging != nil {
 		return successResult("Element visible (scrolls ran out, partly past its scroll container)", hanging)
 	}
-	if partiallyVisible {
-		return errorResult(fmt.Errorf("element found but never sufficiently visible after scrolling"), "")
+	// A step with its own timeout that ran out of it fails in Maestro's
+	// words; one without keeps its message, however its loop ended.
+	reason := ""
+	if core.ScrollLooksUntilTimeout(step) && !time.Now().Before(deadline) {
+		reason = core.ScrollTimeoutMessage(step.Element.Describe(), direction, timeout)
 	}
-	return errorResult(fmt.Errorf("element not found after scrolling"), "")
+	if partiallyVisible {
+		return errorResult(fmt.Errorf("element found but never sufficiently visible after scrolling"), reason)
+	}
+	return errorResult(fmt.Errorf("element not found after scrolling"), reason)
 }
 
 // scrollSurfaceSignature reduces the current page source to a key for
@@ -584,7 +601,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 			if err := d.client.ElementSendKeys(info.ID, text); err != nil {
 				return errorResult(err, "Failed to input text")
 			}
-			note := core.ConfirmTypedText(d.textField(info.ID), text, before, logger.Warn)
+			note := core.ConfirmTypedText(d.textField(info.ID), text, before, step.Retypes(), logger.Warn)
 			return successResult(fmt.Sprintf("Input text: %s%s", text, note), info)
 		}
 	}
@@ -648,7 +665,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		}
 	}
 
-	note := core.ConfirmTypedText(verified, text, beforeText, logger.Warn)
+	note := core.ConfirmTypedText(verified, text, beforeText, step.Retypes(), logger.Warn)
 	return successResult(fmt.Sprintf("Input text: %s%s", text, note), nil)
 }
 
@@ -941,8 +958,12 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 		return errorResult(fmt.Errorf("no app ID specified"), "")
 	}
 
-	// Stop app first if requested (default: true)
-	if step.StopApp == nil || *step.StopApp {
+	// Stop app first if requested (default: true). On iOS, launch arguments and
+	// environment need a real launch: mobile: launchApp on a running app only
+	// brings it to the front, so with them the app is always stopped first, as
+	// the WDA driver does.
+	iosArgs := d.client.Platform() == "ios" && (len(step.Arguments) > 0 || len(step.Environment) > 0)
+	if iosArgs || step.StopApp == nil || *step.StopApp {
 		if err := d.client.TerminateApp(appID); err != nil {
 			logger.Warn("failed to stop app %s before relaunch: %v", appID, err)
 		}
@@ -950,7 +971,7 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 
 	// Clear state if requested
 	if step.ClearState {
-		if err := d.client.ClearAppData(appID); err != nil {
+		if err := d.clearAppData(appID); err != nil {
 			return errorResult(err, fmt.Sprintf("Failed to clear app state: %s", appID))
 		}
 	}
@@ -962,11 +983,66 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 		d.grantPermissions(appID, step.Permissions)
 	}
 
+	// iOS launch arguments and environment go through XCUITest's
+	// mobile: launchApp, as the WDA driver sends them to /wda/apps/launch;
+	// activate_app takes neither, so a flow's `arguments:` never reached the
+	// app (an e2e-skip-onboarding flag, feature-flag overrides).
+	if iosArgs {
+		args, env := iosLaunchArguments(step)
+		if _, err := d.client.ExecuteMobile("launchApp", map[string]interface{}{
+			"bundleId": appID, "arguments": args, "environment": env,
+		}); err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to launch app: %s", appID))
+		}
+		return successResult(fmt.Sprintf("Launched app: %s", appID), nil)
+	}
+
 	if err := d.client.LaunchApp(appID); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to launch app: %s", appID))
 	}
 
 	return successResult(fmt.Sprintf("Launched app: %s", appID), nil)
+}
+
+// clearAppData clears an app's state. On a real iPhone XCUITest has no
+// clearApp, so with --app-file the app is removed and installed again (what
+// the WDA driver does); without one only the app is stopped, as before. A
+// failed remove is only a warning, as in Maestro: the install still runs.
+func (d *Driver) clearAppData(appID string) error {
+	if d.client.Platform() == "ios" && d.client.IsRealDevice() && d.appFile != "" {
+		_ = d.client.TerminateApp(appID)
+		if _, err := d.client.ExecuteMobile("removeApp", map[string]interface{}{"bundleId": appID}); err != nil {
+			logger.Warn("clearState: removing %s failed, installing over it: %v", appID, err)
+		}
+		if _, err := d.client.ExecuteMobile("installApp", map[string]interface{}{"app": d.appFile}); err != nil {
+			return fmt.Errorf("reinstall %s from %s: %w", appID, d.appFile, err)
+		}
+		return nil
+	}
+	return d.client.ClearAppData(appID)
+}
+
+// iosLaunchArguments turns launchApp's arguments into `-key value` pairs and
+// sets each as an environment variable too, as the WDA driver does; the
+// step's environment is added as is. Keys are sorted, so a launch is the
+// same every time.
+func iosLaunchArguments(step *flow.LaunchAppStep) ([]string, map[string]string) {
+	env := map[string]string{}
+	for k, v := range step.Environment {
+		env[k] = v
+	}
+	keys := make([]string, 0, len(step.Arguments))
+	for k := range step.Arguments {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	args := make([]string, 0, 2*len(keys))
+	for _, k := range keys {
+		v := fmt.Sprint(step.Arguments[k])
+		args = append(args, "-"+k, v)
+		env[k] = v
+	}
+	return args, env
 }
 
 func (d *Driver) stopApp(step *flow.StopAppStep) *core.CommandResult {
@@ -996,7 +1072,7 @@ func (d *Driver) clearState(step *flow.ClearStateStep) *core.CommandResult {
 		return errorResult(fmt.Errorf("no app ID specified"), "")
 	}
 
-	if err := d.client.ClearAppData(appID); err != nil {
+	if err := d.clearAppData(appID); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to clear app state: %s", appID))
 	}
 
@@ -1035,6 +1111,7 @@ func (d *Driver) setOrientation(step *flow.SetOrientationStep) *core.CommandResu
 			if err := d.client.SetRotation(z); err != nil {
 				return errorResult(err, fmt.Sprintf("Failed to set orientation: %s", orientation))
 			}
+			d.client.WaitForScreenOrientation(z != 180, rotationSettleTimeout, rotationPollInterval)
 			return successResult(fmt.Sprintf("Set orientation to %s", orientation), nil)
 		}
 	}
@@ -1042,8 +1119,16 @@ func (d *Driver) setOrientation(step *flow.SetOrientationStep) *core.CommandResu
 	if err := d.client.SetOrientation(orientation); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to set orientation: %s", orientation))
 	}
+	d.client.WaitForScreenOrientation(strings.HasPrefix(orientation, "landscape"), rotationSettleTimeout, rotationPollInterval)
 	return successResult(fmt.Sprintf("Set orientation to %s", orientation), nil)
 }
+
+// How long setOrientation waits for the window to take the new orientation,
+// and how often it looks.
+var (
+	rotationSettleTimeout = 5 * time.Second
+	rotationPollInterval  = 250 * time.Millisecond
+)
 
 func (d *Driver) openLink(step *flow.OpenLinkStep) *core.CommandResult {
 	// Note: Appium's OpenURL opens in the default handler

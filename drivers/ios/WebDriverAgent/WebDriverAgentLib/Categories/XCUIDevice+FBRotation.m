@@ -9,16 +9,23 @@
 #import "XCUIDevice+FBRotation.h"
 
 #import "FBConfiguration.h"
+#import "FBHIDOperations.h"
 #import "XCUIApplication.h"
 #import "XCUIApplication+FBHelpers.h"
 #import "XCUIElement+FBUtilities.h"
 
 # if !TARGET_OS_TV && !TARGET_OS_WATCH
 
+static UIInterfaceOrientation FBInterfaceOrientationFromDeviceOrientation(UIDeviceOrientation orientation);
+
 @implementation XCUIDevice (FBRotation)
 
 - (BOOL)fb_setDeviceInterfaceOrientation:(UIDeviceOrientation)orientation
 {
+  if ([FBHIDOperations appliesToDevice:self]) {
+    return [FBHIDOperations rotateToOrientation:orientation
+                          interfaceOrientation:FBInterfaceOrientationFromDeviceOrientation(orientation)];
+  }
   XCUIApplication *application = XCUIApplication.fb_activeApplication;
   [XCUIDevice sharedDevice].orientation = orientation;
   return [self waitUntilInterfaceIsAtOrientation:orientation application:application];
@@ -31,9 +38,7 @@
     return NO;
   }
   UIDeviceOrientation orientation = (UIDeviceOrientation)keysForRotationObj.firstObject.integerValue;
-  XCUIApplication *application = XCUIApplication.fb_activeApplication;
-  [XCUIDevice sharedDevice].orientation = orientation;
-  return [self waitUntilInterfaceIsAtOrientation:orientation application:application];
+  return [self fb_setDeviceInterfaceOrientation:orientation];
 }
 
 static UIInterfaceOrientation FBInterfaceOrientationFromDeviceOrientation(UIDeviceOrientation orientation)

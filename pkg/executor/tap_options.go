@@ -43,10 +43,17 @@ func extractTapOptions(step flow.Step) (tapOptions, bool) {
 	}
 }
 
+// retryIfNoChange reports whether retryTapIfNoChange is on. Unset is off,
+// as in Maestro (YamlFluentCommand: retryTapIfNoChange ?: false).
+func (opts tapOptions) retryIfNoChange() bool {
+	return opts.RetryTapIfNoChange != nil && *opts.RetryTapIfNoChange
+}
+
 // hasTapOptions returns true if any non-default options are set.
+// retryTapIfNoChange: false is the default, not an option.
 func (opts tapOptions) hasTapOptions() bool {
 	return opts.Repeat > 1 || opts.DelayMs > 0 ||
-		opts.RetryTapIfNoChange != nil || opts.WaitToSettleTimeoutMs > 0
+		opts.retryIfNoChange() || opts.WaitToSettleTimeoutMs > 0
 }
 
 const (
@@ -181,14 +188,16 @@ func (fr *FlowRunner) executeTapWithOptions(step flow.Step, opts tapOptions) *co
 	settleNatively := settleTimeout > 0 && nativeSettle != nil
 
 	// Capture hierarchy before tap (for settle and/or retry comparison)
+	retry := opts.retryIfNoChange()
+	compareHierarchy := (settleTimeout > 0 && !settleNatively) || retry
 	var hierarchyBefore []byte
-	if (settleTimeout > 0 && !settleNatively) || opts.RetryTapIfNoChange != nil {
+	if compareHierarchy {
 		hierarchyBefore = fr.waitForSettle(settleTimeout)
 	}
 
 	// Retry count: 2 if retryTapIfNoChange, else 1
 	retryCount := 1
-	if opts.RetryTapIfNoChange != nil && *opts.RetryTapIfNoChange {
+	if retry {
 		retryCount = 2
 	}
 
@@ -245,13 +254,13 @@ func (fr *FlowRunner) executeTapWithOptions(step flow.Step, opts tapOptions) *co
 			} else if !settled {
 				logger.Debug("waitToSettleTimeoutMs: still changing after %dms", settleTimeout)
 			}
-			if opts.RetryTapIfNoChange == nil {
+			if !retry {
 				return lastResult
 			}
 		}
 
 		// Check if UI changed (for retry and settle logic)
-		if (settleTimeout > 0 && !settleNatively) || opts.RetryTapIfNoChange != nil {
+		if compareHierarchy {
 			hierarchyAfter := fr.waitForSettle(settleTimeout)
 			if hierarchyBefore != nil && hierarchyAfter != nil &&
 				!bytes.Equal(hierarchyBefore, hierarchyAfter) {

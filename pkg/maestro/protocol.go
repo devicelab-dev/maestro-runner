@@ -31,6 +31,9 @@ type Event struct {
 type ErrorPayload struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// Data is what some errors carry besides the message, such as the
+	// device state a launch with waitForForegroundMs found. Empty otherwise.
+	Data json.RawMessage `json:"data,omitempty"`
 }
 
 func (e *ErrorPayload) Error() string {
@@ -92,6 +95,19 @@ type SessionResult struct {
 	// AgentBuild is the commit the agent was built from, "-dirty" when built
 	// from uncommitted source; empty from an agent that predates it.
 	AgentBuild string `json:"agentBuild,omitempty"`
+	// Capabilities lists the opt-in features the agent supports
+	// ("snapshot.windowInfo", "ui.observe", ...); empty from an older agent.
+	Capabilities []string `json:"capabilities,omitempty"`
+}
+
+// Has reports whether the agent listed capability c.
+func (s *SessionResult) Has(c string) bool {
+	for _, have := range s.Capabilities {
+		if have == c {
+			return true
+		}
+	}
+	return false
 }
 
 // DeviceResult is returned by Device.getInfo and Session.create.

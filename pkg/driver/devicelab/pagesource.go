@@ -17,18 +17,23 @@ type ParsedElement struct {
 	ResourceID  string
 	ContentDesc string
 	HintText    string // hint attribute for EditText fields
-	ClassName   string
-	Bounds      core.Bounds
-	Enabled     bool
-	Selected    bool
-	Checked     bool
-	Focused     bool
-	Displayed   bool
-	Clickable   bool
-	Scrollable  bool
-	Children    []*ParsedElement
-	Parent      *ParsedElement // parent element for clickable lookup
-	Depth       int            // depth in hierarchy (for deepestMatchingElement)
+	// ErrorText is the field's validation error (AccessibilityNodeInfo.getError),
+	// the `error` attribute the agent writes when one is set. A text selector
+	// matches it, as in Maestro since 2.9 and on the uiautomator2 driver.
+	ErrorText  string
+	ClassName  string
+	Bounds     core.Bounds
+	Enabled    bool
+	Selected   bool
+	Checked    bool
+	Focused    bool
+	Password   bool // the field masks what is typed into it
+	Displayed  bool
+	Clickable  bool
+	Scrollable bool
+	Children   []*ParsedElement
+	Parent     *ParsedElement // parent element for clickable lookup
+	Depth      int            // depth in hierarchy (for deepestMatchingElement)
 }
 
 // ParsePageSource parses Android UI hierarchy XML into elements.
@@ -80,6 +85,8 @@ func ParsePageSource(xmlData string) ([]*ParsedElement, error) {
 					// — the gap only shows once the field has been typed into.
 					case "hint", "hint-text":
 						elem.HintText = attr.Value
+					case "error":
+						elem.ErrorText = attr.Value
 					case "class":
 						elem.ClassName = attr.Value // Override if class attr exists
 					case "bounds":
@@ -92,6 +99,8 @@ func ParsePageSource(xmlData string) ([]*ParsedElement, error) {
 						elem.Checked = attr.Value == "true"
 					case "focused":
 						elem.Focused = attr.Value == "true"
+					case "password":
+						elem.Password = attr.Value == "true"
 					case "displayed":
 						elem.Displayed = attr.Value != "false"
 					case "clickable":
@@ -288,7 +297,7 @@ func matchesSelector(elem *ParsedElement, sel flow.Selector) bool {
 	// Text matching - supports regex patterns and literal contains
 	// Checks text, content-desc (accessibility text), and hint text
 	if sel.Text != "" {
-		if !matchesText(sel.Text, elem.Text, elem.ContentDesc, elem.HintText) {
+		if !matchesText(sel.Text, elem.Text, elem.ContentDesc, elem.HintText) && !matchesErrorText(sel.Text, elem.ErrorText) {
 			return false
 		}
 	}
@@ -621,6 +630,36 @@ func SelectByIndex(candidates []*ParsedElement, index string) *ParsedElement {
 	return selected
 }
 
+// SortCandidates orders matches before one is picked. Without an index,
+// clickable ones come first; with one, Maestro skips that, drops a match
+// that contains another match, and counts the rest by position on screen
+// (top to bottom, then left to right), so this does too.
+func SortCandidates(candidates []*ParsedElement, index string) []*ParsedElement {
+	if index == "" {
+		return SortClickableFirst(candidates)
+	}
+	return core.SortByPosition(core.DeepestMatches(candidates, elementParent), elementBounds)
+}
+
+// elementParent is an element's parent, for core.DeepestMatches.
+func elementParent(e *ParsedElement) *ParsedElement { return e.Parent }
+
+// elementBounds is an element's place on screen, for core.PickAnchor.
+func elementBounds(e *ParsedElement) core.Bounds { return e.Bounds }
+
+// anchorMatches is the elements a relative selector's anchor matches, its own
+// containsDescendants included, for core.PickAnchor to count the anchor's index
+// over. As in Maestro's buildFilter, the anchor's filters apply before its
+// index; the index used to count every anchor, whatever its
+// containsDescendants said (#280).
+func anchorMatches(allElements []*ParsedElement, anchor flow.Selector) []*ParsedElement {
+	matches := FilterBySelector(allElements, anchor)
+	if len(anchor.ContainsDescendants) > 0 {
+		matches = FilterContainsDescendants(matches, allElements, anchor.ContainsDescendants)
+	}
+	return matches
+}
+
 // SortClickableFirst reorders elements to prioritize clickable ones.
 // Clickable elements come first, maintaining relative order within each group.
 func SortClickableFirst(elements []*ParsedElement) []*ParsedElement {
@@ -728,6 +767,16 @@ func anyMatches(re *regexp.Regexp, texts []string) bool {
 		}
 	}
 	return false
+}
+
+// matchesErrorText matches a text selector against a field's validation
+// error. Usually there is none, and an empty string must never satisfy a
+// selector — `.*` would.
+func matchesErrorText(pattern, errorText string) bool {
+	if errorText == "" {
+		return false
+	}
+	return matchesText(pattern, errorText, "", "")
 }
 
 // regexTextsOf lists the attributes a text selector is matched against.

@@ -18,6 +18,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface XCUIApplication (FBHelpers)
 
+/** Activates the application and waits for the system transition when resuming on iOS. */
+- (void)fb_activate;
+
 /**
  Deactivates application for given time
 

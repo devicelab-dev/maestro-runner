@@ -15,13 +15,13 @@ func TestStartAgentSkipsStuckAgent(t *testing.T) {
 	t.Cleanup(func() { reattachProbeWait = wait })
 	dir := t.TempDir()
 	writeManifest(t, dir, "1.0")
-	_, port := agentServer(t, func(cmd string, _ Args) Response {
+	port := tokenAgentFunc(t, "tok", func(cmd string) Response {
 		if cmd == "snapshot" {
 			time.Sleep(2 * time.Second)
 		}
 		return Response{OK: true, Data: &Payload{Message: "ready"}}
 	})
-	saveState("SIM-STUCK", agentState{Port: port, Version: "abc123"})
+	saveState("SIM-STUCK", agentState{Port: port, Version: "abc123", Token: "tok"})
 	a, _, err := StartAgent(context.Background(), AgentOptions{UDID: "SIM-STUCK", Dir: dir})
 	if err == nil && a.Mode() == "reattached" {
 		t.Fatal("re-attached to an agent that does not answer a snapshot")

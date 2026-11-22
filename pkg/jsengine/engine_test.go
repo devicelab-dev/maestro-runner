@@ -503,18 +503,19 @@ func TestEvalError(t *testing.T) {
 	}
 }
 
+// An expression that throws is left as written and its error returned, naming
+// it; the rest of the text is expanded. An undeclared name is not an error.
 func TestExpandVariablesWithError(t *testing.T) {
 	engine := New()
 	defer engine.Close()
+	engine.SetVariable("name", "Ana")
 
-	// Should not fail, just leave invalid expression as-is
-	result, err := engine.ExpandVariables("Value: ${undefinedVar}")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	result, err := engine.ExpandVariables("${name} ${user.email} ${undefinedVar}")
+	if err == nil || !strings.Contains(err.Error(), "${user.email}") || !strings.Contains(err.Error(), "TypeError") {
+		t.Fatalf("err = %v, want the TypeError of ${user.email}", err)
 	}
-	// The expression evaluation fails, so it should continue
-	if !strings.Contains(result, "Value:") {
-		t.Errorf("expected result to contain 'Value:', got %q", result)
+	if want := "Ana ${user.email} undefined"; result != want {
+		t.Errorf("result = %q, want %q", result, want)
 	}
 }
 

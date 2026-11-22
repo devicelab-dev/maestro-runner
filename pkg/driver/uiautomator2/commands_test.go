@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
@@ -699,11 +700,12 @@ func TestSetOrientationLandscapeLeft(t *testing.T) {
 	if !result.Success {
 		t.Errorf("expected success, got error: %v", result.Error)
 	}
-	// Three shell commands: disable accelerometer, set rotation, then one
-	// look at the display (the mock's empty dumpsys is unobservable, so the
-	// settle wait stops after a single read).
-	if len(shell.commands) != 3 {
-		t.Fatalf("expected 3 shell commands, got %d: %v", len(shell.commands), shell.commands)
+	// Four shell commands: disable accelerometer, set rotation, one look at
+	// the display (the mock's empty dumpsys is unobservable, so the settle
+	// wait stops after a single read), then the natural size the screen size
+	// is turned from.
+	if len(shell.commands) != 4 || shell.commands[3] != "wm size" {
+		t.Fatalf("expected 4 shell commands ending in wm size, got %d: %v", len(shell.commands), shell.commands)
 	}
 	if shell.commands[1] != "settings put system user_rotation 1" {
 		t.Errorf("expected user_rotation 1, got %s", shell.commands[1])
@@ -4133,6 +4135,11 @@ func TestScrollUntilVisibleRespectsTimeout(t *testing.T) {
 }
 
 func TestScrollUntilVisibleDefaultMaxScrolls(t *testing.T) {
+	// 20 rounds of about 1.3s here end within 4s of the default 30s timeout:
+	// a minute keeps the cap, not the deadline, the limit.
+	defaultTimeout := core.ScrollUntilVisibleDefaultTimeout
+	core.ScrollUntilVisibleDefaultTimeout = time.Minute
+	t.Cleanup(func() { core.ScrollUntilVisibleDefaultTimeout = defaultTimeout })
 	captures := 0
 	client := &MockUIA2Client{
 		sourceFunc: func() (string, error) {
@@ -4145,8 +4152,7 @@ func TestScrollUntilVisibleDefaultMaxScrolls(t *testing.T) {
 	step := &flow.ScrollUntilVisibleStep{
 		Element:   flow.Selector{Text: "NonExistent"},
 		Direction: "down",
-		BaseStep:  flow.BaseStep{TimeoutMs: 60000}, // long timeout so maxScrolls is the limit
-		// MaxScrolls not set — defaults to 20
+		// No timeout of its own and MaxScrolls not set — defaults to 20
 	}
 
 	result := driver.scrollUntilVisible(step)
@@ -4157,6 +4163,54 @@ func TestScrollUntilVisibleDefaultMaxScrolls(t *testing.T) {
 	}
 	if scrollCount != 20 {
 		t.Errorf("Expected default 20 scrolls, got %d", scrollCount)
+	}
+}
+
+// growingList is a list that moves on every capture, with the target row
+// partly below the screen's bottom edge until the shownAfter'th scroll, and
+// fully on screen from then on. Each round spends the find's 1s budget (the
+// mock answers no locator, so the find reads the page source at the end of
+// it, whether the match is partly visible or not) and the scroll's 300ms
+// settle: about 1.35s a round.
+func growingList(scrolls, shownAfter int) string {
+	top := 2350
+	if scrolls >= shownAfter {
+		top = 1000
+	}
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <android.widget.FrameLayout class="android.widget.FrameLayout" displayed="true" enabled="true" bounds="[0,0][1080,2400]">
+    <android.widget.TextView class="android.widget.TextView" text="Row %d" displayed="true" enabled="true" bounds="[100,100][500,200]"/>
+    <android.widget.TextView class="android.widget.TextView" text="Target" displayed="true" enabled="true" bounds="[100,%d][500,%d]"/>
+  </android.widget.FrameLayout>
+</hierarchy>`, scrolls, top, top+100)
+}
+
+func TestScrollUntilVisibleWithTimeoutIsNotCutAtDefaultMaxScrolls(t *testing.T) {
+	// The target comes on screen after the scroll past the default cap. A
+	// step with its own timeout scrolls until that timeout, as Maestro does;
+	// the default cap only applies to a step without one.
+
+	// The default cap is 20 scrolls; 2 is enough to show that it does not
+	// apply, and it saves the 20 rounds the real cap would cost.
+	defaultMaxScrolls := core.ScrollUntilVisibleDefaultMaxScrolls
+	core.ScrollUntilVisibleDefaultMaxScrolls = 2
+	t.Cleanup(func() { core.ScrollUntilVisibleDefaultMaxScrolls = defaultMaxScrolls })
+	client := &MockUIA2Client{}
+	client.sourceFunc = func() (string, error) { return growingList(len(client.scrollCalls), 3), nil }
+	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, nil)
+
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:   flow.Selector{Text: "Target"},
+		Direction: "down",
+		BaseStep:  flow.BaseStep{TimeoutMs: 60000},
+	})
+
+	if !result.Success {
+		t.Fatalf("expected the target after 3 scrolls, got %q", result.Message)
+	}
+	if got := len(client.scrollCalls); got != 3 {
+		t.Errorf("expected 3 scrolls, got %d", got)
 	}
 }
 
@@ -4490,8 +4544,9 @@ func movingList(captures *int) string {
 }
 
 func TestScrollUntilVisibleStopsWhenScreenStopsMoving(t *testing.T) {
-	// The same capture on every read: a list at its end. Two scrolls that
-	// change nothing are proof enough — the loop must not spend the other 18.
+	// The same capture on every read: a list at its end. For a step without a
+	// timeout of its own, two scrolls that change nothing are proof enough —
+	// the loop must not spend the other 18.
 	client := &MockUIA2Client{
 		sourceFunc: func() (string, error) {
 			return `<?xml version="1.0" encoding="UTF-8"?>
@@ -4507,7 +4562,6 @@ func TestScrollUntilVisibleStopsWhenScreenStopsMoving(t *testing.T) {
 	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
 		Element:   flow.Selector{Text: "NonExistent"},
 		Direction: "down",
-		BaseStep:  flow.BaseStep{TimeoutMs: 60000},
 	})
 
 	if result.Success {
@@ -4518,5 +4572,161 @@ func TestScrollUntilVisibleStopsWhenScreenStopsMoving(t *testing.T) {
 	}
 	if !strings.Contains(result.Message, "made no progress") {
 		t.Errorf("message should name the reason, got %q", result.Message)
+	}
+}
+
+// fillsLateSource is a page source that stays the same, a list still loading,
+// until the shownAfter'th scroll, and then has the target row on screen.
+func fillsLateSource(scrolls, shownAfter int) string {
+	row := `<android.widget.ProgressBar class="android.widget.ProgressBar" displayed="true" enabled="true" bounds="[490,1150][590,1250]"/>`
+	if scrolls >= shownAfter {
+		row = `<android.widget.TextView class="android.widget.TextView" text="Target" displayed="true" enabled="true" bounds="[100,1000][500,1100]"/>`
+	}
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <android.widget.FrameLayout class="android.widget.FrameLayout" displayed="true" enabled="true" bounds="[0,0][1080,2400]">
+    ` + row + `
+  </android.widget.FrameLayout>
+</hierarchy>`
+}
+
+func TestScrollUntilVisibleWithTimeoutWaitsForListThatFillsLate(t *testing.T) {
+	// The screen does not change for four scrolls (the list is still
+	// loading), then the target is there. A step with its own timeout looks
+	// until that timeout, as Maestro does: a still screen is not proof that
+	// the content has ended.
+	client := &MockUIA2Client{}
+	client.sourceFunc = func() (string, error) { return fillsLateSource(len(client.scrollCalls), 4), nil }
+	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, nil)
+
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:   flow.Selector{Text: "Target"},
+		Direction: "down",
+		BaseStep:  flow.BaseStep{TimeoutMs: 20000},
+	})
+
+	if !result.Success {
+		t.Fatalf("expected the target once the list filled, got %q", result.Message)
+	}
+	if got := len(client.scrollCalls); got < 4 {
+		t.Errorf("expected at least 4 scrolls before the target showed, got %d", got)
+	}
+}
+
+func TestScrollUntilVisibleWithTimeoutRunsToItOnStillScreen(t *testing.T) {
+	// A screen that never changes and a step with its own timeout: the step
+	// keeps scrolling until the timeout, then fails in Maestro's words.
+	// A round that finds nothing costs about 1.3s here (the find's 1s budget
+	// and the 300ms settle), and the no-progress stop comes in the third: 3s
+	// is the least that tells the two apart.
+	client := &MockUIA2Client{sourceFunc: func() (string, error) { return fillsLateSource(0, 1), nil }}
+	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, nil)
+
+	start := time.Now()
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:   flow.Selector{Text: "NonExistent"},
+		Direction: "down",
+		BaseStep:  flow.BaseStep{TimeoutMs: 3000},
+	})
+
+	if result.Success {
+		t.Fatal("expected failure when the element never shows")
+	}
+	if elapsed := time.Since(start); elapsed < 3*time.Second {
+		t.Errorf("gave up after %v, before the 3s timeout", elapsed)
+	}
+	if got := len(client.scrollCalls); got <= 2 {
+		t.Errorf("expected more scrolls than the no-progress stop's 2, got %d", got)
+	}
+	if !strings.Contains(result.Message, "No visible element found") {
+		t.Errorf("message should be Maestro's, got %q", result.Message)
+	}
+}
+
+func TestScrollUntilVisibleWithoutTimeoutKeepsItsMessageAtTheDeadline(t *testing.T) {
+	// A step without a timeout of its own that runs into the default timeout (a
+	// list that keeps moving, a maxScrolls it never reaches) keeps the message
+	// it had: Maestro's words are for a step that set its timeout.
+	// The default is 30s; a second is enough to run into it.
+	defaultTimeout := core.ScrollUntilVisibleDefaultTimeout
+	core.ScrollUntilVisibleDefaultTimeout = time.Second
+	t.Cleanup(func() { core.ScrollUntilVisibleDefaultTimeout = defaultTimeout })
+	captures := 0
+	client := &MockUIA2Client{sourceFunc: func() (string, error) { return movingList(&captures), nil }}
+	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, nil)
+
+	start := time.Now()
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:    flow.Selector{Text: "NonExistent"},
+		Direction:  "down",
+		MaxScrolls: 1000,
+	})
+
+	if result.Success {
+		t.Fatal("expected failure when the element never shows")
+	}
+	if elapsed := time.Since(start); elapsed < core.ScrollUntilVisibleDefaultTimeout {
+		t.Fatalf("ended after %v, before the default timeout", elapsed)
+	}
+	if result.Message != "Element not found after 1000 scrolls" || result.Error == nil || result.Error.Error() != "element not found" {
+		t.Errorf("a step without a timeout of its own should keep its message, got %q (%v)", result.Message, result.Error)
+	}
+}
+
+func TestScrollUntilVisibleStopsWhenRunIsCancelled(t *testing.T) {
+	// The run is cancelled (a runFlow's timeout, a caller's cancel) while a
+	// step with its own timeout looks on a still screen: it stops at once
+	// instead of swiping on until that timeout.
+	client := &MockUIA2Client{sourceFunc: func() (string, error) { return fillsLateSource(0, 1), nil }}
+	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	driver.SetContext(ctx)
+
+	start := time.Now()
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:   flow.Selector{Text: "NonExistent"},
+		Direction: "down",
+		BaseStep:  flow.BaseStep{TimeoutMs: 5000},
+	})
+
+	if result.Success || !errors.Is(result.Error, context.Canceled) {
+		t.Fatalf("expected the cancel as the cause, got %q (%v)", result.Message, result.Error)
+	}
+	if got := len(client.scrollCalls); got != 0 {
+		t.Errorf("expected no scroll after the cancel, got %d", got)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("stopped after %v; want at once", elapsed)
+	}
+}
+
+func TestScrollUntilVisibleWithTimeoutAcceptsUncentredElementAtEndOfContent(t *testing.T) {
+	// centerElement on the last row of a list: it is on screen but can never
+	// reach the middle, and the screen stops moving. A step with its own
+	// timeout still takes it at the end of the content, as one without does:
+	// only the not-found failure waits for the timeout.
+	client := &MockUIA2Client{sourceFunc: func() (string, error) {
+		return `<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <android.widget.FrameLayout class="android.widget.FrameLayout" displayed="true" enabled="true" bounds="[0,0][1080,2400]">
+    <android.widget.TextView class="android.widget.TextView" text="Target" displayed="true" enabled="true" bounds="[100,2200][500,2300]"/>
+  </android.widget.FrameLayout>
+</hierarchy>`, nil
+	}}
+	driver := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, nil)
+
+	result := driver.scrollUntilVisible(&flow.ScrollUntilVisibleStep{
+		Element:       flow.Selector{Text: "Target"},
+		Direction:     "down",
+		CenterElement: true,
+		BaseStep:      flow.BaseStep{TimeoutMs: 20000},
+	})
+
+	if !result.Success || !strings.Contains(result.Message, "end of content before centring") {
+		t.Fatalf("expected the element at the end of the content, got %q (%v)", result.Message, result.Error)
+	}
+	if got := len(client.scrollCalls); got != 2 {
+		t.Errorf("expected the 2 scrolls that show the end of the content, got %d", got)
 	}
 }

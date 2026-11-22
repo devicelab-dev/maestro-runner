@@ -10,8 +10,13 @@
 #import <UIKit/UIKit.h>
 #import "FBIntegrationTestCase.h"
 #import "XCUIDevice+FBRotation.h"
+#import "XCUIDevice+FBHinge.h"
+#import "FBConfiguration.h"
+#import "FBScreen.h"
+#import "FBSession.h"
 
 @interface XCUIDeviceRotationTests : FBIntegrationTestCase
+@property (nonatomic, strong) FBSession *session;
 
 @end
 
@@ -21,11 +26,13 @@
 {
   [super setUp];
   [self launchApplication];
+  self.session = [FBSession initWithApplication:self.testedApplication];
 }
 
 - (void)tearDown
 {
   [self resetOrientation];
+  [self.session kill];
   [super tearDown];
 }
 
@@ -100,6 +107,52 @@
   ];
   XCTAssertFalse(success, @"Device should not support tilt");
   XCTAssertEqual(currentRotation, [XCUIDevice sharedDevice].orientation, @"Device doesnt support tilt, should be at previous orientation");
+}
+
+- (void)testRotationOnSelectedDuoDisplay
+{
+#if TARGET_OS_SIMULATOR
+  XCUIDevice *device = XCUIDevice.sharedDevice;
+  XCTSkipIf(!device.fb_supportsHingeAngleReading || !device.fb_canAttemptSimulatedHingeAngleInjection,
+            @"Requires hinge angle reading and injection support");
+  NSNumber *originalDisplay = FBConfiguration.sharedInstance.currentDisplayId;
+  NSNumber *originalAngle = [device fb_getSimulatedHingeAngle:nil];
+  XCTAssertNotNil(originalAngle);
+  @try {
+    for (NSNumber *angle in @[@0, @90, @180]) {
+      XCTAssertTrue([device fb_setSimulatedHingeAngle:angle.doubleValue error:nil]);
+      [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:3]];
+      for (NSDictionary *screen in [FBScreen screensWithError:nil]) {
+        if ([screen[@"isMain"] boolValue] == (angle.intValue == 0)) {
+          FBConfiguration.sharedInstance.currentDisplayId = screen[@"displayId"];
+        }
+      }
+      [self.testedApplication activate];
+      NSArray *orientations = @[@(UIDeviceOrientationLandscapeLeft),
+                                @(UIDeviceOrientationLandscapeRight),
+                                @(UIDeviceOrientationPortrait)];
+      NSArray *labels = @[@"LandscapeRight", @"LandscapeLeft", @"Portrait"];
+      for (NSUInteger i = 0; i < orientations.count; i++) {
+        UIDeviceOrientation orientation = [orientations[i] integerValue];
+        XCTAssertTrue([device fb_setDeviceInterfaceOrientation:orientation]);
+        XCTAssertTrue([self.testedApplication.staticTexts[labels[i]] waitForExistenceWithTimeout:5]);
+        XCTAssertEqual(device.orientation, orientation);
+      }
+      BOOL rotated = [device fb_setDeviceRotation:@{@"x": @0, @"y": @0, @"z": @270}];
+      XCTAssertTrue(rotated);
+      XCTAssertTrue(self.testedApplication.staticTexts[@"LandscapeRight"].exists);
+    }
+  } @finally {
+    [device fb_setSimulatedHingeAngle:0 error:nil];
+    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:3]];
+    FBConfiguration.sharedInstance.currentDisplayId = nil;
+    [device fb_setDeviceInterfaceOrientation:UIDeviceOrientationPortrait];
+    if (nil != originalAngle) {
+      [device fb_setSimulatedHingeAngle:originalAngle.doubleValue error:nil];
+    }
+    FBConfiguration.sharedInstance.currentDisplayId = originalDisplay;
+  }
+#endif
 }
 
 @end

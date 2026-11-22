@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
 )
 
@@ -30,7 +31,7 @@ func TestAutoAlertButton(t *testing.T) {
 		{"accept", nil, ""},
 		{"", []string{"Allow"}, ""},
 	} {
-		if got := autoAlertButton(tc.action, tc.buttons); got != tc.want {
+		if got := autoAlertButton(tc.action, tc.buttons, core.IOSPromptLabels{}); got != tc.want {
 			t.Errorf("autoAlertButton(%q, %q) = %q, want %q", tc.action, tc.buttons, got, tc.want)
 		}
 	}
@@ -393,5 +394,68 @@ func TestAutoAlertLeavesPromptToStepAimedAtIt(t *testing.T) {
 				t.Fatalf("taps after = %+v", taps)
 			}
 		})
+	}
+}
+
+// germanLabels is the vocabulary a German simulator's string tables give.
+var germanLabels = core.NewIOSPromptLabels([][2]string{
+	{"Allow", "Erlauben"},
+	{"Don’t Allow", "Nicht erlauben"},
+	{"Allow While Using App", "Beim Verwenden der App erlauben"},
+	{"Ask App Not to Track", "App bitten, kein Tracking durchzuführen"},
+})
+
+func TestAutoAlertButtonLocalized(t *testing.T) {
+	for _, tc := range []struct {
+		action  string
+		buttons []string
+		want    string
+	}{
+		{"accept", []string{"Nicht erlauben", "Erlauben"}, "Erlauben"},
+		{"dismiss", []string{"Nicht erlauben", "Erlauben"}, "Nicht erlauben"},
+		{"accept", []string{"Einmal erlauben", "Beim Verwenden der App erlauben", "Nicht erlauben"}, "Beim Verwenden der App erlauben"},
+		{"dismiss", []string{"App bitten, kein Tracking durchzuführen", "Erlauben"}, "App bitten, kein Tracking durchzuführen"},
+		// An app's own alert in German is still left alone.
+		{"accept", []string{"OK"}, ""},
+		{"accept", []string{"Später erlauben"}, ""},
+	} {
+		if got := autoAlertButton(tc.action, tc.buttons, germanLabels); got != tc.want {
+			t.Errorf("autoAlertButton(%q, %q) = %q, want %q", tc.action, tc.buttons, got, tc.want)
+		}
+	}
+}
+
+// A German prompt is answered through the simulator's own strings, which are
+// read once, and only when the English rule found no button.
+func TestAutoAlertLocalizedPrompt(t *testing.T) {
+	sb := &springboardAlert{buttons: []string{"Nicht erlauben", "Erlauben"}}
+	d, _, _ := newTestDriver(t, sb.handle)
+	loads := 0
+	d.loadPromptLabels = func() core.IOSPromptLabels { loads++; return germanLabels }
+	fakeLaunch(t, nil)
+	if res := d.Execute(&flow.LaunchAppStep{AppID: "com.example"}); !res.Success {
+		t.Fatal(res.Message)
+	}
+	if res := d.Execute(&flow.TapOnStep{Selector: flow.Selector{Text: "Home"}}); !res.Success {
+		t.Fatal(res.Message)
+	}
+	taps := sb.taps()
+	if len(taps) != 1 || taps[0].Action != "accept" || taps[0].Button != "Erlauben" {
+		t.Fatalf("taps = %+v, want accept \"Erlauben\"", taps)
+	}
+	if loads != 1 {
+		t.Errorf("strings read %d times, want 1", loads)
+	}
+
+	// English prompts never read the strings.
+	sb2 := &springboardAlert{buttons: []string{"Don’t Allow", "Allow"}}
+	d2, _, _ := newTestDriver(t, sb2.handle)
+	d2.loadPromptLabels = func() core.IOSPromptLabels { t.Error("strings read for an English prompt"); return germanLabels }
+	fakeLaunch(t, nil)
+	if res := d2.Execute(&flow.LaunchAppStep{AppID: "com.example"}); !res.Success {
+		t.Fatal(res.Message)
+	}
+	if res := d2.Execute(&flow.TapOnStep{Selector: flow.Selector{Text: "Home"}}); !res.Success {
+		t.Fatal(res.Message)
 	}
 }

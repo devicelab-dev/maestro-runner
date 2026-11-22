@@ -797,6 +797,36 @@ func isClickableType(elemType string) bool {
 	}
 }
 
+// SortCandidates orders matches before one is picked. Without an index,
+// clickable ones come first; with one, Maestro skips that, drops a match
+// that contains another match, and counts the rest by position on screen
+// (top to bottom, then left to right), so this does too.
+func SortCandidates(candidates []*ParsedElement, index string) []*ParsedElement {
+	if index == "" {
+		return SortClickableFirst(candidates)
+	}
+	return core.SortByPosition(core.DeepestMatches(candidates, elementParent), elementBounds)
+}
+
+// elementParent is an element's parent, for core.DeepestMatches.
+func elementParent(e *ParsedElement) *ParsedElement { return e.Parent }
+
+// elementBounds is an element's place on screen, for core.PickAnchor.
+func elementBounds(e *ParsedElement) core.Bounds { return e.Bounds }
+
+// anchorMatches is the elements a relative selector's anchor matches, its own
+// containsDescendants included, for core.PickAnchor to count the anchor's index
+// over. As in Maestro's buildFilter, the anchor's filters apply before its
+// index; the index used to count every anchor, whatever its
+// containsDescendants said (#280).
+func anchorMatches(allElements []*ParsedElement, anchor flow.Selector) []*ParsedElement {
+	matches := FilterBySelector(allElements, anchor)
+	if len(anchor.ContainsDescendants) > 0 {
+		matches = FilterContainsDescendants(matches, allElements, anchor.ContainsDescendants)
+	}
+	return matches
+}
+
 // SortClickableFirst reorders elements to prioritize interactive ones.
 // iOS doesn't expose a "clickable" attribute, so we determine clickability
 // from the element type (Button, Link, TextField, etc. are clickable).

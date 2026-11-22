@@ -77,6 +77,14 @@ maestro-runner --driver appium --appium-url <server-url> test flow.yaml # Appium
 maestro-runner test --parallel 3 flows/                                 # Parallel on 3 devices
 ```
 
+## AI coding agents
+
+```bash
+maestro-runner skills install    # writes ~/.claude/skills/maestro-runner/SKILL.md
+```
+
+Installs a skill that tells Claude Code (and other agents that read `SKILL.md`) how to write Maestro flows, run them with maestro-runner, inspect the screen and read the reports. `--dir` writes it elsewhere (`.claude/skills/maestro-runner` in a repository), `--print` prints it. The file carries the binary's version and is replaced when you install from a newer release.
+
 ## Key Features
 
 - **Zero migration** — Runs your existing Maestro YAML flows as-is, no changes needed
@@ -96,7 +104,7 @@ maestro-runner test --parallel 3 flows/                                 # Parall
 - **scrollUntilVisible** — Native scroll implementation that reliably finds off-screen elements
 - **Relative selectors** — Find elements by position: below, above, leftOf, rightOf, childOf
 - **JavaScript scripting** — Embedded JS runtime with HTTP client for dynamic test logic, no external dependencies
-- **Configurable timeouts** — Per-command and per-flow timeouts, `--wait-for-idle-timeout 0` to disable
+- **Configurable timeouts** — Per-command and per-flow timeouts, `--find-timeout 3000` to make a wrong selector fail in 3 s instead of 17 s, `--wait-for-idle-timeout 0` to disable
 - **Lightweight** — Single binary, no JVM required
 
 ## Supported Platforms & Drivers

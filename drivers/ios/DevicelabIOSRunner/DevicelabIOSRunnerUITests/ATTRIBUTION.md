@@ -63,6 +63,22 @@ The only intentional local edits are:
    60 → 240 chars/sec (matches WDA's `FBTypeText` default). RN inputs
    accept this rate without dropping characters.
 
+8. `RunnerTests+Snapshot.swift` collapsed tab fallback: ported from
+   upstream's fix for wide sliders wedging the runner (agent-device #3776,
+   commit 92db564a3, MIT), adapted to this file. The fallback reads its
+   candidates in one predicate query instead of every descendant one
+   attribute at a time, starts that query only while the snapshot's 8 s
+   processing budget still covers what the root snapshot took (otherwise the
+   snapshot reports `truncated`), and no longer treats a slider as a
+   collapsed container. Candidate `hittable` comes from geometry instead of
+   a per-element XCTest call.
+9. `RunnerTests+Lifecycle.swift` `activateTarget`: when the target app was
+   in the background, wait (at most 2 s) for SpringBoard to go quiescent
+   after `activate()`. The idea comes from WebDriverAgent's
+   `-[XCUIApplication fb_activate]` (appium/appium-ios PR #82, Apache License
+   2.0): after a resume the next tap could report success without reaching
+   the app.
+
 The wire-protocol contract (`RunnerTests+Models.swift` Command/Response shapes,
 HTTP/JSON transport in `RunnerTests+Transport.swift`, dispatch behaviour in
 `RunnerTests+CommandExecution.swift`) is **agent-device's contract** — the

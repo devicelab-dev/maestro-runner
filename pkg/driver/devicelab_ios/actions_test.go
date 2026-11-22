@@ -3,6 +3,7 @@ package devicelab_ios
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -10,7 +11,9 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
 )
 
@@ -226,6 +229,105 @@ func TestScrollUntilVisibleStopsWithoutProgress(t *testing.T) {
 	}
 }
 
+func TestScrollUntilVisibleWithTimeoutWaitsForListThatFillsLate(t *testing.T) {
+	// The screen does not change for four scrolls (the list is still
+	// loading), then the target is there. A step with its own timeout looks
+	// until that timeout, as Maestro does: a still screen is not proof that
+	// the content has ended.
+	var scrolls atomic.Int32
+	d, _, _ := newTestDriver(t, func(cmd string, _ Args) (*Response, error) {
+		filled := scrolls.Load() >= 4
+		switch cmd {
+		case "act":
+			scrolls.Add(1)
+		case "find":
+			if filled {
+				return tree(node(1, "Cell", "Target", 0, 300, 400, 50)), nil
+			}
+			return tree(), nil
+		case "settle":
+			if filled {
+				return ok(&Payload{ScreenHash: "list"}), nil
+			}
+			return ok(&Payload{ScreenHash: "loading"}), nil
+		}
+		return ok(nil), nil
+	})
+	res := d.Execute(&flow.ScrollUntilVisibleStep{
+		Element:  flow.Selector{Text: "Target"},
+		BaseStep: flow.BaseStep{TimeoutMs: 20000},
+	})
+	if !res.Success || scrolls.Load() < 4 {
+		t.Fatalf("res=%+v scrolls=%d, want the target after at least 4 scrolls", res, scrolls.Load())
+	}
+}
+
+func TestScrollUntilVisibleWithTimeoutRunsToItOnStillScreen(t *testing.T) {
+	// A screen that never changes and a step with its own timeout: the step
+	// keeps scrolling until the timeout, then fails in Maestro's words.
+	d, fa, _ := newTestDriver(t, func(cmd string, _ Args) (*Response, error) {
+		switch cmd {
+		case "settle":
+			return ok(&Payload{ScreenHash: "same"}), nil
+		case "find":
+			return tree(), nil
+		}
+		return ok(nil), nil
+	})
+	start := time.Now()
+	res := d.Execute(&flow.ScrollUntilVisibleStep{
+		Element:  flow.Selector{Text: "Missing"},
+		BaseStep: flow.BaseStep{TimeoutMs: 1000},
+	})
+	if res.Success || !strings.Contains(res.Message, "No visible element found") {
+		t.Fatalf("res = %+v, want Maestro's message", res)
+	}
+	if res.Error == nil || !strings.Contains(res.Error.Error(), "not found") {
+		t.Errorf("cause = %v, want a not-found cause, as the other drivers give", res.Error)
+	}
+	if elapsed := time.Since(start); elapsed < time.Second {
+		t.Errorf("gave up after %v, before the 1s timeout", elapsed)
+	}
+	if n := len(fa.sent("act")); n <= 3 {
+		t.Errorf("scrolls = %d, want more than the no-progress stop's 3", n)
+	}
+}
+
+func TestScrollUntilVisibleWithoutTimeoutKeepsItsMessageAtTheDeadline(t *testing.T) {
+	// A step without a timeout of its own that runs into the default timeout (a
+	// screen that moves after every scroll) keeps the message and the cause
+	// it had: Maestro's words are for a step that set its timeout.
+	// The default is 30s; a second is enough to run into it.
+	defaultTimeout := core.ScrollUntilVisibleDefaultTimeout
+	core.ScrollUntilVisibleDefaultTimeout = time.Second
+	t.Cleanup(func() { core.ScrollUntilVisibleDefaultTimeout = defaultTimeout })
+	var scrolls atomic.Int32
+	d, _, _ := newTestDriver(t, func(cmd string, _ Args) (*Response, error) {
+		switch cmd {
+		case "act":
+			scrolls.Add(1)
+		case "find":
+			return tree(), nil
+		case "settle":
+			return ok(&Payload{ScreenHash: fmt.Sprintf("list after %d scrolls", scrolls.Load())}), nil
+		}
+		return ok(nil), nil
+	})
+	sel := flow.Selector{Text: "Missing"}
+	start := time.Now()
+	res := d.Execute(&flow.ScrollUntilVisibleStep{Element: sel})
+	if res.Success {
+		t.Fatal("found an element that is not there")
+	}
+	if elapsed := time.Since(start); elapsed < core.ScrollUntilVisibleDefaultTimeout {
+		t.Fatalf("ended after %v, before the default timeout", elapsed)
+	}
+	want := fmt.Sprintf("%s not visible after scrolling down", describe(sel))
+	if res.Message != want || res.Error == nil || res.Error.Error() != want {
+		t.Errorf("a step without a timeout of its own should keep %q, got %q (%v)", want, res.Message, res.Error)
+	}
+}
+
 func TestScrollUntilVisibleLimits(t *testing.T) {
 	d, fa, _ := newTestDriver(t, screenOf())
 	res := d.Execute(&flow.ScrollUntilVisibleStep{Element: flow.Selector{Text: "X"}, MaxScrolls: 2})
@@ -407,9 +509,10 @@ func TestHideKeyboard(t *testing.T) {
 	d, _, _ := newTestDriver(t, func(cmd string, _ Args) (*Response, error) {
 		return ok(&Payload{Visible: visible}), nil
 	})
-	// A keyboard that stays up is not an error, as in Maestro.
-	if res := d.Execute(&flow.HideKeyboardStep{}); !res.Success {
-		t.Fatalf("keyboard still up should pass, as in Maestro: %s", res.Message)
+	// A keyboard that stays up fails the step, as in Maestro, and says what
+	// to use instead.
+	if res := d.Execute(&flow.HideKeyboardStep{}); res.Success || !strings.Contains(res.Message, "pressKey: Enter") {
+		t.Fatalf("keyboard still up should fail and name pressKey: Enter: %+v", res)
 	}
 	visible = false
 	if res := d.Execute(&flow.HideKeyboardStep{}); !res.Success {
@@ -513,18 +616,70 @@ func TestScreenshotAndCrop(t *testing.T) {
 }
 
 func TestAlert(t *testing.T) {
-	d, fa, _ := newTestDriver(t, func(cmd string, _ Args) (*Response, error) {
-		return ok(&Payload{Present: true, Message: "Allow?"}), nil
+	d, fa, _ := newTestDriver(t, func(cmd string, a Args) (*Response, error) {
+		p := &Payload{Present: true, Title: "Allow?", Buttons: []string{"Don’t Allow", "Allow"}}
+		if a.Action != "read" {
+			p.Message = "tapped " + a.Button
+		}
+		return ok(p), nil
 	})
-	if res := d.Execute(&flow.AcceptAlertStep{}); !res.Success || !strings.Contains(res.Message, "Allow?") {
+	if res := d.Execute(&flow.AcceptAlertStep{}); !res.Success || !strings.Contains(res.Message, "tapped Allow") {
 		t.Fatalf("res = %+v", res)
 	}
-	if a := fa.sent("alert")[0]; a.Action != "accept" {
-		t.Fatalf("alert = %+v", a)
+	sent := fa.sent("alert")
+	if len(sent) != 2 || sent[0].Action != "read" || sent[1].Action != "accept" || sent[1].Button != "Allow" {
+		t.Fatalf("alert = %+v", sent)
 	}
 	d2, _, _ := newTestDriver(t, screenOf())
 	if res := d2.Execute(&flow.DismissAlertStep{BaseStep: flow.BaseStep{TimeoutMs: 50}}); !res.Success || !strings.Contains(res.Message, "no alert") {
 		t.Fatalf("res = %+v", res)
+	}
+}
+
+// An alert whose buttons cannot be named for the answer fails the step and
+// taps nothing: a dismiss never taps "Allow".
+func TestDismissAlertRefusesAffirmativeOnly(t *testing.T) {
+	d, fa, _ := newTestDriver(t, func(cmd string, a Args) (*Response, error) {
+		return ok(&Payload{Present: true, Title: "Track?", Buttons: []string{"Allow", "Allow Once"}}), nil
+	})
+	if res := d.Execute(&flow.DismissAlertStep{}); res.Success {
+		t.Fatalf("res = %+v", res)
+	}
+	for _, a := range fa.sent("alert") {
+		if a.Action != "read" {
+			t.Fatalf("tapped: %+v", a)
+		}
+	}
+}
+
+func TestAlertStepButton(t *testing.T) {
+	stacked := []string{"Einmal erlauben", "Beim Verwenden der App erlauben", "Nicht erlauben"}
+	for _, tc := range []struct {
+		action  string
+		buttons []string
+		want    string
+	}{
+		{"dismiss", []string{"Allow Once", "Allow While Using App", "Don’t Allow"}, "Don’t Allow"},
+		{"accept", []string{"Allow Once", "Allow While Using App", "Don’t Allow"}, "Allow Once"},
+		{"dismiss", []string{"Ask App Not to Track", "Allow"}, "Ask App Not to Track"},
+		{"dismiss", []string{"Delete", "Archive", "Cancel"}, "Cancel"},
+		// Unknown labels: by layout.
+		{"dismiss", stacked, "Nicht erlauben"},
+		{"accept", stacked, "Einmal erlauben"},
+		{"dismiss", []string{"Abbrechen", "Löschen"}, "Abbrechen"},
+		{"accept", []string{"Abbrechen", "Löschen"}, "Löschen"},
+		{"dismiss", []string{"Got it"}, "Got it"},
+		{"accept", []string{"Got it"}, "Got it"},
+		// The layout's pick reads as the other answer: refuse.
+		{"dismiss", []string{"Allow", "Später"}, "Später"},
+		{"dismiss", []string{"Allow", "Allow Once"}, ""},
+		{"accept", []string{"Später", "Cancel"}, "Später"},
+		{"accept", []string{"Cancel", "Not Now"}, ""},
+		{"accept", nil, ""},
+	} {
+		if got := alertStepButton(tc.action, tc.buttons); got != tc.want {
+			t.Errorf("%s %q = %q, want %q", tc.action, tc.buttons, got, tc.want)
+		}
 	}
 }
 
@@ -667,6 +822,33 @@ func TestScrollUntilVisibleCenterStopsAtEndOfContent(t *testing.T) {
 	}
 }
 
+func TestScrollUntilVisibleWithTimeoutCenterStopsAtEndOfContent(t *testing.T) {
+	// The last item of a list cannot reach the middle and the screen stops
+	// moving: a step with its own timeout still takes the visible element at
+	// the end of the content, as one without does; only the not-found
+	// failure waits for the timeout.
+	d, fa, _ := newTestDriver(t, func(cmd string, _ Args) (*Response, error) {
+		switch cmd {
+		case "find":
+			return tree(node(1, "StaticText", "Last", 84, 770, 82, 20)), nil
+		case "settle":
+			return ok(&Payload{ScreenHash: "same"}), nil
+		}
+		return ok(nil), nil
+	})
+	res := d.Execute(&flow.ScrollUntilVisibleStep{
+		Element:       flow.Selector{Text: "Last"},
+		CenterElement: true,
+		BaseStep:      flow.BaseStep{TimeoutMs: 20000},
+	})
+	if !res.Success || res.Message != "element visible at the end of the content" {
+		t.Fatalf("res = %+v, want the element at the end of the content", res)
+	}
+	if n := len(fa.sent("act")); n != 3 {
+		t.Errorf("scrolls = %d, want the 3 that show the end of the content", n)
+	}
+}
+
 func TestScrollUsesMaestroDefaultDuration(t *testing.T) {
 	d, fa, _ := newTestDriver(t, screenOf())
 	if res := d.Execute(&flow.ScrollStep{Direction: "down"}); !res.Success {
@@ -778,5 +960,39 @@ func TestTapDoesNotHitAStalePointWhenTheElementLeft(t *testing.T) {
 	}
 	if n := len(fa.sent("act")); n != 0 {
 		t.Errorf("taps = %d, want 0", n)
+	}
+}
+
+// The agent reads the field back and retypes once when keys went missing,
+// unless that would do harm: `retype: false` leaves a short field as it is,
+// and text with a newline or a tab, which the field never shows, would read
+// back short every time and press return twice (a double submit).
+func TestInputTextVerifyFlag(t *testing.T) {
+	d, fa, _ := newTestDriver(t, func(cmd string, _ Args) (*Response, error) {
+		return ok(&Payload{Typed: true}), nil
+	})
+	no := false
+	steps := []*flow.InputTextStep{
+		{Text: "jane"},
+		{Text: "jane", Retype: &no},
+		{Text: "query\n"},
+		{Text: "a\tb"},
+	}
+	for _, s := range steps {
+		if r := d.Execute(s); !r.Success {
+			t.Fatalf("%q: %s", s.Text, r.Message)
+		}
+	}
+	types := fa.sent("type")
+	if len(types) != len(steps) {
+		t.Fatalf("types = %+v", types)
+	}
+	if types[0].Verify != nil {
+		t.Errorf("plain text: verify = %v, want the agent's default", *types[0].Verify)
+	}
+	for i, ty := range types[1:] {
+		if ty.Verify == nil || *ty.Verify {
+			t.Errorf("%q: verify = %v, want false", steps[i+1].Text, ty.Verify)
+		}
 	}
 }

@@ -48,8 +48,22 @@ func (d *Driver) act(kind string, x, y float64, extra *Args) error {
 	if extra != nil {
 		args.X2, args.Y2, args.HoldMs, args.MoveMs, args.RestMs = extra.X2, extra.Y2, extra.HoldMs, extra.MoveMs, extra.RestMs
 	}
-	_, err := d.call("act", args)
-	return err
+	// Only a retry waits on the log; a warning needs nothing from the step.
+	w := d.touchWatch()
+	if w == nil || !d.retryLostTouch || !redeliverable(kind) {
+		_, err := d.call("act", args)
+		return err
+	}
+	mark := w.mark()
+	if _, err := d.call("act", args); err != nil {
+		return err
+	}
+	if sender, lost := w.lostSince(mark, lostTouchWait); lost {
+		logger.Warn("[devicelab-ios] %s at (%.0f,%.0f) never reached the app (backboardd sender 0x%s); sending it again", kind, x, y, sender)
+		_, err := d.call("act", args)
+		return err
+	}
+	return nil
 }
 
 // ---------- taps ----------
@@ -92,6 +106,10 @@ func (d *Driver) tapSelector(sel flow.Selector, optional bool, timeoutMs int, ki
 	if !ok {
 		err := fmt.Errorf("%s is not on screen", describe(sel))
 		return core.ErrorResult(err, err.Error())
+	}
+	x, y, node, err = d.aimClearOfKeyboard(sel, node, x, y)
+	if err != nil {
+		return core.ErrorResult(err, fmt.Sprintf("%s is under the keyboard and could not be tapped: %v", describe(sel), err))
 	}
 	var extra *Args
 	if kind == "longPress" {
@@ -278,7 +296,7 @@ func (d *Driver) scrollUntilVisible(s *flow.ScrollUntilVisibleStep) *core.Comman
 		return core.ErrorResult(err, err.Error()+" — it currently works on the uiautomator2 driver")
 	}
 	var progress core.ScrollProgress
-	timeout := 30 * time.Second
+	timeout := core.ScrollUntilVisibleDefaultTimeout
 	if s.TimeoutMs > 0 {
 		timeout = time.Duration(s.TimeoutMs) * time.Millisecond
 	}
@@ -336,11 +354,23 @@ func (d *Driver) scrollUntilVisible(s *flow.ScrollUntilVisibleStep) *core.Comman
 				if shown != nil {
 					return core.SuccessResult("element visible at the end of the content", toElementInfo(shown))
 				}
-				err := fmt.Errorf("%s not visible: scrolling %s made no progress after %d scrolls (end of content?)",
-					describe(s.Element), direction, i+1)
-				return core.ErrorResult(err, err.Error())
+				// A step with its own timeout looks until it passes, as in
+				// Maestro: a list still filling reads as stuck too.
+				if !core.ScrollLooksUntilTimeout(s) {
+					err := fmt.Errorf("%s not visible: scrolling %s made no progress after %d scrolls (end of content?)",
+						describe(s.Element), direction, i+1)
+					return core.ErrorResult(err, err.Error())
+				}
 			}
 		}
+	}
+	if core.ScrollLooksUntilTimeout(s) && time.Now().After(deadline) {
+		// A step with its own timeout that ran out of it fails in Maestro's
+		// words, with a "not found" cause, as the other drivers give: the
+		// report files it as element_not_found, which is what Maestro's
+		// ElementNotFound is. One without keeps its message.
+		err := fmt.Errorf("%s not found after scrolling %s", describe(s.Element), direction)
+		return core.ErrorResult(err, core.ScrollTimeoutMessage(describe(s.Element), direction, timeout))
 	}
 	err := fmt.Errorf("%s not visible after scrolling %s", describe(s.Element), direction)
 	return core.ErrorResult(err, err.Error())
@@ -530,7 +560,8 @@ func (d *Driver) inputText(s *flow.InputTextStep) *core.CommandResult {
 	if s.Text == "" {
 		return core.SuccessResult("nothing to type", nil)
 	}
-	resp, err := d.call("type", &Args{Text: s.Text, Speed: d.typingSpeed})
+	args := &Args{Text: s.Text, Speed: d.typingSpeed, Verify: typeVerify(s)}
+	resp, err := d.call("type", args)
 	// Nothing had focus: the tap meant to focus the field did not take. That
 	// is this step's own tap when it has a selector, else the step before's
 	// (the usual "tapOn field, inputText" pair). Tap it once more and type.
@@ -542,7 +573,7 @@ func (d *Driver) inputText(s *flow.InputTextStep) *core.CommandResult {
 		logger.Debug("[devicelab-ios] inputText: no field has focus; re-tapping (%.0f,%.0f)", retry.x, retry.y)
 		if terr := d.act("tap", retry.x, retry.y, nil); terr == nil {
 			d.settle(defaultSettleTimeout)
-			resp, err = d.call("type", &Args{Text: s.Text, Speed: d.typingSpeed})
+			resp, err = d.call("type", args)
 		}
 	}
 	if err != nil {
@@ -553,6 +584,21 @@ func (d *Driver) inputText(s *flow.InputTextStep) *core.CommandResult {
 		msg += " (not confirmed in the field)"
 	}
 	return core.SuccessResult(msg, nil)
+}
+
+// typeVerify is the agent's verify flag for an inputText: nil (the agent's
+// default, read the field back and retype once when keys went missing) unless
+// a retype would do harm. With `retype: false` the flow asked for a field
+// that reads back short to be left as it is. Text with a newline or a tab
+// moves on as it is typed: the field never shows those characters, so the
+// read-back always looks short, and the retype pressed return a second time,
+// submitting the form twice. WDA skips its check for the same text.
+func typeVerify(s *flow.InputTextStep) *bool {
+	if s.Retypes() && !strings.ContainsAny(s.Text, "\n\t") {
+		return nil
+	}
+	off := false
+	return &off
 }
 
 func (d *Driver) eraseText(count int) *core.CommandResult {
@@ -570,14 +616,15 @@ func (d *Driver) hideKeyboard() *core.CommandResult {
 	if err != nil {
 		return core.ErrorResult(err, err.Error())
 	}
-	// Maestro's iOS hideKeyboard tries its two swipes and moves on: a
-	// keyboard some screens will not dismiss (TestHive's search field) is
-	// not an error there, and the flow's next steps decide. Failing here
-	// failed a flow Maestro and WDA pass.
+	// A keyboard still up after the dismiss swipes fails the step, as in
+	// Maestro (since 2.2). Passing left it over the screen, and the flow
+	// failed later on a step that had nothing to do with the keyboard.
 	if resp.payload().Visible {
-		logger.Info("[devicelab-ios] hideKeyboard: the keyboard is still visible after the dismiss swipes")
-		return core.SuccessResult("keyboard still visible (not dismissible here)", nil)
+		err := errors.New("couldn't hide the keyboard: the screen did not dismiss it on the swipes. " +
+			"Use pressKey: Enter on a field whose return key closes it, or tap a non-interactive element, such as a label, instead of hideKeyboard")
+		return core.ErrorResult(err, err.Error())
 	}
+	d.keyboardMayBeUp = false
 	return core.SuccessResult("keyboard hidden", nil)
 }
 
@@ -683,22 +730,102 @@ func (d *Driver) takeScreenshot(crop *flow.Selector) *core.CommandResult {
 }
 
 // alert accepts or dismisses a system or in-app alert, waiting for one to
-// appear up to the step's timeout (default 5s).
+// appear up to the step's timeout (default 5s). The driver reads the alert
+// and names the button: the agent's own fallback is by position, which on a
+// stacked alert picks the wrong end ("Allow Once" for a dismiss).
 func (d *Driver) alert(action string, timeoutMs int) *core.CommandResult {
 	if timeoutMs <= 0 {
 		timeoutMs = 5000
 	}
 	deadline := time.Now().Add(time.Duration(timeoutMs) * time.Millisecond)
 	for {
-		resp, err := d.call("alert", &Args{Action: action, App: d.appID})
+		resp, err := d.call("alert", &Args{Action: "read", App: d.appID})
 		if err == nil && resp.payload().Present {
-			return core.SuccessResult(fmt.Sprintf("%s alert: %s", action, resp.payload().Message), nil)
+			p := resp.payload()
+			button := alertStepButton(action, p.Buttons)
+			if button == "" {
+				err := fmt.Errorf("alert %q has no button to %s (it has: %s)", p.Title, action, strings.Join(p.Buttons, ", "))
+				return core.ErrorResult(err, err.Error())
+			}
+			tap, err := d.call("alert", &Args{Action: action, App: d.appID, Button: button})
+			if err != nil {
+				return core.ErrorResult(err, fmt.Sprintf("%s alert failed: %v", action, err))
+			}
+			if tap.payload().Present {
+				return core.SuccessResult(fmt.Sprintf("%s alert: %s", action, tap.payload().Message), nil)
+			}
+			// Gone between the read and the tap: look again.
 		}
 		if time.Now().After(deadline) {
 			return core.SuccessResult("no alert to "+action, nil)
 		}
 		time.Sleep(pollInterval)
 	}
+}
+
+// isAcceptLabel and isDeclineLabel are the buttons acceptAlert and
+// dismissAlert look for first, case-insensitive.
+func isAcceptLabel(label string) bool {
+	l := strings.ToLower(strings.TrimSpace(label))
+	switch l {
+	case "ok", "continue", "open", "yes":
+		return true
+	}
+	return strings.HasPrefix(l, "allow")
+}
+
+func isDeclineLabel(label string) bool {
+	l := strings.ToLower(strings.TrimSpace(label))
+	switch l {
+	case "cancel", "not now", "close", "no", "dismiss":
+		return true
+	}
+	return (strings.HasPrefix(l, "don") && strings.Contains(l, "allow")) || strings.HasPrefix(l, "ask app not")
+}
+
+// alertStepButton is the button acceptAlert ("accept") or dismissAlert
+// ("dismiss") taps: the first one with a label for that answer; else, by
+// iOS's layout, the button that answer sits on (two buttons side by side
+// put the cancel on the left; three or more are stacked with the cancel at
+// the bottom), or the only button whose label does not read as the other
+// answer when the layout's does; a lone button is the only answer. "" when
+// no button can be named: a dismiss never taps a button reading "Allow".
+func alertStepButton(action string, buttons []string) string {
+	want, other := isAcceptLabel, isDeclineLabel
+	if action == "dismiss" {
+		want, other = isDeclineLabel, isAcceptLabel
+	}
+	for _, b := range buttons {
+		if want(b) {
+			return b
+		}
+	}
+	switch len(buttons) {
+	case 0:
+		return ""
+	case 1:
+		return buttons[0]
+	}
+	// Two side by side: accept on the right. Stacked: cancel at the bottom.
+	pick := buttons[len(buttons)-1]
+	if (action == "dismiss") == (len(buttons) == 2) {
+		pick = buttons[0]
+	}
+	if !other(pick) {
+		return pick
+	}
+	// The layout's button reads as the other answer: take the one button
+	// that does not, if there is exactly one.
+	var rest []string
+	for _, b := range buttons {
+		if !other(b) {
+			rest = append(rest, b)
+		}
+	}
+	if len(rest) == 1 {
+		return rest[0]
+	}
+	return ""
 }
 
 // isNoFocus reports the agent's "nothing has keyboard focus" answer to type.

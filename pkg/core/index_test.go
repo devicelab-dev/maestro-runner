@@ -62,3 +62,99 @@ func TestIndexError(t *testing.T) {
 		t.Errorf("ParseIndex(2.9) = %d, %v; want 2 (truncated, as Maestro)", i, err)
 	}
 }
+
+// Matches are ordered top to bottom, then left to right; an element without
+// bounds goes last and ties keep their order (#254). The input is not changed.
+func TestSortByPosition(t *testing.T) {
+	type el struct {
+		name string
+		b    Bounds
+	}
+	in := []el{
+		{"none", Bounds{}},
+		{"bottom-right", Bounds{X: 200, Y: 500, Width: 10, Height: 10}},
+		{"bottom-left", Bounds{X: 0, Y: 500, Width: 10, Height: 10}},
+		{"top", Bounds{X: 50, Y: 0, Width: 10, Height: 10}},
+		{"tie-a", Bounds{X: 0, Y: 300, Width: 10, Height: 10}},
+		{"tie-b", Bounds{X: 0, Y: 300, Width: 20, Height: 20}},
+	}
+	got := SortByPosition(in, func(e el) Bounds { return e.b })
+	var names []string
+	for _, e := range got {
+		names = append(names, e.name)
+	}
+	want := "top tie-a tie-b bottom-left bottom-right none"
+	if strings.Join(names, " ") != want {
+		t.Errorf("order = %v, want %s", names, want)
+	}
+	if in[0].name != "none" {
+		t.Error("SortByPosition reordered its input")
+	}
+}
+
+// An anchor's index counts the anchors by their place on screen, as Maestro
+// does, not in tree order and not clickable first: the cards here are listed
+// out of screen order, and only card B is clickable.
+func TestPickAnchor(t *testing.T) {
+	type card struct {
+		name      string
+		clickable bool
+		b         Bounds
+	}
+	cards := []card{
+		{"C", false, Bounds{X: 0, Y: 500, Width: 400, Height: 200}},
+		{"B", true, Bounds{X: 420, Y: 100, Width: 400, Height: 200}},
+		{"A", false, Bounds{X: 0, Y: 100, Width: 400, Height: 200}},
+	}
+	bounds := func(c card) Bounds { return c.b }
+
+	for index, want := range map[string]string{"0": "A", "1": "B", "2": "C", "-1": "C", "1.0": "B"} {
+		got, err := PickAnchor(cards, index, bounds)
+		if err != nil || len(got) != 1 || got[0].name != want {
+			t.Errorf("PickAnchor(index %s) = %v, %v; want card %s", index, got, err, want)
+		}
+	}
+	if got, err := PickAnchor(cards, "", bounds); err != nil || len(got) != 3 || got[0].name != "C" {
+		t.Errorf("PickAnchor without an index = %v, %v; want every anchor as found", got, err)
+	}
+	for index, want := range map[string]string{
+		"3":         "anchor element not found: no element at index 3: 3 match(es)",
+		"undefined": `anchor element not found: invalid index "undefined"`,
+	} {
+		if _, err := PickAnchor(cards, index, bounds); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("PickAnchor(index %s) error = %v, want %q", index, err, want)
+		}
+	}
+}
+
+type treeNode struct {
+	name   string
+	parent *treeNode
+}
+
+func TestDeepestMatches(t *testing.T) {
+	root := &treeNode{name: "root"}
+	tab := &treeNode{name: "tab", parent: root}
+	label := &treeNode{name: "label", parent: &treeNode{name: "wrapper", parent: tab}}
+	nav := &treeNode{name: "nav", parent: root}
+	parent := func(n *treeNode) *treeNode { return n.parent }
+	names := func(ns []*treeNode) string {
+		var s []string
+		for _, n := range ns {
+			s = append(s, n.name)
+		}
+		return strings.Join(s, ",")
+	}
+
+	// The tab holds the label (two levels down), so it yields to it.
+	if got := names(DeepestMatches([]*treeNode{nav, tab, label}, parent)); got != "nav,label" {
+		t.Errorf("got %s, want nav,label", got)
+	}
+	// Matches that hold no other match are all kept, in order.
+	if got := names(DeepestMatches([]*treeNode{nav, tab}, parent)); got != "nav,tab" {
+		t.Errorf("got %s, want nav,tab", got)
+	}
+	if got := DeepestMatches([]*treeNode(nil), parent); len(got) != 0 {
+		t.Errorf("no matches: got %v", got)
+	}
+}

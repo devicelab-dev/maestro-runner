@@ -35,6 +35,11 @@ type Client struct {
 	sourceOKAt   time.Time
 	sourceErr    error
 	sourceErrsAt time.Time
+
+	// typedClear: clear a field with typed backspaces instead of WebDriverAgent's
+	// hardware-keyboard Clear key (useClearTextShortcut false). On for a
+	// simulator only; NewDriver sets it from the device.
+	typedClear bool
 }
 
 // SourceUnreadableSince returns the last page-source error when no read
@@ -143,7 +148,9 @@ func (c *Client) CreateSession(bundleID string, alertAction string) error {
 		},
 	}
 
-	resp, err := c.post("/session", caps)
+	// A session with a bundleId launches the app, so it waits for iOS to
+	// register the app as a launch does.
+	resp, err := c.postLaunch("/session", caps, bundleID)
 	if err != nil {
 		return fmt.Errorf("failed to create session: %w", err)
 	}
@@ -167,7 +174,22 @@ func (c *Client) CreateSession(bundleID string, alertAction string) error {
 	// even though stock Maestro's XCTest traversal (no such cap) sees them
 	// (#171). Applied here so every session — the primary one and the one
 	// launchApp recreates — gets it.
-	_ = c.UpdateSettings(map[string]interface{}{"snapshotMaxDepth": wdaSnapshotMaxDepth()})
+	//
+	// useClearTextShortcut: WebDriverAgent's first try at clearing a field is
+	// a hardware keyboard's Clear key (an IOHIDEvent). On a simulator iOS then
+	// takes a hardware keyboard as attached and keeps the software keyboard
+	// parked below the screen whenever a field has focus, so what an app shows
+	// with the keyboard (a betslip's stake chips) never appears; there the
+	// field is cleared with typed backspaces, as Maestro erases. A real
+	// iPhone keeps its keyboard up after the Clear key, and typed backspaces
+	// erase only what is left of the cursor: a tap in the middle of a
+	// one-digit field put the cursor before the digit about half the time,
+	// and nothing was erased. Sent either way, since WebDriverAgent keeps it
+	// process-wide.
+	_ = c.UpdateSettings(map[string]interface{}{
+		"snapshotMaxDepth":     wdaSnapshotMaxDepth(),
+		"useClearTextShortcut": !c.typedClear,
+	})
 
 	return nil
 }
@@ -263,8 +285,46 @@ func (c *Client) LaunchAppWithArgs(bundleID string, arguments []string, environm
 	if len(environment) > 0 {
 		body["environment"] = environment
 	}
-	_, err := c.post(c.sessionPath("/wda/apps/launch"), body)
+	_, err := c.postLaunch(c.sessionPath("/wda/apps/launch"), body, bundleID)
 	return err
+}
+
+// appNotFound is how WDA's launch fails while iOS does not know the app:
+// FrontBoard's NotFound. /wda/apps/launch words it "Application … is unknown
+// to FrontBoard" (iOS 17 and 26) or "Unknown application display identifier
+// …" (iOS 18); a new session "Application info provider
+// (FBSApplicationLibrary) returned nil for …" (iOS 26 and 27). On a real
+// device it happens right after an install (clearState's reinstall): the
+// launch is sent before iOS has registered the app, and the same launch
+// succeeds a few seconds later.
+const appNotFound = "FBSOpenApplicationErrorDomain Code=4"
+
+// How long, and how often, a launch is sent again while it fails with
+// appNotFound. An app that is not installed at all fails after launchRetryFor.
+var (
+	launchRetryFor   = 10 * time.Second
+	launchRetryEvery = 500 * time.Millisecond
+)
+
+// postLaunch posts a request that launches bundleID, sending it again while
+// iOS has not registered the app yet. It logs one line when it had to.
+func (c *Client) postLaunch(path string, body interface{}, bundleID string) (map[string]interface{}, error) {
+	start := time.Now()
+	for tries := 1; ; tries++ {
+		resp, err := c.post(path, body)
+		if err == nil || !strings.Contains(err.Error(), appNotFound) || time.Since(start) >= launchRetryFor {
+			if tries > 1 {
+				took := time.Since(start).Round(10 * time.Millisecond)
+				if err != nil {
+					logger.Warn("WDA launch of %s: iOS still did not know the app after %d tries in %s", bundleID, tries, took)
+				} else {
+					logger.Info("WDA launch of %s: iOS had not registered the app yet; launched after %d tries in %s", bundleID, tries, took)
+				}
+			}
+			return resp, err
+		}
+		time.Sleep(launchRetryEvery)
+	}
 }
 
 // TerminateApp terminates an app by bundle ID.
@@ -273,6 +333,23 @@ func (c *Client) TerminateApp(bundleID string) error {
 		"bundleId": bundleID,
 	})
 	return err
+}
+
+// AppState returns XCUIApplication.State for an app: 1 not running, 2
+// running in the background (suspended), 3 running in the background, 4
+// running in the foreground.
+func (c *Client) AppState(bundleID string) (int, error) {
+	resp, err := c.post(c.sessionPath("/wda/apps/state"), map[string]interface{}{
+		"bundleId": bundleID,
+	})
+	if err != nil {
+		return 0, err
+	}
+	state, ok := resp["value"].(float64)
+	if !ok {
+		return 0, fmt.Errorf("unexpected app state response: %v", resp["value"])
+	}
+	return int(state), nil
 }
 
 // ActivateApp brings an app to foreground.
@@ -325,7 +402,18 @@ const swipeMoveMs = 100
 // a list iOS took that as a tap on the row (DDG Settings opened a link in
 // Safari mid-scroll).
 func (c *Client) Swipe(fromX, fromY, toX, toY float64, durationSec float64) error {
-	restMs := int(durationSec * 1000)
+	return c.pointerDrag(fromX, fromY, toX, toY, swipeMoveMs, int(durationSec*1000))
+}
+
+// Flick touches (fromX, fromY), moves to (toX, toY) in moveMs and lifts at
+// once: the short drag Maestro's iOS hideKeyboard makes.
+func (c *Client) Flick(fromX, fromY, toX, toY float64, moveMs int) error {
+	return c.pointerDrag(fromX, fromY, toX, toY, moveMs, 0)
+}
+
+// pointerDrag is one finger's W3C touch: down at the start, a move of moveMs
+// to the end, a rest of restMs there, up.
+func (c *Client) pointerDrag(fromX, fromY, toX, toY float64, moveMs, restMs int) error {
 	if restMs < 0 {
 		restMs = 0
 	}
@@ -338,7 +426,7 @@ func (c *Client) Swipe(fromX, fromY, toX, toY float64, durationSec float64) erro
 				"actions": []interface{}{
 					map[string]interface{}{"type": "pointerMove", "duration": 0, "x": fromX, "y": fromY},
 					map[string]interface{}{"type": "pointerDown", "button": 0},
-					map[string]interface{}{"type": "pointerMove", "duration": swipeMoveMs, "x": toX, "y": toY},
+					map[string]interface{}{"type": "pointerMove", "duration": moveMs, "x": toX, "y": toY},
 					map[string]interface{}{"type": "pause", "duration": restMs},
 					map[string]interface{}{"type": "pointerUp", "button": 0},
 				},
@@ -430,15 +518,31 @@ func (c *Client) Screenshot() ([]byte, error) {
 	return nil, fmt.Errorf("invalid screenshot response")
 }
 
-// Source returns the UI hierarchy as XML.
+// Source returns the UI hierarchy as XML, with every attribute WDA writes.
 func (c *Client) Source() (string, error) {
-	source, err := c.source()
+	source, err := c.source("/source")
 	c.noteSource(err)
 	return source, err
 }
 
-func (c *Client) source() (string, error) {
-	resp, err := c.get(c.sessionPath("/source"))
+// lookupSourceExcluded are the attributes a lookup's page source leaves out.
+// WebDriverAgent computes both for every element of the tree, `visible` with an
+// accessibility call each, and the page-source matcher reads neither: it
+// decides by bounds. On a screen of a few thousand elements the source took
+// 23 s with them and 2.5 s without (an iPhone 17, iOS 27). Appium's
+// pageSourceExcludedAttributes setting exists for the same reason.
+const lookupSourceExcluded = "visible,accessible"
+
+// LookupSource is Source for a lookup: the hierarchy without the attributes
+// in lookupSourceExcluded. Every element of it parses as displayed.
+func (c *Client) LookupSource() (string, error) {
+	source, err := c.source("/source?excluded_attributes=" + lookupSourceExcluded)
+	c.noteSource(err)
+	return source, err
+}
+
+func (c *Client) source(path string) (string, error) {
+	resp, err := c.get(c.sessionPath(path))
 	if err != nil {
 		// A snapshot taken while the accessibility tree is mutating can fail
 		// with a transient kAXErrorInvalidUIElement (-25202): an element ref
@@ -446,9 +550,12 @@ func (c *Client) source() (string, error) {
 		// before surfacing it (mirrors Maestro's #3430 recovery).
 		if isTransientAXError(err) {
 			time.Sleep(150 * time.Millisecond)
-			resp, err = c.get(c.sessionPath("/source"))
+			resp, err = c.get(c.sessionPath(path))
 		}
 		if err != nil {
+			if strings.Contains(err.Error(), "kAXErrorServerNotFound") {
+				return "", fmt.Errorf("%w (WDA: %v)", ErrAXServerNotFound, err)
+			}
 			return "", err
 		}
 	}
@@ -457,6 +564,20 @@ func (c *Client) source() (string, error) {
 		return value, nil
 	}
 	return "", fmt.Errorf("invalid source response")
+}
+
+// ErrAXServerNotFound is a page source that failed with kAXErrorServerNotFound:
+// the app runs but its accessibility server does not, so WDA cannot read it.
+// Seen on real iPhones after a clearState reinstall, when cfprefsd refused the
+// reinstalled app's preferences. It does not clear within a flow (#268), so a
+// lookup stops at once instead of polling page sources of several seconds
+// each to its timeout.
+var ErrAXServerNotFound = errors.New("the app's accessibility server is not running (kAXErrorServerNotFound): " +
+	"WDA can reach the device but not the app; a relaunch does not help, restarting the device does")
+
+// axServerDown reports whether err is ErrAXServerNotFound.
+func axServerDown(err error) bool {
+	return errors.Is(err, ErrAXServerNotFound)
 }
 
 // isTransientAXError reports whether a WDA error is the transient
@@ -525,6 +646,41 @@ func (c *Client) AcceptAlert() error {
 // DismissAlert dismisses the current system alert (taps Don't Allow/Cancel).
 func (c *Client) DismissAlert() error {
 	_, err := c.post(c.sessionPath("/alert/dismiss"), nil)
+	return err
+}
+
+// AlertText returns the open system alert's text. It fails when none is open.
+func (c *Client) AlertText() (string, error) {
+	resp, err := c.get(c.sessionPath("/alert/text"))
+	if err != nil {
+		return "", err
+	}
+	text, _ := resp["value"].(string)
+	if text == "" {
+		return "", fmt.Errorf("no system alert text")
+	}
+	return text, nil
+}
+
+// AlertButtons returns the labels of the open system alert's buttons.
+func (c *Client) AlertButtons() ([]string, error) {
+	resp, err := c.get(c.sessionPath("/wda/alert/buttons"))
+	if err != nil {
+		return nil, err
+	}
+	values, _ := resp["value"].([]interface{})
+	labels := make([]string, 0, len(values))
+	for _, v := range values {
+		if label, ok := v.(string); ok {
+			labels = append(labels, label)
+		}
+	}
+	return labels, nil
+}
+
+// TapAlertButton taps the open system alert's button with that label.
+func (c *Client) TapAlertButton(label string) error {
+	_, err := c.post(c.sessionPath("/alert/accept"), map[string]interface{}{"name": label})
 	return err
 }
 

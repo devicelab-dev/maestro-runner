@@ -82,21 +82,38 @@ func (d *Driver) launchApp(s *flow.LaunchAppStep) *core.CommandResult {
 			return res
 		}
 	}
-	d.applyLaunchPermissions(bid, s.Permissions)
-	if s.ClearKeychain {
-		if _, err := d.runSimctl("keychain", d.udid, "reset"); err != nil {
-			logger.Warn("launchApp: clearKeychain skipped: %v", err)
+	if keepsRunningApp(s) && (len(s.Permissions) > 0 || s.ClearKeychain) {
+		// A permission change makes iOS kill the running app (tccd), and
+		// stopApp: false is there to keep it.
+		logger.Info("launchApp: stopApp: false keeps the running app, so its permissions and clearKeychain are not applied")
+	}
+	if !keepsRunningApp(s) {
+		d.applyLaunchPermissions(bid, s.Permissions)
+		if s.ClearKeychain {
+			if _, err := d.runSimctl("keychain", d.udid, "reset"); err != nil {
+				logger.Warn("launchApp: clearKeychain skipped: %v", err)
+			}
 		}
 	}
-	if s.StopApp == nil || *s.StopApp {
+	args := []string{"launch", "--terminate-running-process", d.udid, bid}
+	if keepsRunningApp(s) {
+		// Maestro's plain `simctl launch`: a running app comes to the front
+		// as it was, not restarted.
+		args = []string{"launch", d.udid, bid}
+	} else {
 		_ = d.terminate(bid)
 	}
-	args := []string{"launch", "--terminate-running-process", d.udid, bid}
 	args = append(args, flattenArguments(s.Arguments)...)
 	if _, err := simctlEnv(launchEnv(s.Environment), args...); err != nil {
 		return core.ErrorResult(err, fmt.Sprintf("launchApp failed: %v", err))
 	}
 	return core.SuccessResult("launched "+bid, nil)
+}
+
+// keepsRunningApp reports whether launchApp leaves a running app running
+// (`stopApp: false`): Maestro then only brings it to the front.
+func keepsRunningApp(s *flow.LaunchAppStep) bool {
+	return s.StopApp != nil && !*s.StopApp
 }
 
 // launchEnv is the host's environment (xcrun needs PATH, DEVELOPER_DIR) plus
@@ -282,14 +299,17 @@ func (d *Driver) removeStagedApps() {
 // whose it is; it must survive a wipe.
 const containerMetadata = ".com.apple.mobile_container_manager.metadata.plist"
 
-// wipeData is the fast clearState: stop, empty the data container, reset
-// permissions — no reinstall.
+// wipeData is the fast clearState: stop, drop the preferences cache, empty
+// the data container, reset permissions — no reinstall.
 func (d *Driver) wipeData(bid string) error {
 	_ = d.terminate(bid)
 	out, err := d.runSimctl("get_app_container", d.udid, bid, "data")
 	container := strings.TrimSpace(out)
 	if err != nil || container == "" {
 		return fmt.Errorf("app %s is not installed on the simulator", bid)
+	}
+	if err := d.restartPrefsDaemon(); err != nil {
+		return err
 	}
 	if err := wipeDataContainer(container); err != nil {
 		return err
@@ -317,6 +337,45 @@ func wipeDataContainer(container string) error {
 		}
 	}
 	return nil
+}
+
+// cfprefsdServices name the simulator's preferences daemon for launchctl:
+// the user/foreground form current runtimes ask for, then the system form
+// for a runtime that does not know the first.
+var cfprefsdServices = []string{
+	"user/foreground/com.apple.cfprefsd.xpc.daemon",
+	"system/com.apple.cfprefsd.xpc.daemon",
+}
+
+// restartPrefsDaemon kills the simulator's cfprefsd; launchd starts it again
+// on demand with an empty cache. The daemon serves an app's UserDefaults from
+// memory and writes them to disk later, so emptying the container alone left
+// them in place for the next launch. SIGKILL, not a stop: a daemon on its way
+// out flushes its pending writes. Called with the app stopped and before the
+// wipe, so no deferred write can land in the emptied container. A preference
+// another app has not flushed yet is lost — the price of the fast path.
+func (d *Driver) restartPrefsDaemon() error {
+	var errs []string
+	for _, svc := range cfprefsdServices {
+		out, err := d.runSimctlWithin(10*time.Second, prefsKillArgs(d.udid, svc)...)
+		if err == nil || prefsDaemonNotRunning(out) {
+			return nil
+		}
+		errs = append(errs, fmt.Sprintf("%v: %s", err, strings.TrimSpace(out)))
+	}
+	return fmt.Errorf("restart the simulator's preferences daemon (UserDefaults would survive the clear): %s",
+		strings.Join(errs, "; "))
+}
+
+// prefsKillArgs is the simctl command that SIGKILLs service in the simulator.
+func prefsKillArgs(udid, service string) []string {
+	return []string{"spawn", udid, "launchctl", "kill", "SIGKILL", service}
+}
+
+// prefsDaemonNotRunning reports launchctl refusing because the daemon is not
+// running: it caches nothing, which is all the restart is for.
+func prefsDaemonNotRunning(out string) bool {
+	return strings.Contains(strings.ToLower(out), "no such process")
 }
 
 func (d *Driver) clearKeychain() *core.CommandResult {
@@ -599,21 +658,34 @@ func ApplySimulatorPrefs(udid string) {
 	if os.Getenv(SimPrefsEnv) == "0" || udid == "" {
 		return
 	}
+	// Each simctl spawn takes about 0.3-0.7 s, so the prefs go side by side.
+	results := make([]*savedPref, len(simPrefs))
+	var wg sync.WaitGroup
+	for i, p := range simPrefs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			out, err := prefsSimctl("spawn", udid, "defaults", "read", p.domain, p.key)
+			old := strings.TrimSpace(out)
+			if err == nil && old == p.value {
+				return
+			}
+			if _, werr := prefsSimctl("spawn", udid, "defaults", "write", p.domain, p.key, p.kind, p.value); werr != nil {
+				logger.Warn("simulator pref %s.%s not set: %v", p.domain, p.key, werr)
+				return
+			}
+			// `defaults read` fails when the key is not set.
+			results[i] = &savedPref{domain: p.domain, key: p.key, kind: p.kind, value: old, absent: err != nil}
+		}()
+	}
+	wg.Wait()
 	var applied []string
 	var saved []savedPref
-	for _, p := range simPrefs {
-		out, err := prefsSimctl("spawn", udid, "defaults", "read", p.domain, p.key)
-		old := strings.TrimSpace(out)
-		if err == nil && old == p.value {
-			continue
+	for i, r := range results {
+		if r != nil {
+			saved = append(saved, *r)
+			applied = append(applied, simPrefs[i].why)
 		}
-		if _, err := prefsSimctl("spawn", udid, "defaults", "write", p.domain, p.key, p.kind, p.value); err != nil {
-			logger.Warn("simulator pref %s.%s not set: %v", p.domain, p.key, err)
-			continue
-		}
-		// `defaults read` fails when the key is not set.
-		saved = append(saved, savedPref{domain: p.domain, key: p.key, kind: p.kind, value: old, absent: err != nil})
-		applied = append(applied, p.why)
 	}
 	savedPrefsMu.Lock()
 	savedPrefs[udid] = append(savedPrefs[udid], saved...)
@@ -630,14 +702,19 @@ func RestoreSimulatorPrefs(udid string) {
 	saved := savedPrefs[udid]
 	delete(savedPrefs, udid)
 	savedPrefsMu.Unlock()
-	for i := len(saved) - 1; i >= 0; i-- {
-		p := saved[i]
-		args := []string{"spawn", udid, "defaults", "write", p.domain, p.key, p.kind, p.value}
-		if p.absent {
-			args = []string{"spawn", udid, "defaults", "delete", p.domain, p.key}
-		}
-		if _, err := prefsSimctl(args...); err != nil {
-			logger.Warn("simulator pref %s.%s not restored: %v", p.domain, p.key, err)
-		}
+	var wg sync.WaitGroup
+	for _, p := range saved {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			args := []string{"spawn", udid, "defaults", "write", p.domain, p.key, p.kind, p.value}
+			if p.absent {
+				args = []string{"spawn", udid, "defaults", "delete", p.domain, p.key}
+			}
+			if _, err := prefsSimctl(args...); err != nil {
+				logger.Warn("simulator pref %s.%s not restored: %v", p.domain, p.key, err)
+			}
+		}()
 	}
+	wg.Wait()
 }

@@ -181,3 +181,23 @@ func TestInputTextFocusedFieldThatHeldTextRetypesADrop(t *testing.T) {
 		t.Fatalf("field holds %q after %d clears, want %q after one", f.value, f.clears, "xhello world")
 	}
 }
+
+// `retype: false` leaves a field that cuts what it is given, a stake field
+// keeping two decimals, as the app made it: retyping would change the app's
+// state. The step's message notes the difference.
+func TestInputTextRetypeFalseLeavesAShortenedField(t *testing.T) {
+	f := &focusedFieldServer{garble: func(s string) string { return strings.TrimSuffix(s, "999") }}
+	server := httptest.NewServer(f.handler(t))
+	defer server.Close()
+	retype := false
+	result := createTestDriver(server).inputText(&flow.InputTextStep{Text: "3,23999", Retype: &retype})
+	if !result.Success {
+		t.Fatalf("inputText failed: %s", result.Message)
+	}
+	if f.value != "3,23" || f.clears != 0 || f.retyped != 0 {
+		t.Fatalf("field %q, %d clears, %d retypes: want it as the app left it", f.value, f.clears, f.retyped)
+	}
+	if !strings.Contains(result.Message, "field holds 4 of the 7 characters typed; not retyped") {
+		t.Errorf("message %q does not note the shorter field", result.Message)
+	}
+}

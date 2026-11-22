@@ -217,10 +217,8 @@ func TestStartAgentReattaches(t *testing.T) {
 	t.Setenv("MAESTRO_RUNNER_HOME", t.TempDir())
 	dir := t.TempDir()
 	writeManifest(t, dir, "1.0")
-	_, port := agentServer(t, func(cmd string, _ Args) Response {
-		return Response{OK: true, Data: &Payload{Message: "ready"}}
-	})
-	saveState("SIM-R", agentState{Port: port, Version: "abc123"})
+	port := tokenAgent(t, "tok")
+	saveState("SIM-R", agentState{Port: port, Version: "abc123", Token: "tok"})
 	a, c, err := StartAgent(context.Background(), AgentOptions{UDID: "SIM-R", Dir: dir})
 	if err != nil || a.Mode() != "reattached" || a.Port() != port || c == nil {
 		t.Fatalf("a=%+v err=%v", a, err)

@@ -84,6 +84,9 @@ func formatDuration(ms int64) string {
 
 // NewParallelRunner creates a parallel runner with multiple device workers.
 func NewParallelRunner(workers []DeviceWorker, config RunnerConfig) *ParallelRunner {
+	// Several devices share one terminal: a pause on one would hold the
+	// others' prompts and input, so parallel runs never pause.
+	config.Pauser = nil
 	return &ParallelRunner{
 		workers: workers,
 		config:  config,

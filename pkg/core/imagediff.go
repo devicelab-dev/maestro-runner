@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -16,6 +17,11 @@ import (
 )
 
 const maestroPixelTolerance = 0.1
+
+// ErrScreenshotSizeMismatch is wrapped by CompareImages and
+// WriteScreenshotDiff when the two images differ in size, so callers can tell
+// it apart from a decode failure.
+var ErrScreenshotSizeMismatch = errors.New("screenshot size mismatch")
 
 // ImageDifference returns the fraction of pixels that differ between two
 // encoded images (PNG or JPEG). Returns 1.0 when sizes differ or decoding
@@ -128,7 +134,8 @@ func CompareImages(expectedData, actualData []byte) (ImageMatchStats, error) {
 	actualBounds := actual.Bounds()
 	if expectedBounds.Dx() != actualBounds.Dx() || expectedBounds.Dy() != actualBounds.Dy() {
 		return ImageMatchStats{}, fmt.Errorf(
-			"screenshot size mismatch: expected %dx%d, actual %dx%d",
+			"%w: expected %dx%d, actual %dx%d",
+			ErrScreenshotSizeMismatch,
 			expectedBounds.Dx(),
 			expectedBounds.Dy(),
 			actualBounds.Dx(),
@@ -223,7 +230,8 @@ func WriteScreenshotDiff(expectedData, actualData []byte, diffPath string) error
 	width, height := expectedBounds.Dx(), expectedBounds.Dy()
 	if width != actualBounds.Dx() || height != actualBounds.Dy() {
 		return fmt.Errorf(
-			"screenshot size mismatch: expected %dx%d, actual %dx%d",
+			"%w: expected %dx%d, actual %dx%d",
+			ErrScreenshotSizeMismatch,
 			width,
 			height,
 			actualBounds.Dx(),

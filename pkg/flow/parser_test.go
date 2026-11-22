@@ -2665,3 +2665,44 @@ func TestSwipeWordSpeedIgnored(t *testing.T) {
 		t.Errorf("numeric speed: got %d, want 80", s1.Speed)
 	}
 }
+
+// `retype: false` reaches the step; without it a short field is retyped.
+func TestParse_InputTextRetype(t *testing.T) {
+	flow, err := Parse([]byte("- inputText:\n    text: \"3,23999\"\n    retype: false\n- inputText: \"hello\"\n"), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if step := flow.Steps[0].(*InputTextStep); step.Retypes() {
+		t.Error("retype: false: Retypes() = true, want false")
+	}
+	if step := flow.Steps[1].(*InputTextStep); !step.Retypes() {
+		t.Error("no retype: Retypes() = false, want true")
+	}
+}
+
+// repeat keeps its timeout (ms), as a number or a variable.
+func TestParse_RepeatTimeout(t *testing.T) {
+	yaml := `
+- repeat:
+    while:
+      visible: "Loading"
+    timeout: 5000
+    commands:
+      - tapOn: "Next"
+- repeat:
+    times: 3
+    timeout: ${T}
+    commands:
+      - back
+`
+	f, err := Parse([]byte(yaml), "test.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := f.Steps[0].(*RepeatStep).Timeout; got != "5000" {
+		t.Errorf("timeout = %q, want 5000", got)
+	}
+	if got := f.Steps[1].(*RepeatStep).Timeout; got != "${T}" {
+		t.Errorf("timeout = %q, want ${T}", got)
+	}
+}

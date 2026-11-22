@@ -64,6 +64,18 @@ type Driver struct {
 	autoAlert       string
 	alertWatchUntil time.Time
 	lastAlertCheck  time.Time
+	// promptLabels is how this simulator's language words the prompt
+	// buttons, read once, the first time a prompt has no English match;
+	// loadPromptLabels reads it, and tests replace it.
+	promptLabels     core.IOSPromptLabels
+	promptLabelsOnce sync.Once
+	loadPromptLabels func() core.IOSPromptLabels
+	// keyboardMayBeUp is set by a step that may have left the software
+	// keyboard up (core.MayLeaveIOSKeyboardUp) and cleared once the keyboard
+	// is seen gone. Only while it is set does a tap look for the keyboard
+	// first (aimClearOfKeyboard).
+	keyboardMayBeUp bool
+
 	// step is the step Execute is running; a prompt it is aimed at
 	// (`tapOn: "Allow"`) is left to it.
 	step flow.Step
@@ -71,6 +83,10 @@ type Driver struct {
 	mu         sync.Mutex
 	stagedApps map[string]stagedApp
 	recording  *simulator.Recording
+	// touch reads the simulator's log for lost touches (touchwatch.go);
+	// retryLostTouch sends a lost tap or long press once more.
+	touch          *touchWatch
+	retryLostTouch bool
 
 	// realDevice is set on a physical iPhone (SetRealDevice): what simctl
 	// does on a simulator goes through the agent or devicectl, or is
@@ -232,9 +248,10 @@ func (d *Driver) GetState() *core.StateSnapshot {
 	return state
 }
 
-// Close releases what the driver holds (staged app copies).
+// Close releases what the driver holds (staged app copies, the log stream).
 func (d *Driver) Close() {
 	d.removeStagedApps()
+	d.stopTouchWatch()
 	d.web.mu.Lock()
 	ready := d.web.ready
 	d.web.mu.Unlock()
@@ -316,6 +333,9 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 		// The app asks for permissions as it starts: the next steps ask
 		// for a prompt first.
 		d.alertWatchUntil = time.Now().Add(autoAlertLaunchWindow)
+	}
+	if core.MayLeaveIOSKeyboardUp(step, result) {
+		d.keyboardMayBeUp = true
 	}
 	result.Duration = time.Since(start)
 	return result
@@ -403,9 +423,10 @@ func (d *Driver) execute(step flow.Step) *core.CommandResult {
 		return d.assertDarkMode(false)
 	case *flow.AddMediaStep:
 		return d.addMedia(s.Files)
-	case *flow.SetAirplaneModeStep, *flow.ToggleAirplaneModeStep:
-		err := fmt.Errorf("airplane mode is not available on the iOS simulator")
-		return core.ErrorResult(err, err.Error())
+	case *flow.SetAirplaneModeStep:
+		return d.setAirplaneMode(s.Enabled)
+	case *flow.ToggleAirplaneModeStep:
+		return d.toggleAirplaneMode()
 	default:
 		err := fmt.Errorf("%s is not supported by --driver devicelab on iOS", step.Type())
 		return core.ErrorResult(err, err.Error())
@@ -432,7 +453,8 @@ func movesScreen(step flow.Step) bool {
 		*flow.DragAndDropStep, *flow.SwipeStep, *flow.ScrollStep, *flow.ScrollUntilVisibleStep,
 		*flow.BackStep, *flow.PressKeyStep, *flow.InputTextStep, *flow.InputRandomStep,
 		*flow.EraseTextStep, *flow.HideKeyboardStep, *flow.LaunchAppStep, *flow.OpenLinkStep,
-		*flow.OpenBrowserStep, *flow.AcceptAlertStep, *flow.DismissAlertStep, *flow.SetOrientationStep:
+		*flow.OpenBrowserStep, *flow.AcceptAlertStep, *flow.DismissAlertStep, *flow.SetOrientationStep,
+		*flow.SetAirplaneModeStep, *flow.ToggleAirplaneModeStep:
 		return true
 	}
 	return false

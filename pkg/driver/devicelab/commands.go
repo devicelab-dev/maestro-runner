@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
@@ -48,7 +50,7 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 	// element the keyboard leaves showing, so only a fully covered element
 	// fails there; every other tap aims at the centre.
 	agentPlaced := (step.Selector.Text != "" || step.Selector.ID != "") && step.Point == "" &&
-		!step.Selector.HasRelativeSelector() && !d.isBrowserMode()
+		!step.Selector.HasRelativeSelector() && !step.Selector.HasNonZeroIndex() && !d.isBrowserMode()
 	covering := keyboardStillCovering
 	if agentPlaced {
 		covering = keyboardCoversAll
@@ -62,8 +64,11 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 	// No stale nodes, no performAction, no parent walk-up. Routing id
 	// selectors through this path gives them the same tree-signature
 	// settle that text selectors get (agent's findAndClick → findElement
-	// with settle=true), so id taps don't fire mid-animation.
-	if (step.Selector.Text != "" || step.Selector.ID != "") && step.Point == "" && !step.Selector.HasRelativeSelector() {
+	// with settle=true), so id taps don't fire mid-animation. The agent taps
+	// its first match, so a non-zero index goes to the page-source lookup
+	// below, which counts matches by position (#260).
+	if (step.Selector.Text != "" || step.Selector.ID != "") && step.Point == "" &&
+		!step.Selector.HasRelativeSelector() && !step.Selector.HasNonZeroIndex() {
 		// Browser mode: find via CDP and click via CDP
 		if d.isBrowserMode() {
 			return d.tapOnBrowser(step)
@@ -245,7 +250,7 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		if bad := d.guardTapInjection(step.Selector.Describe(), info.Bounds, x, y); bad != nil {
 			return bad
 		}
-		if err := d.client.Click(x, y); err != nil {
+		if err := d.clickTarget(x, y, info.Bounds, step.Selector.Describe()); err != nil {
 			return errorResult(err, fmt.Sprintf("Failed to tap at relative point: %v", err))
 		}
 		return successResult(fmt.Sprintf("Tapped at relative point (%d, %d) on element", x, y), info)
@@ -268,11 +273,71 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 	// Always use coordinate-based tap (not accessibility performAction).
 	// Coordinate taps simulate real touch events, which work reliably for
 	// repeated taps on the same button and custom click handlers.
-	if err := d.client.Click(x, y); err != nil {
+	if err := d.clickTarget(x, y, info.Bounds, step.Selector.Describe()); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to tap at coordinates: %v", err))
 	}
 
 	return successResult("Tapped on element", info)
+}
+
+// windowCheckingClicker is a client whose coordinate tap can also report
+// another window over the tap point (maestro.Adapter). Optional, so the
+// DeviceLabClient interface and its fakes stay as they are.
+type windowCheckingClicker interface {
+	ClickChecked(x, y int, target core.Bounds) (coveredBy string, err error)
+}
+
+// windowCheckingToucher adds the same report for a double tap and a long
+// press (maestro.Adapter).
+type windowCheckingToucher interface {
+	DoubleClickChecked(x, y int, target core.Bounds) (coveredBy string, err error)
+	LongClickChecked(x, y, durationMs int, target core.Bounds) (coveredBy string, err error)
+}
+
+// clickTarget taps (x, y) for the element at target and warns when the agent
+// finds another window over the point: Android sends a touch to the topmost
+// window there, so a keyboard, dialog or overlay would take the tap instead
+// of the element. Only a warning: the tap has gone out, and the find-and-click
+// path, which can refuse or move a tap, has its own hit test.
+// MAESTRO_DISABLE_HIT_TEST turns the check off, as it does that one.
+func (d *Driver) clickTarget(x, y int, target core.Bounds, what string) error {
+	c, ok := d.client.(windowCheckingClicker)
+	if !ok || os.Getenv("MAESTRO_DISABLE_HIT_TEST") != "" {
+		return d.client.Click(x, y)
+	}
+	coveredBy, err := c.ClickChecked(x, y, target)
+	warnCovered("tap", what, x, y, coveredBy, err)
+	return err
+}
+
+// doubleClickTarget double-taps (x, y) for the element at target, warning as
+// clickTarget does.
+func (d *Driver) doubleClickTarget(x, y int, target core.Bounds, what string) error {
+	c, ok := d.client.(windowCheckingToucher)
+	if !ok || os.Getenv("MAESTRO_DISABLE_HIT_TEST") != "" {
+		return d.client.DoubleClick(x, y)
+	}
+	coveredBy, err := c.DoubleClickChecked(x, y, target)
+	warnCovered("double tap", what, x, y, coveredBy, err)
+	return err
+}
+
+// longClickTarget long-presses (x, y) for the element at target, warning as
+// clickTarget does.
+func (d *Driver) longClickTarget(x, y, durationMs int, target core.Bounds, what string) error {
+	c, ok := d.client.(windowCheckingToucher)
+	if !ok || os.Getenv("MAESTRO_DISABLE_HIT_TEST") != "" {
+		return d.client.LongClick(x, y, durationMs)
+	}
+	coveredBy, err := c.LongClickChecked(x, y, durationMs, target)
+	warnCovered("long press", what, x, y, coveredBy, err)
+	return err
+}
+
+func warnCovered(gesture, what string, x, y int, coveredBy string, err error) {
+	if err == nil && coveredBy != "" {
+		logger.Warn("[devicelab] %s on %s at (%d,%d): the point is under %s, which may receive the %s instead of the element", gesture, what, x, y, coveredBy, gesture)
+	}
 }
 
 // tapHit handles a find-and-click that found an element for step via s. It
@@ -537,7 +602,7 @@ func (d *Driver) doubleTapOn(step *flow.DoubleTapOnStep) *core.CommandResult {
 	if bad := d.guardTapInjection(step.Selector.Describe(), info.Bounds, x, y); bad != nil {
 		return bad
 	}
-	if err := d.client.DoubleClick(x, y); err != nil {
+	if err := d.doubleClickTarget(x, y, info.Bounds, step.Selector.Describe()); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to double tap at coordinates: %v", err))
 	}
 
@@ -566,7 +631,7 @@ func (d *Driver) longPressOn(step *flow.LongPressOnStep) *core.CommandResult {
 	if bad := d.guardTapInjection(step.Selector.Describe(), info.Bounds, x, y); bad != nil {
 		return bad
 	}
-	if err := d.client.LongClick(x, y, duration); err != nil {
+	if err := d.longClickTarget(x, y, duration, info.Bounds, step.Selector.Describe()); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to long press at coordinates: %v", err))
 	}
 
@@ -1031,7 +1096,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		invalidateText(target)
 		// Per-character key events are the path that loses characters when the
 		// app janks — the reason this verification exists at all.
-		note := core.ConfirmTypedText(target, text, before, logger.Warn)
+		note := core.ConfirmTypedText(target, text, before, step.Retypes(), logger.Warn)
 		return successResult(fmt.Sprintf("Entered text (keyPress): %s%s%s", text, unicodeWarning, note), nil)
 	}
 
@@ -1122,6 +1187,23 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 					invalidateText(focused)
 					typedInto, beforeText = focused, before
 				}
+			} else if typesPerKey(text) {
+				// Maestro types every character as its own key event. Apps
+				// that react per keystroke — a one-time-code box that moves to
+				// the next box, an input mask, search as you type — see one
+				// change when the field is set in one call, so short text is
+				// typed key by key here too. Long text is still set: per-key
+				// typing is slow, and such fields hold short values.
+				if err := d.sendKeys(text); err == nil {
+					typed = true
+					invalidateText(focused)
+					if d.focusStayedOn(focused) {
+						typedInto, beforeText = focused, before
+					}
+					// Otherwise the app moved focus while the text went in (a
+					// code box advancing), so the first field holds only part
+					// of it by design; retyping it there would undo that.
+				}
 			} else if err := focused.Input(text); err == nil {
 				typed = true
 				typedInto, beforeText = focused, before
@@ -1140,7 +1222,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		}
 	}
 
-	note := core.ConfirmTypedText(typedInto, text, beforeText, logger.Warn)
+	note := core.ConfirmTypedText(typedInto, text, beforeText, step.Retypes(), logger.Warn)
 	return successResult(fmt.Sprintf("Entered text: %s%s%s", text, unicodeWarning, note), nil)
 }
 
@@ -1171,6 +1253,35 @@ func fieldHoldsText(field core.Element, value string) bool {
 	}
 	showing, known := native.elem.ShowingHint()
 	return known && !showing
+}
+
+// perKeyMaxChars is the longest text an empty field is typed into key by key.
+// One-time codes, PINs and masked dates fit; longer text is set in one call,
+// since each key waits for the app (about 90 ms on a React Native field).
+const perKeyMaxChars = 8
+
+// typesPerKey reports whether text for an empty field goes in as key events.
+// Characters outside ASCII are set instead: key events cannot type them all.
+func typesPerKey(text string) bool {
+	return utf8.RuneCountInString(text) <= perKeyMaxChars && !core.HasNonASCII(text)
+}
+
+// focusStayedOn reports whether field still has focus after typing. A field
+// whose bounds are unknown counts as kept: there is nothing to compare.
+func (d *Driver) focusStayedOn(field core.Element) bool {
+	info := field.Info()
+	if info == nil {
+		return true
+	}
+	now, err := d.findFocused()
+	if err != nil || now == nil {
+		return true
+	}
+	nb, fb := now.Info(), info.Bounds
+	if nb == nil || fb.Width <= 0 || fb.Height <= 0 {
+		return true
+	}
+	return nb.Bounds == fb
 }
 
 // focusedFieldBefore resolves the element that key events will reach and reads
@@ -1488,23 +1599,21 @@ func (d *Driver) scrollContainerOf(b core.Bounds) (core.Bounds, bool) {
 const scrollEdgeTolerancePx = 2
 
 func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.CommandResult {
-	// `from:` confines the scroll to a container. Only the UIAutomator2 driver
-	// implements it so far; refusing here is better than silently scrolling the
-	// whole screen and leaving the flow author to wonder why.
-	if !step.From.IsEmpty() {
-		return errorResult(fmt.Errorf("unsupported option"), "scrollUntilVisible `from:` is not supported on this driver yet — it currently works on the uiautomator2 driver")
-	}
-
 	direction := strings.ToLower(step.Direction)
 	if direction == "" {
 		direction = "down"
 	}
 
-	maxScrolls := 20
+	maxScrolls := core.ScrollUntilVisibleDefaultMaxScrolls
 	if step.MaxScrolls > 0 {
 		maxScrolls = step.MaxScrolls
+	} else if core.ScrollLooksUntilTimeout(step) {
+		// The step's own timeout is its budget, as in Maestro and on the iOS
+		// drivers: the default count, which could end the step before that
+		// timeout, does not apply.
+		maxScrolls = math.MaxInt
 	}
-	timeout := 30 * time.Second
+	timeout := core.ScrollUntilVisibleDefaultTimeout
 	if step.TimeoutMs > 0 {
 		timeout = time.Duration(step.TimeoutMs) * time.Millisecond
 	}
@@ -1523,6 +1632,20 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	width, height, err := d.tappableScreenSize()
 	if err != nil {
 		return errorResult(err, "Failed to get screen size")
+	}
+
+	// `from:` confines the gesture to one container. Resolved once, before the
+	// loop: re-finding it on every iteration would cost a lookup per scroll,
+	// and a container that moves while its own content scrolls is not a case
+	// worth paying for.
+	var container *core.Bounds
+	if !step.From.IsEmpty() {
+		_, info, findErr := d.findElement(step.From, false, step.TimeoutMs)
+		if findErr != nil || info == nil {
+			return errorResult(findErr, fmt.Sprintf("Scroll container not found: %s", step.From.Describe()))
+		}
+		bounds := info.Bounds
+		container = &bounds
 	}
 
 	// Height of a flush candidate awaiting confirmation, or -1 for none.
@@ -1546,6 +1669,11 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	for i := 0; i < maxScrolls && time.Now().Before(deadline); i++ {
 		wasHanging := hanging
 		hanging = nil
+		// A cancelled run stops here: with a timeout of its own the step
+		// would otherwise swipe on a still screen until that timeout.
+		if err := d.parentContext().Err(); err != nil {
+			return errorResult(fmt.Errorf("scroll cancelled: %w", err), "")
+		}
 		_, info, err := d.findElement(step.Element, true, 1000)
 		if err == nil && info != nil {
 			if decided, done := centering.Check(step.CenterElement, info.Bounds, direction, width, height); decided {
@@ -1604,11 +1732,21 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 			if hanging != nil {
 				return successResult(fmt.Sprintf("Element visible after %d scrolls (end of content, partly past its scroll container)", i), hanging)
 			}
-			return errorResult(fmt.Errorf("element not found"), fmt.Sprintf("Element not found: scrolling %s made no progress after %d scrolls (end of content?)", direction, i))
+			// A step with its own timeout looks until it passes, as in Maestro:
+			// a list still filling reads as stuck too.
+			if !core.ScrollLooksUntilTimeout(step) {
+				return errorResult(fmt.Errorf("element not found"), fmt.Sprintf("Element not found: scrolling %s made no progress after %d scrolls (end of content?)", direction, i))
+			}
 		}
 
-		if err := d.performScroll(direction, width, height, step.Engine, 0.3, scrollMs); err != nil {
-			return errorResult(err, fmt.Sprintf("Failed to scroll: %v", err))
+		scrollErr := error(nil)
+		if container != nil {
+			scrollErr = d.performScrollInRect(direction, *container, step.Engine, 0.3, scrollMs)
+		} else {
+			scrollErr = d.performScroll(direction, width, height, step.Engine, 0.3, scrollMs)
+		}
+		if scrollErr != nil {
+			return errorResult(scrollErr, fmt.Sprintf("Failed to scroll: %v", scrollErr))
 		}
 
 		time.Sleep(300 * time.Millisecond)
@@ -1619,6 +1757,11 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	}
 	if hanging != nil {
 		return successResult("Element visible (scrolls ran out, partly past its scroll container)", hanging)
+	}
+	// A step with its own timeout that ran out of it fails in Maestro's
+	// words; one without keeps its message, however its loop ended.
+	if core.ScrollLooksUntilTimeout(step) && !time.Now().Before(deadline) {
+		return errorResult(fmt.Errorf("element not found"), core.ScrollTimeoutMessage(step.Element.Describe(), direction, timeout))
 	}
 	return errorResult(fmt.Errorf("element not found"), fmt.Sprintf("Element not found after %d scrolls", maxScrolls))
 }
@@ -1654,36 +1797,63 @@ func (d *Driver) performScroll(direction string, width, height int, engine strin
 	return d.client.ScrollInArea(area, direction, percent, durationMs)
 }
 
+// performScrollInRect scrolls inside one container rather than the screen. The
+// inset keeps the gesture off the container's own edges, where a swipe is as
+// likely to be read by the parent list as by the container itself.
+func (d *Driver) performScrollInRect(direction string, bounds core.Bounds, engine string, percent float64, durationMs int) error {
+	inset := bounds.Height / 8
+	x, y := bounds.X, bounds.Y+inset
+	w, h := bounds.Width, bounds.Height-2*inset
+	if h <= 0 {
+		x, y, w, h = bounds.X, bounds.Y, bounds.Width, bounds.Height
+	}
+
+	useAgent := strings.EqualFold(engine, "agent")
+	if !useAgent && d.device != nil {
+		return d.scrollByAdbInRect(direction, x, y, w, h, percent, durationMs)
+	}
+	return d.client.ScrollInArea(uiautomator2.NewRect(x, y, w, h), direction, percent, durationMs)
+}
+
 // scrollByAdb issues `adb shell input swipe` over the local shell executor.
 // percent is the swipe distance as a fraction of the screen dimension along
 // the scroll axis. Direction uses Maestro scroll semantics (what becomes
 // visible — "down" reveals content below by swiping the finger UP).
 func (d *Driver) scrollByAdb(direction string, screenWidth, screenHeight int, percent float64, durationMs int) error {
-	centerX := screenWidth / 2
-	centerY := screenHeight / 2
-	halfV := int(float64(screenHeight) * percent / 2)
-	halfH := int(float64(screenWidth) * percent / 2)
-	var fromX, fromY, toX, toY int
-	switch direction {
-	case "up":
-		fromX, fromY = centerX, centerY-halfV
-		toX, toY = centerX, centerY+halfV
-	case "down":
-		fromX, fromY = centerX, centerY+halfV
-		toX, toY = centerX, centerY-halfV
-	case "left":
-		fromX, fromY = centerX-halfH, centerY
-		toX, toY = centerX+halfH, centerY
-	case "right":
-		fromX, fromY = centerX+halfH, centerY
-		toX, toY = centerX-halfH, centerY
-	default:
-		fromX, fromY = centerX, centerY+halfV
-		toX, toY = centerX, centerY-halfV
-	}
+	return d.scrollByAdbInRect(direction, 0, 0, screenWidth, screenHeight, percent, durationMs)
+}
+
+// scrollByAdbInRect is scrollByAdb over an arbitrary rectangle, so a scroll can
+// be confined to one container rather than the whole screen. The gesture is
+// centred in the rectangle and spans `percent` of its height or width.
+func (d *Driver) scrollByAdbInRect(direction string, rectX, rectY, rectW, rectH int, percent float64, durationMs int) error {
+	fromX, fromY, toX, toY := scrollPointsInRect(direction, rectX, rectY, rectW, rectH, percent)
 	cmd := fmt.Sprintf("input swipe %d %d %d %d %d", fromX, fromY, toX, toY, durationMs)
 	_, err := d.device.Shell(cmd)
 	return err
+}
+
+// scrollPointsInRect returns the swipe endpoints for a scroll centred in a
+// rectangle and spanning `percent` of it along the scroll axis. Pure, so the
+// geometry can be checked without a device.
+//
+// Direction follows Maestro semantics — it names what becomes visible, so
+// "down" reveals content below by dragging the finger up the screen.
+func scrollPointsInRect(direction string, rectX, rectY, rectW, rectH int, percent float64) (fromX, fromY, toX, toY int) {
+	centerX := rectX + rectW/2
+	centerY := rectY + rectH/2
+	halfV := int(float64(rectH) * percent / 2)
+	halfH := int(float64(rectW) * percent / 2)
+	switch direction {
+	case "up":
+		return centerX, centerY - halfV, centerX, centerY + halfV
+	case "left":
+		return centerX - halfH, centerY, centerX + halfH, centerY
+	case "right":
+		return centerX + halfH, centerY, centerX - halfH, centerY
+	default: // "down" and anything unrecognised
+		return centerX, centerY + halfV, centerX, centerY - halfV
+	}
 }
 
 // scrollDurationMs is the swipe duration (in ms) passed to the DeviceLab
@@ -1959,11 +2129,50 @@ const (
 	pageSettleQuietMs       = 500
 )
 
-// settle waits for the screen to stop changing after a tap, for at most
-// maxMs; it is off when waitForIdleTimeout is 0.
+// settle waits for the screen to stop changing after a tap or swipe, for at
+// most maxMs; it is off when waitForIdleTimeout is 0.
+//
+// A screen that never stops changing (a spinner, a looping Lottie view) would
+// cost every step the full maxMs. Once a settle has run out on a screen, the
+// next settle on that same screen waits at most stuckSettleCap instead. The
+// screen is the agent's content hash (text and content-desc, not bounds), so an
+// animation alone keeps it, and new text or a new screen resets the full cap.
+// The hash is read only while a screen is on record, so a run whose settles
+// all finish pays nothing for this.
 func (d *Driver) settle(maxMs int, what string) {
-	d.settleFor(maxMs, settleQuietMs, what)
+	if !d.settlingOn() {
+		return
+	}
+	limit := maxMs
+	if d.stuckScreenKnown {
+		if h, err := d.client.TreeHash(); err == nil && h != 0 && h == d.stuckScreen {
+			if capMs := int(stuckSettleCap.Milliseconds()); capMs < limit {
+				limit = capMs
+			}
+		} else {
+			d.stuckScreenKnown = false
+		}
+	}
+	if !d.settleFor(limit, settleQuietMs, what) {
+		d.stuckScreenKnown = false
+		return
+	}
+	// Ran out: remember the screen it ran out on, read now, after the wait,
+	// so a change that landed during it counts.
+	if h, err := d.client.TreeHash(); err == nil && h != 0 {
+		if !d.stuckScreenKnown {
+			logger.Debug("[devicelab] settle after %s: screen still changing after %dms; next settle here waits at most %v", what, limit, stuckSettleCap)
+		}
+		d.stuckScreen, d.stuckScreenKnown = h, true
+	} else {
+		d.stuckScreenKnown = false
+	}
 }
+
+// stuckSettleCap bounds a settle on a screen where the last settle ran out.
+// MAESTRO_DEVICELAB_STUCK_SETTLE_MS overrides it; a value at or above the
+// full cap (2000) turns the shortening off.
+var stuckSettleCap = durationFromEnvMs("MAESTRO_DEVICELAB_STUCK_SETTLE_MS", 500*time.Millisecond)
 
 // settlePage is settle for a page load (openLink, Enter): the screen must
 // stay still for the longer pageSettleQuietMs.
@@ -2009,15 +2218,21 @@ func durationFromEnvMs(name string, def time.Duration) time.Duration {
 	return def
 }
 
-func (d *Driver) settleFor(maxMs, quietMs int, what string) {
+// settleFor reports whether the wait ran out with the screen still changing;
+// false when it settled, when the agent could not say, or when settling is off.
+func (d *Driver) settleFor(maxMs, quietMs int, what string) (ranOut bool) {
 	if !d.settlingOn() {
-		return
+		return false
 	}
-	if settled, err := d.client.WaitForSettle(maxMs, quietMs); err != nil {
+	settled, err := d.client.WaitForSettle(maxMs, quietMs)
+	if err != nil {
 		logger.Debug("[devicelab] settle after %s: %v", what, err)
-	} else if !settled {
+		return false
+	}
+	if !settled {
 		logger.Debug("[devicelab] settle after %s: still changing after %dms", what, maxMs)
 	}
+	return !settled
 }
 
 func (d *Driver) back(_ *flow.BackStep) *core.CommandResult {
@@ -2719,16 +2934,14 @@ func (d *Driver) setClipboard(step *flow.SetClipboardStep) *core.CommandResult {
 func (d *Driver) setOrientation(step *flow.SetOrientationStep) *core.CommandResult {
 	orientation := strings.ToUpper(strings.ReplaceAll(step.Orientation, "_", ""))
 
-	if orientation == "PORTRAIT" || orientation == "LANDSCAPE" {
-		if err := d.client.SetOrientation(orientation); err != nil {
-			return errorResult(err, fmt.Sprintf("Failed to set orientation: %v", err))
-		}
-		return successResult(fmt.Sprintf("Set orientation to %s", orientation), nil)
-	}
-
+	// Every orientation is set over adb, as Maestro does: the agent's
+	// Device.setOrientation never turned the display, so PORTRAIT and
+	// LANDSCAPE did nothing (#256). LANDSCAPE is LANDSCAPE_LEFT.
 	var rotation string
 	switch orientation {
-	case "LANDSCAPELEFT":
+	case "PORTRAIT":
+		rotation = "0"
+	case "LANDSCAPE", "LANDSCAPELEFT":
 		rotation = "1"
 	case "UPSIDEDOWN":
 		rotation = "2"
@@ -2740,7 +2953,7 @@ func (d *Driver) setOrientation(step *flow.SetOrientationStep) *core.CommandResu
 	}
 
 	if d.device == nil {
-		return errorResult(fmt.Errorf("device not configured"), "Extended orientations require device access")
+		return errorResult(fmt.Errorf("device not configured"), "setOrientation requires device access")
 	}
 
 	if _, err := d.device.Shell("settings put system accelerometer_rotation 0"); err != nil {
@@ -2759,15 +2972,17 @@ func (d *Driver) setOrientation(step *flow.SetOrientationStep) *core.CommandResu
 	// worth saying.
 	want, _ := strconv.Atoi(rotation)
 	if err := core.WaitForDisplayRotation(d.device.Shell, want, rotationSettleTimeout, rotationPollInterval); err != nil {
+		d.noteRotation(core.DisplayRotation(d.device.Shell))
 		return successResult(fmt.Sprintf("Set orientation to %s (%v)", step.Orientation, err), nil)
 	}
+	d.noteRotation(want)
 
 	return successResult(fmt.Sprintf("Set orientation to %s", step.Orientation), nil)
 }
 
 // How long setOrientation waits for the display to report the new rotation
 // before moving on, and how often it looks.
-const (
+var (
 	rotationSettleTimeout = 5 * time.Second
 	rotationPollInterval  = 250 * time.Millisecond
 )

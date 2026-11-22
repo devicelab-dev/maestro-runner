@@ -143,6 +143,11 @@ func (d *Driver) handleLaunchApp(s *flow.LaunchAppStep) *core.CommandResult {
 	}
 
 	args := []string{"launch", "--terminate-running-process", d.udid, bid}
+	if s.StopApp != nil && !*s.StopApp {
+		// Maestro's plain `simctl launch`: a running app comes to the front
+		// as it was, not restarted.
+		args = []string{"launch", d.udid, bid}
+	}
 	args = append(args, flattenArguments(s.Arguments)...)
 	cmd := d.simctl(args...)
 	if env := launchEnv(s.Environment); env != nil {
@@ -191,7 +196,7 @@ func (d *Driver) handleTapOn(s *flow.TapOnStep) *core.CommandResult {
 	// taps at the matched element's center. On miss the runner returns the
 	// walked snapshot so we fall through to the existing snapshot+filter
 	// path below (which handles complex selectors: relative, indexed, etc.).
-	if key, value, ok := simpleSelectorKeyValue(s.Selector); ok {
+	if key, value, ok := simpleSelectorKeyValue(s.Selector); ok && !d.keyboardMayBeUp {
 		if hit, err := d.tryTapBySelector(key, value); err == nil && hit != nil {
 			d.lastTappedIdentifier = hit.Identifier
 			// No snapshot on this path, so there is no before-text to diff
@@ -215,6 +220,11 @@ func (d *Driver) handleTapOn(s *flow.TapOnStep) *core.CommandResult {
 	cx, cy, perr := pointOf(node, s.Point)
 	if perr != nil {
 		return core.ErrorResult(perr, "tapOn: "+perr.Error())
+	}
+	if s.Point == "" {
+		if cx, cy, node, err = d.aimClearOfKeyboard(s.Selector, node, cx, cy); err != nil {
+			return keyboardBlocked(s.Selector, err)
+		}
 	}
 	ctx, cancel := d.callTimeout()
 	defer cancel()
@@ -644,7 +654,13 @@ func (d *Driver) handleHideKeyboard(s *flow.HideKeyboardStep) *core.CommandResul
 		}
 		return core.ErrorResult(err, "hideKeyboard failed: "+err.Error())
 	}
+	d.keyboardMayBeUp = false
 	return core.SuccessResult("keyboard dismissed", nil)
+}
+
+// keyboardBlocked is the result of a tap whose target the keyboard covers.
+func keyboardBlocked(sel flow.Selector, err error) *core.CommandResult {
+	return core.ErrorResult(err, fmt.Sprintf("%s is under the keyboard and could not be tapped: %v", describeSelector(sel), err))
 }
 
 // handleSwipe routes maestro's SwipeStep to the runner's drag command with
@@ -807,7 +823,7 @@ func (d *Driver) handleScrollUntilVisible(s *flow.ScrollUntilVisibleStep) *core.
 	if maxScrolls <= 0 {
 		maxScrolls = math.MaxInt
 	}
-	timeout := 30 * time.Second
+	timeout := core.ScrollUntilVisibleDefaultTimeout
 	if s.TimeoutMs > 0 {
 		timeout = time.Duration(s.TimeoutMs) * time.Millisecond
 	}
@@ -828,7 +844,9 @@ func (d *Driver) handleScrollUntilVisible(s *flow.ScrollUntilVisibleStep) *core.
 			if node := d.scrollTargetIn(nodes, s.Element, s.VisibilityPercentage); node != nil {
 				return core.SuccessResult("element found after scrolling", toElementInfo(node))
 			}
-			if sig, ok := scrollSurfaceSignature(nodes); ok && progress.Observe(sig) {
+			// A step with its own timeout looks until it passes, as in
+			// Maestro: a list still filling reads as stuck too.
+			if sig, ok := scrollSurfaceSignature(nodes); ok && progress.Observe(sig) && !core.ScrollLooksUntilTimeout(s) {
 				return core.ErrorResult(
 					fmt.Errorf("element not found after %d scrolls", i),
 					fmt.Sprintf("scroll target not found: scrolling %s made no progress (end of content?)", direction),
@@ -843,6 +861,14 @@ func (d *Driver) handleScrollUntilVisible(s *flow.ScrollUntilVisibleStep) *core.
 		// after every swipe: a list still coasting reads as a different
 		// screen each time and its rows are not where they will stop.
 		d.settleScreen(settleCapMs(deadline))
+	}
+	// A step with its own timeout that ran out of it fails in Maestro's
+	// words; one without keeps its message, however its loop ended.
+	if core.ScrollLooksUntilTimeout(s) && !time.Now().Before(deadline) {
+		return core.ErrorResult(
+			fmt.Errorf("element not found after scrolling"),
+			core.ScrollTimeoutMessage(describeSelector(s.Element), direction, timeout),
+		)
 	}
 	return core.ErrorResult(
 		fmt.Errorf("element not found after scrolling"),
@@ -935,6 +961,11 @@ func (d *Driver) handleDoubleTap(s *flow.DoubleTapOnStep) *core.CommandResult {
 	cx, cy, perr := pointOf(node, s.Selector.Point)
 	if perr != nil {
 		return core.ErrorResult(perr, "doubleTap: "+perr.Error())
+	}
+	if s.Selector.Point == "" {
+		if cx, cy, node, err = d.aimClearOfKeyboard(s.Selector, node, cx, cy); err != nil {
+			return keyboardBlocked(s.Selector, err)
+		}
 	}
 	ctx, cancel := d.callTimeout()
 	defer cancel()
@@ -1044,6 +1075,11 @@ func (d *Driver) handleLongPress(s *flow.LongPressOnStep) *core.CommandResult {
 	cx, cy, perr := pointOf(node, s.Selector.Point)
 	if perr != nil {
 		return core.ErrorResult(perr, "longPress: "+perr.Error())
+	}
+	if s.Selector.Point == "" {
+		if cx, cy, node, err = d.aimClearOfKeyboard(s.Selector, node, cx, cy); err != nil {
+			return keyboardBlocked(s.Selector, err)
+		}
 	}
 	durationMs := float64(core.LongPressMs(s.DurationMs))
 	ctx, cancel := d.callTimeout()

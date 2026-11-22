@@ -122,6 +122,11 @@ MAESTRO_RUNNER_NO_UPDATE_CHECK=1 to skip the check; on CI the notice is not prin
 			Name:  "retry-failed",
 			Usage: "Run only the flows that failed in the previous run (looks for the last report under the same --output directory)",
 		},
+		&cli.BoolFlag{
+			Name:    "pause-on-failure",
+			Usage:   "When a step fails its flow, pause there with the device and app left as they are: print the screen's elements, save a screenshot, run steps on it, then retry the step or continue. Interactive terminals only: ignored with a warning when stdin is not a terminal (CI) and with --parallel or several devices",
+			EnvVars: []string{"MAESTRO_PAUSE_ON_FAILURE"},
+		},
 
 		// Parallelization
 		&cli.IntFlag{
@@ -161,7 +166,7 @@ MAESTRO_RUNNER_NO_UPDATE_CHECK=1 to skip the check; on CI the notice is not prin
 		// Driver settings
 		&cli.IntFlag{
 			Name:    "wait-for-idle-timeout",
-			Usage:   "Wait for device idle in ms (0 = disabled, default 200)",
+			Usage:   "Wait for device idle in ms (0 = disabled, default 200). On iOS WDA only 0 has an effect: it turns off the settle before each action",
 			Value:   200,
 			EnvVars: []string{"MAESTRO_WAIT_FOR_IDLE_TIMEOUT"},
 		},
@@ -174,6 +179,11 @@ MAESTRO_RUNNER_NO_UPDATE_CHECK=1 to skip the check; on CI the notice is not prin
 			Name:    "condition-timeout",
 			Usage:   "Fixed timeout in ms for when:/while: condition checks. Unset: as Maestro, 7s less the time since the last step (at least 1s). Override per condition with `timeout:`.",
 			EnvVars: []string{"MAESTRO_CONDITION_TIMEOUT"},
+		},
+		&cli.IntFlag{
+			Name:    "find-timeout",
+			Usage:   "Default timeout in ms to find an element, for steps without their own timeout (unset: the driver default, 17000 on most drivers, as Maestro). Lower it, e.g. 3000, to make a wrong selector fail fast while writing flows. A flow's commandTimeout overrides it.",
+			EnvVars: []string{"MAESTRO_FIND_TIMEOUT"},
 		},
 		&cli.BoolFlag{
 			Name:    "disable-animations",
@@ -565,6 +575,10 @@ type RunConfig struct {
 	ReportFile  string
 	RetryFailed bool // Narrow the selection to flows that failed in the previous run
 	Retries     int  // Run failing flows again, up to this many more times, in the same run
+	// PauseOnFailure pauses a sequential run at a step that fails its flow
+	// and takes commands from the terminal (--pause-on-failure, #246).
+	// Already resolved: false whenever no one could answer the pause.
+	PauseOnFailure bool
 	// ShareHierarchy makes a test run answer `hierarchy` for its device
 	// (see hierarchy_share.go); off for the hierarchy command itself.
 	ShareHierarchy bool
@@ -606,6 +620,7 @@ type RunConfig struct {
 	// Driver settings
 	WaitForIdleTimeout int    // Wait for device idle in ms (0 = disabled, default 200)
 	ConditionTimeout   int    // Default timeout (ms) for when:/while: condition checks (default 1000)
+	FindTimeout        int    // Default element find timeout (ms) for steps without one (0 = driver default)
 	DisableAnimations  bool   // Switch device animations off for the run (--disable-animations / workspace)
 	Insecure           bool   // Skip TLS verification for runScript http.* (--insecure)
 	StepDelay          int    // Pause between top-level steps in ms (0 = none)
@@ -852,6 +867,7 @@ func runTest(c *cli.Context) error {
 		ReportBaseDir:      reportBaseDir,
 		ReportFile:         reportFile,
 		RetryFailed:        getBool("retry-failed"),
+		PauseOnFailure:     getBool("pause-on-failure"),
 		Retries:            getInt("retries"),
 		ShareHierarchy:     true,
 		Parallel:           parallel,
@@ -874,6 +890,7 @@ func runTest(c *cli.Context) error {
 		NewCommandTimeout:  getInt("new-command-timeout"),
 		WaitForIdleTimeout: getInt("wait-for-idle-timeout"),
 		ConditionTimeout:   getInt("condition-timeout"),
+		FindTimeout:        getInt("find-timeout"),
 		DisableAnimations:  getBool("disable-animations"),
 		Insecure:           getBool("insecure"),
 		StepDelay:          getInt("step-delay"),
@@ -930,6 +947,13 @@ func runTest(c *cli.Context) error {
 			}
 			// else: keep default 200ms from CLI flag
 		}
+	}
+
+	var pauseWarning string
+	cfg.PauseOnFailure, pauseWarning = resolvePauseOnFailure(cfg.PauseOnFailure, cfg.Parallel, cfg.Devices, stdinIsTerminal())
+	if pauseWarning != "" {
+		printSetupWarning(pauseWarning)
+		logger.Warn("%s", pauseWarning)
 	}
 
 	cfg.TelemetryFlags = setFlagNames(c)
@@ -1790,6 +1814,7 @@ func executeSingleDevice(cfg *RunConfig, flows []flow.Flow) (*executor.RunResult
 		Env:                cfg.Env,
 		WaitForIdleTimeout: cfg.WaitForIdleTimeout,
 		ConditionTimeout:   cfg.ConditionTimeout,
+		FindTimeout:        cfg.FindTimeout,
 		DisableAnimations:  cfg.DisableAnimations,
 		Insecure:           cfg.Insecure,
 		StepDelay:          cfg.StepDelay,
@@ -1800,6 +1825,7 @@ func executeSingleDevice(cfg *RunConfig, flows []flow.Flow) (*executor.RunResult
 		OnNestedStep:       onNestedStep,
 		OnNestedFlowStart:  onNestedFlowStart,
 		OnFlowEnd:          onFlowEndWithCloud(cfg),
+		Pauser:             failurePauser(cfg, deviceInfo, driverName),
 	})
 
 	notifyCloudRunStart(cfg, len(flows))
@@ -1844,6 +1870,7 @@ func ExecuteFlowWithDriver(driver core.Driver, cfg *RunConfig, f flow.Flow) (*ex
 		Env:                cfg.Env,
 		WaitForIdleTimeout: cfg.WaitForIdleTimeout,
 		ConditionTimeout:   cfg.ConditionTimeout,
+		FindTimeout:        cfg.FindTimeout,
 		DisableAnimations:  cfg.DisableAnimations,
 		Insecure:           cfg.Insecure,
 		StepDelay:          cfg.StepDelay,
@@ -1854,6 +1881,7 @@ func ExecuteFlowWithDriver(driver core.Driver, cfg *RunConfig, f flow.Flow) (*ex
 		OnNestedStep:       onNestedStep,
 		OnNestedFlowStart:  onNestedFlowStart,
 		OnFlowEnd:          onFlowEndWithCloud(cfg),
+		Pauser:             failurePauser(cfg, deviceInfo, driverName),
 	})
 
 	notifyCloudRunStart(cfg, 1)
@@ -2225,6 +2253,7 @@ func executeAppiumSingleSession(cfg *RunConfig, flows []flow.Flow) (*executor.Ru
 		Env:                cfg.Env,
 		WaitForIdleTimeout: cfg.WaitForIdleTimeout,
 		ConditionTimeout:   cfg.ConditionTimeout,
+		FindTimeout:        cfg.FindTimeout,
 		DisableAnimations:  cfg.DisableAnimations,
 		Insecure:           cfg.Insecure,
 		StepDelay:          cfg.StepDelay,
@@ -2235,6 +2264,7 @@ func executeAppiumSingleSession(cfg *RunConfig, flows []flow.Flow) (*executor.Ru
 		OnNestedStep:       onNestedStep,
 		OnNestedFlowStart:  onNestedFlowStart,
 		OnFlowEnd:          onFlowEndWithCloud(cfg),
+		Pauser:             failurePauser(cfg, deviceInfo, "appium"),
 	})
 
 	notifyCloudRunStart(cfg, len(flows))
@@ -2443,6 +2473,7 @@ func createAppiumDriver(cfg *RunConfig) (core.Driver, func(), error) {
 	info := driver.GetPlatformInfo()
 	logger.Info("Appium session created successfully: %s", info.DeviceID)
 	driver.SetAppInfo(resolveAppiumAppVersion(cfg, info))
+	driver.SetAppFile(cfg.AppFile)
 
 	// Build the provider chain: detected cloud provider (if any) + the session
 	// exporter (if --appium-session-file is set). Composite runs them all, so a
@@ -3120,6 +3151,7 @@ func createParallelRunner(cfg *RunConfig, workers []executor.DeviceWorker, platf
 		Env:                cfg.Env,
 		WaitForIdleTimeout: cfg.WaitForIdleTimeout,
 		ConditionTimeout:   cfg.ConditionTimeout,
+		FindTimeout:        cfg.FindTimeout,
 		DisableAnimations:  cfg.DisableAnimations,
 		Insecure:           cfg.Insecure,
 		StepDelay:          cfg.StepDelay,

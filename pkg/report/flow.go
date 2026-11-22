@@ -111,6 +111,15 @@ func (w *FlowWriter) CommandLogs(cmdIndex int, logs []string) {
 	w.flush()
 }
 
+// CommandMessage records what a passed command reports about its outcome.
+func (w *FlowWriter) CommandMessage(cmdIndex int, msg string) {
+	if cmdIndex < 0 || cmdIndex >= len(w.flow.Commands) || msg == "" {
+		return
+	}
+	w.flow.Commands[cmdIndex].Message = msg
+	w.flush()
+}
+
 // End marks the flow as complete. flowLevelError, when non-empty, is used
 // as the failure message when no individual command recorded one — covers
 // flow-level failures like failOnConsoleError.

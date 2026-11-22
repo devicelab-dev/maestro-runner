@@ -199,6 +199,7 @@ Examples:
 			doctorCommand,
 			screenshotCommand,
 			serverCommand,
+			skillsCommand,
 		},
 	}
 

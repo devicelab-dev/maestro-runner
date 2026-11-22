@@ -1783,7 +1783,7 @@ const htmlTemplate = `<!DOCTYPE html>
             const hasSubCommands = cmd.subCommands && cmd.subCommands.length > 0;
             const hasScreenshots = cmd.artifacts && (cmd.artifacts.screenshotBefore || cmd.artifacts.screenshotAfter);
             const hasLogs = cmd.logs && cmd.logs.length > 0;
-            const hasDetails = cmd.yaml || cmd.error || hasScreenshots || hasLogs;
+            const hasDetails = cmd.yaml || cmd.error || cmd.message || hasScreenshots || hasLogs;
             const isExpandable = hasDetails || hasSubCommands;
 
             let html = '<div class="command-item ' + status + (hasSubCommands ? ' has-subcommands' : '') + '" id="flow-' + flowIndex + '-cmd-' + index + '-d' + depth + '" onclick="toggleCommand(this, event)">';
@@ -1808,6 +1808,10 @@ const htmlTemplate = `<!DOCTYPE html>
 
                 if (cmd.yaml && !hasSubCommands) {
                     html += '<div class="command-yaml">' + escapeHtml(cmd.yaml) + '</div>';
+                }
+
+                if (cmd.message) {
+                    html += '<div class="command-logs">' + escapeHtml(cmd.message) + '</div>';
                 }
 
                 if (hasLogs) {

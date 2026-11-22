@@ -659,3 +659,13 @@ func TestMatchesTextFindsHintOnceFieldHasText(t *testing.T) {
 		t.Error("expected text to still match")
 	}
 }
+
+func TestParsePageSource_Password(t *testing.T) {
+	elems, err := ParsePageSource(`<hierarchy><node class="android.widget.EditText" password="true" bounds="[0,0][1,1]"/><node class="android.widget.EditText" password="false" bounds="[0,0][1,1]"/></hierarchy>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(elems) != 2 || !elems[0].Password || elems[1].Password {
+		t.Fatalf("got %d elements: %+v", len(elems), elems)
+	}
+}

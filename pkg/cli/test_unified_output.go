@@ -175,6 +175,9 @@ func printCommand(cmd report.Command, depth int) {
 		fmt.Printf("%s%s%s%s %s %s(%s)%s\n",
 			indent, symbolColor, symbol, color(colorReset),
 			description, durColor, formatDuration(duration), color(colorReset))
+		if cmd.Message != "" {
+			fmt.Printf("%s  %s╰─ %s%s\n", indent, color(colorGray), cmd.Message, color(colorReset))
+		}
 	} else {
 		fmt.Printf("%s%s✗%s %s (%s)\n",
 			indent, color(colorRed), color(colorReset),

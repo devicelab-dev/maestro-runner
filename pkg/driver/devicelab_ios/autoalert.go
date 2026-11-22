@@ -8,6 +8,7 @@ import (
 	"github.com/devicelab-dev/maestro-runner/pkg/core"
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
 	"github.com/devicelab-dev/maestro-runner/pkg/logger"
+	"github.com/devicelab-dev/maestro-runner/pkg/simulator"
 )
 
 // System permission prompts are answered the way the WDA driver answers them
@@ -59,24 +60,39 @@ func autoAlertAction(permissions map[string]string) string {
 // accept taps a label starting with "Allow" ("Allow", "Allow While Using
 // App", "Allow Once", "Allow Full Access", App Tracking Transparency's
 // "Allow"); dismiss taps "Don't Allow" (either apostrophe) or "Ask App Not
-// to Track". The first match in the alert's order wins. "" when none matches:
-// an alert answered "OK" or "Continue" is left to the flow, and there is no
-// fallback to another button.
-func autoAlertButton(action string, buttons []string) string {
+// to Track". On a device in another language, the same labels as iOS words
+// them there count (labels, see core.IOSPromptLabels). The first match in the
+// alert's order wins. "" when none matches: an alert answered "OK" or
+// "Continue" is left to the flow, and there is no fallback to another button.
+func autoAlertButton(action string, buttons []string, labels core.IOSPromptLabels) string {
 	for _, b := range buttons {
-		l := strings.ToLower(b)
-		switch action {
-		case "accept":
-			if strings.HasPrefix(l, "allow") {
-				return b
-			}
-		case "dismiss":
-			if (strings.HasPrefix(l, "don") && strings.Contains(l, "allow")) || strings.HasPrefix(l, "ask app not") {
-				return b
-			}
+		if labels.Action(b) == action {
+			return b
 		}
 	}
 	return ""
+}
+
+// localPromptLabels is the simulator's prompt vocabulary in its preferred
+// languages, read on first use. A real device, or a simulator whose strings
+// cannot be read, keeps the English labels.
+func (d *Driver) localPromptLabels() core.IOSPromptLabels {
+	d.promptLabelsOnce.Do(func() {
+		if d.loadPromptLabels != nil {
+			d.promptLabels = d.loadPromptLabels()
+			return
+		}
+		if d.realDevice || d.udid == "" {
+			return
+		}
+		pairs, err := simulator.PromptStringPairs(d.udid)
+		if err != nil {
+			logger.Debug("[devicelab-ios] permission prompt strings unavailable, English labels only: %v", err)
+			return
+		}
+		d.promptLabels = core.NewIOSPromptLabels(pairs)
+	})
+	return d.promptLabels
 }
 
 // answerSystemAlert asks the agent once for a SpringBoard alert and taps the
@@ -98,7 +114,11 @@ func (d *Driver) answerSystemAlert() bool {
 		logger.Debug("[devicelab-ios] system alert %q left to the step, which is aimed at it", p.Title)
 		return false
 	}
-	button := autoAlertButton(d.autoAlert, p.Buttons)
+	button := autoAlertButton(d.autoAlert, p.Buttons, core.IOSPromptLabels{})
+	if button == "" {
+		// Not English: try the labels in the simulator's language.
+		button = autoAlertButton(d.autoAlert, p.Buttons, d.localPromptLabels())
+	}
 	if button == "" {
 		logger.Debug("[devicelab-ios] system alert %q left to the flow: no button to %s in %q", p.Title, d.autoAlert, p.Buttons)
 		return false

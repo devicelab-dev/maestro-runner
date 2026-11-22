@@ -36,6 +36,27 @@ type Driver struct {
 
 	// WDA alert action for real device permission handling ("accept", "dismiss", or "")
 	alertAction string
+	// flowAnswersAlerts: the flow answers permission prompts itself, so WDA
+	// must not (see stepsAnswerAlerts).
+	flowAnswersAlerts bool
+	// flowPromptButtons: the prompt buttons the flow's taps name; a prompt
+	// with one of them is the flow's to answer. flowAnswersAnyPrompt: the
+	// flow has an acceptAlert or dismissAlert, which may be meant for any
+	// prompt. promptAction: what WDA would have answered the flow's other
+	// prompts with ("accept", "dismiss" or "") had the flow named none, which
+	// a lookup that finds nothing answers them with (answerUnnamedPrompt).
+	flowPromptButtons    []string
+	flowAnswersAnyPrompt bool
+	promptAction         string
+	// alertLookup: what of a system alert the current step's selector may match.
+	alertLookup alertLookup
+
+	// promptLabels is how a simulator's language words the permission
+	// prompt buttons, read once on first use; loadPromptLabels reads it, and
+	// tests replace it.
+	promptLabels     core.IOSPromptLabels
+	promptLabelsOnce sync.Once
+	loadPromptLabels func() core.IOSPromptLabels
 
 	// Timeouts (0 = use defaults)
 	findTimeout         int // ms, for required elements
@@ -63,6 +84,12 @@ type Driver struct {
 	// settleOff is set by a wait-for-idle timeout of 0: actions no longer
 	// wait for the screen to settle first (#212).
 	settleOff bool
+
+	// keyboardMayBeUp is set by a step that may have left the software
+	// keyboard up (core.MayLeaveIOSKeyboardUp) and cleared once the keyboard
+	// is seen gone. Only while it is set does a tap look for the keyboard
+	// first (aimClearOfKeyboard).
+	keyboardMayBeUp bool
 }
 
 // Crash-loop detection thresholds.
@@ -73,6 +100,9 @@ const (
 
 // NewDriver creates a new WDA driver.
 func NewDriver(client *Client, info *core.PlatformInfo, udid string) *Driver {
+	if client != nil {
+		client.typedClear = info != nil && info.IsSimulator
+	}
 	return &Driver{
 		client: client,
 		info:   info,
@@ -104,12 +134,14 @@ func NewDriver(client *Client, info *core.PlatformInfo, udid string) *Driver {
 // at "", which means no monitor is registered and in-app dialogs aren't
 // auto-handled.
 func (d *Driver) PrepareForFlow(steps []flow.Step) {
+	d.flowPromptButtons, d.flowAnswersAnyPrompt = promptButtonsNamed(steps)
+	d.flowAnswersAlerts = d.flowAnswersAnyPrompt || len(d.flowPromptButtons) > 0
 	for _, s := range steps {
 		launchApp, ok := s.(*flow.LaunchAppStep)
 		if !ok {
 			continue
 		}
-		d.alertAction = resolveAlertAction(launchApp.Permissions)
+		d.alertAction = d.flowAlertAction(launchApp.Permissions)
 
 		// Real-device safety net (#108): system permission dialogs are
 		// auto-handled ONLY via WDA's defaultAlertAction, which needs a single
@@ -119,7 +151,7 @@ func (d *Driver) PrepareForFlow(steps []flow.Step) {
 		// doesn't hit this (permissions are pre-granted via simctl). Warn so the
 		// failure isn't silent. An explicit `unset` is an intentional opt-out and
 		// stays silent.
-		if d.alertAction == "" && d.info != nil && !d.info.IsSimulator &&
+		if d.alertAction == "" && !d.flowAnswersAlerts && d.info != nil && !d.info.IsSimulator &&
 			len(launchApp.Permissions) > 0 && !hasAllValue(launchApp.Permissions, "unset") {
 			logger.Warn("[wda] launchApp declares mixed permissions; on a real iOS device WDA can only auto-accept or auto-dismiss ALL permission dialogs, so they won't be auto-handled and may block the flow (and can wedge the device). Use permissions: { all: allow } (or { all: deny }), or add an explicit acceptAlert/dismissAlert step where the prompt appears.")
 		}
@@ -145,7 +177,7 @@ func (d *Driver) EnsureSession(appID string) error {
 		"animationCoolOffTimeout": 0,
 		// Permission prompts only: without it the monitor the session's
 		// defaultAlertAction starts also taps the app's own alerts.
-		"autoClickAlertSelector": autoClickAlertSelector(d.alertAction),
+		"autoClickAlertSelector": autoClickAlertSelector(d.alertAction, d.localPromptLabels(d.alertAction)),
 	})
 	return nil
 }
@@ -205,28 +237,21 @@ func (d *Driver) SetAppFile(path string) {
 	d.appFile = path
 }
 
-// SetWaitForIdleTimeout sets the wait for idle timeout.
-// Quiescence is disabled by default on iOS because it can cause XCTest crashes
-// on apps with continuous animations. It is only enabled when the user explicitly
-// sets a timeout > 200ms (the CLI default), indicating they want idle waiting.
-// Negative values and 0 disable quiescence. Values 1-200 are a no-op (keep session default).
-// Values > 200 enable quiescence — minimum effective value is 200ms.
+// SetWaitForIdleTimeout applies --wait-for-idle-timeout. On WDA only 0 (or
+// less) does anything: it turns off the settle before an action (#212), which
+// on a screen that never stops changing (a looping Rive or Lottie view) cost
+// its full 3s cap on every action.
 //
-// 0 also turns off the settle before an action (#212): on a screen that never
-// stops changing (a looping Rive or Lottie view) it cost its full 3s cap on
-// every action, and 0 is documented as "disabled".
+// A value above 0 changes nothing (#267). WebDriverAgent's idle wait stays
+// off: it can crash XCTest on apps with continuous animations, sessions are
+// created without it, and WebDriverAgent reads shouldWaitForQuiescence only
+// at session creation. Even on, it waits when the app launches or comes to
+// the front, not inside a find or a page source.
 func (d *Driver) SetWaitForIdleTimeout(ms int) error {
 	d.settleOff = ms <= 0
-	if ms > 200 {
-		return d.client.UpdateSettings(map[string]interface{}{
-			"shouldWaitForQuiescence": true,
-			"waitForIdleTimeout":      ms,
-		})
-	}
 	if ms <= 0 {
 		return d.client.DisableQuiescence()
 	}
-	// ms 1-200 (default range): keep quiescence disabled (session default)
 	return nil
 }
 
@@ -275,7 +300,15 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	if d.screenMayMove && !d.settleOff && actsOnScreen(step) && !flow.RepeatTapAfterFirst(step) {
 		d.settleScreen()
 	}
-	d.screenMayMove = movesScreen(step)
+	// A step that neither acts nor moves the screen (an assert, a script, a
+	// flow's condition) leaves the flag as it was, so the next action still
+	// settles: a tap, a check that answered while the sheet the tap opened
+	// was still sliding up, then a tap on that sheet went out mid-slide and
+	// was lost (WDA reports the sheet's final frame while it moves).
+	if movesScreen(step) || actsOnScreen(step) {
+		d.screenMayMove = movesScreen(step)
+	}
+	d.alertLookup = alertLookupFor(step)
 
 	var result *core.CommandResult
 	switch s := step.(type) {
@@ -397,6 +430,9 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 		}
 	}
 
+	if core.MayLeaveIOSKeyboardUp(step, result) {
+		d.keyboardMayBeUp = true
+	}
 	result.Duration = time.Since(start)
 	d.trackCrashLoop(result)
 	return result
@@ -437,6 +473,11 @@ var screenSettleLimit = 3 * time.Second
 // returns the last screenshot's hash (empty when none could be taken), which
 // callers can compare to tell whether the screen moved at all.
 func (d *Driver) settleScreen() string {
+	return d.settleScreenWithin(screenSettleLimit)
+}
+
+// settleScreenWithin is settleScreen with its own cap.
+func (d *Driver) settleScreenWithin(limit time.Duration) string {
 	start := time.Now()
 	prev := ""
 	for {
@@ -450,11 +491,37 @@ func (d *Driver) settleScreen() string {
 			return cur
 		}
 		prev = cur
-		if time.Since(start) >= screenSettleLimit {
-			logger.Debug("[wda] screen still changing after %v — continuing", screenSettleLimit)
+		if time.Since(start) >= limit {
+			logger.Debug("[wda] screen still changing after %v — continuing", limit)
 			return cur
 		}
 	}
+}
+
+// resumeSettleLimit caps the wait after a backgrounded app is brought back.
+var resumeSettleLimit = 2 * time.Second
+
+// inBackground reports whether an app is running but not on screen, so
+// launching it resumes it rather than starting it.
+func (d *Driver) inBackground(bundleID string) bool {
+	state, err := d.client.AppState(bundleID)
+	return err == nil && (state == 2 || state == 3)
+}
+
+// waitAfterResume waits, at most resumeSettleLimit, for the screen to stop
+// changing after a backgrounded app was brought back. Right after a resume
+// the app can already be idle while SpringBoard is still switching to it,
+// and a tap sent then is reported as done but never reaches the app
+// (WebDriverAgent fixed this with a SpringBoard idle wait in
+// appium/appium-ios#82). The bundled WebDriverAgent has no endpoint for
+// SpringBoard's idle state, and this driver runs with
+// animationCoolOffTimeout 0, which turns that fix off anyway; the switch
+// is on screen, so two identical screenshots mark its end. This runs even
+// when the next step is an assert, which skips the settle before a tap.
+func (d *Driver) waitAfterResume() {
+	start := time.Now()
+	d.settleScreenWithin(resumeSettleLimit)
+	logger.Debug("[wda] waited %v for the resumed app to settle", time.Since(start).Round(time.Millisecond))
 }
 
 // trackCrashLoop counts consecutive "app died on launch" failures and trips a
@@ -607,6 +674,8 @@ func (d *Driver) findElementWithContext(ctx context.Context, sel flow.Selector) 
 			// Fallback to page source parsing
 			if info, err := d.findElementByPageSourceOnce(sel); err == nil {
 				return info, nil
+			} else if axServerDown(err) {
+				return nil, err
 			} else {
 				lastErr = err
 			}
@@ -689,6 +758,9 @@ func (d *Driver) findElementForTapWithContext(ctx context.Context, sel flow.Sele
 				if err == nil {
 					return info, nil
 				}
+				if axServerDown(err) {
+					return nil, err
+				}
 				lastErr = fmt.Errorf("selector %q not found in page source: %w", sel.Text, err)
 				time.Sleep(50 * time.Millisecond)
 				continue
@@ -727,6 +799,9 @@ func (d *Driver) findElementForTapWithContext(ctx context.Context, sel flow.Sele
 				info, psErr := d.findElementByPageSourceOnce(sel)
 				if psErr == nil {
 					return info, nil
+				}
+				if axServerDown(psErr) {
+					return nil, psErr
 				}
 				// Still not found - keep polling. Surface both failures:
 				// the page-source reason (with closest-text hints) is the
@@ -1147,10 +1222,13 @@ func (d *Driver) onScreenOf(ids []string) (*core.ElementInfo, error) {
 	return nil, lastErr
 }
 
-// deepestOf returns the first element that contains none of the others:
-// bounds containment stands in for ancestry, which the element API does not
-// expose.
+// deepestOf returns an element that contains none of the others: bounds
+// containment stands in for ancestry, which the element API does not expose.
+// Of those, a control comes first: a search field and its magnifier icon can
+// share an id side by side, and the icon, first in tree order, takes no
+// input (#259). Otherwise the first in tree order.
 func deepestOf(infos []*core.ElementInfo) *core.ElementInfo {
+	var first *core.ElementInfo
 	for _, a := range infos {
 		inner := false
 		for _, b := range infos {
@@ -1159,11 +1237,32 @@ func deepestOf(infos []*core.ElementInfo) *core.ElementInfo {
 				break
 			}
 		}
-		if !inner {
+		if inner {
+			continue
+		}
+		if isControl(a.Class) {
 			return a
 		}
+		if first == nil {
+			first = a
+		}
+	}
+	if first != nil {
+		return first
 	}
 	return infos[0]
+}
+
+// isControl reports whether an element type is one a user acts on: a field,
+// a button or another control, as opposed to an image, a label or a container.
+// The same list as the devicelab iOS driver's.
+func isControl(t string) bool {
+	switch strings.TrimPrefix(t, "XCUIElementType") {
+	case "TextField", "SecureTextField", "SearchField", "TextView", "Button", "Switch", "Toggle",
+		"Link", "Slider", "Stepper", "SegmentedControl", "Picker", "PickerWheel", "DatePicker":
+		return true
+	}
+	return false
 }
 
 // contains reports whether b lies entirely within a.
@@ -1187,6 +1286,9 @@ func (d *Driver) findElementRelativeWithContext(ctx context.Context, sel flow.Se
 			if err == nil {
 				return info, nil
 			}
+			if axServerDown(err) {
+				return nil, err
+			}
 			lastErr = err
 			// HTTP round-trip is natural rate limit, no sleep needed
 		}
@@ -1195,7 +1297,7 @@ func (d *Driver) findElementRelativeWithContext(ctx context.Context, sel flow.Se
 
 // findElementRelativeOnce performs a single attempt to find element with relative selector.
 func (d *Driver) findElementRelativeOnce(sel flow.Selector) (*core.ElementInfo, error) {
-	pageSource, err := d.client.Source()
+	pageSource, err := d.client.LookupSource()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get page source: %w", err)
 	}
@@ -1239,7 +1341,10 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector, allElements []*Parse
 	// Apply relative filters
 	anchorSelector, filterType := getRelativeFilter(sel)
 	if anchorSelector != nil {
-		anchors := FilterBySelector(allElements, *anchorSelector)
+		anchors, err := core.PickAnchor(anchorMatches(allElements, *anchorSelector), anchorSelector.Index, elementBounds)
+		if err != nil {
+			return nil, err
+		}
 		if len(anchors) == 0 {
 			return nil, notFound("anchor element not found")
 		}
@@ -1266,8 +1371,8 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector, allElements []*Parse
 		return nil, notFound("no elements match selector")
 	}
 
-	// Prioritize clickable/interactive elements
-	candidates = SortClickableFirst(candidates)
+	// Interactive first, or by position when an index is given
+	candidates = SortCandidates(candidates, sel.Index)
 
 	var selected *ParsedElement
 	if sel.Index == "" && (filterType == filterBelow || filterType == filterAbove || filterType == filterLeftOf || filterType == filterRightOf) {
@@ -1296,7 +1401,7 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector, allElements []*Parse
 
 // findElementByPageSourceOnce performs a single page source search.
 func (d *Driver) findElementByPageSourceOnce(sel flow.Selector) (*core.ElementInfo, error) {
-	pageSource, err := d.client.Source()
+	pageSource, err := d.client.LookupSource()
 	if err != nil {
 		return nil, err
 	}
@@ -1320,6 +1425,12 @@ func (d *Driver) findElementByPageSourceOnce(sel flow.Selector) (*core.ElementIn
 	// rather than XCUITest's opinion. When accepting a visible="false" element
 	// we tag a MatchNote so the report records the override (see rescueNote).
 	if len(candidates) == 0 {
+		if info := d.findOnSystemAlert(sel); info != nil {
+			return info, nil
+		}
+		if d.answerUnnamedPrompt() {
+			return nil, notFound("a permission prompt the flow does not answer was over the app: answered, looking again")
+		}
 		if sel.Text != "" {
 			if closest := ClosestTexts(allElements, sel.Text, 3); len(closest) > 0 {
 				return nil, notFound("no elements match selector; closest on-screen texts: %s", strings.Join(closest, ", "))
@@ -1328,8 +1439,8 @@ func (d *Driver) findElementByPageSourceOnce(sel flow.Selector) (*core.ElementIn
 		return nil, notFound("no elements match selector")
 	}
 
-	// Prioritize clickable/interactive elements
-	candidates = SortClickableFirst(candidates)
+	// Interactive first, or by position when an index is given
+	candidates = SortCandidates(candidates, sel.Index)
 
 	if err := core.IndexError(len(candidates), sel.Index); err != nil {
 		return nil, err

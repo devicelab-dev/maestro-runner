@@ -213,7 +213,7 @@ func TestClassifyDriverStateTrimsLongLog(t *testing.T) {
 // marker (written before the launch), and append the driver's output after
 // it rather than truncating it away.
 func TestDeviceLabStartCommand(t *testing.T) {
-	cmd := deviceLabStartCommand(testMarker)
+	cmd := deviceLabStartCommand(testMarker, "", false)
 	steps := []string{
 		"rm -f " + deviceLabDriverLog + ";",
 		"echo '" + testMarker + "' > " + deviceLabDriverLog + ";",
@@ -331,5 +331,67 @@ func TestWaitForDeviceLabDriverReadyHealthy(t *testing.T) {
 	d := &AndroidDevice{serial: "emulator-5554", adbPath: "adb", driverLocalPort: ln.Addr().(*net.TCPAddr).Port}
 	if err := d.waitForDeviceLabDriverReady(2*time.Second, testMarker); err != nil {
 		t.Fatalf("waitForDeviceLabDriverReady: %v", err)
+	}
+}
+
+// With a token the driver is told to require it, and DEVICELAB_ANDROID_AGENT_BIND=any
+// asks it to listen on every interface; both go to am instrument.
+func TestDeviceLabStartCommandToken(t *testing.T) {
+	cmd := deviceLabStartCommand(testMarker, "ab12", false)
+	if !strings.Contains(cmd, "am instrument -w --no-hidden-api-checks -e token ab12 "+DeviceLabDriverTest+"/") {
+		t.Errorf("token not passed: %q", cmd)
+	}
+	if strings.Contains(cmd, "-e bind") {
+		t.Errorf("bind passed without asking: %q", cmd)
+	}
+	if cmd := deviceLabStartCommand(testMarker, "ab12", true); !strings.Contains(cmd, "-e token ab12 -e bind any ") {
+		t.Errorf("bind any not passed: %q", cmd)
+	}
+}
+
+func TestNewDriverToken(t *testing.T) {
+	a, err := newDriverToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := newDriverToken()
+	if len(a) != 48 || a == b || strings.Trim(a, "0123456789abcdef") != "" {
+		t.Errorf("tokens %q, %q: want two different 48-digit hex strings", a, b)
+	}
+}
+
+// The health check sends the token, and only a 101 status line counts: a
+// driver that wants another token refuses the upgrade.
+func TestCheckDeviceLabHandshakeToken(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			buf := make([]byte, 1024)
+			n, _ := conn.Read(buf)
+			if strings.Contains(string(buf[:n]), "\r\nX-DeviceLab-Token: good\r\n") {
+				_, _ = conn.Write([]byte("HTTP/1.1 101 Switching Protocols\r\n\r\n"))
+			} else {
+				_, _ = conn.Write([]byte("HTTP/1.1 404 WebSocket Upgrade Failure\r\nX-Close: 1008 101\r\n\r\n"))
+			}
+			conn.Close()
+		}
+	}()
+	addr := ln.Addr().String()
+	if !checkDeviceLabHandshake("tcp", addr, "good") {
+		t.Error("right token: not healthy")
+	}
+	if checkDeviceLabHandshake("tcp", addr, "bad") {
+		t.Error("wrong token: healthy")
+	}
+	if checkDeviceLabHandshake("tcp", addr, "") {
+		t.Error("no token: healthy")
 	}
 }

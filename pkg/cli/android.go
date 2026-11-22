@@ -452,6 +452,7 @@ func createDeviceLabDriver(cfg *RunConfig, dev *device.AndroidDevice, info devic
 		wsClient = maestro.NewClientTCP(dev.DeviceLabDriverLocalPort())
 	}
 
+	wsClient.SetToken(dev.DeviceLabDriverToken())
 	if cfg.OutputDir != "" {
 		wsClient.SetLogPath(filepath.Join(cfg.OutputDir, "client.log"))
 	}
@@ -516,6 +517,7 @@ func createDeviceLabDriver(cfg *RunConfig, dev *device.AndroidDevice, info devic
 		if dev.DeviceLabDriverSocket() == "" {
 			wsClient.SetTCPPort(dev.DeviceLabDriverLocalPort())
 		}
+		wsClient.SetToken(dev.DeviceLabDriverToken())
 		if err := wsClient.Connect(); err != nil {
 			return fmt.Errorf("reconnect WebSocket: %w", err)
 		}

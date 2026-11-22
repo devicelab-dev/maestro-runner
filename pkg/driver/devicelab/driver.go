@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -132,6 +131,15 @@ type Driver struct {
 	// Set after a successful tap; back/pressKey settle first when it is set
 	lastStepWasTap bool
 
+	// Set after a successful swipe or scroll and kept until the next step
+	// that acts on the screen, which settles first
+	swipeUnsettled bool
+
+	// Content hash of the screen the last tap/swipe settle ran out on; the
+	// next settle on that screen uses the short stuckSettleCap
+	stuckScreen      uint64
+	stuckScreenKnown bool
+
 	// The element the last step tapped, while the next inputText may be
 	// meant for it (nil after any other step)
 	lastTapped *core.ElementInfo
@@ -157,6 +165,11 @@ type Driver struct {
 	cachedActivities map[string]string // appID -> activity
 	cachedScreenW    int               // physical display width  (from `wm size`)
 	cachedScreenH    int               // physical display height (from `wm size`)
+
+	// rotation is the display rotation (0-3) the last setOrientation left,
+	// when rotated is set. Before one, the sizes are as read at session start.
+	rotation int
+	rotated  bool
 
 	// CDP state from background push events (nil = not wired)
 	cdpStateFunc func() *core.CDPInfo
@@ -425,21 +438,40 @@ func (d *Driver) CDPState() *core.CDPInfo {
 	return nil
 }
 
-// screenSize returns cached screen dimensions from PlatformInfo.
+// screenSize returns the size percentage points, swipes and scrolls are
+// worked out from: the whole display, as Maestro reads it (getRealMetrics),
+// turned to the orientation setOrientation left. The size the agent reports
+// at session start leaves out the system bars (1080x2138 of a 1080x2340
+// Pixel 4a), which put `50%` about 100 px above Maestro's; it is the fallback
+// when `wm size` can't be read.
 func (d *Driver) screenSize() (int, int, error) {
+	if w, h, ok := d.physicalScreenSize(); ok {
+		return w, h, nil
+	}
 	if d.info != nil && d.info.ScreenWidth > 0 && d.info.ScreenHeight > 0 {
 		return d.info.ScreenWidth, d.info.ScreenHeight, nil
 	}
 	return 0, 0, fmt.Errorf("screen dimensions not available")
 }
 
-// physicalScreenSize returns the full physical display size (e.g. 1080x2340 from
-// `wm size`), cached for the session. Unlike screenSize() — which returns the
-// on-device-reported USABLE size (it can exclude the status bar, e.g. 1080x2204) —
-// this matches the coordinate space of the accessibility hierarchy (whose root spans
-// the full display), so it is the correct reference for on-screen geometry checks
-// against element bounds. Returns ok=false if it cannot be determined.
+// physicalScreenSize returns the full physical display size (e.g. 1080x2340
+// from `wm size`), cached for the session. Unlike the size the agent reports
+// (the usable size, which can leave out the system bars, e.g. 1080x2204), it
+// matches the coordinate space of the accessibility hierarchy, whose root
+// spans the full display, so it is the reference for on-screen geometry
+// checks against element bounds. `wm size` does not turn with the display, so after a
+// setOrientation the size is turned to the rotation it left (2340x1080 in
+// landscape). Returns ok=false if it cannot be determined.
 func (d *Driver) physicalScreenSize() (int, int, bool) {
+	w, h, ok := d.naturalScreenSize()
+	if ok && d.rotated {
+		w, h = core.RotateSize(w, h, d.rotation)
+	}
+	return w, h, ok
+}
+
+// naturalScreenSize is the display size from `wm size`, at rotation 0.
+func (d *Driver) naturalScreenSize() (int, int, bool) {
 	if d.cachedScreenW > 0 && d.cachedScreenH > 0 {
 		return d.cachedScreenW, d.cachedScreenH, true
 	}
@@ -458,14 +490,20 @@ func (d *Driver) physicalScreenSize() (int, int, bool) {
 	return w, h, true
 }
 
+// noteRotation records the display rotation setOrientation left, so sizes
+// and percentage points follow it (#256). An unknown rotation (-1) keeps the
+// sizes as they were.
+func (d *Driver) noteRotation(rotation int) {
+	if rotation >= 0 {
+		d.rotation, d.rotated = rotation, true
+	}
+}
+
 // tappableScreenSize returns the screen size used to validate element bounds: the
 // full physical display (same coordinate space as the accessibility hierarchy that
 // produced the bounds), falling back to the on-device-reported size when the
-// physical size is unavailable.
+// physical size is unavailable. It is screenSize, named for what it guards.
 func (d *Driver) tappableScreenSize() (int, int, error) {
-	if w, h, ok := d.physicalScreenSize(); ok {
-		return w, h, nil
-	}
 	return d.screenSize()
 }
 
@@ -473,35 +511,7 @@ func (d *Driver) tappableScreenSize() (int, int, error) {
 // "Override size" line (the effective display size when one is set) over the
 // "Physical size" line.
 func parseWmSize(out string) (int, int) {
-	var pw, ph, ow, oh int
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(line, "Physical size:"):
-			pw, ph = parseWxH(strings.TrimPrefix(line, "Physical size:"))
-		case strings.HasPrefix(line, "Override size:"):
-			ow, oh = parseWxH(strings.TrimPrefix(line, "Override size:"))
-		}
-	}
-	if ow > 0 && oh > 0 {
-		return ow, oh
-	}
-	return pw, ph
-}
-
-// parseWxH parses "1080x2340" (tolerating surrounding spaces) into width, height.
-func parseWxH(s string) (int, int) {
-	s = strings.TrimSpace(s)
-	i := strings.IndexByte(s, 'x')
-	if i <= 0 {
-		return 0, 0
-	}
-	w, err1 := strconv.Atoi(strings.TrimSpace(s[:i]))
-	h, err2 := strconv.Atoi(strings.TrimSpace(s[i+1:]))
-	if err1 != nil || err2 != nil {
-		return 0, 0
-	}
-	return w, h
+	return core.ParseWmSize(out)
 }
 
 // SetContext sets the parent context for element-finding operations.
@@ -553,6 +563,12 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	// element on both screens is a correct pass either way.
 	if d.lastStepWasTap && actsOnScreen(step) && !flow.RepeatTapAfterFirst(step) {
 		d.settle(settleAfterTapTimeoutMs, "tap")
+	} else if d.swipeUnsettled && actsOnScreen(step) {
+		// The same after a swipe, as Maestro settles after every swipe, and
+		// across the checks in between: a swipe, an assertVisible that passed
+		// on the page still sliding in, then a swipe on that page went to the
+		// outer pager still animating (pager-view nested_pagerView_example).
+		d.settle(settleAfterTapTimeoutMs, "swipe")
 	}
 
 	// A tap returns only once the screen has started to react, or after
@@ -714,6 +730,14 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 		// tap's change had finished.
 	default:
 		d.lastStepWasTap = false
+	}
+	switch step.(type) {
+	case *flow.SwipeStep, *flow.ScrollStep:
+		d.swipeUnsettled = result.Success
+	default:
+		if actsOnScreen(step) {
+			d.swipeUnsettled = false
+		}
 	}
 	d.lastTapped = nil
 	if _, ok := step.(*flow.TapOnStep); ok && result.Success && result.Element != nil && result.Element.Bounds.Width > 0 {
@@ -1192,6 +1216,28 @@ func (d *Driver) findElementDirectWithContext(ctx context.Context, sel flow.Sele
 	}
 }
 
+// agentTextTiers is core.UiSelectorTextTiers with hints, plus errorMatches in
+// its last, ignore-case tier: the agent then also finds a field by its
+// validation error, as Maestro's text matching does (2.9+). Only the last tier
+// gets it, since that one matches whatever the case and each query is another
+// walk of the tree when nothing matches. errorMatches, like hintMatches, is a
+// DeviceLab-agent extension, in the agent this runner bundles (c9e34be on);
+// an older agent refuses that query.
+func agentTextTiers(text string) [][]string {
+	tiers := core.UiSelectorTextTiers(text, true)
+	if len(tiers) == 0 {
+		return tiers
+	}
+	last := len(tiers) - 1
+	for _, body := range tiers[last] {
+		if rest, ok := strings.CutPrefix(body, ".hintMatches("); ok {
+			tiers[last] = append(tiers[last], ".errorMatches("+rest)
+			break
+		}
+	}
+	return tiers
+}
+
 // buildClickableOnlyStrategies builds UiAutomator strategies that only match clickable elements.
 //
 // Every query matches the whole text, description or hint, as Maestro does
@@ -1204,7 +1250,7 @@ func (d *Driver) findElementDirectWithContext(ctx context.Context, sel flow.Sele
 func buildClickableOnlyStrategies(sel flow.Selector) ([]LocatorStrategy, error) {
 	var strategies []LocatorStrategy
 	filters := ".clickable(true)" + buildStateFilters(sel)
-	for _, tier := range core.UiSelectorTextTiers(sel.Text, true) {
+	for _, tier := range agentTextTiers(sel.Text) {
 		for _, body := range tier {
 			strategies = append(strategies, LocatorStrategy{
 				Strategy: uiautomator2.StrategyUIAutomator,
@@ -1605,7 +1651,11 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector) (*core.ElementInfo, 
 				}}
 			}
 		} else {
-			anchors = FilterBySelector(allElements, *anchorSelector)
+			picked, err := core.PickAnchor(anchorMatches(allElements, *anchorSelector), anchorSelector.Index, elementBounds)
+			if err != nil {
+				return nil, err
+			}
+			anchors = picked
 		}
 	}
 
@@ -1631,7 +1681,7 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector) (*core.ElementInfo, 
 		return nil, fmt.Errorf("no elements match relative criteria")
 	}
 
-	candidates = SortClickableFirst(candidates)
+	candidates = SortCandidates(candidates, sel.Index)
 
 	if err := core.IndexError(len(candidates), sel.Index); err != nil {
 		return nil, err
@@ -1685,7 +1735,11 @@ func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements 
 				}}
 			}
 		} else {
-			anchors = FilterBySelector(allElements, *anchorSelector)
+			picked, err := core.PickAnchor(anchorMatches(allElements, *anchorSelector), anchorSelector.Index, elementBounds)
+			if err != nil {
+				return nil, nil, err
+			}
+			anchors = picked
 		}
 	}
 
@@ -1711,7 +1765,7 @@ func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements 
 		return nil, nil, fmt.Errorf("no elements match relative criteria")
 	}
 
-	candidates = SortClickableFirst(candidates)
+	candidates = SortCandidates(candidates, sel.Index)
 
 	if err := core.IndexError(len(candidates), sel.Index); err != nil {
 		return nil, nil, err
@@ -1747,7 +1801,7 @@ func (d *Driver) findElementByPageSourceOnce(sel flow.Selector) (*uiautomator2.E
 	}
 
 	candidates := FilterBySelector(allElements, sel)
-	candidates = SortClickableFirst(candidates)
+	candidates = SortCandidates(candidates, sel.Index)
 
 	if len(candidates) == 0 {
 		return nil, nil, fmt.Errorf("no elements match selector")
@@ -1808,7 +1862,7 @@ func (d *Driver) findElementByPageSourceOnceInternal(sel flow.Selector) (*core.E
 	}
 
 	candidates := FilterBySelector(allElements, sel)
-	candidates = SortClickableFirst(candidates)
+	candidates = SortCandidates(candidates, sel.Index)
 
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no elements match selector")
@@ -1903,7 +1957,7 @@ func buildSelectorsWithOptions(sel flow.Selector, timeoutMs int, preferClickable
 	// (#188). hintMatches is a DeviceLab-agent extension: it matches the
 	// EditText android:hint placeholder, so "tapOn: 'Email'" finds an empty
 	// field by hint.
-	textTiers := core.UiSelectorTextTiers(sel.Text, true)
+	textTiers := agentTextTiers(sel.Text)
 
 	// A selector naming both must match one element carrying both. Emitting the
 	// id-only and text-only queries as separate candidates made them an OR: the
@@ -2052,10 +2106,13 @@ func errorResult(err error, msg string) *core.CommandResult {
 // Maestro. Without an explicit index, SelectByIndex would instead fall through
 // to DeepestMatchingElement and could return a far-away, deeply-nested node.
 //
-// This runs after SortClickableFirst, which is a stable partition: it moves the
-// clickable candidates ahead of the rest without disturbing distance order
-// inside either group. So the first candidate is the nearest clickable one, or
-// the nearest of any kind when none are clickable — which is what a tap wants.
+// This runs after SortCandidates. Without an index that is SortClickableFirst,
+// a stable partition: it moves the clickable candidates ahead of the rest
+// without disturbing distance order inside either group. So the first
+// candidate is the nearest clickable one, or the nearest of any kind when none
+// are clickable — which is what a tap wants. With an index, candidates are in
+// screen-position order instead and the index counts in that order, as in
+// Maestro (#254).
 //
 // Non-directional filters keep the old behaviour: containsChild and friends do
 // not order by distance, and depth is the useful tiebreak there.

@@ -21,10 +21,16 @@ type hNode struct {
 	// Element states, emitted only when notable so the tree stays uncluttered:
 	// Enabled is set false only when disabled; Checked only for checkable
 	// elements; Selected/Focused only when true.
-	Enabled  *bool   `json:"enabled,omitempty"`
-	Checked  *bool   `json:"checked,omitempty"`
-	Selected *bool   `json:"selected,omitempty"`
-	Focused  *bool   `json:"focused,omitempty"`
+	Enabled  *bool `json:"enabled,omitempty"`
+	Checked  *bool `json:"checked,omitempty"`
+	Selected *bool `json:"selected,omitempty"`
+	Focused  *bool `json:"focused,omitempty"`
+	// Android only, when the node carries them: a field's validation error
+	// (which text selectors match), and for reading only, the state a
+	// toggle or progress bar announces and a pane's title.
+	Error    string  `json:"error,omitempty"`
+	State    string  `json:"state,omitempty"`
+	Pane     string  `json:"pane,omitempty"`
 	Children []hNode `json:"children,omitempty"`
 }
 
@@ -239,6 +245,9 @@ func convertXML(n rawXML, android bool) hNode {
 		if n.attr("focused") == "true" {
 			out.Focused = boolPtr(true)
 		}
+		out.Error = n.attr("error")
+		out.State = n.attr("state-description")
+		out.Pane = n.attr("pane-title")
 	} else {
 		// iOS WDA: the element tag name is the type; attrs carry name/label.
 		out.Type = strings.TrimPrefix(n.XMLName.Local, "XCUIElementType")
@@ -329,7 +338,8 @@ func renderFind(n hNode, needle string, b *strings.Builder) {
 func nodeMatches(n hNode, needle string) bool {
 	return strings.Contains(strings.ToLower(n.Type), needle) ||
 		strings.Contains(strings.ToLower(n.ID), needle) ||
-		strings.Contains(strings.ToLower(n.Text), needle)
+		strings.Contains(strings.ToLower(n.Text), needle) ||
+		strings.Contains(strings.ToLower(n.Error), needle)
 }
 
 func compactLine(n hNode, depth int) string {
@@ -345,6 +355,15 @@ func compactLine(n hNode, depth int) string {
 	}
 	if n.Text != "" {
 		b.WriteString(fmt.Sprintf("  text=%q", n.Text))
+	}
+	if n.Error != "" {
+		b.WriteString(fmt.Sprintf("  error=%q", n.Error))
+	}
+	if n.State != "" {
+		b.WriteString(fmt.Sprintf("  state=%q", n.State))
+	}
+	if n.Pane != "" {
+		b.WriteString(fmt.Sprintf("  pane=%q", n.Pane))
 	}
 	if n.Bounds != nil {
 		b.WriteString(fmt.Sprintf("  (%d,%d %dx%d)", n.Bounds.X, n.Bounds.Y, n.Bounds.Width, n.Bounds.Height))

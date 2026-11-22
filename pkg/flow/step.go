@@ -147,6 +147,12 @@ type BaseStep struct {
 	Optional  bool     `yaml:"optional" json:"optional,omitempty"`
 	StepLabel string   `yaml:"label" json:"label,omitempty"`
 	TimeoutMs int      `yaml:"timeout" json:"timeout,omitempty"`
+	// TimeoutExpr is `timeout:` written as a ${...} expression, kept for the
+	// expand pass to resolve into TimeoutMs when the step runs. Maestro reads
+	// extendedWaitUntil's, waitForAnimationToEnd's and scrollUntilVisible's
+	// timeout as text and evaluates it with the step's other scripts, so only
+	// those steps set it (see numberExpression).
+	TimeoutExpr string `yaml:"-" json:"-"`
 	// Platform restricts this step to a single platform; when set and it
 	// doesn't match the running driver, the step is skipped (Maestro #1353).
 	Platform string `yaml:"platform" json:"platform,omitempty"`
@@ -345,6 +351,9 @@ type ScrollUntilVisibleStep struct {
 	WaitToSettleTimeoutMs int      `yaml:"waitToSettleTimeoutMs"`
 	// Engine selects the scroll backend. See ScrollStep.Engine.
 	Engine string `yaml:"engine"`
+	// SpeedExpr is `speed:` written as a ${...} expression, which the expand
+	// pass resolves into Speed when the step runs, as Maestro evaluates it.
+	SpeedExpr string `yaml:"-"`
 }
 
 // BackStep presses back.
@@ -400,7 +409,16 @@ type InputTextStep struct {
 	// variable, so a password passed through `${PASSWORD}` reaches the report,
 	// the console and the log as `${PASSWORD}` and not as its value.
 	RawText string `yaml:"-"`
+	// Retype: false leaves a field that reads back shorter than what was
+	// typed as it is, for a field that cuts what it is given (a stake field
+	// dropping decimals), where clearing and typing again changes the app's
+	// state. Default true: the field is typed again (dropped keystrokes).
+	Retype *bool `yaml:"retype"`
 }
+
+// Retypes reports whether a field that reads back short is typed again: true
+// unless the step says `retype: false`.
+func (s *InputTextStep) Retypes() bool { return s.Retype == nil || *s.Retype }
 
 // UnmarshalYAML decodes InputTextStep and drops the `text:` value that the
 // inlined Selector picked up alongside Text. See the type comment.
@@ -702,7 +720,10 @@ type RepeatStep struct {
 	BaseStep `yaml:",inline"`
 	Times    string    `yaml:"times"` // String for variable support
 	While    Condition `yaml:"while"`
-	Steps    []Step    `yaml:"-"`
+	// Timeout (ms, string for variable support) ends the loop once that much
+	// time has passed: no new iteration starts after it. The repeat passes.
+	Timeout string `yaml:"timeout"`
+	Steps   []Step `yaml:"-"`
 }
 
 // RetryStep retries steps on failure.

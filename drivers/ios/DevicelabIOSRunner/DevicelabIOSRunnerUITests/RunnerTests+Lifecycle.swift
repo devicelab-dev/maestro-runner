@@ -237,12 +237,45 @@ extension RunnerTests {
       target.state.rawValue,
       reason
     )
+    let resuming = isBackgrounded(target.state)
     // activate avoids terminating and relaunching the target app
     target.activate()
+    if resuming {
+      waitForSpringBoardAfterResume()
+    }
     currentApp = target
     currentBundleId = bundleId
     needsFirstInteractionDelay = true
     return target
+  }
+
+  /// True for an app that is running but not on screen: activating it is a
+  /// resume, not a launch.
+  func isBackgrounded(_ state: XCUIApplication.State) -> Bool {
+#if os(iOS)
+    return state == .runningBackground || state == .runningBackgroundSuspended
+#else
+    return false
+#endif
+  }
+
+  /// Waits, capped at resumeSpringBoardIdleTimeout, for SpringBoard to go
+  /// idle with its animations done. After a backgrounded app is brought back
+  /// the app itself can already look idle while SpringBoard is still
+  /// finishing the switch, and the next tap was reported as performed but
+  /// never reached the app. Waiting on SpringBoard, only on this resume path,
+  /// is the fix WebDriverAgent took (appium/appium-ios#82, Apache-2.0).
+  func waitForSpringBoardAfterResume() {
+    let started = ProcessInfo.processInfo.systemUptime
+    let outcome = RunnerXCTestTimeouts.waitForQuiescence(
+      of: springboard,
+      timeout: resumeSpringBoardIdleTimeout
+    )
+    NSLog(
+      "AGENT_DEVICE_RUNNER_RESUME_WAIT outcome=%d waited_ms=%.0f",
+      outcome.rawValue,
+      (ProcessInfo.processInfo.systemUptime - started) * 1000
+    )
   }
 
   func withTemporaryScrollIdleTimeoutIfSupported(

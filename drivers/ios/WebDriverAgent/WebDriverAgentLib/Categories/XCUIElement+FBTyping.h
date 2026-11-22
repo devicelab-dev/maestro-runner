@@ -21,6 +21,13 @@ NS_ASSUME_NONNULL_BEGIN
  */
 BOOL FBTypeText(NSString *text, NSUInteger typingSpeed, NSError **error);
 
+#if TARGET_OS_IOS
+/**
+ Waits up to `timeout` seconds for a hittable key. A miss does not fail the caller.
+ */
+void FBWaitForHittableKey(XCUIApplication * _Nullable application, NSTimeInterval timeout);
+#endif
+
 @interface XCUIElement (FBTyping)
 
 /**

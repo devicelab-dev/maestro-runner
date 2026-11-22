@@ -288,6 +288,47 @@ func (a *Adapter) Click(x, y int) error {
 	return err
 }
 
+// ClickChecked taps at (x, y) like Click, aimed at the element with bounds
+// target, and returns the description of another window the agent found over
+// the point (the keyboard, a dialog, an overlay) that would receive the tap
+// instead; "" when the tap reaches the target's window, or from an agent too
+// old to check. The tap goes out either way.
+func (a *Adapter) ClickChecked(x, y int, target core.Bounds) (string, error) {
+	return a.touchChecked("Gesture.click", map[string]interface{}{"x": x, "y": y}, target)
+}
+
+// DoubleClickChecked double-taps at (x, y) like DoubleClick, reporting another
+// window over the point as ClickChecked does.
+func (a *Adapter) DoubleClickChecked(x, y int, target core.Bounds) (string, error) {
+	return a.touchChecked("Gesture.doubleClick", map[string]interface{}{"x": x, "y": y}, target)
+}
+
+// LongClickChecked long-presses at (x, y) like LongClick, reporting another
+// window over the point as ClickChecked does.
+func (a *Adapter) LongClickChecked(x, y, durationMs int, target core.Bounds) (string, error) {
+	return a.touchChecked("Gesture.longClick", map[string]interface{}{"x": x, "y": y, "durationMs": durationMs}, target)
+}
+
+// touchChecked sends a coordinate gesture with the target's bounds and returns
+// the agent's coveredBy ("" when absent).
+func (a *Adapter) touchChecked(method string, params map[string]interface{}, target core.Bounds) (string, error) {
+	params["targetLeft"] = target.X
+	params["targetTop"] = target.Y
+	params["targetRight"] = target.X + target.Width
+	params["targetBottom"] = target.Y + target.Height
+	resp, err := a.client.Call(method, params)
+	if err != nil {
+		return "", err
+	}
+	var result struct {
+		CoveredBy string `json:"coveredBy"`
+	}
+	if len(resp.Result) > 0 {
+		_ = json.Unmarshal(resp.Result, &result)
+	}
+	return result.CoveredBy, nil
+}
+
 // DoubleClick double-taps at the given coordinates.
 func (a *Adapter) DoubleClick(x, y int) error {
 	_, err := a.client.Call("Gesture.doubleClick", map[string]interface{}{

@@ -75,6 +75,26 @@ func TestLaunchAppDefaultsToAllowAll(t *testing.T) {
 	}
 }
 
+func TestLaunchAppStopAppFalseKeepsRunningApp(t *testing.T) {
+	f := &fakeSimctl{}
+	f.install(t)
+	d := simDriver()
+	stop := false
+	res := d.handleLaunchApp(&flow.LaunchAppStep{AppID: "com.x", StopApp: &stop})
+	if !res.Success {
+		t.Fatalf("launch failed: %s", res.Message)
+	}
+	got := f.joined()
+	if last := got[len(got)-1]; last != "launch SIM com.x" {
+		t.Errorf("launch = %q, want no --terminate-running-process", last)
+	}
+	for _, c := range got {
+		if strings.HasPrefix(c, "terminate") {
+			t.Errorf("stopApp: false must not terminate: %q", got)
+		}
+	}
+}
+
 func TestLaunchAppPermissionsKeychainAndEnv(t *testing.T) {
 	f := &fakeSimctl{reply: func(args []string) (string, bool) {
 		return "", args[0] == "privacy" && args[2] == "grant" && args[3] == "camera"
@@ -271,6 +291,50 @@ func TestClearStateFastWipe(t *testing.T) {
 		if strings.HasPrefix(c, "uninstall") || strings.HasPrefix(c, "install") {
 			t.Errorf("fast clearState reinstalled: %q", c)
 		}
+	}
+	// The preferences daemon restarts after the app stops and before the
+	// permission reset, or the app's UserDefaults survive in its cache.
+	want := []string{
+		"terminate SIM com.x",
+		"get_app_container SIM com.x data",
+		"spawn SIM launchctl kill SIGKILL user/foreground/com.apple.cfprefsd.xpc.daemon",
+		"privacy SIM reset all com.x",
+	}
+	if got := strings.Join(f.joined(), "\n"); got != strings.Join(want, "\n") {
+		t.Errorf("calls:\n%s\nwant:\n%s", got, strings.Join(want, "\n"))
+	}
+}
+
+func TestRestartPrefsDaemon(t *testing.T) {
+	user := "spawn SIM launchctl kill SIGKILL user/foreground/com.apple.cfprefsd.xpc.daemon"
+	system := "spawn SIM launchctl kill SIGKILL system/com.apple.cfprefsd.xpc.daemon"
+	cases := []struct {
+		name    string
+		reply   func(args []string) (string, bool)
+		wantErr bool
+		calls   []string
+	}{
+		{"user domain", nil, false, []string{user}},
+		{"falls back to the system domain", func(a []string) (string, bool) {
+			return "", strings.Join(a, " ") == user
+		}, false, []string{user, system}},
+		{"not running holds no cache", func([]string) (string, bool) {
+			return "Could not kill service: 3: No such process", true
+		}, false, []string{user}},
+		{"both fail", func([]string) (string, bool) { return "nope", true }, true, []string{user, system}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := &fakeSimctl{reply: c.reply}
+			f.install(t)
+			err := simDriver().restartPrefsDaemon()
+			if (err != nil) != c.wantErr {
+				t.Fatalf("err = %v", err)
+			}
+			if got := strings.Join(f.joined(), "\n"); got != strings.Join(c.calls, "\n") {
+				t.Errorf("calls = %q", f.joined())
+			}
+		})
 	}
 }
 

@@ -2,7 +2,9 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -33,8 +35,8 @@ type FlowRunner struct {
 	stepsFailed  int
 	stepsSkipped int
 
-	// Set when a runFlow's or runScript's when: skipped it; markInteraction
-	// consumes it
+	// Set when a runFlow's or runScript's when: skipped it: the step is
+	// reported skipped, and markInteraction consumes it
 	conditionSkipped bool
 	// Sub-command tracking for compound steps (runFlow, repeat, retry)
 	subCommands []report.Command
@@ -92,23 +94,12 @@ func (fr *FlowRunner) Run() FlowResult {
 		fr.script.SetPlatform(info.Platform)
 	}
 
-	// Apply flow config variables (takes precedence over CLI env)
-	// Expand the appId first so that `appId: ${APP_ID}` resolves using CLI -e values
-	if fr.flow.Config.AppID != "" {
-		expanded := fr.script.ExpandVariables(fr.flow.Config.AppID)
-		fr.flow.Config.AppID = expanded
-	}
-	if appID := fr.flow.Config.EffectiveAppID(); appID != "" {
-		fr.script.SetVariable("APP_ID", appID)
-	}
-	// Expand flow config env values to support ${VAR || "default"} syntax
-	for k, v := range fr.flow.Config.Env {
-		fr.script.SetVariable(k, fr.script.ExpandVariables(v))
-	}
+	fr.applyFlowConfigVariables()
 
-	// Apply commandTimeout if specified - overrides driver's default find timeout
-	if fr.flow.Config.CommandTimeout > 0 {
-		fr.driver.SetFindTimeout(fr.flow.Config.CommandTimeout)
+	// Default find timeout: the flow's commandTimeout, else --find-timeout,
+	// else the driver's own default (left untouched).
+	if findTimeout := effectiveFindTimeout(fr.flow.Config.CommandTimeout, fr.config.FindTimeout); findTimeout > 0 {
+		fr.driver.SetFindTimeout(findTimeout)
 	}
 
 	// Apply the global condition-check timeout for when:/while: checks. 0 keeps
@@ -235,7 +226,7 @@ func (fr *FlowRunner) Run() FlowResult {
 	if len(fr.flow.Config.OnFlowStart) > 0 {
 		for _, step := range fr.flow.Config.OnFlowStart {
 			result := fr.executeNestedStep(step)
-			if !result.Success && !step.IsOptional() {
+			if !result.Success && !optionalFailure(step, result) {
 				// onFlowStart failed - fail the flow
 				errMsg := fmt.Sprintf("onFlowStart failed: %v", result.Error)
 				flowStatus = report.StatusFailed
@@ -281,45 +272,22 @@ func (fr *FlowRunner) Run() FlowResult {
 			break
 		}
 
-		// Describe before executing: expansion rewrites the step in place, and
-		// the description is what the console shows.
-		describe, desc := fr.stepNames(step)
+		// Counts before the step, for a retry from a pause to start again from.
+		passedBefore, failedBefore, skippedBefore := fr.stepsPassed, fr.stepsFailed, fr.stepsSkipped
 
-		// Execute step
-		stepStatus, stepError, stepDuration := fr.executeStep(i, step)
+		stepStatus, stepError, desc, optionalFailed := fr.runTopLevelStep(i, step)
 
-		// The report described the step before the run, with every ${NAME}
-		// as written; give it the flow values that are known now.
-		if describe != step.Describe() {
-			fr.flowWriter.CommandYAML(i, describe)
-		}
-
-		// Notify step complete
-		if fr.config.OnStepComplete != nil {
-			fr.config.OnStepComplete(i, desc, stepStatus == report.StatusPassed, stepDuration, stepError)
-		}
-
-		// Track step counts (compound steps like runFlow/repeat/retry don't count themselves,
-		// their sub-steps are counted individually in executeNestedStep)
-		isCompoundStep := false
-		switch step.(type) {
-		case *flow.RepeatStep, *flow.RetryStep, *flow.RunFlowStep:
-			isCompoundStep = true
-		}
-		if !isCompoundStep {
-			switch stepStatus {
-			case report.StatusPassed:
-				fr.stepsPassed++
-			case report.StatusFailed:
-				fr.stepsFailed++
-			case report.StatusSkipped:
-				fr.stepsSkipped++
-			}
+		// --pause-on-failure (#246): a failure that would fail the flow waits
+		// here, with the device as it left it, and may be run again.
+		for attempt := 1; stepStatus == report.StatusFailed && !optionalFailed &&
+			fr.pauseOnFailure(i, desc, stepError, attempt); attempt++ {
+			fr.stepsPassed, fr.stepsFailed, fr.stepsSkipped = passedBefore, failedBefore, skippedBefore
+			stepStatus, stepError, desc, optionalFailed = fr.runTopLevelStep(i, step)
 		}
 
 		// Handle step result
 		if stepStatus == report.StatusFailed {
-			if step.IsOptional() {
+			if optionalFailed {
 				// Optional step failure doesn't fail flow
 				continue
 			}
@@ -403,6 +371,48 @@ func (fr *FlowRunner) Run() FlowResult {
 	}
 }
 
+// runTopLevelStep runs the flow's step idx, reports it and counts it. It
+// returns the step's status and error, its title as the console shows it, and
+// whether a failure lets the flow go on because the step is optional.
+func (fr *FlowRunner) runTopLevelStep(idx int, step flow.Step) (report.Status, string, string, bool) {
+	// Describe before executing: expansion rewrites the step in place, and
+	// the description is what the console shows.
+	describe, desc := fr.stepNames(step)
+
+	// Execute step
+	stepStatus, stepError, stepDuration, optionalFailed := fr.executeStep(idx, step)
+
+	// The report described the step before the run, with every ${NAME}
+	// as written; give it the flow values that are known now.
+	if describe != step.Describe() {
+		fr.flowWriter.CommandYAML(idx, describe)
+	}
+
+	// Notify step complete
+	if fr.config.OnStepComplete != nil {
+		fr.config.OnStepComplete(idx, desc, stepStatus != report.StatusFailed, stepDuration, stepError)
+	}
+
+	// Track step counts (compound steps like runFlow/repeat/retry don't count themselves,
+	// their sub-steps are counted individually in executeNestedStep)
+	isCompoundStep := false
+	switch step.(type) {
+	case *flow.RepeatStep, *flow.RetryStep, *flow.RunFlowStep:
+		isCompoundStep = true
+	}
+	if !isCompoundStep {
+		switch stepStatus {
+		case report.StatusPassed:
+			fr.stepsPassed++
+		case report.StatusFailed:
+			fr.stepsFailed++
+		case report.StatusSkipped:
+			fr.stepsSkipped++
+		}
+	}
+	return stepStatus, stepError, desc, optionalFailed
+}
+
 // runFlowCompleteHooks runs the flow's onFlowComplete steps and returns why
 // they failed, or "" when they passed. Maestro runs the hook through
 // executeCommands (Orchestra.kt:237-256), which stops at the first failing
@@ -410,7 +420,7 @@ func (fr *FlowRunner) Run() FlowResult {
 func (fr *FlowRunner) runFlowCompleteHooks() string {
 	for _, step := range fr.flow.Config.OnFlowComplete {
 		result := fr.executeNestedStep(step)
-		if !result.Success && !step.IsOptional() {
+		if !result.Success && !optionalFailure(step, result) {
 			errMsg := fmt.Sprintf("onFlowComplete failed: %v", result.Error)
 			logger.Warn("%s", errMsg)
 			return errMsg
@@ -419,42 +429,35 @@ func (fr *FlowRunner) runFlowCompleteHooks() string {
 	return ""
 }
 
-// executeStep executes a single step and updates the report.
-// Returns status, error message, and duration in milliseconds.
-func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, string, int64) {
-	stepStart := time.Now()
-	defer fr.markInteraction(step)
+// expressionError is a ${...} that threw. Unlike a command's own failure, it
+// fails the flow even when the step is optional: Maestro turns only a
+// MaestroException into a warning, not a JsEvaluationException.
+type expressionError struct{ error }
 
-	logger.Debug("Executing step %d: %s", idx, fr.maskTypedName(step, step.Describe()))
+func (e expressionError) Unwrap() error { return e.error }
 
-	// Mark step as started
-	fr.flowWriter.CommandStart(idx)
-
-	// Step-level platform gate: a step with `platform: ios|android|web` runs
-	// only on that platform and is skipped elsewhere (Maestro #1353).
-	if gate := step.PlatformGate(); gate != "" {
-		if info := fr.driver.GetPlatformInfo(); info != nil && !strings.EqualFold(info.Platform, gate) {
-			logger.Debug("Skipping step %d: platform gate %q != driver platform %q", idx, gate, info.Platform)
-			fr.flowWriter.CommandEnd(idx, report.StatusSkipped, nil, nil, report.CommandArtifacts{})
-			return report.StatusSkipped, "", time.Since(stepStart).Milliseconds()
-		}
+// expressionFailed is the result of a step whose ${...} threw: the step fails
+// with the JavaScript error and does not run, as in Maestro. A timeout whose
+// ${...} is not a number fails it the same way, but an optional step's
+// failure lets the flow go on, as Maestro's InvalidCommand does (a warning
+// there): see numberError.
+func expressionFailed(err error) *core.CommandResult {
+	var number numberError
+	if !errors.As(err, &number) || !number.optionalForgives {
+		err = expressionError{err}
 	}
+	return &core.CommandResult{Success: false, Error: err, Message: err.Error()}
+}
 
-	// Determine what artifacts to capture
-	captureAlways := fr.config.Artifacts == ArtifactAlways
-	captureOnFailure := fr.config.Artifacts == ArtifactOnFailure
+// optionalFailure reports whether a failed step lets its flow go on because
+// it is optional. One whose ${...} threw does not (see expressionError).
+func optionalFailure(step flow.Step, result *core.CommandResult) bool {
+	return step.IsOptional() && !errors.As(result.Error, new(expressionError))
+}
 
-	// Capture before screenshot if configured
-	var artifacts report.CommandArtifacts
-	if captureAlways {
-		artifacts = fr.captureArtifacts(idx, "before", false)
-	}
-
-	// Expand variables in a copy: the flow keeps the ${...} template for the
-	// next time this step runs (a count: rerun reuses the parsed flow).
-	step = cloneForRun(step)
-	fr.script.ExpandStep(step)
-
+// runStep routes an expanded step to its handler. A takeScreenshot puts the
+// picture it saved in artifacts.
+func (fr *FlowRunner) runStep(idx int, step flow.Step, artifacts *report.CommandArtifacts) *core.CommandResult {
 	// Execute step - route to appropriate handler
 	var result *core.CommandResult
 
@@ -486,7 +489,7 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 		result = fr.executeRunFlow(s)
 
 	// App lifecycle steps - inject flow's appId/url if not specified.
-	// ExpandStep above runs BEFORE the config copy, so any ${VAR} in the
+	// executeStep's ExpandStep runs BEFORE the config copy, so any ${VAR} in the
 	// flow's top-level `appId:` would otherwise leak through unexpanded.
 	// Re-expand after the copy so CLI -e variables substitute correctly.
 	case *flow.LaunchAppStep:
@@ -534,7 +537,6 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 
 	// RunBrowserScript - execute JS file in browser, store output variable
 	case *flow.RunBrowserScriptStep:
-		fr.script.ExpandStep(step)
 		result = fr.driver.Execute(step)
 		if result.Success && s.Output != "" {
 			if val, ok := result.Data.(string); ok {
@@ -544,7 +546,6 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 
 	// EvalWebViewScript - execute JS in mobile WebView, store output variable
 	case *flow.EvalWebViewScriptStep:
-		fr.script.ExpandStep(step)
 		result = fr.driver.Execute(step)
 		if result.Success && s.Output != "" {
 			if val, ok := result.Data.(string); ok {
@@ -554,7 +555,6 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 
 	// RunWebViewScript - execute JS file in mobile WebView, store output variable
 	case *flow.RunWebViewScriptStep:
-		fr.script.ExpandStep(step)
 		result = fr.driver.Execute(step)
 		if result.Success && s.Output != "" {
 			if val, ok := result.Data.(string); ok {
@@ -591,7 +591,6 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 
 	// CopyTextFrom - delegate to driver and sync copied text to script engine
 	case *flow.CopyTextFromStep:
-		fr.script.ExpandStep(step) // Expand variables in selector
 		result = fr.driver.Execute(step)
 		if result.Success && result.Data != nil {
 			if text, ok := result.Data.(string); ok {
@@ -637,6 +636,51 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 	default:
 		result = fr.driver.Execute(step)
 	}
+	return result
+}
+
+// executeStep executes a single step and updates the report.
+// Returns status, error message, duration in milliseconds, and whether a
+// failure lets the flow go on because the step is optional (optionalFailure).
+func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, string, int64, bool) {
+	stepStart := time.Now()
+	defer fr.markInteraction(step)
+
+	logger.Debug("Executing step %d: %s", idx, fr.maskTypedName(step, step.Describe()))
+
+	// Mark step as started
+	fr.flowWriter.CommandStart(idx)
+
+	// Step-level platform gate: a step with `platform: ios|android|web` runs
+	// only on that platform and is skipped elsewhere (Maestro #1353).
+	if gate := step.PlatformGate(); gate != "" {
+		if info := fr.driver.GetPlatformInfo(); info != nil && !strings.EqualFold(info.Platform, gate) {
+			logger.Debug("Skipping step %d: platform gate %q != driver platform %q", idx, gate, info.Platform)
+			fr.flowWriter.CommandEnd(idx, report.StatusSkipped, nil, nil, report.CommandArtifacts{})
+			return report.StatusSkipped, "", time.Since(stepStart).Milliseconds(), false
+		}
+	}
+
+	// Determine what artifacts to capture
+	captureAlways := fr.config.Artifacts == ArtifactAlways
+	captureOnFailure := fr.config.Artifacts == ArtifactOnFailure
+
+	// Capture before screenshot if configured
+	var artifacts report.CommandArtifacts
+	if captureAlways {
+		artifacts = fr.captureArtifacts(idx, "before", false)
+	}
+
+	// Expand variables in a copy: the flow keeps the ${...} template for the
+	// next time this step runs (a count: rerun reuses the parsed flow). A
+	// ${...} that throws fails the step and nothing runs, as in Maestro.
+	step = cloneForRun(step)
+	var result *core.CommandResult
+	if err := fr.script.ExpandStep(step); err != nil {
+		result = expressionFailed(err)
+	} else {
+		result = fr.runStep(idx, step, &artifacts)
+	}
 	result = fr.maskTypedResult(step, result)
 
 	stepDuration := time.Since(stepStart).Milliseconds()
@@ -646,7 +690,12 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 	var errorInfo *report.Error
 	var errorMsg string
 
-	if result.Success {
+	if result.Success && fr.conditionSkipped {
+		// Its when: was false. Maestro reports the step skipped, not passed
+		// (CommandSkipped in Orchestra.kt's runFlowCommand and runScriptCommand).
+		status = report.StatusSkipped
+		logger.Debug("Step %d skipped (when condition not met): %s", idx, fr.maskTypedName(step, step.Describe()))
+	} else if result.Success {
 		status = report.StatusPassed
 		logger.Debug("Step %d completed successfully (%dms): %s", idx, stepDuration, fr.maskTypedName(step, step.Describe()))
 	} else {
@@ -699,6 +748,7 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 	}
 
 	fr.flowWriter.CommandLogs(idx, fr.script.TakeConsoleLogs())
+	fr.flowWriter.CommandMessage(idx, outcomeMessage(step, result))
 
 	// Update report - use CommandEndWithSubs for compound steps
 	switch step.(type) {
@@ -709,7 +759,7 @@ func (fr *FlowRunner) executeStep(idx int, step flow.Step) (report.Status, strin
 		fr.flowWriter.CommandEnd(idx, status, element, errorInfo, artifacts)
 	}
 
-	return status, errorMsg, stepDuration
+	return status, errorMsg, stepDuration, !result.Success && optionalFailure(step, result)
 }
 
 func (fr *FlowRunner) executeTakeScreenshot(
@@ -909,6 +959,14 @@ func (fr *FlowRunner) executeAssertScreenshot(step *flow.AssertScreenshotStep, c
 		}
 		err = fmt.Errorf("compare screenshot with %q: %w", referencePath, err)
 		msg := err.Error()
+		if errors.Is(err, core.ErrScreenshotSizeMismatch) && step.CropOn == nil {
+			// A whole-screen baseline only changes size with the screen: it
+			// was recorded on another device, simulator or display scale.
+			msg += " — the baseline was recorded on a screen of another size" +
+				" (a different device, simulator or display scale); re-record it" +
+				" on this device with --update-screenshots, or keep one baseline" +
+				" per device"
+		}
 		if step.CropOn != nil {
 			// A cropped baseline is only ever as stable as the element's
 			// rendered size, so name that cause rather than leaving the user to
@@ -1068,7 +1126,11 @@ func (fr *FlowRunner) collectStepsForPrepare() []flow.Step {
 		}
 		seen[path] = true
 		if sub, err := flow.ParseFile(path); err == nil {
+			// A file run by runFlow or retry runs its own hooks around its
+			// steps (executeSubFlow), so a launchApp in them is scanned too.
+			expand(sub.Config.OnFlowStart, filepath.Dir(path), depth+1)
 			expand(sub.Steps, filepath.Dir(path), depth+1)
+			expand(sub.Config.OnFlowComplete, filepath.Dir(path), depth+1)
 		}
 	}
 	expand = func(steps []flow.Step, dir string, depth int) {
@@ -1098,13 +1160,57 @@ func (fr *FlowRunner) collectStepsForPrepare() []flow.Step {
 	return out
 }
 
+// outcomeMessage is the message of a passed step whose outcome passing alone
+// does not tell: an airplane mode step that found the switch already in the
+// wanted state, or was skipped on a simulator (#252). It goes in the report
+// and the console output; "" for any other step.
+func outcomeMessage(step flow.Step, result *core.CommandResult) string {
+	if result == nil || !result.Success || result.Message == "" {
+		return ""
+	}
+	switch step.(type) {
+	case *flow.SetAirplaneModeStep, *flow.ToggleAirplaneModeStep:
+		logger.Info("%s: %s", step.Type(), result.Message)
+		return result.Message
+	}
+	return ""
+}
+
+// maxWhileIterations caps a while loop that has neither times nor timeout.
+// Maestro has no cap (Int.MAX_VALUE); ours stops a loop whose condition
+// never changes, and says so.
+const maxWhileIterations = 1000
+
 // executeRepeat handles repeat step execution.
+//
+// timeout (ms) ends the loop once that much time has passed since it
+// started: no new iteration starts after it, the one running finishes, and
+// the repeat passes. It works with times and with while; with while and no
+// times it replaces the maxWhileIterations cap.
 func (fr *FlowRunner) executeRepeat(step *flow.RepeatStep) *core.CommandResult {
 	hasWhile := step.While.Visible != nil || step.While.NotVisible != nil || step.While.Script != ""
 
+	timeoutMs, err := fr.script.ParseIntStrict(step.Timeout, 0)
+	if err != nil || timeoutMs < 0 {
+		if err == nil {
+			err = fmt.Errorf("must not be negative, got %d", timeoutMs)
+		}
+		return &core.CommandResult{
+			Success: false,
+			Error:   err,
+			Message: fmt.Sprintf("repeat: invalid 'timeout' value: %v", err),
+		}
+	}
+
 	defaultTimes := 1
+	capped := false
 	if hasWhile && step.Times == "" {
-		defaultTimes = 1000 // Max iterations for while loops without explicit times
+		if timeoutMs > 0 {
+			defaultTimes = math.MaxInt
+		} else {
+			defaultTimes = maxWhileIterations
+			capped = true
+		}
 	}
 	times, err := fr.script.ParseIntStrict(step.Times, defaultTimes)
 	if err != nil {
@@ -1118,7 +1224,10 @@ func (fr *FlowRunner) executeRepeat(step *flow.RepeatStep) *core.CommandResult {
 		times = 1
 	}
 
-	for i := 0; i < times; i++ {
+	start := time.Now()
+	timeout := time.Duration(timeoutMs) * time.Millisecond
+	ran := 0
+	for ; ran < times; ran++ {
 		// Check context
 		if fr.ctx.Err() != nil {
 			return &core.CommandResult{
@@ -1128,14 +1237,27 @@ func (fr *FlowRunner) executeRepeat(step *flow.RepeatStep) *core.CommandResult {
 			}
 		}
 
+		if timeout > 0 && ran > 0 && time.Since(start) >= timeout {
+			return &core.CommandResult{
+				Success: true,
+				Message: fmt.Sprintf("Repeat stopped at its %dms timeout (%d iterations)", timeoutMs, ran),
+			}
+		}
+
 		// Check while condition. Expand a fresh copy of the condition each
 		// iteration: step.While keeps the pristine ${...} template so a loop
 		// body that mutates the interpolated variable is picked up next pass
 		// (in-place expansion would replace the template after iteration 1).
 		if hasWhile {
 			whileCond := step.While
-			fr.script.ExpandCondition(&whileCond)
-			if !fr.script.CheckCondition(fr.ctx, whileCond, fr.driver) {
+			if err := fr.script.ExpandCondition(&whileCond); err != nil {
+				return expressionFailed(err)
+			}
+			met, err := fr.script.CheckCondition(fr.ctx, whileCond, fr.driver)
+			if err != nil {
+				return expressionFailed(err)
+			}
+			if !met {
 				break // Condition no longer met
 			}
 		}
@@ -1143,7 +1265,7 @@ func (fr *FlowRunner) executeRepeat(step *flow.RepeatStep) *core.CommandResult {
 		// Execute nested steps
 		for _, nestedStep := range step.Steps {
 			result := fr.executeNestedStep(nestedStep)
-			if !result.Success && !nestedStep.IsOptional() {
+			if !result.Success && !optionalFailure(nestedStep, result) {
 				return result
 			}
 		}
@@ -1155,9 +1277,16 @@ func (fr *FlowRunner) executeRepeat(step *flow.RepeatStep) *core.CommandResult {
 		}
 	}
 
+	if capped && ran == times {
+		logger.Warn("repeat: while condition still true after %d iterations; stopped (set times: or timeout: to change this)", maxWhileIterations)
+		return &core.CommandResult{
+			Success: true,
+			Message: fmt.Sprintf("Repeat stopped after %d iterations with its while condition still true", ran),
+		}
+	}
 	return &core.CommandResult{
 		Success: true,
-		Message: fmt.Sprintf("Repeat completed (%d iterations)", times),
+		Message: fmt.Sprintf("Repeat completed (%d iterations)", ran),
 	}
 }
 
@@ -1210,7 +1339,11 @@ func (fr *FlowRunner) executeRetry(step *flow.RetryStep) *core.CommandResult {
 	attempts := fr.retryAttempts(step.MaxRetries)
 
 	// Apply env variables with restore
-	defer fr.script.withEnvVars(step.Env)()
+	restore, err := fr.script.withEnvVars(step.Env)
+	defer restore()
+	if err != nil {
+		return expressionFailed(err)
+	}
 
 	// If file is specified, load and execute that flow
 	if step.File != "" && len(step.Steps) == 0 {
@@ -1240,7 +1373,7 @@ func (fr *FlowRunner) executeRetry(step *flow.RetryStep) *core.CommandResult {
 		success := true
 		for _, nestedStep := range step.Steps {
 			result := fr.executeNestedStep(nestedStep)
-			if !result.Success && !nestedStep.IsOptional() {
+			if !result.Success && !optionalFailure(nestedStep, result) {
 				lastErr = result.Error
 				success = false
 				break
@@ -1261,11 +1394,17 @@ func (fr *FlowRunner) executeRetry(step *flow.RetryStep) *core.CommandResult {
 // executeRunScript runs a runScript step unless its when: condition is false,
 // as Maestro does: an unmet condition skips the script.
 func (fr *FlowRunner) executeRunScript(step *flow.RunScriptStep) *core.CommandResult {
-	if step.When != nil && !fr.script.CheckCondition(fr.ctx, *step.When, fr.driver) {
-		fr.conditionSkipped = true
-		return &core.CommandResult{
-			Success: true,
-			Message: "Skipped (when condition not met)",
+	if step.When != nil {
+		met, err := fr.script.CheckCondition(fr.ctx, *step.When, fr.driver)
+		if err != nil {
+			return expressionFailed(err)
+		}
+		if !met {
+			fr.conditionSkipped = true
+			return &core.CommandResult{
+				Success: true,
+				Message: "Skipped (when condition not met)",
+			}
 		}
 	}
 	return fr.script.ExecuteRunScript(step)
@@ -1276,7 +1415,11 @@ func (fr *FlowRunner) executeRunFlow(step *flow.RunFlowStep) *core.CommandResult
 	// Check when condition. When false, prefer the else branch over skipping
 	// if one was provided.
 	if step.When != nil {
-		if !fr.script.CheckCondition(fr.ctx, *step.When, fr.driver) {
+		met, err := fr.script.CheckCondition(fr.ctx, *step.When, fr.driver)
+		if err != nil {
+			return expressionFailed(err)
+		}
+		if !met {
 			if step.ElseFile != "" || len(step.ElseSteps) > 0 {
 				return fr.executeRunFlowElse(step)
 			}
@@ -1315,7 +1458,11 @@ func (fr *FlowRunner) executeRunFlow(step *flow.RunFlowStep) *core.CommandResult
 	defer func() { fr.depth-- }()
 
 	// Apply env variables with restore
-	defer fr.script.withEnvVars(step.Env)()
+	restore, err := fr.script.withEnvVars(step.Env)
+	defer restore()
+	if err != nil {
+		return expressionFailed(err)
+	}
 
 	// Format timeout limit for error messages
 	timeoutLimit := ""
@@ -1337,7 +1484,7 @@ func (fr *FlowRunner) executeRunFlow(step *flow.RunFlowStep) *core.CommandResult
 			}
 			lastStep = nestedStep.Describe()
 			result := fr.executeNestedStep(nestedStep)
-			if !result.Success && !nestedStep.IsOptional() {
+			if !result.Success && !optionalFailure(nestedStep, result) {
 				return fr.wrapRunFlowTimeout(result, step, lastStep, timeoutLimit)
 			}
 		}
@@ -1402,7 +1549,11 @@ func (fr *FlowRunner) executeRunFlowElse(step *flow.RunFlowStep) *core.CommandRe
 	fr.depth++
 	defer func() { fr.depth-- }()
 
-	defer fr.script.withEnvVars(step.Env)()
+	restore, err := fr.script.withEnvVars(step.Env)
+	defer restore()
+	if err != nil {
+		return expressionFailed(err)
+	}
 
 	timeoutLimit := ""
 	if step.TimeoutMs > 0 {
@@ -1423,7 +1574,7 @@ func (fr *FlowRunner) executeRunFlowElse(step *flow.RunFlowStep) *core.CommandRe
 			}
 			lastStep = nestedStep.Describe()
 			result := fr.executeNestedStep(nestedStep)
-			if !result.Success && !nestedStep.IsOptional() {
+			if !result.Success && !optionalFailure(nestedStep, result) {
 				return fr.wrapRunFlowTimeout(result, step, lastStep, timeoutLimit)
 			}
 		}
@@ -1537,6 +1688,144 @@ func (fr *FlowRunner) executePasteText(step *flow.PasteTextStep) *core.CommandRe
 	return result
 }
 
+// runNestedStep routes an expanded nested step to its handler.
+func (fr *FlowRunner) runNestedStep(step flow.Step) *core.CommandResult {
+	var result *core.CommandResult
+	switch s := step.(type) {
+	case *flow.DefineVariablesStep:
+		result = fr.script.ExecuteDefineVariables(s)
+	case *flow.RunScriptStep:
+		result = fr.executeRunScript(s)
+	case *flow.EvalScriptStep:
+		result = fr.script.ExecuteEvalScript(s)
+	case *flow.AssertTrueStep:
+		result = fr.script.ExecuteAssertTrue(s)
+	case *flow.AssertConditionStep:
+		result = fr.script.ExecuteAssertCondition(fr.ctx, s, fr.driver)
+	case *flow.RepeatStep:
+		result = fr.executeRepeat(s)
+	case *flow.RetryStep:
+		result = fr.executeRetry(s)
+	case *flow.RunFlowStep:
+		result = fr.executeRunFlow(s)
+
+	// App lifecycle steps - inject flow's appId if not specified.
+	// Mirrors executeStep so hooks (onFlowStart/onFlowComplete) and other nested
+	// invocations resolve the default appId the same way as top-level steps.
+	case *flow.LaunchAppStep:
+		if s.AppID == "" {
+			s.AppID = fr.flow.Config.EffectiveAppID()
+		}
+		s.AppID = fr.script.ExpandVariables(s.AppID)
+		result = fr.driver.Execute(step)
+	case *flow.StopAppStep:
+		if s.AppID == "" {
+			s.AppID = fr.flow.Config.EffectiveAppID()
+		}
+		s.AppID = fr.script.ExpandVariables(s.AppID)
+		result = fr.driver.Execute(step)
+	case *flow.KillAppStep:
+		if s.AppID == "" {
+			s.AppID = fr.flow.Config.EffectiveAppID()
+		}
+		s.AppID = fr.script.ExpandVariables(s.AppID)
+		result = fr.driver.Execute(step)
+	case *flow.SetPermissionsStep:
+		if s.AppID == "" {
+			s.AppID = fr.flow.Config.EffectiveAppID()
+		}
+		s.AppID = fr.script.ExpandVariables(s.AppID)
+		result = fr.driver.Execute(step)
+	case *flow.ClearStateStep:
+		if s.AppID == "" {
+			s.AppID = fr.flow.Config.EffectiveAppID()
+		}
+		s.AppID = fr.script.ExpandVariables(s.AppID)
+		result = fr.driver.Execute(step)
+	case *flow.TakeScreenshotStep:
+		result, _ = fr.executeTakeScreenshot(s, len(fr.subCommands))
+	case *flow.AssertScreenshotStep:
+		result = fr.executeAssertScreenshot(s, -1)
+	case *flow.EvalBrowserScriptStep:
+		result = fr.driver.Execute(step)
+		if result.Success && s.Output != "" {
+			if val, ok := result.Data.(string); ok {
+				fr.script.SetVariable(s.Output, val)
+			}
+		}
+	case *flow.RunBrowserScriptStep:
+		result = fr.driver.Execute(step)
+		if result.Success && s.Output != "" {
+			if val, ok := result.Data.(string); ok {
+				fr.script.SetVariable(s.Output, val)
+			}
+		}
+	case *flow.EvalWebViewScriptStep:
+		result = fr.driver.Execute(step)
+		if result.Success && s.Output != "" {
+			if val, ok := result.Data.(string); ok {
+				fr.script.SetVariable(s.Output, val)
+			}
+		}
+	case *flow.RunWebViewScriptStep:
+		result = fr.driver.Execute(step)
+		if result.Success && s.Output != "" {
+			if val, ok := result.Data.(string); ok {
+				fr.script.SetVariable(s.Output, val)
+			}
+		}
+	case *flow.GetConsoleLogsStep:
+		result = fr.driver.Execute(step)
+		if result.Success && s.Output != "" {
+			if val, ok := result.Data.(string); ok {
+				fr.script.SetVariable(s.Output, val)
+			}
+		}
+	case *flow.GetCookiesStep:
+		result = fr.driver.Execute(step)
+		if result.Success && s.Output != "" {
+			if val, ok := result.Data.(string); ok {
+				fr.script.SetVariable(s.Output, val)
+			}
+		}
+	case *flow.WaitForRequestStep:
+		result = fr.driver.Execute(step)
+		if result.Success && s.Output != "" {
+			if val, ok := result.Data.(string); ok {
+				fr.script.SetVariable(s.Output, val)
+			}
+		}
+	// runShell and pasteText are handled here, not by the driver, exactly
+	// as at the top level. Without these cases a runShell inside a runFlow
+	// reached the driver and failed as unsupported (#174), and a pasteText
+	// pasted the device clipboard instead of the text copyTextFrom saved.
+	case *flow.RunShellStep:
+		result = fr.executeRunShell(s)
+	case *flow.SetClipboardStep:
+		result = fr.executeSetClipboard(s)
+	case *flow.PasteTextStep:
+		result = fr.executePasteText(s)
+	case *flow.CopyTextFromStep:
+		result = fr.driver.Execute(step)
+		// Sync copied text to script engine
+		if result.Success && result.Data != nil {
+			if text, ok := result.Data.(string); ok {
+				fr.script.SetCopiedText(text)
+			}
+		}
+	case *flow.TapOnStep, *flow.DoubleTapOnStep, *flow.LongPressOnStep:
+		opts, _ := extractTapOptions(step)
+		result = fr.executeTapWithOptions(step, opts)
+
+	case *flow.WaitStep:
+		result = fr.executeWait(s)
+
+	default:
+		result = fr.driver.Execute(step)
+	}
+	return result
+}
+
 // executeNestedStep executes a step without report tracking (for nested execution).
 func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 	step = cloneForRun(step)
@@ -1560,156 +1849,12 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 		fr.subCommands = nil
 	}
 
-	switch s := step.(type) {
-	case *flow.DefineVariablesStep:
-		result = fr.script.ExecuteDefineVariables(s)
-	case *flow.RunScriptStep:
-		fr.script.ExpandStep(step)
-		result = fr.executeRunScript(s)
-	case *flow.EvalScriptStep:
-		result = fr.script.ExecuteEvalScript(s)
-	case *flow.AssertTrueStep:
-		result = fr.script.ExecuteAssertTrue(s)
-	case *flow.AssertConditionStep:
-		result = fr.script.ExecuteAssertCondition(fr.ctx, s, fr.driver)
-	case *flow.RepeatStep:
-		result = fr.executeRepeat(s)
-	case *flow.RetryStep:
-		result = fr.executeRetry(s)
-	case *flow.RunFlowStep:
-		fr.script.ExpandStep(step)
-		result = fr.executeRunFlow(s)
-
-	// App lifecycle steps - inject flow's appId if not specified.
-	// Mirrors executeStep so hooks (onFlowStart/onFlowComplete) and other nested
-	// invocations resolve the default appId the same way as top-level steps.
-	case *flow.LaunchAppStep:
-		if s.AppID == "" {
-			s.AppID = fr.flow.Config.EffectiveAppID()
-		}
-		fr.script.ExpandStep(step)
-		result = fr.driver.Execute(step)
-	case *flow.StopAppStep:
-		if s.AppID == "" {
-			s.AppID = fr.flow.Config.EffectiveAppID()
-		}
-		fr.script.ExpandStep(step)
-		result = fr.driver.Execute(step)
-	case *flow.KillAppStep:
-		if s.AppID == "" {
-			s.AppID = fr.flow.Config.EffectiveAppID()
-		}
-		fr.script.ExpandStep(step)
-		result = fr.driver.Execute(step)
-	case *flow.SetPermissionsStep:
-		if s.AppID == "" {
-			s.AppID = fr.flow.Config.EffectiveAppID()
-		}
-		fr.script.ExpandStep(step)
-		result = fr.driver.Execute(step)
-	case *flow.ClearStateStep:
-		if s.AppID == "" {
-			s.AppID = fr.flow.Config.EffectiveAppID()
-		}
-		fr.script.ExpandStep(step)
-		result = fr.driver.Execute(step)
-	case *flow.TakeScreenshotStep:
-		fr.script.ExpandStep(step)
-		result, _ = fr.executeTakeScreenshot(s, len(fr.subCommands))
-	case *flow.AssertScreenshotStep:
-		fr.script.ExpandStep(step)
-		result = fr.executeAssertScreenshot(s, -1)
-	case *flow.EvalBrowserScriptStep:
-		fr.script.ExpandStep(step)
-		result = fr.driver.Execute(step)
-		if result.Success && s.Output != "" {
-			if val, ok := result.Data.(string); ok {
-				fr.script.SetVariable(s.Output, val)
-			}
-		}
-	case *flow.RunBrowserScriptStep:
-		fr.script.ExpandStep(step)
-		result = fr.driver.Execute(step)
-		if result.Success && s.Output != "" {
-			if val, ok := result.Data.(string); ok {
-				fr.script.SetVariable(s.Output, val)
-			}
-		}
-	case *flow.EvalWebViewScriptStep:
-		fr.script.ExpandStep(step)
-		result = fr.driver.Execute(step)
-		if result.Success && s.Output != "" {
-			if val, ok := result.Data.(string); ok {
-				fr.script.SetVariable(s.Output, val)
-			}
-		}
-	case *flow.RunWebViewScriptStep:
-		fr.script.ExpandStep(step)
-		result = fr.driver.Execute(step)
-		if result.Success && s.Output != "" {
-			if val, ok := result.Data.(string); ok {
-				fr.script.SetVariable(s.Output, val)
-			}
-		}
-	case *flow.GetConsoleLogsStep:
-		fr.script.ExpandStep(step)
-		result = fr.driver.Execute(step)
-		if result.Success && s.Output != "" {
-			if val, ok := result.Data.(string); ok {
-				fr.script.SetVariable(s.Output, val)
-			}
-		}
-	case *flow.GetCookiesStep:
-		fr.script.ExpandStep(step)
-		result = fr.driver.Execute(step)
-		if result.Success && s.Output != "" {
-			if val, ok := result.Data.(string); ok {
-				fr.script.SetVariable(s.Output, val)
-			}
-		}
-	case *flow.WaitForRequestStep:
-		fr.script.ExpandStep(step)
-		result = fr.driver.Execute(step)
-		if result.Success && s.Output != "" {
-			if val, ok := result.Data.(string); ok {
-				fr.script.SetVariable(s.Output, val)
-			}
-		}
-	// runShell and pasteText are handled here, not by the driver, exactly
-	// as at the top level. Without these cases a runShell inside a runFlow
-	// reached the driver and failed as unsupported (#174), and a pasteText
-	// pasted the device clipboard instead of the text copyTextFrom saved.
-	case *flow.RunShellStep:
-		fr.script.ExpandStep(step)
-		result = fr.executeRunShell(s)
-	case *flow.SetClipboardStep:
-		fr.script.ExpandStep(step)
-		result = fr.executeSetClipboard(s)
-	case *flow.PasteTextStep:
-		fr.script.ExpandStep(step)
-		result = fr.executePasteText(s)
-	case *flow.CopyTextFromStep:
-		// Expand variables before driver execution
-		fr.script.ExpandStep(step)
-		result = fr.driver.Execute(step)
-		// Sync copied text to script engine
-		if result.Success && result.Data != nil {
-			if text, ok := result.Data.(string); ok {
-				fr.script.SetCopiedText(text)
-			}
-		}
-	case *flow.TapOnStep, *flow.DoubleTapOnStep, *flow.LongPressOnStep:
-		fr.script.ExpandStep(step)
-		opts, _ := extractTapOptions(step)
-		result = fr.executeTapWithOptions(step, opts)
-
-	case *flow.WaitStep:
-		result = fr.executeWait(s)
-
-	default:
-		// Expand variables before driver execution
-		fr.script.ExpandStep(step)
-		result = fr.driver.Execute(step)
+	// Expand once, before the handler, as executeStep does: a ${...} that
+	// throws fails the step and nothing runs.
+	if err := fr.script.ExpandStep(step); err != nil {
+		result = expressionFailed(err)
+	} else {
+		result = fr.runNestedStep(step)
 	}
 	result = fr.maskTypedResult(step, result)
 
@@ -1720,11 +1865,17 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 		result = fr.enrichTimeoutError(result)
 	}
 
+	// Its when: was false: skipped, as at the top level.
+	skipped := result.Success && fr.conditionSkipped
+
 	// Track nested step counts (compound steps like runFlow/repeat/retry don't count themselves)
 	if !isCompoundStep {
-		if result.Success {
+		switch {
+		case skipped:
+			fr.stepsSkipped++
+		case result.Success:
 			fr.stepsPassed++
-		} else {
+		default:
 			fr.stepsFailed++
 		}
 	}
@@ -1752,7 +1903,9 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 
 	// Add to parent's sub-commands for report
 	status := report.StatusPassed
-	if !result.Success {
+	if skipped {
+		status = report.StatusSkipped
+	} else if !result.Success {
 		status = report.StatusFailed
 	}
 
@@ -1779,6 +1932,7 @@ func (fr *FlowRunner) executeNestedStep(step flow.Step) *core.CommandResult {
 		cmd.SubCommands = nestedSubCommands
 	}
 	cmd.Logs = fr.script.TakeConsoleLogs()
+	cmd.Message = outcomeMessage(step, result)
 
 	// A failed nested step (inside runFlow / repeat / retry) now gets its own
 	// screenshot + hierarchy, the same post-mortem a failed top-level step has.
@@ -1812,11 +1966,43 @@ func (fr *FlowRunner) executeSubFlow(subFlow flow.Flow) *core.CommandResult {
 	defer func() { fr.script.flowDir = prevDir }()
 
 	// Apply sub-flow env
-	defer fr.script.withEnvVars(subFlow.Config.Env)()
+	restore, err := fr.script.withEnvVars(subFlow.Config.Env)
+	defer restore()
+	if err != nil {
+		return expressionFailed(err)
+	}
 
-	// Execute steps
+	// The file's own onFlowStart runs before its steps and its onFlowComplete
+	// after them, as Maestro's runSubFlow runs the file of a runFlow or a
+	// retry (Orchestra.kt): a failing onFlowStart skips the steps, the steps
+	// failing still run onFlowComplete, and the sub-flow fails when a hook
+	// fails. The first failure is the sub-flow's, as for a flow's own hooks.
+	// Once the run is cancelled or a runFlow's timeout: has passed,
+	// runSubFlowSteps runs nothing more, onFlowComplete included; Maestro too
+	// skips it on a cancel. Maestro also skips the steps when onFlowStart
+	// changed nothing on screen (runSubFlow reads executeSubflowCommands'
+	// "screen changed" as success); here they run.
+	result := fr.runSubFlowSteps(subFlow, subFlow.Config.OnFlowStart, "onFlowStart failed: ")
+	if result == nil {
+		result = fr.runSubFlowSteps(subFlow, subFlow.Steps, "")
+	}
+	if done := fr.runSubFlowSteps(subFlow, subFlow.Config.OnFlowComplete, "onFlowComplete failed: "); result == nil {
+		result = done
+	}
+	if result != nil {
+		return result
+	}
+	return &core.CommandResult{
+		Success: true,
+		Message: fmt.Sprintf("Sub-flow '%s' completed", subFlow.Config.Name),
+	}
+}
+
+// runSubFlowSteps runs steps of subFlow as nested steps and returns the
+// result of the first that fails it (its message after prefix), or nil.
+func (fr *FlowRunner) runSubFlowSteps(subFlow flow.Flow, steps []flow.Step, prefix string) *core.CommandResult {
 	var lastStepDesc string
-	for _, step := range subFlow.Steps {
+	for _, step := range steps {
 		if fr.ctx.Err() != nil {
 			msg := "Sub-flow cancelled"
 			if lastStepDesc != "" {
@@ -1851,15 +2037,32 @@ func (fr *FlowRunner) executeSubFlow(subFlow flow.Flow) *core.CommandResult {
 		}
 
 		result := fr.executeNestedStep(step)
-		if !result.Success && !step.IsOptional() {
+		if !result.Success && !optionalFailure(step, result) {
+			if prefix != "" {
+				result = &core.CommandResult{Success: false, Error: result.Error, Message: prefix + result.Message}
+			}
 			return result
 		}
 	}
+	return nil
+}
 
-	return &core.CommandResult{
-		Success: true,
-		Message: fmt.Sprintf("Sub-flow '%s' completed", subFlow.Config.Name),
+// hookNamedError is a failed sub-flow's error, led by the hook that failed
+// ("onFlowComplete failed: ") when one did. runSubFlowSteps puts the hook's
+// name only in the result's Message, and a retry's final result keeps only
+// the last attempt's Error, so without this the name was lost.
+func hookNamedError(result *core.CommandResult) error {
+	for _, prefix := range []string{"onFlowStart failed: ", "onFlowComplete failed: "} {
+		if strings.HasPrefix(result.Message, prefix) {
+			if result.Error == nil {
+				return errors.New(result.Message)
+			}
+			if !strings.HasPrefix(result.Error.Error(), prefix) {
+				return fmt.Errorf("%s%w", prefix, result.Error)
+			}
+		}
 	}
+	return result.Error
 }
 
 // executeSubFlowWithRetry runs a sub-flow up to attempts times, until it passes.
@@ -1882,7 +2085,7 @@ func (fr *FlowRunner) executeSubFlowWithRetry(subFlow flow.Flow, attempts int) *
 				Message: fmt.Sprintf("Retry succeeded on attempt %d", attempt),
 			}
 		}
-		lastErr = result.Error
+		lastErr = hookNamedError(result)
 	}
 
 	return retryExhausted(lastErr, attempts)
@@ -2090,4 +2293,38 @@ func (fr *FlowRunner) stepNames(step flow.Step) (describe, title string) {
 		return describe, fr.maskTypedName(step, fr.script.DisplayText(label))
 	}
 	return describe, describe
+}
+
+// applyFlowConfigVariables applies the flow's env: block and its appId.
+// Flow env values take precedence over -e / --env-file values (they are set
+// after them, as in Maestro) and may use them: ${VAR || "default"}.
+// The appId is expanded after the env: block so `appId: ${X}` can use an X
+// the same flow defines. APP_ID then holds the appId, unless the flow's env:
+// sets APP_ID itself.
+func (fr *FlowRunner) applyFlowConfigVariables() {
+	for k, v := range fr.flow.Config.Env {
+		fr.script.SetVariable(k, fr.script.ExpandVariables(v))
+	}
+	if fr.flow.Config.AppID != "" {
+		fr.flow.Config.AppID = fr.script.ExpandVariables(fr.flow.Config.AppID)
+	}
+	if _, ok := fr.flow.Config.Env["APP_ID"]; ok {
+		return
+	}
+	if appID := fr.flow.Config.EffectiveAppID(); appID != "" {
+		fr.script.SetVariable("APP_ID", appID)
+	}
+}
+
+// effectiveFindTimeout picks the default element lookup timeout (ms) for a
+// flow: its own commandTimeout wins over the run-wide --find-timeout. 0 means
+// neither is set and the driver keeps its default.
+func effectiveFindTimeout(flowCommandTimeout, runFindTimeout int) int {
+	if flowCommandTimeout > 0 {
+		return flowCommandTimeout
+	}
+	if runFindTimeout > 0 {
+		return runFindTimeout
+	}
+	return 0
 }

@@ -45,7 +45,12 @@ type Client struct {
 	seq         atomic.Int64
 	prefix      string
 	reviver     Reviver
+	token       string
 }
+
+// TokenHeader carries the run's token; an agent started with one answers a
+// request without it 401.
+const TokenHeader = "X-DeviceLab-Token"
 
 // NewClient returns a client for the agent on 127.0.0.1:port.
 func NewClient(port int) *Client {
@@ -63,6 +68,20 @@ func NewClient(port int) *Client {
 
 // SetReviver installs the function that restarts a dead agent.
 func (c *Client) SetReviver(r Reviver) { c.reviver = r }
+
+// SetToken sets the token sent with every request: the one the agent was
+// started with.
+func (c *Client) SetToken(token string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.token = token
+}
+
+func (c *Client) authToken() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.token
+}
 
 // SetPort re-points the client at a restarted agent.
 func (c *Client) SetPort(port int) {
@@ -138,6 +157,7 @@ func (c *Client) send(ctx context.Context, cmd, id string, body []byte) (*Respon
 	// idempotent; the header lets the transport retry it on a keep-alive
 	// connection the agent had already closed.
 	req.Header.Set("Idempotency-Key", id)
+	req.Header.Set(TokenHeader, c.authToken())
 	start := time.Now()
 	res, err := c.http.Do(req)
 	if err != nil {

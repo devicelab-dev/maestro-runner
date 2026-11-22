@@ -60,14 +60,34 @@ func (d *Driver) launchAppOnDevice(s *flow.LaunchAppStep, bid string) *core.Comm
 	if s.ClearKeychain {
 		logger.Warn("launchApp: clearKeychain skipped: %v", errOnDevice("clearKeychain"))
 	}
-	if s.StopApp == nil || *s.StopApp {
+	args := &Args{Action: "launch", BundleID: bid, Arguments: flattenArguments(s.Arguments), Environment: s.Environment}
+	if keepsRunningApp(s) {
+		// XCTest's launch restarts a running app; `stopApp: false` brings it
+		// to the front instead, as Maestro does.
+		if d.appRunningOnDevice(bid) {
+			args = &Args{Action: "activate", BundleID: bid}
+		}
+	} else {
 		_ = d.terminateOnDevice(bid)
 	}
-	args := &Args{Action: "launch", BundleID: bid, Arguments: flattenArguments(s.Arguments), Environment: s.Environment}
 	if _, err := d.call("app", args); err != nil {
 		return core.ErrorResult(err, fmt.Sprintf("launchApp failed: %v", err))
 	}
 	return core.SuccessResult("launched "+bid, nil)
+}
+
+// appRunningOnDevice reports whether the agent sees the app running, in front
+// or in the background. An unanswered read counts as not running.
+func (d *Driver) appRunningOnDevice(bid string) bool {
+	resp, err := d.call("app", &Args{Action: "state", BundleID: bid})
+	if err != nil {
+		return false
+	}
+	switch resp.payload().AppState {
+	case "foreground", "background":
+		return true
+	}
+	return false
 }
 
 // terminateOnDevice stops an app through the agent; one that is not running

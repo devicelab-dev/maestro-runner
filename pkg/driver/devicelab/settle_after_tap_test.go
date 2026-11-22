@@ -287,3 +287,39 @@ func TestRepeatedTapsGoOutBackToBack(t *testing.T) {
 		t.Errorf("a tap after the repeat settled %d times, want 1", client.settles)
 	}
 }
+
+// The step after a swipe that acts on the screen settles first, also when
+// checks come between them: swipe, assertVisible, swipe sent the second swipe
+// to a pager still sliding in from the first.
+func TestActionAfterSwipeSettlesAcrossChecks(t *testing.T) {
+	client := &settleCountingClient{richClient: &richClient{trackingClient: newTrackingClient()}}
+	d := New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 1920}, &mockShell{})
+	swipe := &flow.SwipeStep{BaseStep: flow.BaseStep{StepType: flow.StepSwipe}, Start: "90%, 50%", End: "10%, 50%", Duration: 1}
+
+	if res := d.Execute(swipe); !res.Success {
+		t.Fatalf("swipe failed: %v", res.Error)
+	}
+	if client.settles != 0 {
+		t.Fatalf("swipe settled %d times on its own, want 0", client.settles)
+	}
+
+	// A step that does not act on the screen neither settles nor clears it.
+	d.Execute(&flow.SetClipboardStep{BaseStep: flow.BaseStep{StepType: flow.StepSetClipboard}, Text: "x"})
+	if client.settles != 0 {
+		t.Fatalf("setClipboard after a swipe settled %d times, want 0", client.settles)
+	}
+
+	if res := d.Execute(swipe); !res.Success {
+		t.Fatalf("second swipe failed: %v", res.Error)
+	}
+	if client.settles != 1 {
+		t.Fatalf("swipe after swipe and a check settled %d times, want 1", client.settles)
+	}
+
+	back := &flow.BackStep{BaseStep: flow.BaseStep{StepType: flow.StepBack}}
+	d.Execute(back) // follows the second swipe: settles
+	d.Execute(back) // follows a back: does not
+	if client.settles != 2 {
+		t.Fatalf("settled %d times after swipe, back, back; want 2", client.settles)
+	}
+}

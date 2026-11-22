@@ -548,3 +548,20 @@ func TestFlowWriter_commandSummary(t *testing.T) {
 		t.Errorf("Current = %v, want 1", summary.Current)
 	}
 }
+
+// A passed command's outcome message reaches the flow detail (and so
+// report.json's flow files); an empty one or a bad index changes nothing.
+func TestFlowWriter_CommandMessage(t *testing.T) {
+	fw, _, _ := createTestFlowWriter(t)
+	fw.CommandMessage(1, "Airplane mode already enabled")
+	fw.CommandMessage(2, "")
+	fw.CommandMessage(9, "ignored")
+
+	cmds := fw.GetFlowDetail().Commands
+	if cmds[1].Message != "Airplane mode already enabled" {
+		t.Errorf("message = %q", cmds[1].Message)
+	}
+	if cmds[2].Message != "" {
+		t.Errorf("empty message set %q", cmds[2].Message)
+	}
+}

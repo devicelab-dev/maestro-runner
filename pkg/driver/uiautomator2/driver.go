@@ -105,6 +105,13 @@ type Driver struct {
 	// end of the run.
 	locationReady bool
 	locationSet   bool
+
+	// The display's natural size (`wm size`) and the rotation (0-3) the last
+	// setOrientation left, when rotated is set: the size read at session
+	// start does not turn with the display (#256).
+	naturalW, naturalH int
+	rotation           int
+	rotated            bool
 }
 
 // New creates a new UIAutomator2 driver.
@@ -117,12 +124,47 @@ func New(client UIA2Client, info *core.PlatformInfo, device ShellExecutor) *Driv
 	}
 }
 
-// screenSize returns cached screen dimensions from PlatformInfo.
+// screenSize returns cached screen dimensions from PlatformInfo, turned to
+// the orientation setOrientation left the display in.
 func (d *Driver) screenSize() (int, int, error) {
 	if d.info != nil && d.info.ScreenWidth > 0 && d.info.ScreenHeight > 0 {
-		return d.info.ScreenWidth, d.info.ScreenHeight, nil
+		w, h := d.info.ScreenWidth, d.info.ScreenHeight
+		if d.rotated {
+			if rw, rh := core.RotateSize(d.naturalW, d.naturalH, d.rotation); (w > h) != (rw > rh) {
+				w, h = h, w
+			}
+		}
+		return w, h, nil
 	}
 	return 0, 0, fmt.Errorf("screen dimensions not available")
+}
+
+// naturalScreenSize is the display size from `wm size`, at rotation 0.
+func (d *Driver) naturalScreenSize() (int, int, bool) {
+	if d.naturalW > 0 && d.naturalH > 0 {
+		return d.naturalW, d.naturalH, true
+	}
+	if d.device == nil {
+		return 0, 0, false
+	}
+	out, err := d.device.Shell("wm size")
+	if err != nil {
+		return 0, 0, false
+	}
+	w, h := core.ParseWmSize(out)
+	if w <= 0 || h <= 0 {
+		return 0, 0, false
+	}
+	d.naturalW, d.naturalH = w, h
+	return w, h, true
+}
+
+// noteRotation records the display rotation setOrientation left. An unknown
+// rotation (-1), or an unknown natural size, keeps the size as it was.
+func (d *Driver) noteRotation(rotation int) {
+	if _, _, ok := d.naturalScreenSize(); ok && rotation >= 0 {
+		d.rotation, d.rotated = rotation, true
+	}
 }
 
 // SetContext sets the parent context for element-finding operations.
@@ -386,6 +428,19 @@ func (d *Driver) findElementFast(sel flow.Selector, optional bool, stepTimeoutMs
 //
 // This handles React Native pattern where text nodes aren't clickable but parent containers are.
 func (d *Driver) findElementForTap(sel flow.Selector, optional bool, stepTimeoutMs int) (*uiautomator2.Element, *core.ElementInfo, error) {
+	elem, info, err := d.findTapCandidate(sel, optional, stepTimeoutMs)
+	// A native element with no area was already refused (tryFindTapTarget).
+	// One from the page source is dropped by FilterOutOfBounds when the
+	// screen size is known; this catches it when it is not.
+	if err == nil && elem == nil && info != nil && core.ZeroArea(info.Bounds) {
+		return nil, nil, core.ZeroAreaTapError(info.Bounds)
+	}
+	return elem, info, err
+}
+
+// findTapCandidate resolves the element a tap aims at, by the route that suits
+// the selector.
+func (d *Driver) findTapCandidate(sel flow.Selector, optional bool, stepTimeoutMs int) (*uiautomator2.Element, *core.ElementInfo, error) {
 	// For relative selectors (below, above, etc.), use page source which handles them correctly
 	if sel.HasRelativeSelector() {
 		timeout := d.calculateTimeout(optional, stepTimeoutMs)
@@ -442,7 +497,7 @@ func (d *Driver) findElementForTapWithContext(ctx context.Context, sel flow.Sele
 			return nil, nil, fmt.Errorf("element '%s' not found: %w", sel.Describe(), ctx.Err())
 		default:
 			// Step 1: Try clickable strategies first (fast path)
-			elem, info, err := d.tryFindElement(clickableStrategies)
+			elem, info, err := d.tryFindTapTarget(clickableStrategies)
 			if err == nil {
 				return elem, info, nil
 			}
@@ -560,9 +615,13 @@ func (d *Driver) findElementWithContext(ctx context.Context, sel flow.Selector, 
 			var elem *uiautomator2.Element
 			var info *core.ElementInfo
 			var err error
-			if fastMode {
+			switch {
+			case fastMode:
 				elem, info, err = d.tryFindElementFast(strategies)
-			} else {
+			case preferClickable:
+				// Only the tap lookups prefer clickable elements.
+				elem, info, err = d.tryFindTapTarget(strategies)
+			default:
 				elem, info, err = d.tryFindElement(strategies)
 			}
 			if err == nil {
@@ -671,9 +730,17 @@ func (d *Driver) tryFindElementFast(strategies []LocatorStrategy) (*uiautomator2
 // Returns full element info including text and bounds (3 HTTP calls total).
 // Use tryFindElementFast for visibility checks where details aren't needed.
 func (d *Driver) tryFindElement(strategies []LocatorStrategy) (*uiautomator2.Element, *core.ElementInfo, error) {
+	elem, info, _, err := d.tryFindElementWithRect(strategies)
+	return elem, info, err
+}
+
+// tryFindElementWithRect is tryFindElement that also reports whether the
+// element's rect was read, so a caller can tell a real 0x0 element from
+// bounds that are zero only because the read failed.
+func (d *Driver) tryFindElementWithRect(strategies []LocatorStrategy) (*uiautomator2.Element, *core.ElementInfo, bool, error) {
 	elem, info, err := d.tryFindElementFast(strategies)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 
 	// Fetch additional details (2 more HTTP calls)
@@ -681,6 +748,7 @@ func (d *Driver) tryFindElement(strategies []LocatorStrategy) (*uiautomator2.Ele
 		info.Text = text
 	}
 
+	rectOK := false
 	if rect, err := elem.Rect(); err == nil {
 		info.Bounds = core.Bounds{
 			X:      rect.X,
@@ -688,8 +756,25 @@ func (d *Driver) tryFindElement(strategies []LocatorStrategy) (*uiautomator2.Ele
 			Width:  rect.Width,
 			Height: rect.Height,
 		}
+		rectOK = true
 	}
 
+	return elem, info, rectOK, nil
+}
+
+// tryFindTapTarget is tryFindElement for a tap. An element with no area is
+// refused, so the caller keeps polling: UiAutomator taps the centre of its
+// visible bounds, which for a 0x0 node is its origin, a point on whatever is
+// drawn there. Maestro never finds such a node (filterOutOfBounds), and the
+// page-source paths here drop it the same way (FilterOutOfBounds).
+func (d *Driver) tryFindTapTarget(strategies []LocatorStrategy) (*uiautomator2.Element, *core.ElementInfo, error) {
+	elem, info, rectOK, err := d.tryFindElementWithRect(strategies)
+	if err != nil {
+		return nil, nil, err
+	}
+	if rectOK && core.ZeroArea(info.Bounds) {
+		return nil, nil, core.ZeroAreaTapError(info.Bounds)
+	}
 	return elem, info, nil
 }
 
@@ -846,7 +931,11 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector) (*core.ElementInfo, 
 			}
 		} else {
 			// Simple anchor - use FilterBySelector
-			anchors = FilterBySelector(allElements, *anchorSelector)
+			picked, err := core.PickAnchor(anchorMatches(allElements, *anchorSelector), anchorSelector.Index, elementBounds)
+			if err != nil {
+				return nil, err
+			}
+			anchors = picked
 		}
 	}
 
@@ -874,8 +963,8 @@ func (d *Driver) resolveRelativeSelector(sel flow.Selector) (*core.ElementInfo, 
 		return nil, fmt.Errorf("no elements match relative criteria")
 	}
 
-	// Prioritize clickable elements
-	candidates = SortClickableFirst(candidates)
+	// Clickable first, or by position when an index is given
+	candidates = SortCandidates(candidates, sel.Index)
 
 	var selected *ParsedElement
 	if sel.Index == "" && (filterType == filterBelow || filterType == filterAbove || filterType == filterLeftOf || filterType == filterRightOf) {
@@ -945,7 +1034,11 @@ func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements 
 			}
 		} else {
 			// Simple anchor - use FilterBySelector
-			anchors = FilterBySelector(allElements, *anchorSelector)
+			picked, err := core.PickAnchor(anchorMatches(allElements, *anchorSelector), anchorSelector.Index, elementBounds)
+			if err != nil {
+				return nil, nil, err
+			}
+			anchors = picked
 		}
 	}
 
@@ -973,8 +1066,8 @@ func (d *Driver) findElementRelativeWithElements(sel flow.Selector, allElements 
 		return nil, nil, fmt.Errorf("no elements match relative criteria")
 	}
 
-	// Prioritize clickable elements
-	candidates = SortClickableFirst(candidates)
+	// Clickable first, or by position when an index is given
+	candidates = SortCandidates(candidates, sel.Index)
 
 	var selected *ParsedElement
 	if sel.Index == "" && (filterType == filterBelow || filterType == filterAbove || filterType == filterLeftOf || filterType == filterRightOf) {
@@ -1022,7 +1115,7 @@ func (d *Driver) findElementByPageSourceOnce(sel flow.Selector) (*uiautomator2.E
 	}
 
 	candidates := FilterBySelector(allElements, sel)
-	candidates = SortClickableFirst(candidates)
+	candidates = SortCandidates(candidates, sel.Index)
 
 	if len(candidates) == 0 {
 		return nil, nil, fmt.Errorf("no elements match selector")
@@ -1092,7 +1185,7 @@ func (d *Driver) findElementByPageSourceOnceInternal(sel flow.Selector) (*core.E
 	}
 
 	candidates := FilterBySelector(allElements, sel)
-	candidates = SortClickableFirst(candidates)
+	candidates = SortCandidates(candidates, sel.Index)
 
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no elements match selector")

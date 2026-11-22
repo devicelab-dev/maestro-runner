@@ -16,6 +16,7 @@ import (
 	"github.com/devicelab-dev/maestro-runner/pkg/flow"
 	"github.com/devicelab-dev/maestro-runner/pkg/iosinstall"
 	"github.com/devicelab-dev/maestro-runner/pkg/logger"
+	"github.com/devicelab-dev/maestro-runner/pkg/simulator"
 )
 
 // Tap commands
@@ -54,6 +55,14 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		return errorResult(err, fmt.Sprintf("Element not found: %s", selectorDesc(step.Selector)))
 	}
 
+	if info != nil && info.Class == systemAlertButtonClass {
+		label := info.Text
+		if err := d.answerAlert(func() error { return d.client.TapAlertButton(label) }); err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to tap system alert button: %s", label))
+		}
+		return successResult(fmt.Sprintf("Tapped system alert button: %s", info.Text), info)
+	}
+
 	// If Point is specified WITH selector, tap at relative position within element bounds
 	if step.Point != "" && info != nil && info.Bounds.Width > 0 {
 		px, py, parseErr := core.ParsePointCoords(step.Point, info.Bounds.Width, info.Bounds.Height)
@@ -76,6 +85,10 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 		}
 		x := float64(info.Bounds.X + info.Bounds.Width/2)
 		y := float64(info.Bounds.Y + info.Bounds.Height/2)
+		x, y, info, err = d.aimClearOfKeyboard(step.Selector, info, x, y)
+		if err != nil {
+			return keyboardBlocked(step.Selector, err)
+		}
 		if err := d.client.LongPress(x, y, durationSec); err != nil {
 			return errorResult(err, fmt.Sprintf("Press for %.2fs failed", durationSec))
 		}
@@ -98,6 +111,13 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 			info = fresh
 			x, y, onScreen = d.tapPoint(info.Bounds)
 		}
+	}
+	if onScreen {
+		x, y, info, err = d.aimClearOfKeyboard(step.Selector, info, x, y)
+		if err != nil {
+			return keyboardBlocked(step.Selector, err)
+		}
+		isTextField = strings.Contains(info.Class, "TextField")
 	}
 
 	tapped := false
@@ -159,6 +179,77 @@ func (d *Driver) tapPoint(b core.Bounds) (x, y float64, onScreen bool) {
 		return 0, 0, false
 	}
 	return float64(left+right) / 2, float64(top+bottom) / 2, true
+}
+
+// keyboardRefindMs bounds the lookup of a tap's target after the keyboard
+// that covered it was hidden.
+const keyboardRefindMs = 2000
+
+// aimClearOfKeyboard returns where to tap info's element, planned at (x, y),
+// so the touch does not press a key: when the software keyboard covers that
+// point it hides the keyboard and looks sel up again, then aims at the part
+// of the element above the keyboard if it is still covered, else fails
+// (core.KeyboardGuard). It asks for the keyboard only after a step that may
+// have left it up. The element returned is the one last found.
+func (d *Driver) aimClearOfKeyboard(sel flow.Selector, info *core.ElementInfo, x, y float64) (float64, float64, *core.ElementInfo, error) {
+	if !d.keyboardMayBeUp || core.IsIOSKeyboardType(info.Class) {
+		return x, y, info, nil
+	}
+	target := info.Bounds
+	guard := core.KeyboardGuard{
+		Keyboard: func() (*core.Bounds, error) {
+			kb, err := d.keyboardFrame()
+			if err == nil && kb == nil {
+				d.keyboardMayBeUp = false
+			}
+			return kb, err
+		},
+		OnKeyboard: func() bool { return d.onKeyboard(target) },
+		Hide:       func() { d.hideKeyboard(&flow.HideKeyboardStep{}) },
+		Refind: func() (core.Bounds, float64, float64, bool) {
+			fresh, err := d.findElementForTap(sel, true, keyboardRefindMs)
+			if err != nil || fresh == nil {
+				return core.Bounds{}, 0, 0, false
+			}
+			fx, fy, ok := d.tapPoint(fresh.Bounds)
+			if ok {
+				info = fresh
+			}
+			return fresh.Bounds, fx, fy, ok
+		},
+	}
+	tx, ty, _, err := guard.Aim(target, x, y)
+	return tx, ty, info, err
+}
+
+// onKeyboard reports whether the element with bounds b belongs to the
+// keyboard (a key, its return button), read from the page source; false when
+// the source cannot be read.
+func (d *Driver) onKeyboard(b core.Bounds) bool {
+	src, err := d.client.LookupSource()
+	if err != nil {
+		return false
+	}
+	elems, err := ParsePageSource(src)
+	if err != nil {
+		return false
+	}
+	for _, e := range elems {
+		if e.Bounds != b {
+			continue
+		}
+		for p := e; p != nil; p = p.Parent {
+			if p.Type == "XCUIElementTypeKeyboard" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// keyboardBlocked is the result of a tap whose target the keyboard covers.
+func keyboardBlocked(sel flow.Selector, err error) *core.CommandResult {
+	return errorResult(err, fmt.Sprintf("%s is under the keyboard and could not be tapped: %v", selectorDesc(sel), err))
 }
 
 // dragAndDrop long-presses the from-target, then drags it onto the to-target.
@@ -248,6 +339,11 @@ func (d *Driver) doubleTapOn(step *flow.DoubleTapOnStep) *core.CommandResult {
 		return errorResult(perr, fmt.Sprintf("Invalid point coordinates: %v", perr))
 	}
 	x, y := float64(px), float64(py)
+	if step.Selector.Point == "" {
+		if x, y, info, err = d.aimClearOfKeyboard(step.Selector, info, x, y); err != nil {
+			return keyboardBlocked(step.Selector, err)
+		}
+	}
 
 	if err := d.client.DoubleTap(x, y); err != nil {
 		return errorResult(err, "Double tap failed")
@@ -267,6 +363,11 @@ func (d *Driver) longPressOn(step *flow.LongPressOnStep) *core.CommandResult {
 		return errorResult(perr, fmt.Sprintf("Invalid point coordinates: %v", perr))
 	}
 	x, y := float64(px), float64(py)
+	if step.Selector.Point == "" {
+		if x, y, info, err = d.aimClearOfKeyboard(step.Selector, info, x, y); err != nil {
+			return keyboardBlocked(step.Selector, err)
+		}
+	}
 
 	duration := float64(step.DurationMs) / 1000.0
 	if duration <= 0 {
@@ -329,6 +430,9 @@ func (d *Driver) assertVisible(step *flow.AssertVisibleStep) *core.CommandResult
 
 	info, err := d.findElement(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
+		if axServerDown(err) {
+			return errorResult(err, fmt.Sprintf("Element not visible: %s: %v", selectorDesc(step.Selector), err))
+		}
 		return errorResult(err, fmt.Sprintf("Element not visible: %s", selectorDesc(step.Selector)))
 	}
 
@@ -390,7 +494,7 @@ func (d *Driver) assertVisibleCount(step *flow.AssertVisibleStep, want int) *cor
 // countVisibleMatchesOnce takes one page-source snapshot and counts the
 // selector's visible matches.
 func (d *Driver) countVisibleMatchesOnce(sel flow.Selector) (int, error) {
-	pageSource, err := d.client.Source()
+	pageSource, err := d.client.LookupSource()
 	if err != nil {
 		return 0, err
 	}
@@ -425,7 +529,7 @@ func (d *Driver) assertNotVisible(step *flow.AssertNotVisibleStep) *core.Command
 			return successResult("Element is not visible", nil)
 		}
 
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) || axServerDown(err) {
 			if err != nil {
 				return errorResult(err, fmt.Sprintf("Could not check that %s is not visible: %v", selectorDesc(step.Selector), err))
 			}
@@ -476,7 +580,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 					func(s string) error { return d.client.ElementSendKeys(info.ID, s, d.typingFrequency) },
 					func() error { return d.client.ElementClear(info.ID) },
 				)
-				note := core.ConfirmTypedText(field, text, before, logger.Warn)
+				note := core.ConfirmTypedText(field, text, before, step.Retypes(), logger.Warn)
 				return successResult(fmt.Sprintf("Entered text: %s%s%s", text, unicodeWarning, note), info)
 			}
 		}
@@ -514,7 +618,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 		return errorResult(err, "Input text failed")
 	}
 
-	note := d.focusedReadBack(focusedID, text, before)
+	note := d.focusedReadBack(focusedID, text, before, step.Retypes())
 	return successResult(fmt.Sprintf("Entered text: %s%s%s", text, unicodeWarning, note), nil)
 }
 
@@ -537,7 +641,7 @@ func (d *Driver) inputText(step *flow.InputTextStep) *core.CommandResult {
 //     typed with characters missing, wherever they went missing, is retyped.
 //     A max length that cuts the text short looks the same, and gets one
 //     retype that leaves the same value and a warning in the step's message.
-func (d *Driver) focusedReadBack(focusedID, text, before string) string {
+func (d *Driver) focusedReadBack(focusedID, text, before string, retype bool) string {
 	if focusedID == "" || strings.ContainsAny(text, "\n\t") {
 		return ""
 	}
@@ -562,7 +666,7 @@ func (d *Driver) focusedReadBack(focusedID, text, before string) string {
 		func(s string) error { return d.client.ElementSendKeys(focusedID, s, d.typingFrequency) },
 		func() error { return d.client.ElementClear(focusedID) },
 	)
-	return core.ConfirmTypedText(field, text, before, logger.Warn)
+	return core.ConfirmTypedText(field, text, before, retype, logger.Warn)
 }
 
 // onlyDropped reports whether typing text into a field that held before left
@@ -667,6 +771,11 @@ func (d *Driver) eraseText(step *flow.EraseTextStep) *core.CommandResult {
 	if err == nil && elemID != "" {
 		// Got active element - try to read its text
 		currentText, textErr := d.client.ElementText(elemID)
+		if textErr == nil && chars < len([]rune(currentText)) && d.showsPlaceholder(elemID, currentText) {
+			// WDA reads an empty field's placeholder as its text: keeping
+			// "the rest" of it would type the placeholder into the field.
+			currentText = ""
+		}
 		if textErr == nil {
 			textLen := len([]rune(currentText)) // Use runes for proper Unicode handling
 
@@ -709,12 +818,110 @@ func (d *Driver) eraseText(step *flow.EraseTextStep) *core.CommandResult {
 	return successResult(fmt.Sprintf("Erased %d characters", chars), nil)
 }
 
-func (d *Driver) hideKeyboard(step *flow.HideKeyboardStep) *core.CommandResult {
-	// iOS: tap outside to dismiss keyboard, or press Done button
-	// Try pressing the "return" key (ignore error - keyboard might not be visible)
-	_ = d.client.SendKeys("\n", 0)
+// showsPlaceholder reports whether text, read from an element, is its
+// placeholder: WDA's text of an empty text field is the placeholder.
+func (d *Driver) showsPlaceholder(elemID, text string) bool {
+	placeholder, err := d.client.ElementAttribute(elemID, "placeholderValue")
+	return err == nil && placeholder != "" && placeholder == text
+}
 
-	return successResult("Attempted to hide keyboard", nil)
+// keyboardFrame returns the software keyboard's frame, nil when none is on
+// screen.
+func (d *Driver) keyboardFrame() (*core.Bounds, error) {
+	ids, err := d.client.FindElements("class chain", "**/XCUIElementTypeKeyboard")
+	if err != nil || len(ids) == 0 {
+		return nil, err
+	}
+	x, y, w, h, err := d.client.ElementRect(ids[0])
+	if err != nil {
+		return nil, err
+	}
+	if w <= 0 || h <= 0 {
+		return nil, nil
+	}
+	return &core.Bounds{X: x, Y: y, Width: w, Height: h}, nil
+}
+
+// hideKeyboard dismisses the software keyboard the way Maestro's iOS driver
+// does: two short drags (up, then left) that a scroll view turns into a
+// dismissal. It no longer presses return, which in a form submits it or
+// closes the screen. With no keyboard up it does nothing, as in Maestro. A
+// keyboard that will not go is left up, and the step still passes, as in
+// Maestro.
+func (d *Driver) hideKeyboard(step *flow.HideKeyboardStep) *core.CommandResult {
+	kb, err := d.keyboardFrame()
+	if err == nil && kb == nil {
+		d.keyboardMayBeUp = false
+		return successResult("No keyboard to hide", nil)
+	}
+	if d.dismissKeyboard(kb) {
+		d.keyboardMayBeUp = false
+		return successResult("Keyboard hidden", nil)
+	}
+	logger.Info("[wda] hideKeyboard: the keyboard is still visible after the dismiss drags")
+	return successResult("Keyboard still visible (not dismissible here)", nil)
+}
+
+const (
+	// keyboardDragMs is how long each dismissing drag moves: Maestro's 50 ms.
+	keyboardDragMs = 50
+	// keyboardDragFraction is each drag's length as a share of the screen:
+	// Maestro's 3%.
+	keyboardDragFraction = 0.03
+)
+
+// keyboardDragPause is how long the keyboard gets to go after each drag.
+var keyboardDragPause = 300 * time.Millisecond
+
+// dismissKeyboard makes Maestro's two keyboard-dismissing drags and reports
+// whether the keyboard went. kb is the keyboard's frame, nil when unknown.
+// Maestro starts them at the exact centre of the screen, where a 50 ms drag
+// still presses the control under it; they start at the point nearest the
+// centre that no control covers (core.KeyboardDragStart). With no such point
+// the keyboard stays. When the screen cannot be read, the centre is used, as
+// in Maestro.
+func (d *Driver) dismissKeyboard(kb *core.Bounds) bool {
+	w, h, err := d.screenSize()
+	if err != nil {
+		return false
+	}
+	keyboardTop := h
+	if kb != nil {
+		keyboardTop = kb.Y
+	}
+	sx, sy, ok := w/2, h/2, true
+	if src, err := d.client.LookupSource(); err == nil {
+		if elems, err := ParsePageSource(src); err == nil {
+			elems = FilterOutOfBounds(elems, w, h)
+			nodes := make([]core.ScreenNode, 0, len(elems))
+			for _, e := range elems {
+				if kb == nil && e.Type == "XCUIElementTypeKeyboard" && e.Bounds.Height > 0 {
+					keyboardTop = e.Bounds.Y
+				}
+				nodes = append(nodes, core.ScreenNode{Type: e.Type, Bounds: e.Bounds, Leaf: len(e.Children) == 0})
+			}
+			sx, sy, ok = core.KeyboardDragStart(nodes, w, h, keyboardTop)
+		}
+	}
+	if !ok {
+		logger.Debug("[wda] hideKeyboard: no point clear of controls to start the dismiss drags")
+		return false
+	}
+	x, y := float64(sx), float64(sy)
+	ends := [][2]float64{
+		{x, y - float64(h)*keyboardDragFraction},
+		{x - float64(w)*keyboardDragFraction, y},
+	}
+	for _, end := range ends {
+		if err := d.client.Flick(x, y, end[0], end[1], keyboardDragMs); err != nil {
+			return false
+		}
+		time.Sleep(keyboardDragPause)
+		if visible, err := d.keyboardVisible(); err == nil && !visible {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *Driver) acceptAlert(step *flow.AcceptAlertStep) *core.CommandResult {
@@ -745,13 +952,19 @@ func (d *Driver) waitForAlert(timeoutMs int, accept bool) *core.CommandResult {
 		case <-ctx.Done():
 			return successResult(fmt.Sprintf("No alert to %s", action), nil)
 		default:
-			var err error
+			answer := d.client.DismissAlert
 			if accept {
-				err = d.client.AcceptAlert()
-			} else {
-				err = d.client.DismissAlert()
+				answer = d.client.AcceptAlert
 			}
-			if err == nil {
+			if _, err := d.client.AlertText(); err == nil {
+				if err := d.answerAlert(answer); err != nil {
+					return errorResult(err, fmt.Sprintf("Failed to %s alert", action))
+				}
+				return successResult(fmt.Sprintf("Alert %sed", action), nil)
+			}
+			// /alert/text has failed: either no alert yet, or WDA can't read
+			// one it could still answer, as before.
+			if err := answer(); err == nil {
 				return successResult(fmt.Sprintf("Alert %sed", action), nil)
 			}
 			time.Sleep(500 * time.Millisecond)
@@ -854,7 +1067,7 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	if step.MaxScrolls > 0 {
 		maxScrolls = step.MaxScrolls
 	}
-	timeout := 30 * time.Second
+	timeout := core.ScrollUntilVisibleDefaultTimeout
 	if step.TimeoutMs > 0 {
 		timeout = time.Duration(step.TimeoutMs) * time.Millisecond
 	}
@@ -870,6 +1083,11 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 	var shown *core.ElementInfo
 
 	for i := 0; i < maxScrolls && time.Now().Before(deadline); i++ {
+		// A cancelled run stops here: with a timeout of its own the step
+		// would otherwise swipe on a still screen until that timeout.
+		if err := d.parentContext().Err(); err != nil {
+			return errorResult(fmt.Errorf("scroll cancelled: %w", err), "")
+		}
 		info, err := d.findElement(step.Element, true, 1000)
 		if err == nil && info != nil {
 			// Found in the tree is not enough: an element half-hidden behind
@@ -919,12 +1137,21 @@ func (d *Driver) scrollUntilVisible(step *flow.ScrollUntilVisibleStep) *core.Com
 			if shown != nil {
 				return successResult("Element visible after scrolling (end of content before centring)", shown)
 			}
-			return errorResult(fmt.Errorf("element not found after scrolling"), fmt.Sprintf("Element not found: %s — scrolling %s made no progress after %d scrolls (end of content?)", selectorDesc(step.Element), direction, i+1))
+			// A step with its own timeout looks until it passes, as in Maestro:
+			// a list still filling reads as stuck too.
+			if !core.ScrollLooksUntilTimeout(step) {
+				return errorResult(fmt.Errorf("element not found after scrolling"), fmt.Sprintf("Element not found: %s — scrolling %s made no progress after %d scrolls (end of content?)", selectorDesc(step.Element), direction, i+1))
+			}
 		}
 	}
 
 	if shown != nil {
 		return successResult("Element visible after scrolling (scrolls ran out before centring)", shown)
+	}
+	// A step with its own timeout that ran out of it fails in Maestro's
+	// words; one without keeps its message, however its loop ended.
+	if core.ScrollLooksUntilTimeout(step) && !time.Now().Before(deadline) {
+		return errorResult(fmt.Errorf("element not found after scrolling"), core.ScrollTimeoutMessage(selectorDesc(step.Element), direction, timeout))
 	}
 	return errorResult(fmt.Errorf("element not found after scrolling"), fmt.Sprintf("Element not found: %s", selectorDesc(step.Element)))
 }
@@ -1248,7 +1475,7 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 	}
 
 	if d.udid != "" {
-		d.alertAction = resolveAlertAction(permissions)
+		d.alertAction = d.flowAlertAction(permissions)
 	}
 
 	// Convert arguments map to iOS launch arguments format
@@ -1303,12 +1530,13 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 		// driver settles on screenshots itself.
 		"animationCoolOffTimeout": 0,
 		"defaultAlertAction":      d.alertAction,
-		"autoClickAlertSelector":  autoClickAlertSelector(d.alertAction),
-	}
-	if d.alertAction == "accept" {
-		sessionSettings["acceptAlertButtonSelector"] = "**/XCUIElementTypeButton[`label BEGINSWITH[c] 'Allow' OR label ==[c] 'OK'`]"
-	} else if d.alertAction == "dismiss" {
-		sessionSettings["dismissAlertButtonSelector"] = "**/XCUIElementTypeButton[`label CONTAINS[c] 'Don't Allow' OR label CONTAINS[c] 'Dont Allow'`]"
+		"autoClickAlertSelector":  autoClickAlertSelector(d.alertAction, d.localPromptLabels(d.alertAction)),
+		// acceptAlert and dismissAlert name their button whatever the
+		// permissions: without a match WDA taps by position (dismiss the
+		// first button, accept the last), which on a stacked alert is the
+		// wrong end: "Allow Once" for a dismiss.
+		"acceptAlertButtonSelector":  acceptAlertButtonSelector,
+		"dismissAlertButtonSelector": dismissAlertButtonSelector,
 	}
 	_ = d.client.UpdateSettings(sessionSettings)
 
@@ -1323,13 +1551,19 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 	// before launching it unless the flow says `stopApp: false`. Without the stop,
 	// a relaunch only brought a running app to the front, still where it was, so
 	// a flow checking what survives a restart tested nothing.
+	resuming := false
 	if hasArgs || step.StopApp == nil || *step.StopApp {
 		_ = d.client.TerminateApp(bundleID)
+	} else {
+		resuming = d.inBackground(bundleID)
 	}
 
 	// Launch the app (with or without args)
 	if err := d.client.LaunchAppWithArgs(bundleID, launchArgs, launchEnv); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to launch app: %s", bundleID))
+	}
+	if resuming {
+		d.waitAfterResume()
 	}
 
 	return successResult(fmt.Sprintf("Launched app: %s", bundleID), nil)
@@ -1605,7 +1839,7 @@ func (d *Driver) copyTextFrom(step *flow.CopyTextFromStep) *core.CommandResult {
 // lookup returns an element id, and those are plain text and id selectors, so
 // there is no relative selector to resolve here.
 func (d *Driver) pageSourceText(sel flow.Selector, want core.Bounds) (string, error) {
-	pageSource, err := d.client.Source()
+	pageSource, err := d.client.LookupSource()
 	if err != nil {
 		return "", err
 	}
@@ -1816,6 +2050,9 @@ func (d *Driver) waitUntil(step *flow.WaitUntilStep) *core.CommandResult {
 				if err == nil && info != nil {
 					return successResult("Element became visible", info)
 				}
+				if axServerDown(err) {
+					return errorResult(err, fmt.Sprintf("Could not wait for '%s': %v", selector.Describe(), err))
+				}
 			} else {
 				// Single attempt for not visible check. Only a lookup that
 				// read the screen and found no match means the element is
@@ -1823,6 +2060,9 @@ func (d *Driver) waitUntil(step *flow.WaitUntilStep) *core.CommandResult {
 				info, err := d.findElementOnce(*step.NotVisible)
 				if isNotFound(err) || (err == nil && info == nil) {
 					return successResult("Element became not visible", nil)
+				}
+				if axServerDown(err) {
+					return errorResult(err, fmt.Sprintf("Could not check that '%s' is not visible: %v", selector.Describe(), err))
 				}
 				unreadable = err
 				if unreadable != nil {
@@ -2184,17 +2424,70 @@ const (
 	autoDismissAlertSelector = "**/XCUIElementTypeButton[`(label BEGINSWITH[c] 'Don' AND label CONTAINS[c] 'Allow') OR label BEGINSWITH[c] 'Ask App Not'`]"
 )
 
+// Selectors for the buttons acceptAlert and dismissAlert tap. Only a button
+// with no match falls back to WDA's positional pick. The apostrophe in
+// "Don't Allow" is matched as "Don…Allow": a quote inside the predicate ends
+// its string, and the selector that had one never matched.
+const (
+	acceptAlertButtonSelector  = "**/XCUIElementTypeButton[`label BEGINSWITH[c] 'Allow' OR label ==[c] 'OK' OR label ==[c] 'Continue' OR label ==[c] 'Open' OR label ==[c] 'Yes'`]"
+	dismissAlertButtonSelector = "**/XCUIElementTypeButton[`(label BEGINSWITH[c] 'Don' AND label CONTAINS[c] 'Allow') OR label BEGINSWITH[c] 'Ask App Not' OR label ==[c] 'Cancel' OR label ==[c] 'Not Now' OR label ==[c] 'Close' OR label ==[c] 'No' OR label ==[c] 'Dismiss'`]"
+)
+
 // autoClickAlertSelector returns the autoClickAlertSelector for an alert
-// action from resolveAlertAction: "" (monitor off) when there is none.
-func autoClickAlertSelector(alertAction string) string {
+// action from resolveAlertAction: "" (monitor off) when there is none. On a
+// simulator in another language, labels adds the prompt buttons as iOS words
+// them there ("Erlauben" in German), each matched as a whole label.
+func autoClickAlertSelector(alertAction string, labels core.IOSPromptLabels) string {
+	var sel string
 	switch alertAction {
 	case "accept":
-		return autoAcceptAlertSelector
+		sel = autoAcceptAlertSelector
 	case "dismiss":
-		return autoDismissAlertSelector
+		sel = autoDismissAlertSelector
 	default:
 		return ""
 	}
+	var extra []string
+	for _, l := range labels.Labels(alertAction) {
+		// The label goes inside a quoted predicate string inside a
+		// backtick-quoted class chain; one that would end either is left out.
+		if strings.ContainsAny(l, "'`\\\"") {
+			continue
+		}
+		extra = append(extra, "label ==[c] '"+l+"'")
+	}
+	if len(extra) == 0 {
+		return sel
+	}
+	return strings.TrimSuffix(sel, "`]") + " OR " + strings.Join(extra, " OR ") + "`]"
+}
+
+// localPromptLabels is, on a simulator, its prompt vocabulary in its preferred
+// languages, read the first time an action needs it. A real device, no
+// action, or strings that cannot be read keep the English labels.
+func (d *Driver) localPromptLabels(alertAction string) core.IOSPromptLabels {
+	if alertAction == "" {
+		return core.IOSPromptLabels{}
+	}
+	d.promptLabelsOnce.Do(func() {
+		if d.loadPromptLabels != nil {
+			d.promptLabels = d.loadPromptLabels()
+			return
+		}
+		if d.info == nil || !d.info.IsSimulator || d.udid == "" {
+			return
+		}
+		pairs, err := simulator.PromptStringPairs(d.udid)
+		if err != nil {
+			logger.Debug("[wda] permission prompt strings unavailable, English labels only: %v", err)
+			return
+		}
+		d.promptLabels = core.NewIOSPromptLabels(pairs)
+		if n := len(d.promptLabels.Labels("accept")) + len(d.promptLabels.Labels("dismiss")); n > 0 {
+			logger.Debug("[wda] %d localized permission prompt labels", n)
+		}
+	})
+	return d.promptLabels
 }
 
 // resolveAlertAction determines the WDA defaultAlertAction from a permission map.

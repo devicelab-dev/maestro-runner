@@ -58,6 +58,9 @@ final class RunnerTests: XCTestCase {
   // a caller polling snapshots during settle paid it on each following
   // interaction.
   let firstInteractionAfterActivateDelay: TimeInterval = 0.1
+  // The most a resume (activating a backgrounded app) waits for SpringBoard
+  // to go idle. WebDriverAgent saw lost taps with no wait and none with 2 s.
+  let resumeSpringBoardIdleTimeout: TimeInterval = 2.0
   // The idle command's cap when the caller gives none, and the most it may
   // ask for: well under mainThreadExecutionTimeout, so a wait can never be
   // mistaken for a hung main thread.

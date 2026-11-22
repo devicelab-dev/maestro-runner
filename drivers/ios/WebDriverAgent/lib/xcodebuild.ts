@@ -26,6 +26,9 @@ import {
 
 const DEFAULT_SIGNING_ID = 'iPhone Developer';
 const PREBUILD_DELAY = 0;
+// Bounds the best-effort udid case lookup so a hung 'xcodebuild -showdestinations' cannot stall
+// session startup past wdaLaunchTimeout, which does not cover this step.
+const XCODE_DEVICE_UDID_RESOLUTION_TIMEOUT_MS = 15000;
 
 const ERROR_WRITING_ATTACHMENT = 'Error writing attachment data to file';
 const ERROR_COPYING_ATTACHMENT = 'Error copying testing attachment';
@@ -43,6 +46,7 @@ export class XcodeBuild {
   readonly device: AppleDevice;
   readonly realDevice: boolean;
   readonly agentPath: string;
+  private _xcodeDeviceUdidPromise?: Promise<string>;
   readonly bootstrapPath: string;
   readonly platformVersion?: string;
   readonly platformName?: string;
@@ -70,7 +74,6 @@ export class XcodeBuild {
   private readonly resultBundlePath?: string;
   private readonly resultBundleVersion?: string;
   private _didBuildFail: boolean;
-  private _didProcessExit: boolean;
   private readonly _buildSettingsPromises = new Map<string, Promise<XcodeBuildSettings | undefined>>();
   private noSessionProxy?: NoSessionProxy;
   private xctestrunFilePath?: string;
@@ -126,7 +129,6 @@ export class XcodeBuild {
     this.resultBundleVersion = args.resultBundleVersion;
 
     this._didBuildFail = false;
-    this._didProcessExit = false;
   }
 
   /**
@@ -138,6 +140,8 @@ export class XcodeBuild {
     this.noSessionProxy = noSessionProxy;
 
     if (this.useXctestrunFile) {
+      // Keep the caller's udid casing: the canonical case is only for '-destination id=';
+      // switching it here would orphan an existing .xctestrun file on case-sensitive filesystems.
       const deviceInfo = {
         isRealDevice: !!this.realDevice,
         udid: this.device.udid,
@@ -244,11 +248,13 @@ export class XcodeBuild {
       throw new Error('xcodebuild subprocess was not created');
     }
     const xcodebuild = this.xcodebuild;
+    // Exit state belongs to this invocation, including build-only invocations.
+    let didProcessExit = false;
     return await new Promise<StringRecord | void>((resolve, reject) => {
       xcodebuild.once('exit', (code, signal) => {
         xcodeLog.error(`xcodebuild exited with code '${code}' and signal '${signal}'`);
         xcodebuild.removeAllListeners();
-        this._didProcessExit = true;
+        didProcessExit = true;
         if (this._didBuildFail || (!signal && code !== 0)) {
           let errorMessage =
             `xcodebuild failed with code ${code}.` +
@@ -279,7 +285,7 @@ export class XcodeBuild {
           }
           await xcodebuild.start(true);
           if (!buildOnly) {
-            const result = await this.waitForStart(timer);
+            const result = await this.waitForStart(timer, () => didProcessExit);
             resolve(result ?? undefined);
           }
         } catch (err: any) {
@@ -358,7 +364,48 @@ export class XcodeBuild {
     return entry.buildSettings;
   }
 
-  private getCommand(buildOnly: boolean = false): {cmd: string; args: string[]} {
+  /**
+   * Best-effort resolves this real device's udid to the case xcodebuild's own
+   * `-showdestinations` listing reports it in, so the `-destination id=` argument this class
+   * builds does not depend on whatever case the caller happened to pass in — different Apple
+   * tooling doesn't agree on udid letter case. Falls back to `device.udid` unchanged on any
+   * failure, timeout, or when no destination matches. A no-op for simulators, whose udid is
+   * already canonical by construction.
+   */
+  private resolveXcodeDeviceUdid(): Promise<string> {
+    if (!this.realDevice) {
+      return Promise.resolve(this.device.udid);
+    }
+    // Cache the in-flight promise itself (not just a "did we start" flag), so concurrent callers
+    // await the same resolution instead of one of them racing ahead with a value that isn't
+    // resolved yet.
+    if (!this._xcodeDeviceUdidPromise) {
+      this._xcodeDeviceUdidPromise = this.fetchXcodeDeviceUdid();
+    }
+    return this._xcodeDeviceUdidPromise;
+  }
+
+  private async fetchXcodeDeviceUdid(): Promise<string> {
+    const runnerScheme = `WebDriverAgentRunner${getPlatformSchemeSuffix(this.platformName || '')}`;
+    let stdout: string;
+    try {
+      ({stdout} = await exec('xcodebuild', ['-showdestinations', '-project', this.agentPath, '-scheme', runnerScheme], {
+        timeout: XCODE_DEVICE_UDID_RESOLUTION_TIMEOUT_MS,
+      }));
+    } catch (err: any) {
+      this.log.debug(
+        `Cannot list xcodebuild destinations to resolve the canonical udid case for '${this.device.udid}'. ` +
+          `Will use it as is. Original error: ${err.message}`,
+      );
+      return this.device.udid;
+    }
+
+    const udid = this.device.udid.toLowerCase();
+    const match = [...stdout.matchAll(/\bid:([0-9A-Fa-f-]+)/g)].find(([, id]) => id.toLowerCase() === udid);
+    return match?.[1] ?? this.device.udid;
+  }
+
+  private getCommand(buildOnly: boolean, resolvedUdid: string): {cmd: string; args: string[]} {
     const cmd = 'xcodebuild';
     const args: string[] = [];
 
@@ -396,7 +443,7 @@ export class XcodeBuild {
         args.push('-derivedDataPath', this.derivedDataPath);
       }
     }
-    args.push('-destination', `id=${this.device.udid}`);
+    args.push('-destination', `id=${resolvedUdid}`);
 
     const versionMatch = this.platformVersion ? new RegExp(/^(\d+)\.(\d+)/).exec(this.platformVersion) : null;
     if (versionMatch) {
@@ -443,7 +490,8 @@ export class XcodeBuild {
       await setRealDeviceSecurity(this.keychainPath, this.keychainPassword);
     }
 
-    const {cmd, args} = this.getCommand(buildOnly);
+    const resolvedUdid = await this.resolveXcodeDeviceUdid();
+    const {cmd, args} = this.getCommand(buildOnly, resolvedUdid);
     this.log.debug(
       `Beginning ${buildOnly ? 'build' : 'test'} with command '${cmd} ${args.join(' ')}' ` +
         `in directory '${this.bootstrapPath}'`,
@@ -505,7 +553,7 @@ export class XcodeBuild {
     return xcodebuild;
   }
 
-  private async waitForStart(timer: timing.Timer): Promise<StringRecord | null> {
+  private async waitForStart(timer: timing.Timer, didProcessExit: () => boolean): Promise<StringRecord | null> {
     // try to connect once every 0.5 seconds, until `launchTimeout` is up
     const timeout = this.launchTimeout || 60000; // Default to 60 seconds if not set
     this.log.debug(`Waiting up to ${timeout}ms for WebDriverAgent to start`);
@@ -517,7 +565,7 @@ export class XcodeBuild {
       }
       const noSessionProxy = this.noSessionProxy;
       await retryInterval(retries, 1000, async () => {
-        if (this._didProcessExit) {
+        if (didProcessExit()) {
           // there has been an error elsewhere and we need to short-circuit
           return currentStatus;
         }
@@ -537,7 +585,7 @@ export class XcodeBuild {
         }
       });
 
-      if (this._didProcessExit) {
+      if (didProcessExit()) {
         // there has been an error elsewhere and we need to short-circuit
         return currentStatus;
       }

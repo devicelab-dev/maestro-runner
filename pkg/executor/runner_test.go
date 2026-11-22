@@ -3096,3 +3096,58 @@ func TestRunner_AssertScreenshotStep_ClearsStaleDiffOnSizeMismatch(t *testing.T)
 		t.Errorf("a cropOn assertion should explain why sizes drift, got %q", msg)
 	}
 }
+
+// A whole-screen baseline from another device (different size or scale) fails
+// on size, as Maestro does, and the error says why and how to fix it.
+func TestRunner_AssertScreenshotStep_FullScreenSizeMismatchHint(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	base := imagecolor.RGBA{R: 10, G: 20, B: 30, A: 255}
+	reference := encodeTestFilledPNG(t, 1080, 2340, base, nil)
+	captured := encodeTestFilledPNG(t, 1170, 2532, base, nil)
+	if err := os.WriteFile(filepath.Join(tmpDir, "reference.png"), reference, 0o644); err != nil {
+		t.Fatalf("write reference image: %v", err)
+	}
+
+	driver := &mockDriver{
+		executeFunc: func(step flow.Step) *core.CommandResult {
+			if _, ok := step.(*flow.AssertScreenshotStep); ok {
+				return &core.CommandResult{Success: true, Data: captured}
+			}
+			return &core.CommandResult{Success: true}
+		},
+	}
+	runner := New(driver, RunnerConfig{
+		OutputDir: filepath.Join(tmpDir, "output"),
+		Artifacts: ArtifactNever,
+		Device:    report.Device{ID: "test", Platform: "android"},
+		App:       report.App{ID: "com.test"},
+	})
+	flows := []flow.Flow{{
+		SourcePath: filepath.Join(tmpDir, "test.yaml"),
+		Config:     flow.Config{Name: "Assert Screenshot Other Device"},
+		Steps: []flow.Step{&flow.AssertScreenshotStep{
+			BaseStep:            flow.BaseStep{StepType: flow.StepAssertScreenshot},
+			Path:                "reference",
+			ThresholdPercentage: 95,
+		}},
+	}}
+
+	result, err := runner.Run(context.Background(), flows)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Status != report.StatusFailed {
+		t.Fatalf("Status = %v, want %v", result.Status, report.StatusFailed)
+	}
+	msg := result.FlowResults[0].Error
+	if !strings.Contains(msg, "size mismatch: expected 1080x2340, actual 1170x2532") {
+		t.Errorf("error should name both sizes, got %q", msg)
+	}
+	if !strings.Contains(msg, "recorded on a screen of another size") {
+		t.Errorf("a full-screen mismatch should name the other-device cause, got %q", msg)
+	}
+	if strings.Contains(msg, "cropOn") {
+		t.Errorf("no cropOn hint without cropOn, got %q", msg)
+	}
+}
