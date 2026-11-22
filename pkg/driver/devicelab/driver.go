@@ -422,10 +422,11 @@ func (d *Driver) SetWebViewForwarder(forwarder CDPForwarder) {
 	d.webView = newWebViewManager(forwarder)
 }
 
-// Close cleans up resources (WebView CDP connection, ADB forwards).
+// Close cleans up resources (WebView CDP connection, ADB forwards) and closes
+// the Chrome tabs the runner opened.
 func (d *Driver) Close() {
 	if d.webView != nil {
-		d.webView.disconnect()
+		d.webView.closeOpenedTabs()
 	}
 }
 
@@ -978,6 +979,27 @@ func (d *Driver) scanCDPSocket() *core.CDPInfo {
 
 	d.lastCDPResult = nil
 	return nil
+}
+
+// browserDevToolsSocket returns the browser's DevTools socket on the device
+// (chrome_devtools_remote), whether or not the browser is in the foreground,
+// or "" when there is none.
+func (d *Driver) browserDevToolsSocket() string {
+	output, err := d.device.Shell("cat /proc/net/unix")
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(output, "\n") {
+		atIdx := strings.Index(line, "@")
+		if atIdx < 0 {
+			continue
+		}
+		socket := strings.TrimSpace(line[atIdx+1:])
+		if strings.HasPrefix(socket, "chrome_devtools_remote") || strings.HasPrefix(socket, "chromium_devtools_remote") {
+			return socket
+		}
+	}
+	return ""
 }
 
 // knownBrowserPackages is the set of Android packages that are browsers.

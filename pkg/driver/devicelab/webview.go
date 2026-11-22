@@ -77,6 +77,11 @@ type webViewManager struct {
 	// time.
 	preexistingTabs map[string]bool
 
+	// browserSocket is Chrome's DevTools socket on the device, remembered
+	// from the first look so that closeOpenedTabs can reach Chrome after
+	// openLink's disconnect.
+	browserSocket string
+
 	forwarder CDPForwarder
 }
 
@@ -933,6 +938,8 @@ func (m *webViewManager) connectBrowserViaHTTP(cdpInfo *core.CDPInfo, cdpType st
 	}
 	logger.Info("[cdp:4-forward] ADB forward established: local=%s → device=%s", socketPath, cdpInfo.Socket)
 
+	m.browserSocket = cdpInfo.Socket
+
 	// Step 5: HTTP GET /json to discover page targets
 	logger.Info("[cdp:5-discover] fetching page targets via HTTP /json")
 	targets, err := m.fetchCDPTargets(socketPath)
@@ -1075,13 +1082,7 @@ func (m *webViewManager) fetchCDPTargets(socketPath string) ([]cdpTarget, error)
 // logged but ignored. Called with m.mu held.
 func (m *webViewManager) closeOtherTabs(socketPath string, targets []cdpTarget, keepID string) {
 	if m.preexistingTabs == nil {
-		m.preexistingTabs = map[string]bool{}
-		for _, t := range targets {
-			if t.Type == "page" {
-				m.preexistingTabs[t.ID] = true
-			}
-		}
-		logger.Info("[cdp:5-cleanup] %d tab(s) were open at the first look; they stay open", len(m.preexistingTabs))
+		m.rememberFirstLook(targets)
 		return
 	}
 
@@ -1109,6 +1110,84 @@ func (m *webViewManager) closeOtherTabs(socketPath string, targets []cdpTarget, 
 	if closed > 0 {
 		logger.Info("[cdp:5-cleanup] closed %d old tab(s), keeping %s", closed, keepID)
 	}
+}
+
+// rememberFirstLook records the page targets of the first look at Chrome's
+// tabs as the ones that were open before the runner. Called with m.mu held.
+func (m *webViewManager) rememberFirstLook(targets []cdpTarget) {
+	m.preexistingTabs = map[string]bool{}
+	for _, t := range targets {
+		if t.Type == "page" {
+			m.preexistingTabs[t.ID] = true
+		}
+	}
+	logger.Info("[cdp:5-cleanup] %d tab(s) were open at the first look; they stay open", len(m.preexistingTabs))
+}
+
+// hasLookedAtTabs reports whether the first look at Chrome's tabs was taken.
+func (m *webViewManager) hasLookedAtTabs() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.preexistingTabs != nil
+}
+
+// lookFirst takes the first look at Chrome's tabs through its DevTools
+// socket on the device, before an openLink opens a tab, so that tab counts as
+// one the runner opened. Without it, the tab an openLink opened before the
+// first connect was listed at the first look and stayed open. It does nothing
+// once a look was taken, or while a WebView connection holds the forward.
+func (m *webViewManager) lookFirst(socket string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.preexistingTabs != nil || m.socketPath != "" {
+		return
+	}
+	socketPath := m.forwarder.CDPSocketPath()
+	if err := m.forwarder.ForwardToAbstractSocket(socketPath, socket); err != nil {
+		logger.Debug("[cdp:5-cleanup] first look: ADB forward failed: %v", err)
+		return
+	}
+	defer func() {
+		_ = m.forwarder.RemoveSocketForward(socketPath)
+		os.Remove(socketPath)
+	}()
+	targets, err := m.fetchCDPTargets(socketPath)
+	if err != nil {
+		logger.Debug("[cdp:5-cleanup] first look: %v", err)
+		return
+	}
+	m.browserSocket = socket
+	m.rememberFirstLook(targets)
+}
+
+// closeOpenedTabs closes every Chrome tab the runner opened (every page
+// target not listed at the first look), then disconnects. Called when the
+// driver closes: a tab of the runner's left open would be listed at the next
+// run's first look, and that run never closes those, so they would pile up
+// across runs. A run that ends without it (killed, or the device gone) still
+// leaves its tabs, which later runs keep.
+func (m *webViewManager) closeOpenedTabs() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.disconnectLocked()
+	if m.preexistingTabs == nil || m.browserSocket == "" {
+		return
+	}
+	socketPath := m.forwarder.CDPSocketPath()
+	if err := m.forwarder.ForwardToAbstractSocket(socketPath, m.browserSocket); err != nil {
+		logger.Debug("[cdp:close] ADB forward failed, tabs left open: %v", err)
+		return
+	}
+	defer func() {
+		_ = m.forwarder.RemoveSocketForward(socketPath)
+		os.Remove(socketPath)
+	}()
+	targets, err := m.fetchCDPTargets(socketPath)
+	if err != nil {
+		logger.Debug("[cdp:close] tabs left open: %v", err)
+		return
+	}
+	m.closeOtherTabs(socketPath, targets, "")
 }
 
 // disconnect closes the Rod connection and cleans up ADB forwarding.
