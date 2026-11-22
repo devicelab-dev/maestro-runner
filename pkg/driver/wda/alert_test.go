@@ -387,6 +387,8 @@ func promptOverAppServer(t *testing.T) (*Driver, *[]string) {
 			jsonResponse(w, map[string]interface{}{"value": nil})
 		case strings.HasSuffix(p, "/screenshot"):
 			jsonResponse(w, map[string]interface{}{"value": "c2FtZQ=="})
+		case strings.HasSuffix(p, "/element"):
+			jsonResponse(w, map[string]interface{}{"value": map[string]interface{}{"ELEMENT": "next"}})
 		case strings.HasSuffix(p, "/elements"):
 			jsonResponse(w, map[string]interface{}{"value": []map[string]interface{}{{
 				"ELEMENT": "next", "name": "next", "text": "Next", "displayed": true,
@@ -472,6 +474,47 @@ func TestTapAsksForPromptsOnlyInTheWatch(t *testing.T) {
 	for _, c := range *calls {
 		if c == "alert/text" {
 			t.Errorf("asked again within %v: %v", promptCheckEvery, *calls)
+		}
+	}
+}
+
+// A tap is aimed at a prompt only through one of its buttons: a tap on the
+// app's "Notifications" while the notification prompt is up gets the prompt
+// answered first, or the tap is lost under it. A check of the prompt's text
+// is still left the prompt.
+func TestTapOnThePromptsTextGetsThePromptAnsweredFirst(t *testing.T) {
+	d, calls := promptOverAppServer(t)
+	tracking := &flow.TapOnStep{Selector: textSelector("Ask App Not to Track")}
+	tracking.Optional = true
+	d.PrepareForFlow([]flow.Step{&flow.LaunchAppStep{}, tracking})
+	d.watchForPrompts(promptLaunchWindow) // as launchApp does
+	res := d.Execute(&flow.TapOnStep{Selector: textSelector("Notifications")})
+	if !res.Success {
+		t.Fatalf("tap failed: %s", res.Message)
+	}
+	if got := strings.Join(tapCalls(*calls), ", "); got != "accept, tap" {
+		t.Errorf("calls = %s, want the prompt answered, then the tap", got)
+	}
+}
+
+func TestStepAimsAtAlertMatchesTapsOnButtonsOnly(t *testing.T) {
+	text := "“Lab” Would Like to Send You Notifications"
+	buttons := []string{"Don’t Allow", "Allow"}
+	for _, tc := range []struct {
+		step flow.Step
+		want bool
+	}{
+		{&flow.TapOnStep{Selector: textSelector("Don't Allow")}, true},
+		{&flow.TapOnStep{Selector: textSelector("Notifications")}, false},
+		{&flow.TapOnStep{Selector: textSelector("Lab")}, false},
+		{&flow.DoubleTapOnStep{Selector: textSelector("Notifications")}, false},
+		{&flow.LongPressOnStep{Selector: textSelector("Notifications")}, false},
+		{&flow.LongPressOnStep{Selector: textSelector("Allow")}, true},
+		{&flow.AssertVisibleStep{Selector: textSelector("Notifications")}, true},
+		{&flow.WaitUntilStep{Visible: &flow.Selector{Text: "Send You Notifications"}}, true},
+	} {
+		if got := stepAimsAtAlert(tc.step, text, buttons); got != tc.want {
+			t.Errorf("stepAimsAtAlert(%T %v) = %v, want %v", tc.step, tc.step, got, tc.want)
 		}
 	}
 }
