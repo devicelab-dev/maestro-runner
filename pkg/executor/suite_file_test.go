@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -159,13 +160,19 @@ func withSuiteKey() map[string]string {
 
 // suite: true in the header keeps the split: each runFlow of the file is a
 // flow of its own, with the suite's appId and env and the runFlow's env, and
-// no output from the one before.
+// no output from the one before. A part's own env wins over the suite's, and
+// the runFlow's over both.
 func TestSuiteKeyRunsEachFileAsAFlow(t *testing.T) {
-	result, seen, out := runFiles(t, withSuiteKey(), "checkout.yaml", RunnerConfig{})
+	files := withSuiteKey()
+	files["checkout.yaml"] = strings.Replace(files["checkout.yaml"], "suite: true\n",
+		"suite: true\nenv:\n  SHOP: north\n  USER: bob\n  ITEM: shoes\n", 1)
+	files["login.yaml"] += "- inputText: ${USER + ' at ' + SHOP}\n"
+	files["cart.yaml"] += "- inputText: ${ITEM + ' at ' + SHOP}\n"
+	result, seen, out := runFiles(t, files, "checkout.yaml", RunnerConfig{})
 	if result.TotalFlows != 2 {
 		t.Fatalf("%d flows, want 2: %+v", result.TotalFlows, result.FlowResults)
 	}
-	want := "tapOn Log in, inputText undefined buys socks"
+	want := "tapOn Log in, inputText alice at north, inputText undefined buys socks, inputText socks at north"
 	if got := strings.Join(typed(seen), ", "); got != want {
 		t.Errorf("the driver got %q, want %q", got, want)
 	}
@@ -211,12 +218,18 @@ func TestSuiteKeyOnAFileWithHooksRunsItAsOneFlow(t *testing.T) {
 
 // The parallel runner splits a suite file only when its header asks, as the
 // sequential one does. It never split one before, so a suite gave one flow
-// with --parallel and two without.
+// with --parallel and two without. Without the key the file is one flow there
+// too: the second runFlow reads what the first kept in output, and the JUnit
+// has the one test under the file's name.
 func TestParallelRunnerSplitsOnlyASuiteKeyFile(t *testing.T) {
 	for _, c := range []struct {
 		files map[string]string
-		want  int
-	}{{suiteFiles, 1}, {withSuiteKey(), 2}} {
+		typed string
+		names []string
+	}{
+		{suiteFiles, "tapOn Log in, inputText alice buys socks", []string{"checkout"}},
+		{withSuiteKey(), "tapOn Log in, inputText undefined buys socks", []string{"login", "cart"}},
+	} {
 		dir := t.TempDir()
 		for name, body := range c.files {
 			if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
@@ -227,11 +240,17 @@ func TestParallelRunnerSplitsOnlyASuiteKeyFile(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		var seen []flow.Step
 		drv := &mockDriver{
 			platformFunc: func() *core.PlatformInfo { return &core.PlatformInfo{Platform: "android", DeviceID: "dev-a"} },
+			executeFunc: func(step flow.Step) *core.CommandResult {
+				seen = append(seen, step)
+				return &core.CommandResult{Success: true}
+			},
 		}
+		out := t.TempDir()
 		pr := NewParallelRunner([]DeviceWorker{{ID: 0, DeviceID: "dev-a", Driver: drv, Cleanup: func() {}}}, RunnerConfig{
-			OutputDir: t.TempDir(),
+			OutputDir: out,
 			Artifacts: ArtifactNever,
 			Device:    report.Device{Name: "1 device", Platform: "android"},
 		})
@@ -239,8 +258,22 @@ func TestParallelRunnerSplitsOnlyASuiteKeyFile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
-		if result.TotalFlows != c.want {
-			t.Errorf("suite: %v: %d flows, want %d", f.Config.Suite, result.TotalFlows, c.want)
+		if result.TotalFlows != len(c.names) || result.Status != report.StatusPassed {
+			t.Errorf("suite: %v: status = %s with %d flows, want passed with %d", f.Config.Suite, result.Status, result.TotalFlows, len(c.names))
+		}
+		if got := strings.Join(typed(seen), ", "); got != c.typed {
+			t.Errorf("suite: %v: the driver got %q, want %q", f.Config.Suite, got, c.typed)
+		}
+		junit, err := os.ReadFile(filepath.Join(out, "junit-report.xml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, m := range regexp.MustCompile(`<testcase id="[^"]*" name="([^"]*)"`).FindAllStringSubmatch(string(junit), -1) {
+			names = append(names, m[1])
+		}
+		if strings.Join(names, ",") != strings.Join(c.names, ",") {
+			t.Errorf("suite: %v: junit-report.xml testcases = %v, want %v", f.Config.Suite, names, c.names)
 		}
 	}
 }
