@@ -226,6 +226,8 @@ func (w *FlowWriter) CommandLogs(cmdIndex int, logs []string) {
 
 // CommandMessage records what a passed command reports about its outcome.
 func (w *FlowWriter) CommandMessage(cmdIndex int, msg string) {
+	w.lock()
+	defer w.mu.Unlock()
 	if cmdIndex < 0 || cmdIndex >= len(w.flow.Commands) || msg == "" {
 		return
 	}

@@ -705,3 +705,28 @@ func TestFlowWriter_CommandMessage(t *testing.T) {
 		t.Errorf("empty message set %q", cmds[2].Message)
 	}
 }
+
+// CommandMessage changes the flow under the writer's lock, as the other
+// writers do: CommandSubs' timer may be writing the same commands meanwhile
+// (go test -race).
+func TestFlowWriter_CommandMessage_WhileTheTimerWrites(t *testing.T) {
+	fw, iw, tmpDir := createTestFlowWriter(t)
+	defer iw.Close()
+	fw.liveEvery = time.Millisecond
+
+	fw.Start()
+	subs := func() []Command { return []Command{{Type: "tapOn", Status: StatusRunning}} }
+	for deadline := time.Now().Add(100 * time.Millisecond); time.Now().Before(deadline); {
+		fw.CommandSubs(1, subs)
+		fw.CommandMessage(2, "Airplane mode already enabled")
+		time.Sleep(200 * time.Microsecond)
+	}
+	fw.End(StatusPassed)
+	d, err := ReadFlowDetail(filepath.Join(tmpDir, "flows", "flow-000.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Commands[2].Message != "Airplane mode already enabled" {
+		t.Errorf("message = %q", d.Commands[2].Message)
+	}
+}
