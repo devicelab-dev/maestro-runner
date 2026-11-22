@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -135,25 +136,21 @@ func priorities(m map[int]int) func(int, int) (int, bool) {
 	return func(pid, _ int) (int, bool) { p, ok := m[pid]; return p, ok }
 }
 
-// captureFront collects the log and the console of the front app's code.
-func captureFront(t *testing.T) (log func() string, console *bytes.Buffer) {
+// captureFront collects the log of the front app's code.
+func captureFront(t *testing.T) (log func() string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "runner.log")
 	if err := logger.Init(path); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(logger.Close)
-	console = &bytes.Buffer{}
-	saved := frontConsole
-	frontConsole = console
-	t.Cleanup(func() { frontConsole = saved })
 	return func() string {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return string(data)
-	}, console
+	}
 }
 
 func TestRunningApps(t *testing.T) {
@@ -261,7 +258,7 @@ func agentReads(bundles ...string) *fakeAgent {
 func TestBringBack(t *testing.T) {
 	a := &Agent{opts: AgentOptions{UDID: "SIM-1"}}
 	ctx := context.Background()
-	log, console := captureFront(t)
+	log := captureFront(t)
 	prefs := &runningApp{"com.apple.Preferences", settings}
 
 	f := &fakeFront{}
@@ -274,8 +271,8 @@ func TestBringBack(t *testing.T) {
 	if got := agent.sent("snapshot"); len(got) != 1 || got[0].MaxNodes != 1 {
 		t.Errorf("the app in front: snapshots %+v, want one read of the app in front", got)
 	}
-	if l := log(); !strings.Contains(l, "brought com.apple.Preferences back to the front") || !strings.Contains(l, "the agent reads it in front)") || strings.Contains(l, "anew") || console.Len() != 0 {
-		t.Errorf("the app back: log %q, console %q", l, console)
+	if l := log(); !strings.Contains(l, "brought com.apple.Preferences back to the front") || !strings.Contains(l, "the agent reads it in front)") || strings.Contains(l, "anew") {
+		t.Errorf("the app back: log %q", l)
 	}
 
 	// An app that ended meanwhile is started again: simctl answers another pid.
@@ -288,28 +285,22 @@ func TestBringBack(t *testing.T) {
 
 	f.launches = nil
 	a.bringBack(ctx, agentReads(), nil, "")
-	if len(f.launches) != 0 || !strings.Contains(log(), "the home screen was in front") || console.Len() != 0 {
-		t.Errorf("the home screen: launches = %v, console %q", f.launches, console)
+	if len(f.launches) != 0 || !strings.Contains(log(), "the home screen was in front") {
+		t.Errorf("the home screen: launches = %v", f.launches)
 	}
 	a.bringBack(ctx, agentReads(), nil, "ps: signal: killed")
 	if len(f.launches) != 0 {
 		t.Errorf("an app not known: launches = %v, want none", f.launches)
 	}
-	// The console line is a contract: a tool that drives the runner looks
-	// for it to tell its user the app was not brought back.
-	if want := "  ⚠ the app in front before the agent's start was not brought back: which app was in front is not known: ps: signal: killed\n"; console.String() != want {
-		t.Errorf("console = %q, want %q", console, want)
+	if want := "[WARN] [devicelab-ios] the app in front before the agent's start was not brought back: which app was in front is not known: ps: signal: killed"; !strings.Contains(log(), want) {
+		t.Errorf("an app not known: log %q, want %q", log(), want)
 	}
 
 	// A launch that fails is said, not returned: the agent is up.
-	console.Reset()
 	f.launch = func(string) (string, error) { return "An error was encountered\nmore", errors.New("exit status 4") }
 	a.bringBack(ctx, agentReads("com.apple.Preferences"), prefs, "")
-	if want := "  ⚠ the app in front before the agent's start was not brought back: simctl launch com.apple.Preferences: exit status 4: An error was encountered\n"; console.String() != want || len(f.launches) != 1 {
-		t.Errorf("a failed launch: console = %q, want %q; launches %v", console, want, f.launches)
-	}
-	if !strings.Contains(log(), "not brought back: simctl launch com.apple.Preferences: exit status 4") {
-		t.Errorf("a failed launch: log %q", log())
+	if !strings.Contains(log(), "not brought back: simctl launch com.apple.Preferences: exit status 4: An error was encountered") || len(f.launches) != 1 {
+		t.Errorf("a failed launch: log %q; launches %v", log(), f.launches)
 	}
 }
 
@@ -322,7 +313,7 @@ func TestBringBackChecksTheAppIsInFront(t *testing.T) {
 	prefs := &runningApp{"com.apple.Preferences", settings}
 
 	t.Run("in front after a second launch", func(t *testing.T) {
-		log, console := captureFront(t)
+		log := captureFront(t)
 		f := &fakeFront{}
 		f.install(t)
 		agent := agentReads(springboardBundle, "com.apple.Preferences")
@@ -330,13 +321,13 @@ func TestBringBackChecksTheAppIsInFront(t *testing.T) {
 		if len(f.launches) != 2 || len(agent.sent("snapshot")) != 2 {
 			t.Errorf("launches %v, snapshots %d; want two of each", f.launches, len(agent.sent("snapshot")))
 		}
-		if l := log(); !strings.Contains(l, "brought com.apple.Preferences back to the front") || !strings.Contains(l, "launched 2 times") || console.Len() != 0 {
-			t.Errorf("log %q, console %q", l, console)
+		if l := log(); !strings.Contains(l, "brought com.apple.Preferences back to the front") || !strings.Contains(l, "launched 2 times") {
+			t.Errorf("log %q", l)
 		}
 	})
 
 	t.Run("never in front", func(t *testing.T) {
-		log, console := captureFront(t)
+		log := captureFront(t)
 		f := &fakeFront{}
 		f.install(t)
 		a.bringBack(ctx, agentReads(springboardBundle), prefs, "")
@@ -347,13 +338,13 @@ func TestBringBackChecksTheAppIsInFront(t *testing.T) {
 		if strings.Contains(l, "brought com.apple.Preferences back") {
 			t.Errorf("the log says the app is back, which the agent did not read: %q", l)
 		}
-		if want := "not brought back: launched com.apple.Preferences again 2 times, but the agent reads com.apple.springboard in front"; !strings.Contains(l, want) || !strings.Contains(console.String(), want) {
-			t.Errorf("log %q, console %q; want %q", l, console, want)
+		if want := "not brought back: launched com.apple.Preferences again 2 times, but the agent reads com.apple.springboard in front"; !strings.Contains(l, want) {
+			t.Errorf("log %q; want %q", l, want)
 		}
 	})
 
 	t.Run("the agent does not answer", func(t *testing.T) {
-		log, _ := captureFront(t)
+		log := captureFront(t)
 		f := &fakeFront{}
 		f.install(t)
 		agent := &fakeAgent{handler: func(string, Args) (*Response, error) { return nil, errors.New("agent unreachable") }}
@@ -362,6 +353,33 @@ func TestBringBackChecksTheAppIsInFront(t *testing.T) {
 			t.Errorf("log %q", l)
 		}
 	})
+}
+
+// What the bring-back says is in the log only: a flow that starts with
+// launchApp does not care which app was in front, so nothing goes to the
+// console, also when the app was not brought back.
+func TestBringBackSaysNothingOnTheConsole(t *testing.T) {
+	if os.Getenv("BRING_BACK_CHILD") == "1" {
+		a := &Agent{opts: AgentOptions{UDID: "SIM-1"}}
+		prefs := &runningApp{"com.apple.Preferences", settings}
+		f := &fakeFront{}
+		f.install(t)
+		a.bringBack(context.Background(), agentReads(), nil, "ps: signal: killed")
+		a.bringBack(context.Background(), agentReads(springboardBundle), prefs, "")
+		f.launch = func(string) (string, error) { return "An error was encountered", errors.New("exit status 4") }
+		a.bringBack(context.Background(), agentReads(), prefs, "")
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestBringBackSaysNothingOnTheConsole$")
+	cmd.Env = append(os.Environ(), "BRING_BACK_CHILD=1")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("%v: %s", err, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("console = %q, want nothing", stderr.String())
+	}
 }
 
 // A fresh start reads the app in front before it launches the agent, brings

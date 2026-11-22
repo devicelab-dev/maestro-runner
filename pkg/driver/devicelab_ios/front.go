@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -255,18 +253,9 @@ func agentFront(ctx context.Context, agent agentAPI) (string, error) {
 	return resp.payload().BundleID, nil
 }
 
-// notBroughtBack says why the app in front before the agent's start was not
-// brought back, on the console too (notBroughtBackLine): the run may begin on
-// the home screen.
+// notBroughtBack says in the log why the app in front before the agent's
+// start was not brought back: the run may begin on the home screen. The log
+// only: a flow that starts with launchApp does not care.
 func notBroughtBack(why string) {
-	logger.Warn("[devicelab-ios] %s%s", notBroughtBackLine, why)
-	fmt.Fprintf(frontConsole, "  ⚠ %s%s\n", notBroughtBackLine, oneLine(why))
+	logger.Warn("[devicelab-ios] the app in front before the agent's start was not brought back: %s", why)
 }
-
-// notBroughtBackLine starts the console line of an app not brought back. A
-// tool that drives the runner may look for it to tell its user, so a test
-// keeps it as it is.
-const notBroughtBackLine = "the app in front before the agent's start was not brought back: "
-
-// frontConsole is where notBroughtBack's line goes; tests replace it.
-var frontConsole io.Writer = os.Stderr
