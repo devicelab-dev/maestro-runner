@@ -225,6 +225,9 @@ func (fr *FlowRunner) Run() FlowResult {
 	flowCompleteRan := false
 	defer func() {
 		if !flowCompleteRan {
+			// The step that panicked left its steps live: the hooks'
+			// steps are not its own.
+			fr.live = nil
 			fr.runFlowCompleteHooks()
 		}
 	}()

@@ -359,3 +359,43 @@ func TestNoLiveWriteAfterAStepPanics(t *testing.T) {
 		t.Errorf("a list given after Run returned was written %d times, want 0", got)
 	}
 }
+
+// onFlowComplete's steps, which still run when a step panicked, are not
+// written as the steps of the runFlow that panicked: the file keeps that
+// runFlow as far as it got.
+func TestFlowCompleteStepsAfterAPanicAreNotTheRunFlowsSteps(t *testing.T) {
+	dir := t.TempDir()
+	driver := &mockDriver{executeFunc: func(step flow.Step) *core.CommandResult {
+		if tap, ok := step.(*flow.TapOnStep); ok {
+			switch tap.Selector.ID {
+			case "boom":
+				panic("nil pointer dereference in a dependency")
+			case "hook":
+				time.Sleep(2 * report.LiveWriteInterval) // a waiting list is written meanwhile
+			}
+		}
+		return &core.CommandResult{Success: true}
+	}}
+	runner := New(driver, RunnerConfig{
+		OutputDir: dir,
+		Artifacts: ArtifactNever,
+		Device:    report.Device{ID: "test", Platform: "android"},
+	})
+	f := flow.Flow{
+		SourcePath: "test.yaml",
+		Config:     flow.Config{Name: "panic, then onFlowComplete", OnFlowComplete: []flow.Step{liveTap("hook")}},
+		Steps:      []flow.Step{liveRunFlow(liveTap("a"), liveTap("boom"))},
+	}
+	if _, err := runner.Run(context.Background(), []flow.Flow{f}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	d, err := report.ReadFlowDetail(filepath.Join(dir, "flows", "flow-000.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range d.Commands[0].SubCommands {
+		if strings.Contains(c.YAML, "hook") {
+			t.Errorf("the runFlow's steps in the report are %q, with onFlowComplete's %q", shapeOf(d.Commands[0].SubCommands), c.YAML)
+		}
+	}
+}
