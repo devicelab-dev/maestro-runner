@@ -87,16 +87,18 @@ func TestCloseOtherTabsLeavesTabsOpenBeforeTheFirstLook(t *testing.T) {
 
 // fakeChrome is Chrome on a device as the driver reaches it: a CDPForwarder
 // whose forward serves Chrome's DevTools HTTP endpoint on the local socket
-// (its tab list, /json/close and the page WebSocket, which it refuses, so a
-// connect stops after it picked a tab), and that records what it is asked.
+// (its tab list, /json/close, /json/activate and the page WebSocket, which
+// it refuses, so a connect stops after it picked a tab), and that records
+// what it is asked.
 type fakeChrome struct {
 	path string
 
-	mu       sync.Mutex
-	tabs     []string
-	closed   []string
-	attached []string
-	srv      *http.Server
+	mu        sync.Mutex
+	tabs      []string
+	closed    []string
+	activated []string
+	attached  []string
+	srv       *http.Server
 }
 
 func newFakeChrome(t *testing.T, tabs ...string) *fakeChrome {
@@ -129,6 +131,11 @@ func (c *fakeChrome) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		_, _ = w.Write([]byte("Target is closing"))
+		return
+	}
+	if id, ok := strings.CutPrefix(r.URL.Path, "/json/activate/"); ok {
+		c.activated = append(c.activated, id)
+		_, _ = w.Write([]byte("Target activated"))
 		return
 	}
 	if id, ok := strings.CutPrefix(r.URL.Path, "/devtools/page/"); ok {
@@ -294,5 +301,28 @@ func TestConnectAttachesToTheNewTabWhateverItsID(t *testing.T) {
 
 	if _, _, attached := chrome.record(); !reflect.DeepEqual(attached, []string{"C0", "B0"}) {
 		t.Errorf("attached to %v; want [C0 B0]", attached)
+	}
+}
+
+func (c *fakeChrome) activatedTabs() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.activated...)
+}
+
+// A connect brings the tab it attaches to to the front: with the tabs that
+// were open before left open, the one attached to may not be the one on
+// screen, where the flow's taps land.
+func TestConnectBringsTheTabToTheFront(t *testing.T) {
+	chrome := newFakeChrome(t, "11", "12", "13")
+	m := newWebViewManager(chrome)
+
+	_ = m.connect(chromeSocket, "browser")
+	chrome.openTab("20") // an openLink
+	m.disconnect()
+	_ = m.connect(chromeSocket, "browser")
+
+	if got, want := chrome.activatedTabs(), []string{"13", "20"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("brought %v to the front; want %v, each tab attached to", got, want)
 	}
 }

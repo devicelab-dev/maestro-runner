@@ -972,6 +972,11 @@ func (m *webViewManager) connectBrowserViaHTTP(cdpInfo *core.CDPInfo, cdpType st
 	// cleanup they pile up indefinitely. Tabs that were open before are left.
 	m.closeOtherTabs(socketPath, targets, pageTarget.ID)
 
+	// Bring the tab to the front: with the tabs that were open before left
+	// open, the one attached to may not be the one on screen (Chrome used
+	// without an openLink first), where taps and screenshots land.
+	m.activateTab(socketPath, pageTarget.ID)
+
 	// Step 6: Connect WebSocket to PAGE-level endpoint (not browser level)
 	// Chrome on Android doesn't support Target.* commands at browser level.
 	connectCtx, connectCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1107,6 +1112,27 @@ func (m *webViewManager) closeOtherTabs(socketPath string, targets []cdpTarget, 
 	}
 	if closed > 0 {
 		logger.Info("[cdp:5-cleanup] closed %d old tab(s), keeping %s", closed, keepID)
+	}
+}
+
+// activateTab brings the tab to the front through HTTP /json/activate/<id>
+// via the forwarded Unix socket. Best-effort — errors are logged but ignored.
+func (m *webViewManager) activateTab(socketPath, id string) {
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var dialer net.Dialer
+			return dialer.DialContext(ctx, "unix", socketPath)
+		},
+	}
+	httpClient := &http.Client{Transport: transport, Timeout: 2 * time.Second}
+	resp, err := httpClient.Get(fmt.Sprintf("http://localhost/json/activate/%s", id))
+	if err != nil {
+		logger.Debug("[cdp:5-activate] failed to activate tab %s: %v", id, err)
+		return
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		logger.Debug("[cdp:5-activate] activating tab %s: HTTP %d", id, resp.StatusCode)
 	}
 }
 
