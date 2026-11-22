@@ -381,11 +381,6 @@ func expandSuites(flows []flow.Flow) []flow.Flow {
 		}
 
 		for _, tc := range testCases {
-			if tc.File == "" {
-				// Inline runFlow (no file), skip expansion
-				continue
-			}
-
 			// Resolve the file path relative to suite location
 			tcPath := tc.File
 			if suiteDir != "" && !filepath.IsAbs(tcPath) {
