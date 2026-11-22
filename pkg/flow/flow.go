@@ -21,9 +21,16 @@ func (f *Flow) IsSuite() bool {
 // SuiteProblem says why this flow's steps cannot be split into a suite's test cases, or "" when they can.
 // A suite is made only of runFlow steps with file references, at least 2 of them: a single runFlow is just a
 // wrapper. A runFlow with inline commands, a `when` condition or an else branch is part of the flow itself, not a
-// test case: splitting the file would drop the commands and run conditional files unconditionally.
-// onFlowStart/onFlowComplete hooks are ignored for detection as they're setup/teardown.
+// test case: splitting the file would drop the commands and run conditional files unconditionally. Nor can
+// a suite have its own onFlowStart or onFlowComplete: its parts run as flows of their own, so the file's hooks
+// would never run.
 func (f *Flow) SuiteProblem() string {
+	if len(f.Config.OnFlowStart) > 0 {
+		return "it has onFlowStart"
+	}
+	if len(f.Config.OnFlowComplete) > 0 {
+		return "it has onFlowComplete"
+	}
 	if len(f.Steps) == 0 {
 		return "it has no steps"
 	}

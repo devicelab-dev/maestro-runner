@@ -193,6 +193,22 @@ func TestSuiteKeyOnAFileThatCannotSplitRunsItAsOneFlow(t *testing.T) {
 	}
 }
 
+// suite: true on a file with its own onFlowStart or onFlowComplete runs it as
+// one flow, its hooks included: split, its parts would run as flows of their
+// own and the hooks never (the validator refuses such a file before a run).
+func TestSuiteKeyOnAFileWithHooksRunsItAsOneFlow(t *testing.T) {
+	files := withSuiteKey()
+	files["checkout.yaml"] = strings.Replace(files["checkout.yaml"], "suite: true\n",
+		"suite: true\nonFlowStart:\n  - tapOn: Start\nonFlowComplete:\n  - tapOn: End\n", 1)
+	result, seen, _ := runFiles(t, files, "checkout.yaml", RunnerConfig{})
+	if result.TotalFlows != 1 || result.Status != report.StatusPassed {
+		t.Fatalf("status = %s with %d flows, want passed with 1", result.Status, result.TotalFlows)
+	}
+	if got := strings.Join(typed(seen), ", "); got != "tapOn Start, tapOn Log in, inputText alice buys socks, tapOn End" {
+		t.Errorf("the driver got %q, want the file's hooks around its steps", got)
+	}
+}
+
 // The parallel runner splits a suite file only when its header asks, as the
 // sequential one does. It never split one before, so a suite gave one flow
 // with --parallel and two without.

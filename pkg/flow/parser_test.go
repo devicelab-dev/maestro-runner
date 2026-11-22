@@ -2181,6 +2181,23 @@ func TestFlow_SuiteProblem(t *testing.T) {
 			t.Errorf("SuiteProblem() = %q, want %q", got, tt.want)
 		}
 	}
+
+	// A suite's own hooks would never run: its parts run as flows of their
+	// own.
+	hook := []Step{&TapOnStep{BaseStep: BaseStep{StepType: StepTapOn}}}
+	for _, c := range []struct {
+		config Config
+		want   string
+	}{
+		{Config{OnFlowStart: hook}, "it has onFlowStart"},
+		{Config{OnFlowComplete: hook}, "it has onFlowComplete"},
+		{Config{OnFlowStart: hook, OnFlowComplete: hook}, "it has onFlowStart"},
+	} {
+		f := Flow{Config: c.config, Steps: []Step{runFlow("a.yaml"), runFlow("b.yaml")}}
+		if got := f.SuiteProblem(); got != c.want {
+			t.Errorf("SuiteProblem() with hooks = %q, want %q", got, c.want)
+		}
+	}
 }
 
 // The header key parses; a file without it is no suite.

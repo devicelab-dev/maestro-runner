@@ -454,7 +454,7 @@ func (v *Validator) validateFile(filePath string, result *Result, validated map[
 			if problem := f.SuiteProblem(); f.Config.Suite && problem != "" {
 				result.Errors = append(result.Errors, &ValidationError{
 					File:    filePath,
-					Message: fmt.Sprintf("suite: true, but %s; a suite has only runFlow steps of files, two or more, without when:, else or inline commands", problem),
+					Message: fmt.Sprintf("suite: true, but %s; a suite has no onFlowStart or onFlowComplete, and only runFlow steps of files, two or more, without when:, else or inline commands", problem),
 				})
 				return
 			}

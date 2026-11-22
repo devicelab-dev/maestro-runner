@@ -1555,6 +1555,7 @@ func TestValidate_SuiteKey(t *testing.T) {
 	files := map[string]string{
 		"suite.yaml":  "appId: x\nsuite: true\n---\n- runFlow: a.yaml\n- runFlow: b.yaml\n",
 		"broken.yaml": "appId: x\nsuite: true\n---\n- runFlow: a.yaml\n- runFlow: b.yaml\n- tapOn: Done\n",
+		"hooked.yaml": "appId: x\nsuite: true\nonFlowStart:\n  - tapOn: Start\n---\n- runFlow: a.yaml\n- runFlow: b.yaml\n",
 		"a.yaml":      "appId: x\n---\n- tapOn: A\n",
 		"b.yaml":      "appId: x\n---\n- tapOn: B\n",
 	}
@@ -1573,9 +1574,19 @@ func TestValidate_SuiteKey(t *testing.T) {
 	if result.IsValid() || len(result.TestCases) != 0 {
 		t.Fatalf("broken.yaml: errors %v, %d test cases; want an error and none", result.Errors, len(result.TestCases))
 	}
-	want := "suite: true, but step 3 is tapOn, not a runFlow; a suite has only runFlow steps of files, two or more, without when:, else or inline commands"
+	want := "suite: true, but step 3 is tapOn, not a runFlow; a suite has no onFlowStart or onFlowComplete, and only runFlow steps of files, two or more, without when:, else or inline commands"
 	if got := result.Errors[0].Error(); !strings.HasSuffix(got, want) {
 		t.Errorf("error = %q, want it to end %q", got, want)
+	}
+
+	// A suite's own onFlowStart would never run: its parts run as flows of
+	// their own.
+	result = New(nil, nil).Validate(filepath.Join(dir, "hooked.yaml"))
+	if result.IsValid() || len(result.TestCases) != 0 {
+		t.Fatalf("hooked.yaml: errors %v, %d test cases; want an error and none", result.Errors, len(result.TestCases))
+	}
+	if got, want := result.Errors[0].Error(), "suite: true, but it has onFlowStart; a suite has no onFlowStart"; !strings.Contains(got, want) {
+		t.Errorf("error = %q, want it to say %q", got, want)
 	}
 
 	// Reached by runFlow, a file's suite: true changes nothing: it runs
