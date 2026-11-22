@@ -22,7 +22,8 @@ import (
 // tool left, found the home screen instead. So a fresh start reads which app
 // was in front before it, and launches that app again once the agent
 // answers: simctl launch of a running app brings it to the front as it was
-// (the same process on the same page, in about 0.25 s).
+// (the same process on the same page, in about 0.25 s). The agent then says
+// which app is in front, and the app is launched once more if it is not.
 //
 // simctl does not say which app is in front, but each simulator app is a
 // process of the Mac, and its scheduling priority does (ps's pri, iOS 27.2):
@@ -185,30 +186,73 @@ func frontApp(ctx context.Context, udid string) (*runningApp, string) {
 }
 
 // bringBack launches the app that was in front before the agent's start
-// (frontApp's answer) again, and says in the log what it did.
-func (a *Agent) bringBack(ctx context.Context, app *runningApp, why string) {
+// (frontApp's answer) again, asks the agent which app is in front once it has
+// settled, launches the app once more if it is not, and says in the log what
+// it did. The log says the app is back only when the agent read it in front.
+func (a *Agent) bringBack(ctx context.Context, agent agentAPI, app *runningApp, why string) {
 	switch {
 	case why != "":
 		notBroughtBack("which app was in front is not known: " + why)
+		return
 	case app == nil:
 		logger.Info("[devicelab-ios] the home screen was in front before the agent's start: nothing to bring back")
-	default:
+		return
+	}
+	start := time.Now()
+	anew, front := "", ""
+	for try := 1; try <= bringBackTries; try++ {
 		// Without --terminate-running-process: the running app comes to
 		// the front as it was.
-		start := time.Now()
 		out, err := frontSimctl(ctx, 30*time.Second, "launch", a.opts.UDID, app.id)
 		out = strings.TrimSpace(out)
 		if err != nil {
 			notBroughtBack(fmt.Sprintf("simctl launch %s: %v: %s", app.id, err, out))
 			return
 		}
-		anew := ""
-		if !strings.HasSuffix(out, ": "+strconv.Itoa(app.pid)) {
+		if anew == "" && !strings.HasSuffix(out, ": "+strconv.Itoa(app.pid)) {
 			anew = ", started anew: " + out
 		}
-		logger.Info("[devicelab-ios] brought %s back to the front, where it was before the agent's start (%s%s)",
-			app.id, time.Since(start).Round(time.Millisecond), anew)
+		// The agent's own start may still be leaving for the home screen.
+		select {
+		case <-ctx.Done():
+			notBroughtBack(fmt.Sprintf("launched %s again, but not checked: %v", app.id, ctx.Err()))
+			return
+		case <-time.After(bringBackSettle):
+		}
+		front, err = agentFront(ctx, agent)
+		switch {
+		case err != nil:
+			front = "no answer (" + err.Error() + ")"
+		case front == "":
+			front = "no app"
+		}
+		if front == app.id {
+			tries := ""
+			if try > 1 {
+				tries = fmt.Sprintf(", launched %d times", try)
+			}
+			logger.Info("[devicelab-ios] brought %s back to the front, where it was before the agent's start (%s, the agent reads it in front%s%s)",
+				app.id, time.Since(start).Round(time.Millisecond), tries, anew)
+			return
+		}
 	}
+	notBroughtBack(fmt.Sprintf("launched %s again %d times, but the agent reads %s in front", app.id, bringBackTries, front))
+}
+
+// bringBackTries is how often bringBack launches the app, and bringBackSettle
+// how long it waits after each launch before it asks the agent.
+var (
+	bringBackTries  = 2
+	bringBackSettle = 500 * time.Millisecond
+)
+
+// agentFront asks the agent which app is in front: its frontmost bundle.
+func agentFront(ctx context.Context, agent agentAPI) (string, error) {
+	resp, err := agent.Call(ctx, "snapshot", &Args{MaxNodes: 1})
+	if err != nil {
+		return "", err
+	}
+	return resp.payload().BundleID, nil
 }
 
 // notBroughtBack says why the app in front before the agent's start was not

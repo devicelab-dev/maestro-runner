@@ -85,12 +85,12 @@ type fakeFront struct {
 func (f *fakeFront) install(t *testing.T) {
 	t.Helper()
 	savedSimctl, savedPS := frontSimctl, readPriorities
-	savedSettle, savedPoll := frontSettle, frontPoll
+	savedSettle, savedPoll, savedBack := frontSettle, frontPoll, bringBackSettle
 	t.Cleanup(func() {
 		frontSimctl, readPriorities = savedSimctl, savedPS
-		frontSettle, frontPoll = savedSettle, savedPoll
+		frontSettle, frontPoll, bringBackSettle = savedSettle, savedPoll, savedBack
 	})
-	frontSettle, frontPoll = 300*time.Millisecond, 20*time.Millisecond
+	frontSettle, frontPoll, bringBackSettle = 300*time.Millisecond, 20*time.Millisecond, 10*time.Millisecond
 	frontSimctl = func(_ context.Context, timeout time.Duration, args ...string) (string, error) {
 		if timeout <= 0 {
 			t.Errorf("simctl %v without a deadline", args)
@@ -244,34 +244,54 @@ func TestFrontAppCannotTell(t *testing.T) {
 	}
 }
 
+// agentReads is a fake agent whose snapshot answers the bundles in front in
+// turn, the last one from then on.
+func agentReads(bundles ...string) *fakeAgent {
+	n := 0
+	return &fakeAgent{handler: func(cmd string, _ Args) (*Response, error) {
+		if cmd != "snapshot" {
+			return ok(&Payload{}), nil
+		}
+		b := bundles[min(n, len(bundles)-1)]
+		n++
+		return ok(&Payload{BundleID: b}), nil
+	}}
+}
+
 func TestBringBack(t *testing.T) {
 	a := &Agent{opts: AgentOptions{UDID: "SIM-1"}}
 	ctx := context.Background()
 	log, console := captureFront(t)
+	prefs := &runningApp{"com.apple.Preferences", settings}
 
 	f := &fakeFront{}
 	f.install(t)
-	a.bringBack(ctx, &runningApp{"com.apple.Preferences", settings}, "")
+	agent := agentReads("com.apple.Preferences")
+	a.bringBack(ctx, agent, prefs, "")
 	if fmt.Sprint(f.launches) != "[launch SIM-1 com.apple.Preferences]" {
 		t.Errorf("the app in front: launches = %v, want it launched again (without --terminate-running-process)", f.launches)
 	}
-	if l := log(); !strings.Contains(l, "brought com.apple.Preferences back to the front") || strings.Contains(l, "anew") || console.Len() != 0 {
+	if got := agent.sent("snapshot"); len(got) != 1 || got[0].MaxNodes != 1 {
+		t.Errorf("the app in front: snapshots %+v, want one read of the app in front", got)
+	}
+	if l := log(); !strings.Contains(l, "brought com.apple.Preferences back to the front") || !strings.Contains(l, "the agent reads it in front)") || strings.Contains(l, "anew") || console.Len() != 0 {
 		t.Errorf("the app back: log %q, console %q", l, console)
 	}
 
 	// An app that ended meanwhile is started again: simctl answers another pid.
 	f.launch = func(id string) (string, error) { return id + ": 31337\n", nil }
-	a.bringBack(ctx, &runningApp{"com.apple.Preferences", settings}, "")
+	a.bringBack(ctx, agentReads("com.apple.Preferences"), prefs, "")
 	if l := log(); !strings.Contains(l, "started anew: com.apple.Preferences: 31337") {
 		t.Errorf("an app that ended: log %q", l)
 	}
+	f.launch = nil
 
 	f.launches = nil
-	a.bringBack(ctx, nil, "")
+	a.bringBack(ctx, agentReads(), nil, "")
 	if len(f.launches) != 0 || !strings.Contains(log(), "the home screen was in front") || console.Len() != 0 {
 		t.Errorf("the home screen: launches = %v, console %q", f.launches, console)
 	}
-	a.bringBack(ctx, nil, "ps: signal: killed")
+	a.bringBack(ctx, agentReads(), nil, "ps: signal: killed")
 	if len(f.launches) != 0 {
 		t.Errorf("an app not known: launches = %v, want none", f.launches)
 	}
@@ -284,7 +304,7 @@ func TestBringBack(t *testing.T) {
 	// A launch that fails is said, not returned: the agent is up.
 	console.Reset()
 	f.launch = func(string) (string, error) { return "An error was encountered\nmore", errors.New("exit status 4") }
-	a.bringBack(ctx, &runningApp{"com.apple.Preferences", settings}, "")
+	a.bringBack(ctx, agentReads("com.apple.Preferences"), prefs, "")
 	if want := "  ⚠ the app in front before the agent's start was not brought back: simctl launch com.apple.Preferences: exit status 4: An error was encountered\n"; console.String() != want || len(f.launches) != 1 {
 		t.Errorf("a failed launch: console = %q, want %q; launches %v", console, want, f.launches)
 	}
@@ -293,8 +313,60 @@ func TestBringBack(t *testing.T) {
 	}
 }
 
-// A fresh start reads the app in front before it launches the agent, and
-// brings that app back once the agent answers.
+// The agent's start may reach the home screen after the agent first answers,
+// sending the app back to the background: the app is launched once more, and
+// the log says it is back only when the agent reads it in front.
+func TestBringBackChecksTheAppIsInFront(t *testing.T) {
+	a := &Agent{opts: AgentOptions{UDID: "SIM-1"}}
+	ctx := context.Background()
+	prefs := &runningApp{"com.apple.Preferences", settings}
+
+	t.Run("in front after a second launch", func(t *testing.T) {
+		log, console := captureFront(t)
+		f := &fakeFront{}
+		f.install(t)
+		agent := agentReads(springboardBundle, "com.apple.Preferences")
+		a.bringBack(ctx, agent, prefs, "")
+		if len(f.launches) != 2 || len(agent.sent("snapshot")) != 2 {
+			t.Errorf("launches %v, snapshots %d; want two of each", f.launches, len(agent.sent("snapshot")))
+		}
+		if l := log(); !strings.Contains(l, "brought com.apple.Preferences back to the front") || !strings.Contains(l, "launched 2 times") || console.Len() != 0 {
+			t.Errorf("log %q, console %q", l, console)
+		}
+	})
+
+	t.Run("never in front", func(t *testing.T) {
+		log, console := captureFront(t)
+		f := &fakeFront{}
+		f.install(t)
+		a.bringBack(ctx, agentReads(springboardBundle), prefs, "")
+		if len(f.launches) != 2 {
+			t.Errorf("launches %v, want two", f.launches)
+		}
+		l := log()
+		if strings.Contains(l, "brought com.apple.Preferences back") {
+			t.Errorf("the log says the app is back, which the agent did not read: %q", l)
+		}
+		if want := "not brought back: launched com.apple.Preferences again 2 times, but the agent reads com.apple.springboard in front"; !strings.Contains(l, want) || !strings.Contains(console.String(), want) {
+			t.Errorf("log %q, console %q; want %q", l, console, want)
+		}
+	})
+
+	t.Run("the agent does not answer", func(t *testing.T) {
+		log, _ := captureFront(t)
+		f := &fakeFront{}
+		f.install(t)
+		agent := &fakeAgent{handler: func(string, Args) (*Response, error) { return nil, errors.New("agent unreachable") }}
+		a.bringBack(ctx, agent, prefs, "")
+		if l := log(); strings.Contains(l, "brought com.apple.Preferences back") || !strings.Contains(l, "but the agent reads no answer (agent unreachable) in front") {
+			t.Errorf("log %q", l)
+		}
+	})
+}
+
+// A fresh start reads the app in front before it launches the agent, brings
+// that app back once the agent answers, and asks the agent which app is in
+// front.
 func TestStartAgentBringsBackTheFrontApp(t *testing.T) {
 	t.Setenv("MAESTRO_RUNNER_HOME", t.TempDir())
 	captureFront(t)
@@ -325,10 +397,16 @@ func TestStartAgentBringsBackTheFrontApp(t *testing.T) {
 		step("simctl " + strings.Join(args, " "))
 		return simctl(ctx, timeout, args...)
 	}
+	port := tokenAgentFunc(t, "tok", func(cmd string) Response {
+		step("agent " + cmd)
+		return Response{OK: true, Data: &Payload{BundleID: "com.apple.Preferences"}}
+	})
 	launchAgent = func(a *Agent, _ context.Context) (*Client, error) {
 		step("agent launch")
 		a.mode = ModeSimctl
-		return NewClient(0), nil
+		c := NewClient(port)
+		c.SetToken("tok")
+		return c, nil
 	}
 
 	if _, _, err := StartAgent(context.Background(), AgentOptions{UDID: "SIM-1", Dir: dir}); err != nil {
@@ -339,6 +417,7 @@ func TestStartAgentBringsBackTheFrontApp(t *testing.T) {
 		"simctl listapps SIM-1",
 		"agent launch",
 		"simctl launch SIM-1 com.apple.Preferences",
+		"agent snapshot",
 	}
 	if strings.Join(steps, "\n") != strings.Join(want, "\n") {
 		t.Errorf("steps:\n  %s\nwant:\n  %s", strings.Join(steps, "\n  "), strings.Join(want, "\n  "))

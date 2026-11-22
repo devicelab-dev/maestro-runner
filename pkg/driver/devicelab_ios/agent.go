@@ -256,7 +256,7 @@ func StartAgent(ctx context.Context, opts AgentOptions) (*Agent, *Client, error)
 	if err != nil {
 		return nil, nil, err
 	}
-	a.bringBack(ctx, front, why)
+	a.bringBack(ctx, c, front, why)
 	c.SetReviver(a.revive)
 	return a, c, nil
 }
