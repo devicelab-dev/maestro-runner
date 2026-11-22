@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -76,6 +77,10 @@ type webViewManager struct {
 	// read; disconnect and cleanup keep it, since openLink disconnects every
 	// time.
 	preexistingTabs map[string]bool
+
+	// lastListing holds the page targets of the previous look at Chrome's
+	// tabs, so a connect can tell the tab that is new since (an openLink's).
+	lastListing map[string]bool
 
 	// browserSocket is Chrome's DevTools socket on the device, remembered
 	// from the first look so that closeOpenedTabs can reach Chrome after
@@ -950,17 +955,10 @@ func (m *webViewManager) connectBrowserViaHTTP(cdpInfo *core.CDPInfo, cdpType st
 		return fmt.Errorf("failed to fetch CDP targets: %w", err)
 	}
 
-	// Find the most recently created page target (highest ID = newest tab).
+	// Find the newest tab: the one an openLink opened since the previous look.
 	// Chrome returns targets in focus order, but after openLink there's a race
-	// where the old tab may still be focused. Using the highest ID is more reliable.
-	var pageTarget *cdpTarget
-	for i := range targets {
-		if targets[i].Type == "page" {
-			if pageTarget == nil || targets[i].ID > pageTarget.ID {
-				pageTarget = &targets[i]
-			}
-		}
-	}
+	// where the old tab may still be focused.
+	pageTarget := m.pickPageTarget(targets)
 	if pageTarget == nil {
 		logger.Info("[cdp:5-discover] no page targets found in %d targets", len(targets))
 		_ = m.forwarder.RemoveSocketForward(socketPath)
@@ -1112,15 +1110,69 @@ func (m *webViewManager) closeOtherTabs(socketPath string, targets []cdpTarget, 
 	}
 }
 
+// pickPageTarget returns the page target to attach to: the newest of those
+// that were not in the previous listing (the tab an openLink opened), else
+// the newest of all. Chrome on Android numbers its tabs ("12"), a newer tab
+// with a higher number, so ids compare as numbers: as strings, "9" beat "10"
+// and the runner kept an old tab and closed the one it had just opened. A
+// target with another id (a GUID: a blank page that is no tab) ranks below
+// every number, and a new one is not taken over a numbered tab. Called with
+// m.mu held.
+func (m *webViewManager) pickPageTarget(targets []cdpTarget) *cdpTarget {
+	var newest, newestNew *cdpTarget
+	for i := range targets {
+		t := &targets[i]
+		if t.Type != "page" {
+			continue
+		}
+		if newest == nil || newerTab(t.ID, newest.ID) {
+			newest = t
+		}
+		if m.lastListing != nil && !m.lastListing[t.ID] && (newestNew == nil || newerTab(t.ID, newestNew.ID)) {
+			newestNew = t
+		}
+	}
+	m.lastListing = pageIDs(targets)
+	if newestNew != nil && (isTabID(newestNew.ID) || !isTabID(newest.ID)) {
+		return newestNew
+	}
+	return newest
+}
+
+// newerTab reports whether the target with id a is a newer tab than b's.
+func newerTab(a, b string) bool {
+	na, errA := strconv.ParseUint(a, 10, 64)
+	nb, errB := strconv.ParseUint(b, 10, 64)
+	switch {
+	case errA == nil && errB == nil:
+		return na > nb
+	case errA == nil || errB == nil:
+		return errA == nil
+	}
+	return a > b
+}
+
+// isTabID reports whether id is one of Chrome's tab numbers.
+func isTabID(id string) bool {
+	_, err := strconv.ParseUint(id, 10, 64)
+	return err == nil
+}
+
+// pageIDs returns the ids of the page targets.
+func pageIDs(targets []cdpTarget) map[string]bool {
+	ids := map[string]bool{}
+	for _, t := range targets {
+		if t.Type == "page" {
+			ids[t.ID] = true
+		}
+	}
+	return ids
+}
+
 // rememberFirstLook records the page targets of the first look at Chrome's
 // tabs as the ones that were open before the runner. Called with m.mu held.
 func (m *webViewManager) rememberFirstLook(targets []cdpTarget) {
-	m.preexistingTabs = map[string]bool{}
-	for _, t := range targets {
-		if t.Type == "page" {
-			m.preexistingTabs[t.ID] = true
-		}
-	}
+	m.preexistingTabs = pageIDs(targets)
 	logger.Info("[cdp:5-cleanup] %d tab(s) were open at the first look; they stay open", len(m.preexistingTabs))
 }
 
@@ -1157,6 +1209,7 @@ func (m *webViewManager) lookFirst(socket string) {
 		return
 	}
 	m.browserSocket = socket
+	m.lastListing = pageIDs(targets)
 	m.rememberFirstLook(targets)
 }
 

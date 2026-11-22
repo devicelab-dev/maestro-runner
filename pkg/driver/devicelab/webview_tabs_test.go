@@ -244,3 +244,55 @@ func (s *chromeShell) Shell(cmd string) (string, error) {
 	}
 	return "", nil
 }
+
+// The tab a connect attaches to is the one that is new since the previous
+// look (an openLink's), Chrome's tab ids compared as numbers: as strings "9"
+// beat "10", so with tabs 8 and 9 open before the run the runner attached to
+// 9 and closed the tab its openLink had just opened.
+func TestConnectAttachesToTheNewTab(t *testing.T) {
+	chrome := newFakeChrome(t, "8", "9")
+	m := newWebViewManager(chrome)
+
+	_ = m.connect(chromeSocket, "browser")
+	chrome.openTab("10") // an openLink
+	m.disconnect()
+	_ = m.connect(chromeSocket, "browser")
+
+	_, closed, attached := chrome.record()
+	if want := []string{"9", "10"}; !reflect.DeepEqual(attached, want) || len(closed) != 0 {
+		t.Errorf("attached to %v and closed %v; want attached to %v and nothing closed", attached, closed, want)
+	}
+}
+
+// A blank page that is no tab (a GUID id) is not taken over Chrome's
+// numbered tabs, at the first look nor when it is the new target: as the
+// highest id as a string, it was, and the runner drove a blank page.
+func TestConnectDoesNotTakeABlankPageForATab(t *testing.T) {
+	chrome := newFakeChrome(t, "8", "9", "D1F3A0B7C2E94F6A8B5C3D2E1F0A9B8C")
+	m := newWebViewManager(chrome)
+
+	_ = m.connect(chromeSocket, "browser")
+	chrome.openTab("E2A4B6C8D0F24A6C8E0B2D4F6A8C0E2B")
+	m.cleanup()
+	_ = m.connect(chromeSocket, "browser")
+
+	if _, _, attached := chrome.record(); !reflect.DeepEqual(attached, []string{"9", "9"}) {
+		t.Errorf("attached to %v; want [9 9], Chrome's newest tab", attached)
+	}
+}
+
+// Where tab ids are not numbers, the new tab is still the one not in the
+// previous listing, whatever its id sorts as.
+func TestConnectAttachesToTheNewTabWhateverItsID(t *testing.T) {
+	chrome := newFakeChrome(t, "A0", "C0")
+	m := newWebViewManager(chrome)
+
+	_ = m.connect(chromeSocket, "browser")
+	chrome.openTab("B0") // an openLink
+	m.disconnect()
+	_ = m.connect(chromeSocket, "browser")
+
+	if _, _, attached := chrome.record(); !reflect.DeepEqual(attached, []string{"C0", "B0"}) {
+		t.Errorf("attached to %v; want [C0 B0]", attached)
+	}
+}
