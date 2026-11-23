@@ -356,6 +356,10 @@ func TestActivateApp(t *testing.T) {
 // TestTap tests tap action
 func TestTap(t *testing.T) {
 	server := mockWDAServer(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/appium/settings") { // the depth around the gesture (TestGesturesRunAtDepthOne)
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
 		if !strings.Contains(r.URL.Path, "/wda/tap") {
 			t.Errorf("Expected /wda/tap, got %s", r.URL.Path)
 		}
@@ -378,6 +382,10 @@ func TestTap(t *testing.T) {
 // TestDoubleTap tests double tap action
 func TestDoubleTap(t *testing.T) {
 	server := mockWDAServer(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/appium/settings") { // the depth around the gesture (TestGesturesRunAtDepthOne)
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
 		if !strings.Contains(r.URL.Path, "/wda/doubleTap") {
 			t.Errorf("Expected /wda/doubleTap, got %s", r.URL.Path)
 		}
@@ -400,6 +408,10 @@ func TestDoubleTap(t *testing.T) {
 // TestLongPress tests long press action
 func TestLongPress(t *testing.T) {
 	server := mockWDAServer(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/appium/settings") { // the depth around the gesture (TestGesturesRunAtDepthOne)
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
 		if !strings.Contains(r.URL.Path, "/wda/touchAndHold") {
 			t.Errorf("Expected /wda/touchAndHold, got %s", r.URL.Path)
 		}
@@ -422,6 +434,10 @@ func TestLongPress(t *testing.T) {
 // TestSwipe tests swipe action
 func TestSwipe(t *testing.T) {
 	server := mockWDAServer(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/appium/settings") { // the depth around the gesture (TestGesturesRunAtDepthOne)
+			jsonResponse(w, map[string]interface{}{"status": 0})
+			return
+		}
 		if !strings.Contains(r.URL.Path, "/actions") {
 			t.Errorf("Expected /actions, got %s", r.URL.Path)
 		}
