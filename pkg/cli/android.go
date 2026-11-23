@@ -596,6 +596,7 @@ func createDeviceLabDriver(cfg *RunConfig, dev *device.AndroidDevice, info devic
 	driver.SetWebViewForwarder(dev)
 
 	cleanup := func() {
+		driver.Close()
 		if err := adapter.DeleteSession(); err != nil {
 			logger.Debug("failed to delete session during cleanup: %v", err)
 		}

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -69,6 +70,22 @@ type webViewManager struct {
 	// unchanged, so its natural throttling is preserved). Guarded by mu; reset on
 	// (re)connect.
 	helperBroken bool
+
+	// preexistingTabs holds the page targets Chrome listed the first time
+	// this manager read them on browserSocket: tabs the runner did not open
+	// (the device user's own), which closeOtherTabs never closes. nil until
+	// that first read, and again when a connect goes to another socket;
+	// disconnect and cleanup keep it, since openLink disconnects every time.
+	preexistingTabs map[string]bool
+
+	// lastListing holds the page targets of the previous look at Chrome's
+	// tabs, so a connect can tell the tab that is new since (an openLink's).
+	lastListing map[string]bool
+
+	// browserSocket is Chrome's DevTools socket on the device that
+	// preexistingTabs and lastListing were read on, remembered so that
+	// closeOpenedTabs can reach Chrome after openLink's disconnect.
+	browserSocket string
 
 	forwarder CDPForwarder
 }
@@ -926,6 +943,18 @@ func (m *webViewManager) connectBrowserViaHTTP(cdpInfo *core.CDPInfo, cdpType st
 	}
 	logger.Info("[cdp:4-forward] ADB forward established: local=%s → device=%s", socketPath, cdpInfo.Socket)
 
+	// The tabs seen at the first look are those of one browser process: a
+	// connect to another DevTools socket (a second browser) is that
+	// socket's first look, so none of its tabs count as the runner's.
+	if cdpInfo.Socket != m.browserSocket {
+		if m.browserSocket != "" {
+			logger.Info("[cdp:5-cleanup] DevTools socket changed (%s → %s): taking a first look at its tabs", m.browserSocket, cdpInfo.Socket)
+		}
+		m.preexistingTabs = nil
+		m.lastListing = nil
+	}
+	m.browserSocket = cdpInfo.Socket
+
 	// Step 5: HTTP GET /json to discover page targets
 	logger.Info("[cdp:5-discover] fetching page targets via HTTP /json")
 	targets, err := m.fetchCDPTargets(socketPath)
@@ -936,17 +965,10 @@ func (m *webViewManager) connectBrowserViaHTTP(cdpInfo *core.CDPInfo, cdpType st
 		return fmt.Errorf("failed to fetch CDP targets: %w", err)
 	}
 
-	// Find the most recently created page target (highest ID = newest tab).
+	// Find the newest tab: the one an openLink opened since the previous look.
 	// Chrome returns targets in focus order, but after openLink there's a race
-	// where the old tab may still be focused. Using the highest ID is more reliable.
-	var pageTarget *cdpTarget
-	for i := range targets {
-		if targets[i].Type == "page" {
-			if pageTarget == nil || targets[i].ID > pageTarget.ID {
-				pageTarget = &targets[i]
-			}
-		}
-	}
+	// where the old tab may still be focused.
+	pageTarget := m.pickPageTarget(targets)
 	if pageTarget == nil {
 		logger.Info("[cdp:5-discover] no page targets found in %d targets", len(targets))
 		_ = m.forwarder.RemoveSocketForward(socketPath)
@@ -955,9 +977,15 @@ func (m *webViewManager) connectBrowserViaHTTP(cdpInfo *core.CDPInfo, cdpType st
 	}
 	logger.Info("[cdp:5-discover] found page target: id=%s title=%q url=%s", pageTarget.ID, pageTarget.Title, pageTarget.URL)
 
-	// Close all other tabs to prevent tab accumulation and stale connections.
-	// Each openLink creates a new Chrome tab; without cleanup, tabs pile up indefinitely.
+	// Close the other tabs this runner opened, to prevent tab accumulation and
+	// stale connections: each openLink creates a new Chrome tab, and without
+	// cleanup they pile up indefinitely. Tabs that were open before are left.
 	m.closeOtherTabs(socketPath, targets, pageTarget.ID)
+
+	// Bring the tab to the front: with the tabs that were open before left
+	// open, the one attached to may not be the one on screen (Chrome used
+	// without an openLink first), where taps and screenshots land.
+	m.activateTab(socketPath, pageTarget.ID)
 
 	// Step 6: Connect WebSocket to PAGE-level endpoint (not browser level)
 	// Chrome on Android doesn't support Target.* commands at browser level.
@@ -1059,9 +1087,18 @@ func (m *webViewManager) fetchCDPTargets(socketPath string) ([]cdpTarget, error)
 	return targets, nil
 }
 
-// closeOtherTabs closes all Chrome tabs except the one we're connecting to.
-// Uses HTTP /json/close/<id> via the forwarded Unix socket. Best-effort — errors are logged but ignored.
+// closeOtherTabs closes the Chrome tabs this runner opened except the one
+// we're connecting to. A tab that was already open the first time the runner
+// read Chrome's targets is not one it opened, and is never closed: the first
+// call only remembers those, every later one closes the rest. Uses HTTP
+// /json/close/<id> via the forwarded Unix socket. Best-effort — errors are
+// logged but ignored. Called with m.mu held.
 func (m *webViewManager) closeOtherTabs(socketPath string, targets []cdpTarget, keepID string) {
+	if m.preexistingTabs == nil {
+		m.rememberFirstLook(targets)
+		return
+	}
+
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			var dialer net.Dialer
@@ -1072,7 +1109,7 @@ func (m *webViewManager) closeOtherTabs(socketPath string, targets []cdpTarget, 
 
 	closed := 0
 	for _, t := range targets {
-		if t.ID == keepID || t.Type != "page" {
+		if t.ID == keepID || t.Type != "page" || m.preexistingTabs[t.ID] {
 			continue
 		}
 		resp, err := httpClient.Get(fmt.Sprintf("http://localhost/json/close/%s", t.ID))
@@ -1086,6 +1123,160 @@ func (m *webViewManager) closeOtherTabs(socketPath string, targets []cdpTarget, 
 	if closed > 0 {
 		logger.Info("[cdp:5-cleanup] closed %d old tab(s), keeping %s", closed, keepID)
 	}
+}
+
+// activateTab brings the tab to the front through HTTP /json/activate/<id>
+// via the forwarded Unix socket. Best-effort — errors are logged but ignored.
+func (m *webViewManager) activateTab(socketPath, id string) {
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var dialer net.Dialer
+			return dialer.DialContext(ctx, "unix", socketPath)
+		},
+	}
+	httpClient := &http.Client{Transport: transport, Timeout: 2 * time.Second}
+	resp, err := httpClient.Get(fmt.Sprintf("http://localhost/json/activate/%s", id))
+	if err != nil {
+		logger.Debug("[cdp:5-activate] failed to activate tab %s: %v", id, err)
+		return
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		logger.Debug("[cdp:5-activate] activating tab %s: HTTP %d", id, resp.StatusCode)
+	}
+}
+
+// pickPageTarget returns the page target to attach to: the newest of those
+// that were not in the previous listing (the tab an openLink opened), else
+// the newest of all. Chrome on Android numbers its tabs ("12"), a newer tab
+// with a higher number, so ids compare as numbers: as strings, "9" beat "10"
+// and the runner kept an old tab and closed the one it had just opened. A
+// target with another id (a GUID: a blank page that is no tab) ranks below
+// every number, and a new one is not taken over a numbered tab. Called with
+// m.mu held.
+func (m *webViewManager) pickPageTarget(targets []cdpTarget) *cdpTarget {
+	var newest, newestNew *cdpTarget
+	for i := range targets {
+		t := &targets[i]
+		if t.Type != "page" {
+			continue
+		}
+		if newest == nil || newerTab(t.ID, newest.ID) {
+			newest = t
+		}
+		if m.lastListing != nil && !m.lastListing[t.ID] && (newestNew == nil || newerTab(t.ID, newestNew.ID)) {
+			newestNew = t
+		}
+	}
+	m.lastListing = pageIDs(targets)
+	if newestNew != nil && (isTabID(newestNew.ID) || !isTabID(newest.ID)) {
+		return newestNew
+	}
+	return newest
+}
+
+// newerTab reports whether the target with id a is a newer tab than b's.
+func newerTab(a, b string) bool {
+	na, errA := strconv.ParseUint(a, 10, 64)
+	nb, errB := strconv.ParseUint(b, 10, 64)
+	switch {
+	case errA == nil && errB == nil:
+		return na > nb
+	case errA == nil || errB == nil:
+		return errA == nil
+	}
+	return a > b
+}
+
+// isTabID reports whether id is one of Chrome's tab numbers.
+func isTabID(id string) bool {
+	_, err := strconv.ParseUint(id, 10, 64)
+	return err == nil
+}
+
+// pageIDs returns the ids of the page targets.
+func pageIDs(targets []cdpTarget) map[string]bool {
+	ids := map[string]bool{}
+	for _, t := range targets {
+		if t.Type == "page" {
+			ids[t.ID] = true
+		}
+	}
+	return ids
+}
+
+// rememberFirstLook records the page targets of the first look at Chrome's
+// tabs as the ones that were open before the runner. Called with m.mu held.
+func (m *webViewManager) rememberFirstLook(targets []cdpTarget) {
+	m.preexistingTabs = pageIDs(targets)
+	logger.Info("[cdp:5-cleanup] %d tab(s) were open at the first look; they stay open", len(m.preexistingTabs))
+}
+
+// hasLookedAtTabs reports whether the first look at Chrome's tabs was taken.
+func (m *webViewManager) hasLookedAtTabs() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.preexistingTabs != nil
+}
+
+// lookFirst takes the first look at Chrome's tabs through its DevTools
+// socket on the device, before an openLink opens a tab, so that tab counts as
+// one the runner opened. Without it, the tab an openLink opened before the
+// first connect was listed at the first look and stayed open. It does nothing
+// once a look was taken, or while a WebView connection holds the forward.
+func (m *webViewManager) lookFirst(socket string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.preexistingTabs != nil || m.socketPath != "" {
+		return
+	}
+	socketPath := m.forwarder.CDPSocketPath()
+	if err := m.forwarder.ForwardToAbstractSocket(socketPath, socket); err != nil {
+		logger.Debug("[cdp:5-cleanup] first look: ADB forward failed: %v", err)
+		return
+	}
+	defer func() {
+		_ = m.forwarder.RemoveSocketForward(socketPath)
+		os.Remove(socketPath)
+	}()
+	targets, err := m.fetchCDPTargets(socketPath)
+	if err != nil {
+		logger.Debug("[cdp:5-cleanup] first look: %v", err)
+		return
+	}
+	m.browserSocket = socket
+	m.lastListing = pageIDs(targets)
+	m.rememberFirstLook(targets)
+}
+
+// closeOpenedTabs closes every Chrome tab the runner opened (every page
+// target not listed at the first look), then disconnects. Called when the
+// driver closes: a tab of the runner's left open would be listed at the next
+// run's first look, and that run never closes those, so they would pile up
+// across runs. A run that ends without it (killed, or the device gone) still
+// leaves its tabs, which later runs keep.
+func (m *webViewManager) closeOpenedTabs() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.disconnectLocked()
+	if m.preexistingTabs == nil || m.browserSocket == "" {
+		return
+	}
+	socketPath := m.forwarder.CDPSocketPath()
+	if err := m.forwarder.ForwardToAbstractSocket(socketPath, m.browserSocket); err != nil {
+		logger.Debug("[cdp:close] ADB forward failed, tabs left open: %v", err)
+		return
+	}
+	defer func() {
+		_ = m.forwarder.RemoveSocketForward(socketPath)
+		os.Remove(socketPath)
+	}()
+	targets, err := m.fetchCDPTargets(socketPath)
+	if err != nil {
+		logger.Debug("[cdp:close] tabs left open: %v", err)
+		return
+	}
+	m.closeOtherTabs(socketPath, targets, "")
 }
 
 // disconnect closes the Rod connection and cleans up ADB forwarding.

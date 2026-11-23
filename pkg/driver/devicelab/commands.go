@@ -3005,6 +3005,15 @@ func (d *Driver) openLink(step *flow.OpenLinkStep) *core.CommandResult {
 		cmd = fmt.Sprintf("am start -a android.intent.action.VIEW -d %s", quoted)
 	}
 
+	// Before the runner's first look at the browser's tabs, look now, so the
+	// tab this link opens counts as the runner's (closed when the driver
+	// closes) and not as one that was open before.
+	if d.webView != nil && !d.webView.hasLookedAtTabs() {
+		if socket := d.browserDevToolsSocket(); socket != "" {
+			d.webView.lookFirst(socket)
+		}
+	}
+
 	beforeHash, beforeErr := d.client.TreeHash()
 	if _, err := d.device.Shell(cmd); err != nil {
 		return errorResult(err, fmt.Sprintf("Failed to open link: %v", err))
