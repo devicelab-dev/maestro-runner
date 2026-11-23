@@ -360,6 +360,49 @@ func TestNoLiveWriteAfterAStepPanics(t *testing.T) {
 	}
 }
 
+// When a nested step panics, the flow's file keeps the runFlow's steps as far
+// as they got, the step that panicked as running, so a reader sees where the
+// flow crashed: Stop writes the list waiting once. With onFlowComplete, whose
+// steps still run after the panic, the file keeps the same steps, none of
+// the hook's among them.
+func TestAPanickedRunFlowKeepsItsStepsInTheFile(t *testing.T) {
+	for _, hooks := range [][]flow.Step{nil, {liveTap("hook")}} {
+		dir := t.TempDir()
+		driver := &mockDriver{executeFunc: func(step flow.Step) *core.CommandResult {
+			if tap, ok := step.(*flow.TapOnStep); ok && tap.Selector.ID == "boom" {
+				panic("nil pointer dereference in a dependency")
+			}
+			return &core.CommandResult{Success: true}
+		}}
+		runner := New(driver, RunnerConfig{
+			OutputDir: dir,
+			Artifacts: ArtifactNever,
+			Device:    report.Device{ID: "test", Platform: "android"},
+		})
+		f := flow.Flow{
+			SourcePath: "test.yaml",
+			Config:     flow.Config{Name: "panic in a runFlow", OnFlowComplete: hooks},
+			Steps:      []flow.Step{liveRunFlow(liveTap("a"), liveTap("boom"))},
+		}
+		if _, err := runner.Run(context.Background(), []flow.Flow{f}); err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+		d, err := report.ReadFlowDetail(filepath.Join(dir, "flows", "flow-000.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "runFlow:running[tapOn:passed,tapOn:running]"
+		if got := shapeOf(d.Commands); got != want {
+			t.Errorf("onFlowComplete %d steps: the flow's file has %s, want %s", len(hooks), got, want)
+		}
+		for _, c := range d.Commands[0].SubCommands {
+			if strings.Contains(c.YAML, "hook") {
+				t.Errorf("onFlowComplete %d steps: the runFlow's steps include onFlowComplete's %q", len(hooks), c.YAML)
+			}
+		}
+	}
+}
+
 // onFlowComplete's steps, which still run when a step panicked, are not
 // written as the steps of the runFlow that panicked: the file keeps that
 // runFlow as far as it got.
