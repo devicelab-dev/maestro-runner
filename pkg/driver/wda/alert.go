@@ -2,6 +2,7 @@ package wda
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -72,12 +73,21 @@ func (d *Driver) findOnSystemAlert(sel flow.Selector) *core.ElementInfo {
 	if err != nil {
 		return nil
 	}
-	if buttons, err := d.client.AlertButtons(); err == nil {
-		if label, ok := pickAlertButton(sel.Text, buttons); ok {
-			return &core.ElementInfo{Text: label, Class: systemAlertButtonClass, Visible: true, Enabled: true}
-		}
+	buttons, _ := d.client.AlertButtons()
+	return matchOnAlert(d.alertLookup, sel, text, buttons)
+}
+
+// matchOnAlert is what sel finds on an alert with this text and these
+// buttons, for a step that may match lookup of it: a button it names, or,
+// for a check, the alert's text. Nil when it finds nothing there.
+func matchOnAlert(lookup alertLookup, sel flow.Selector, text string, buttons []string) *core.ElementInfo {
+	if lookup == alertLookupNone || !matchesOnAlert(sel) {
+		return nil
 	}
-	if d.alertLookup == alertLookupAll && matchesText(straightQuotes(sel.Text), straightQuotes(text)) {
+	if label, ok := pickAlertButton(sel.Text, buttons); ok {
+		return &core.ElementInfo{Text: label, Class: systemAlertButtonClass, Visible: true, Enabled: true}
+	}
+	if lookup == alertLookupAll && matchesText(straightQuotes(sel.Text), straightQuotes(text)) {
 		return &core.ElementInfo{Text: text, Class: systemAlertTextClass, Visible: true, Enabled: true}
 	}
 	return nil
@@ -175,19 +185,23 @@ func promptButtonsNamed(steps []flow.Step) (names []string, any bool) {
 }
 
 // answerUnnamedPrompt answers the open permission prompt as WDA would have,
-// when the flow answers some prompts itself and this one is not among them.
-// WDA's alert monitor is all or nothing for a session, so a flow that taps one
-// prompt's button (the tracking prompt's "Ask App Not to Track", say) turned it
-// off for every prompt, and a later one the flow never meant to answer (the
-// notification prompt) stayed up over the app. A lookup that finds nothing
-// calls this: it leaves the prompt to the flow when one of its buttons is one
-// the flow taps, or when the flow has an acceptAlert or dismissAlert; else it
-// taps the button WDA's own answer would have (autoClickAlertSelector's) and
-// reports whether it did, so the lookup looks again.
+// when the flow answers some prompts itself. WDA's alert monitor is all or
+// nothing for a session, so a flow that taps one prompt's button (the tracking
+// prompt's "Ask App Not to Track", say) turned it off for every prompt, and
+// one the flow does not answer then (the notification prompt) stayed up over
+// the app. It leaves the prompt when the step running is aimed at it (a tap
+// on one of its buttons, a check of its text), as DeviceLab's driver does,
+// while a later tap on one of its buttons has not run (promptTapsFor), or
+// when the flow has an acceptAlert or dismissAlert; else it taps the button
+// WDA's own answer would have (autoClickAlertSelector's) and reports whether
+// it did. Called by a tap after its find, in the watch after a launch or an
+// answered prompt (answerPromptsBeforeTap), and by a lookup that finds
+// nothing (answerPromptOnMiss).
 func (d *Driver) answerUnnamedPrompt() bool {
-	if !d.flowAnswersAlerts || d.flowAnswersAnyPrompt || d.promptAction == "" {
+	if !d.answersPrompts() {
 		return false
 	}
+	d.lastPromptCheck = time.Now()
 	text, err := d.client.AlertText()
 	if err != nil {
 		return false
@@ -196,10 +210,8 @@ func (d *Driver) answerUnnamedPrompt() bool {
 	if err != nil {
 		return false
 	}
-	for _, name := range d.flowPromptButtons {
-		if _, ok := pickAlertButton(name, buttons); ok {
-			return false
-		}
+	if stepAimsAtAlert(d.step, text, buttons) || d.promptTapToRun(buttons) {
+		return false
 	}
 	label := ""
 	for _, b := range buttons {
@@ -217,8 +229,146 @@ func (d *Driver) answerUnnamedPrompt() bool {
 		logger.Warn("[wda] a permission prompt the flow does not answer itself stayed up after %q: %v", label, err)
 		return false
 	}
-	logger.Info("[wda] answered a permission prompt the flow does not answer itself with %q: %q", label, firstLine(text))
+	logger.Info("[wda] answered a permission prompt the step is not aimed at with %q: %q", label, firstLine(text))
+	// Another prompt often follows (notifications, then tracking).
+	d.watchForPrompts(promptAnswerWindow)
 	return true
+}
+
+// How long a tap asks for a prompt first: after launchApp (the app's own
+// screen before a prompt is often tapped first, and the prompt comes a second
+// or two later) and after a prompt was answered (another often follows).
+// DeviceLab's driver watches 3 s after either; a launch here gets longer,
+// since a tap under a prompt is lost (its element is found in the app
+// beneath the prompt) where DeviceLab's lookup sees the prompt.
+const (
+	promptLaunchWindow = 15 * time.Second
+	promptAnswerWindow = 3 * time.Second
+	// promptCheckEvery spaces the asks before taps, promptMissEvery a
+	// lookup's: one costs 70 ms on a light page and 270 ms on a heavy one.
+	promptCheckEvery = 500 * time.Millisecond
+	promptMissEvery  = time.Second
+)
+
+// answersPrompts reports whether the driver answers prompts itself: the flow
+// answers some (WDA's monitor is off) and launchApp's permissions say how.
+func (d *Driver) answersPrompts() bool {
+	return d.flowAnswersAlerts && !d.flowAnswersAnyPrompt && d.promptAction != ""
+}
+
+// watchForPrompts opens the watch for window from now.
+func (d *Driver) watchForPrompts(window time.Duration) {
+	if until := time.Now().Add(window); until.After(d.promptWatchUntil) {
+		d.promptWatchUntil = until
+	}
+}
+
+// answerPromptsBeforeTap answers the prompts over the app before a tap on an
+// element found in it, while the watch is open, and reports whether it
+// answered any (the element is then looked up again).
+func (d *Driver) answerPromptsBeforeTap() bool {
+	if !d.answersPrompts() || !time.Now().Before(d.promptWatchUntil) ||
+		time.Since(d.lastPromptCheck) < promptCheckEvery {
+		return false
+	}
+	answered := false
+	for i := 0; i < 3 && d.answerUnnamedPrompt(); i++ {
+		answered = true
+		if !d.settleOff {
+			d.settleScreen()
+		}
+	}
+	return answered
+}
+
+// answerPromptOnMiss answers a prompt for a lookup that found nothing, at
+// most once per promptMissEvery. It reports whether it did, so the lookup
+// looks again.
+func (d *Driver) answerPromptOnMiss() bool {
+	if !d.answersPrompts() || time.Since(d.lastPromptCheck) < promptMissEvery {
+		return false
+	}
+	return d.answerUnnamedPrompt()
+}
+
+// stepAimsAtAlert reports whether step deals with the open prompt itself: it
+// would find what it looks for on the prompt (matchOnAlert), such as
+// `tapOn: "Ask App Not to Track"` or a check of the prompt's question.
+// DeviceLab's driver leaves a prompt to such a step (devicelab_ios
+// aimsAtAlert). A step that could not answer it there is not aimed at it,
+// whatever its text: a tap counts only through a button (`tapOn:
+// "Notifications"` or the app's name is aimed at the app, and the tap would
+// be lost under a prompt whose text names them), and a tap with an index, a
+// relative selector, an id or a point, a double tap, a long press or a
+// copyTextFrom never finds anything on a prompt, so left the prompt it would
+// only wait under it.
+func stepAimsAtAlert(step flow.Step, text string, buttons []string) bool {
+	var sel *flow.Selector
+	switch s := step.(type) {
+	case *flow.TapOnStep:
+		sel = &s.Selector
+	case *flow.AssertVisibleStep:
+		sel = &s.Selector
+	case *flow.AssertNotVisibleStep:
+		sel = &s.Selector
+	case *flow.WaitUntilStep:
+		sel = s.Visible
+		if sel == nil {
+			sel = s.NotVisible
+		}
+	}
+	return sel != nil && matchOnAlert(alertLookupFor(step), *sel, text, buttons) != nil
+}
+
+// promptTapsFor returns the text of each tap in steps that leaves a prompt to
+// the flow until it has run: a tapOn that names a prompt's button and could
+// answer the prompt (stepAimsAtAlert's rule). Answered earlier, as
+// launchApp's permissions say, the prompt would be gone when the flow taps
+// it, and with `tapOn: "Ask App Not to Track"` a flow that says not to track
+// would end up tracked whenever an earlier lookup missed; an optional tap
+// counts too, since nothing would fail to show it. Only a prompt with that
+// button is held: the notification prompt is still answered for a flow that
+// taps only the tracking prompt's. The steps
+// are those PrepareForFlow gets, onFlowStart's and the body's with runFlow,
+// retry and repeat inlined, so a tap inside them is waited for as well; one
+// in a runFlow whose condition never holds keeps its prompts to the flow to
+// its end. A text with ${...} is left out, since the tap's own text is known
+// only when it runs.
+func promptTapsFor(steps []flow.Step) []string {
+	var texts []string
+	for _, step := range steps {
+		tap, ok := step.(*flow.TapOnStep)
+		if !ok || !namesPromptButton(tap.Selector.Text) ||
+			strings.Contains(tap.Selector.Text, "${") ||
+			alertLookupFor(tap) == alertLookupNone || !matchesOnAlert(tap.Selector) {
+			continue
+		}
+		texts = append(texts, tap.Selector.Text)
+	}
+	return texts
+}
+
+// promptTapToRun reports whether a tap still to run names one of buttons.
+func (d *Driver) promptTapToRun(buttons []string) bool {
+	for _, text := range d.promptTapsToRun {
+		if _, ok := pickAlertButton(text, buttons); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// promptTapRan drops a tap that has run from promptTapsToRun, whether it
+// passed, failed or found nothing as optional: its prompts are then answered
+// for other steps again.
+func (d *Driver) promptTapRan(step flow.Step) {
+	tap, ok := step.(*flow.TapOnStep)
+	if !ok {
+		return
+	}
+	if i := slices.Index(d.promptTapsToRun, tap.Selector.Text); i >= 0 {
+		d.promptTapsToRun = slices.Delete(d.promptTapsToRun, i, i+1)
+	}
 }
 
 func firstLine(s string) string {

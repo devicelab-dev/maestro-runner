@@ -39,15 +39,27 @@ type Driver struct {
 	// flowAnswersAlerts: the flow answers permission prompts itself, so WDA
 	// must not (see stepsAnswerAlerts).
 	flowAnswersAlerts bool
-	// flowPromptButtons: the prompt buttons the flow's taps name; a prompt
-	// with one of them is the flow's to answer. flowAnswersAnyPrompt: the
-	// flow has an acceptAlert or dismissAlert, which may be meant for any
-	// prompt. promptAction: what WDA would have answered the flow's other
-	// prompts with ("accept", "dismiss" or "") had the flow named none, which
-	// a lookup that finds nothing answers them with (answerUnnamedPrompt).
+	// flowPromptButtons: the prompt buttons the flow's taps name, which turn
+	// WDA's monitor off. flowAnswersAnyPrompt: the flow has an acceptAlert or
+	// dismissAlert, which may be meant for any prompt. promptAction: what WDA
+	// would have answered the flow's prompts with ("accept", "dismiss" or "")
+	// had the flow named none, which the driver answers a prompt with when
+	// the step running is not aimed at it (answerUnnamedPrompt).
 	flowPromptButtons    []string
 	flowAnswersAnyPrompt bool
 	promptAction         string
+	// promptTapsToRun: the text of each tap still to run that names a
+	// prompt's button and could answer it; a prompt with that button is left
+	// to the flow until the tap has run (promptTapsFor).
+	promptTapsToRun []string
+	// step: the step Execute runs, which a prompt is left to when it is
+	// aimed at it (stepAimsAtAlert). promptWatchUntil: until when a tap asks
+	// for a prompt after its find, before it taps (after launchApp and after
+	// an answered prompt); lastPromptCheck spaces those asks and a lookup's
+	// (an alert check costs a quarter second on a heavy page).
+	step             flow.Step
+	promptWatchUntil time.Time
+	lastPromptCheck  time.Time
 	// alertLookup: what of a system alert the current step's selector may match.
 	alertLookup alertLookup
 
@@ -136,6 +148,7 @@ func NewDriver(client *Client, info *core.PlatformInfo, udid string) *Driver {
 func (d *Driver) PrepareForFlow(steps []flow.Step) {
 	d.flowPromptButtons, d.flowAnswersAnyPrompt = promptButtonsNamed(steps)
 	d.flowAnswersAlerts = d.flowAnswersAnyPrompt || len(d.flowPromptButtons) > 0
+	d.promptTapsToRun = promptTapsFor(steps)
 	for _, s := range steps {
 		launchApp, ok := s.(*flow.LaunchAppStep)
 		if !ok {
@@ -300,6 +313,9 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	if d.screenMayMove && !d.settleOff && actsOnScreen(step) && !flow.RepeatTapAfterFirst(step) {
 		d.settleScreen()
 	}
+	// The step running: a permission prompt is left to it when it is aimed
+	// at the prompt (answerUnnamedPrompt).
+	d.step = step
 	// A step that neither acts nor moves the screen (an assert, a script, a
 	// flow's condition) leaves the flag as it was, so the next action still
 	// settles: a tap, a check that answered while the sheet the tap opened
@@ -433,6 +449,10 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	if core.MayLeaveIOSKeyboardUp(step, result) {
 		d.keyboardMayBeUp = true
 	}
+	if _, ok := step.(*flow.LaunchAppStep); ok {
+		d.watchForPrompts(promptLaunchWindow)
+	}
+	d.promptTapRan(step)
 	result.Duration = time.Since(start)
 	d.trackCrashLoop(result)
 	return result
@@ -1428,8 +1448,8 @@ func (d *Driver) findElementByPageSourceOnce(sel flow.Selector) (*core.ElementIn
 		if info := d.findOnSystemAlert(sel); info != nil {
 			return info, nil
 		}
-		if d.answerUnnamedPrompt() {
-			return nil, notFound("a permission prompt the flow does not answer was over the app: answered, looking again")
+		if d.answerPromptOnMiss() {
+			return nil, notFound("a permission prompt the step is not aimed at was over the app: answered, looking again")
 		}
 		if sel.Text != "" {
 			if closest := ClosestTexts(allElements, sel.Text, 3); len(closest) > 0 {
