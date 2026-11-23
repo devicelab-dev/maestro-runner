@@ -322,3 +322,43 @@ func TestSuiteDecisionIsLogged(t *testing.T) {
 		})
 	}
 }
+
+// A retry of a suite: true file warns once each time the retry runs, not once
+// per attempt; a repeat around it still warns once per round, as a runFlow
+// does.
+func TestNestedSuiteWarnsOncePerRetry(t *testing.T) {
+	const warning = "suite.yaml has suite: true, but a runFlow or retry runs it"
+	files := map[string]string{
+		"suite.yaml": "appId: x\nsuite: true\n---\n- runFlow: a.yaml\n- runFlow: b.yaml\n",
+		"a.yaml":     "appId: x\n---\n- tapOn: Next\n",
+		"b.yaml":     "appId: x\n---\n- tapOn: Missing\n",
+	}
+	for _, c := range []struct {
+		name, main string
+		taps, want int
+	}{
+		{"retry", "appId: x\n---\n- retry:\n    maxRetries: 2\n    file: suite.yaml\n", 3, 1},
+		{"repeat of a retry", "appId: x\n---\n- repeat:\n    times: 2\n    commands:\n      - retry:\n          maxRetries: 2\n          file: suite.yaml\n          optional: true\n", 6, 2},
+		{"repeat of a runFlow", "appId: x\n---\n- repeat:\n    times: 2\n    commands:\n      - runFlow:\n          file: suite.yaml\n          optional: true\n", 2, 2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			files["main.yaml"] = c.main
+			logPath := filepath.Join(t.TempDir(), "maestro-runner.log")
+			if err := logger.Init(logPath); err != nil {
+				t.Fatal(err)
+			}
+			_, seen, _ := runFiles(t, files, "main.yaml", RunnerConfig{})
+			logger.Close()
+			data, err := os.ReadFile(logPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n := strings.Count(strings.Join(typed(seen), ", "), "tapOn Missing"); n != c.taps {
+				t.Fatalf("the suite file ran %d times, want %d: %v", n, c.taps, typed(seen))
+			}
+			if n := strings.Count(string(data), warning); n != c.want {
+				t.Errorf("the log warns %d times, want %d:\n%s", n, c.want, data)
+			}
+		})
+	}
+}

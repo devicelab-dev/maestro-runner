@@ -1371,6 +1371,7 @@ func (fr *FlowRunner) executeRetry(step *flow.RetryStep) *core.CommandResult {
 				Message: fmt.Sprintf("Failed to parse flow file: %s", filePath),
 			}
 		}
+		warnNestedSuite(subFlow)
 		return fr.executeSubFlowWithRetry(*subFlow, attempts)
 	}
 
@@ -1528,6 +1529,7 @@ func (fr *FlowRunner) executeRunFlow(step *flow.RunFlowStep) *core.CommandResult
 		}
 	}
 
+	warnNestedSuite(subFlow)
 	result := fr.executeSubFlow(*subFlow)
 	if !result.Success {
 		return fr.wrapRunFlowTimeout(result, step, "", timeoutLimit)
@@ -1617,6 +1619,7 @@ func (fr *FlowRunner) executeRunFlowElse(step *flow.RunFlowStep) *core.CommandRe
 		}
 	}
 
+	warnNestedSuite(subFlow)
 	result := fr.executeSubFlow(*subFlow)
 	if !result.Success {
 		return fr.wrapRunFlowTimeout(result, step, "", timeoutLimit)
@@ -2062,14 +2065,18 @@ func (fr *FlowRunner) liveSubs() {
 // newFlowWriter makes a flow's writer; a variable so tests can see it.
 var newFlowWriter = report.NewFlowWriter
 
-// executeSubFlow executes a sub-flow without separate report tracking.
-func (fr *FlowRunner) executeSubFlow(subFlow flow.Flow) *core.CommandResult {
-	// suite: true splits only a file the run starts with; reached by a
-	// runFlow or a retry, the file runs nested, as any sub-flow.
+// warnNestedSuite says in the log that a file a runFlow or retry runs is one
+// sub-flow, even when its header says suite: true: the key splits only a file
+// the run starts with. It is called once each time the runFlow or retry runs,
+// not once per retry attempt.
+func warnNestedSuite(subFlow *flow.Flow) {
 	if subFlow.Config.Suite {
 		logger.Warn("%s has suite: true, but a runFlow or retry runs it: running it as one sub-flow (suite: true splits only a top-level flow file)", subFlow.SourcePath)
 	}
+}
 
+// executeSubFlow executes a sub-flow without separate report tracking.
+func (fr *FlowRunner) executeSubFlow(subFlow flow.Flow) *core.CommandResult {
 	// Save current flow dir
 	prevDir := fr.script.flowDir
 	if subFlow.SourcePath != "" {
