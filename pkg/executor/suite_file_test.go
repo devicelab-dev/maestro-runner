@@ -160,14 +160,16 @@ func withSuiteKey() map[string]string {
 
 // suite: true in the header keeps the split: each runFlow of the file is a
 // flow of its own, with the suite's appId and env and the runFlow's env, and
-// no output from the one before. A part's own env wins over the suite's, and
-// the runFlow's over both.
+// no output from the one before. A part's own env wins over the suite's
+// (login.yaml's USER), and the runFlow's over both (cart.yaml's ITEM, which
+// the suite and cart.yaml both set).
 func TestSuiteKeyRunsEachFileAsAFlow(t *testing.T) {
 	files := withSuiteKey()
 	files["checkout.yaml"] = strings.Replace(files["checkout.yaml"], "suite: true\n",
 		"suite: true\nenv:\n  SHOP: north\n  USER: bob\n  ITEM: shoes\n", 1)
 	files["login.yaml"] += "- inputText: ${USER + ' at ' + SHOP}\n"
-	files["cart.yaml"] += "- inputText: ${ITEM + ' at ' + SHOP}\n"
+	files["cart.yaml"] = strings.Replace(files["cart.yaml"], "appId: x\n", "appId: x\nenv:\n  ITEM: hats\n", 1) +
+		"- inputText: ${ITEM + ' at ' + SHOP}\n"
 	result, seen, out := runFiles(t, files, "checkout.yaml", RunnerConfig{})
 	if result.TotalFlows != 2 {
 		t.Fatalf("%d flows, want 2: %+v", result.TotalFlows, result.FlowResults)
