@@ -448,8 +448,17 @@ func (v *Validator) validateFile(filePath string, result *Result, validated map[
 		}
 		// Check tag filters
 		if flow.ShouldIncludeFlow(f, v.includeTags, v.excludeTags) {
-			result.TestCases = append(result.TestCases, filePath)
 			testCasesAdded[filePath] = true
+			// A file that says it is a suite and cannot be split would run
+			// as one flow against what its header says.
+			if problem := f.SuiteProblem(); f.Config.Suite && problem != "" {
+				result.Errors = append(result.Errors, &ValidationError{
+					File:    filePath,
+					Message: fmt.Sprintf("suite: true, but %s; a suite has no onFlowStart or onFlowComplete, and only runFlow steps of files, two or more, without when:, else or inline commands", problem),
+				})
+				return
+			}
+			result.TestCases = append(result.TestCases, filePath)
 		}
 	}
 }

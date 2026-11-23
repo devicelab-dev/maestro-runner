@@ -2142,11 +2142,80 @@ func TestFlow_IsSuite(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tt.flow.IsSuite()
-			if got != tt.expected {
-				t.Errorf("IsSuite() = %v, want %v", got, tt.expected)
+			// Without suite: true in the header no flow is a suite, whatever
+			// its steps: it runs as one flow, as in Maestro.
+			if tt.flow.IsSuite() {
+				t.Errorf("IsSuite() = true without suite: true")
+			}
+			f := tt.flow
+			f.Config.Suite = true
+			if got := f.IsSuite(); got != tt.expected {
+				t.Errorf("IsSuite() with suite: true = %v, want %v", got, tt.expected)
+			}
+			if problem := f.SuiteProblem(); (problem == "") != tt.expected {
+				t.Errorf("SuiteProblem() = %q, want a reason exactly when it is not a suite", problem)
 			}
 		})
+	}
+}
+
+// SuiteProblem names the step that keeps a file from being a suite, for the
+// validator's error.
+func TestFlow_SuiteProblem(t *testing.T) {
+	runFlow := func(file string) Step { return &RunFlowStep{BaseStep: BaseStep{StepType: StepRunFlow}, File: file} }
+	tests := []struct {
+		steps []Step
+		want  string
+	}{
+		{nil, "it has no steps"},
+		{[]Step{runFlow("a.yaml"), &TapOnStep{BaseStep: BaseStep{StepType: StepTapOn}}}, "step 2 is tapOn, not a runFlow"},
+		{[]Step{runFlow("a.yaml"), &RunFlowStep{BaseStep: BaseStep{StepType: StepRunFlow}, Steps: []Step{&TapOnStep{}}}}, "step 2 is a runFlow with inline commands"},
+		{[]Step{&RunFlowStep{BaseStep: BaseStep{StepType: StepRunFlow}, File: "a.yaml", When: &Condition{Visible: &Selector{Text: "Menu"}}}, runFlow("b.yaml")}, "step 1 is a runFlow with a when: condition"},
+		{[]Step{runFlow("a.yaml"), &RunFlowStep{BaseStep: BaseStep{StepType: StepRunFlow}, File: "b.yaml", ElseFile: "c.yaml"}}, "step 2 is a runFlow with an else"},
+		{[]Step{runFlow("a.yaml")}, "it has only one runFlow"},
+		{[]Step{runFlow("a.yaml"), runFlow("b.yaml")}, ""},
+	}
+	for _, tt := range tests {
+		f := Flow{Steps: tt.steps}
+		if got := f.SuiteProblem(); got != tt.want {
+			t.Errorf("SuiteProblem() = %q, want %q", got, tt.want)
+		}
+	}
+
+	// A suite's own hooks would never run: its parts run as flows of their
+	// own.
+	hook := []Step{&TapOnStep{BaseStep: BaseStep{StepType: StepTapOn}}}
+	for _, c := range []struct {
+		config Config
+		want   string
+	}{
+		{Config{OnFlowStart: hook}, "it has onFlowStart"},
+		{Config{OnFlowComplete: hook}, "it has onFlowComplete"},
+		{Config{OnFlowStart: hook, OnFlowComplete: hook}, "it has onFlowStart"},
+	} {
+		f := Flow{Config: c.config, Steps: []Step{runFlow("a.yaml"), runFlow("b.yaml")}}
+		if got := f.SuiteProblem(); got != c.want {
+			t.Errorf("SuiteProblem() with hooks = %q, want %q", got, c.want)
+		}
+	}
+}
+
+// The header key parses; a file without it is no suite.
+func TestParse_SuiteHeader(t *testing.T) {
+	body := "appId: com.example\nsuite: true\n---\n- runFlow: a.yaml\n- runFlow: b.yaml\n"
+	f, err := Parse([]byte(body), "suite.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.Config.Suite || !f.IsSuite() {
+		t.Errorf("Config.Suite = %v, IsSuite() = %v; want both true", f.Config.Suite, f.IsSuite())
+	}
+	f, err = Parse([]byte(strings.Replace(body, "suite: true\n", "", 1)), "suite.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Config.Suite || f.IsSuite() {
+		t.Errorf("without the key: Config.Suite = %v, IsSuite() = %v; want both false", f.Config.Suite, f.IsSuite())
 	}
 }
 
@@ -2163,6 +2232,7 @@ func TestFlow_GetTestCases(t *testing.T) {
 
 	// Suite should return runFlow steps
 	suite := Flow{
+		Config: Config{Suite: true},
 		Steps: []Step{
 			&RunFlowStep{BaseStep: BaseStep{StepType: StepRunFlow}, File: "login.yaml"},
 			&RunFlowStep{BaseStep: BaseStep{StepType: StepRunFlow}, File: "checkout.yaml"},
