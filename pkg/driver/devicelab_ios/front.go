@@ -33,10 +33,12 @@ import (
 // read (it lists Settings and Safari, not the renderer, Spotlight or the
 // Messages view service).
 
-// frontPriority is the lowest priority that reads as in front: above the
-// background's 4 and the 31 of a background process that is not throttled
-// (the agent's runner), below the front's 47.
-const frontPriority = 40
+// frontPriority is the lowest priority that reads as in front: the front's
+// 47. A background app is 4, a background process that is not throttled (the
+// agent's runner, an app playing audio) 31, and an app in the background can
+// read 46 on and off for a few seconds (a short boost after a Home press,
+// seen on an iPad), which must not read as in front.
+const frontPriority = 47
 
 // frontSettle bounds the wait for one of two apps that read as in front to
 // drop, and frontPoll is how often they are read again meanwhile.

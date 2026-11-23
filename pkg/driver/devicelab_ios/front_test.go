@@ -182,6 +182,7 @@ func TestFrontApp(t *testing.T) {
 			pri:  priorities(map[int]int{settings: 4, safari: 4, renderer: 47}),
 		},
 		{name: "a background app that is not throttled is not in front", pri: priorities(map[int]int{settings: 31, safari: 4})},
+		{name: "a background app's short boost to 46 is not in front", pri: priorities(map[int]int{settings: 46, safari: 4, renderer: 4})},
 		{name: "an app that ended is not in front", pri: priorities(map[int]int{safari: 4})},
 		{
 			name: "two after a switch: the one that left drops",
