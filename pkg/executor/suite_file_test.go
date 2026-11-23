@@ -280,7 +280,8 @@ func TestParallelRunnerSplitsOnlyASuiteKeyFile(t *testing.T) {
 
 // Each way a runFlow-only file goes is in the run's log: split by its key,
 // one flow (the default, with the key to split it), one flow because its key
-// cannot be honoured, or nested because a runFlow runs it.
+// cannot be honoured, nested because a runFlow runs it, or one flow because it
+// is a part of a suite.
 func TestSuiteDecisionIsLogged(t *testing.T) {
 	cannot := withSuiteKey()
 	cannot["checkout.yaml"] += "- tapOn: Done\n"
@@ -288,6 +289,10 @@ func TestSuiteDecisionIsLogged(t *testing.T) {
 	nested := withSuiteKey()
 	nested["suite.yaml"] = nested["checkout.yaml"]
 	nested["checkout.yaml"] = "appId: x\n---\n- runFlow: suite.yaml\n- tapOn: Done\n"
+	// A suite file that is a part of another suite runs as one flow.
+	part := withSuiteKey()
+	part["suite.yaml"] = part["checkout.yaml"]
+	part["checkout.yaml"] = "appId: x\nsuite: true\n---\n- runFlow: suite.yaml\n- runFlow: login.yaml\n"
 	for _, c := range []struct {
 		name  string
 		files map[string]string
@@ -297,6 +302,7 @@ func TestSuiteDecisionIsLogged(t *testing.T) {
 		{"no key", suiteFiles, "checkout.yaml is made only of runFlow steps: running it as one flow (suite: true in its header runs each as a flow of its own)"},
 		{"cannot split", cannot, "[WARN] " + "DIR/checkout.yaml has suite: true, but step 3 is tapOn, not a runFlow: running it as one flow"},
 		{"reached by runFlow", nested, "[WARN] " + "DIR/suite.yaml has suite: true, but a runFlow or retry runs it: running it as one sub-flow (suite: true splits only a top-level flow file)"},
+		{"part of a suite", part, "[WARN] " + "DIR/suite.yaml has suite: true, but it is a part of the suite DIR/checkout.yaml: running it as one flow (suite: true splits only a top-level flow file)"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			logPath := filepath.Join(t.TempDir(), "maestro-runner.log")
@@ -309,7 +315,7 @@ func TestSuiteDecisionIsLogged(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := strings.Replace(c.want, "DIR", filepath.Dir(out), 1)
+			want := strings.ReplaceAll(c.want, "DIR", filepath.Dir(out))
 			if !strings.Contains(string(data), want) {
 				t.Errorf("the log has no %q:\n%s", want, data)
 			}
