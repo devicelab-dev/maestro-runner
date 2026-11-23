@@ -509,12 +509,65 @@ func TestStepAimsAtAlertMatchesTapsOnButtonsOnly(t *testing.T) {
 		{&flow.TapOnStep{Selector: textSelector("Lab")}, false},
 		{&flow.DoubleTapOnStep{Selector: textSelector("Notifications")}, false},
 		{&flow.LongPressOnStep{Selector: textSelector("Notifications")}, false},
-		{&flow.LongPressOnStep{Selector: textSelector("Allow")}, true},
 		{&flow.AssertVisibleStep{Selector: textSelector("Notifications")}, true},
 		{&flow.WaitUntilStep{Visible: &flow.Selector{Text: "Send You Notifications"}}, true},
 	} {
 		if got := stepAimsAtAlert(tc.step, text, buttons); got != tc.want {
 			t.Errorf("stepAimsAtAlert(%T %v) = %v, want %v", tc.step, tc.step, got, tc.want)
+		}
+	}
+}
+
+// A step is aimed at a prompt only when it could find what it looks for on
+// the prompt: a selector with an index, a relative selector, an id or a point
+// never finds a button there, nor does a double tap, a long press or a
+// copyTextFrom, so their text alone does not leave the prompt to them.
+func TestStepAimsAtAlertOnlyWhenItCouldAnswerThePrompt(t *testing.T) {
+	text := "“Lab” Would Like to Send You Notifications"
+	buttons := []string{"Don’t Allow", "Allow"}
+	tap := func(sel flow.Selector) *flow.TapOnStep { return &flow.TapOnStep{Selector: sel} }
+	atPoint := tap(textSelector("Allow"))
+	atPoint.Point = "50%,50%"
+	for _, tc := range []struct {
+		step flow.Step
+		want bool
+	}{
+		{tap(textSelector("Allow")), true},
+		{tap(flow.Selector{Text: "Allow", Index: "0"}), true},
+		{tap(flow.Selector{Text: "Allow", Index: "1"}), false},
+		{tap(flow.Selector{Text: "Allow", Below: &flow.Selector{Text: "Notifications"}}), false},
+		{tap(flow.Selector{Text: "Allow", Above: &flow.Selector{Text: "Notifications"}}), false},
+		{tap(flow.Selector{Text: "Allow", ID: "allow"}), false},
+		{atPoint, false},
+		{&flow.TapOnStep{Selector: textSelector("Allow"), LongPress: true}, false},
+		{&flow.DoubleTapOnStep{Selector: textSelector("Allow")}, false},
+		{&flow.LongPressOnStep{Selector: textSelector("Allow")}, false},
+		{&flow.CopyTextFromStep{Selector: textSelector("Notifications")}, false},
+		{&flow.AssertVisibleStep{Selector: flow.Selector{Text: "Allow", Index: "1"}}, false},
+		{&flow.AssertNotVisibleStep{Selector: textSelector("Allow")}, true},
+	} {
+		if got := stepAimsAtAlert(tc.step, text, buttons); got != tc.want {
+			t.Errorf("stepAimsAtAlert(%T %s) = %v, want %v", tc.step, tc.step.Describe(), got, tc.want)
+		}
+	}
+}
+
+// `longPressOn: "Allow"` or `tapOn: {text: "Allow", index: 1}` cannot reach
+// the prompt, so a lookup under it that misses gets it answered as the
+// permissions say, rather than leaving it up for a step that never answers it.
+func TestLookupAnswersAPromptForAStepThatCannotReachIt(t *testing.T) {
+	longPress := &flow.LongPressOnStep{Selector: textSelector("Allow")}
+	longPress.TimeoutMs = 300
+	indexed := &flow.TapOnStep{Selector: flow.Selector{Text: "Allow", Index: "1"}}
+	indexed.TimeoutMs = 300
+	for _, step := range []flow.Step{longPress, indexed} {
+		d, accepted := alertServer(t, true, "Don’t Allow", "Allow")
+		tracking := &flow.TapOnStep{Selector: textSelector("Ask App Not to Track")}
+		tracking.Optional = true
+		d.PrepareForFlow([]flow.Step{&flow.LaunchAppStep{}, tracking})
+		d.Execute(step)
+		if len(*accepted) != 1 || (*accepted)[0] != "Allow" {
+			t.Errorf("%s: accepted = %v, want [Allow]", step.Describe(), *accepted)
 		}
 	}
 }

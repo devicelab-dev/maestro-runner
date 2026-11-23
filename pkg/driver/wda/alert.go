@@ -72,12 +72,21 @@ func (d *Driver) findOnSystemAlert(sel flow.Selector) *core.ElementInfo {
 	if err != nil {
 		return nil
 	}
-	if buttons, err := d.client.AlertButtons(); err == nil {
-		if label, ok := pickAlertButton(sel.Text, buttons); ok {
-			return &core.ElementInfo{Text: label, Class: systemAlertButtonClass, Visible: true, Enabled: true}
-		}
+	buttons, _ := d.client.AlertButtons()
+	return matchOnAlert(d.alertLookup, sel, text, buttons)
+}
+
+// matchOnAlert is what sel finds on an alert with this text and these
+// buttons, for a step that may match lookup of it: a button it names, or,
+// for a check, the alert's text. Nil when it finds nothing there.
+func matchOnAlert(lookup alertLookup, sel flow.Selector, text string, buttons []string) *core.ElementInfo {
+	if lookup == alertLookupNone || !matchesOnAlert(sel) {
+		return nil
 	}
-	if d.alertLookup == alertLookupAll && matchesText(straightQuotes(sel.Text), straightQuotes(text)) {
+	if label, ok := pickAlertButton(sel.Text, buttons); ok {
+		return &core.ElementInfo{Text: label, Class: systemAlertButtonClass, Visible: true, Enabled: true}
+	}
+	if lookup == alertLookupAll && matchesText(straightQuotes(sel.Text), straightQuotes(text)) {
 		return &core.ElementInfo{Text: text, Class: systemAlertTextClass, Visible: true, Enabled: true}
 	}
 	return nil
@@ -280,28 +289,25 @@ func (d *Driver) answerPromptOnMiss() bool {
 	return d.answerUnnamedPrompt()
 }
 
-// stepAimsAtAlert reports whether step deals with the open prompt itself: a
-// selector that matches one of its buttons, such as `tapOn: "Ask App Not to
-// Track"`, or, for a step that looks rather than taps, its text, such as a
-// check of the prompt's question. DeviceLab's driver leaves a prompt to such
-// a step (devicelab_ios aimsAtAlert). A tap counts only through a button:
-// `tapOn: "Notifications"` or the app's name is aimed at the app, and the
-// tap would be lost under a prompt whose text names them.
+// stepAimsAtAlert reports whether step deals with the open prompt itself: it
+// would find what it looks for on the prompt (matchOnAlert), such as
+// `tapOn: "Ask App Not to Track"` or a check of the prompt's question.
+// DeviceLab's driver leaves a prompt to such a step (devicelab_ios
+// aimsAtAlert). A step that could not answer it there is not aimed at it,
+// whatever its text: a tap counts only through a button (`tapOn:
+// "Notifications"` or the app's name is aimed at the app, and the tap would
+// be lost under a prompt whose text names them), and a tap with an index, a
+// relative selector, an id or a point, a double tap, a long press or a
+// copyTextFrom never finds anything on a prompt, so left the prompt it would
+// only wait under it.
 func stepAimsAtAlert(step flow.Step, text string, buttons []string) bool {
 	var sel *flow.Selector
-	buttonsOnly := false
 	switch s := step.(type) {
 	case *flow.TapOnStep:
-		sel, buttonsOnly = &s.Selector, true
-	case *flow.DoubleTapOnStep:
-		sel, buttonsOnly = &s.Selector, true
-	case *flow.LongPressOnStep:
-		sel, buttonsOnly = &s.Selector, true
+		sel = &s.Selector
 	case *flow.AssertVisibleStep:
 		sel = &s.Selector
 	case *flow.AssertNotVisibleStep:
-		sel = &s.Selector
-	case *flow.CopyTextFromStep:
 		sel = &s.Selector
 	case *flow.WaitUntilStep:
 		sel = s.Visible
@@ -309,13 +315,7 @@ func stepAimsAtAlert(step flow.Step, text string, buttons []string) bool {
 			sel = s.NotVisible
 		}
 	}
-	if sel == nil || sel.Text == "" {
-		return false
-	}
-	if _, ok := pickAlertButton(sel.Text, buttons); ok {
-		return true
-	}
-	return !buttonsOnly && matchesText(straightQuotes(sel.Text), straightQuotes(text))
+	return sel != nil && matchOnAlert(alertLookupFor(step), *sel, text, buttons) != nil
 }
 
 func firstLine(s string) string {
