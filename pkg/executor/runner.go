@@ -401,6 +401,11 @@ func expandSuites(flows []flow.Flow) []flow.Flow {
 				continue
 			}
 
+			// A part runs as a flow of its own and is not split again.
+			if tcFlow.Config.Suite {
+				logger.Warn("%s has suite: true, but it is a part of the suite %s: running it as one flow (suite: true splits only a top-level flow file)", tcPath, f.SourcePath)
+			}
+
 			// Inherit appId/url from suite if not set in test case
 			if tcFlow.Config.EffectiveAppID() == "" {
 				if id := f.Config.EffectiveAppID(); id != "" {

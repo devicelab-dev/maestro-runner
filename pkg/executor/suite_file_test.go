@@ -160,14 +160,16 @@ func withSuiteKey() map[string]string {
 
 // suite: true in the header keeps the split: each runFlow of the file is a
 // flow of its own, with the suite's appId and env and the runFlow's env, and
-// no output from the one before. A part's own env wins over the suite's, and
-// the runFlow's over both.
+// no output from the one before. A part's own env wins over the suite's
+// (login.yaml's USER), and the runFlow's over both (cart.yaml's ITEM, which
+// the suite and cart.yaml both set).
 func TestSuiteKeyRunsEachFileAsAFlow(t *testing.T) {
 	files := withSuiteKey()
 	files["checkout.yaml"] = strings.Replace(files["checkout.yaml"], "suite: true\n",
 		"suite: true\nenv:\n  SHOP: north\n  USER: bob\n  ITEM: shoes\n", 1)
 	files["login.yaml"] += "- inputText: ${USER + ' at ' + SHOP}\n"
-	files["cart.yaml"] += "- inputText: ${ITEM + ' at ' + SHOP}\n"
+	files["cart.yaml"] = strings.Replace(files["cart.yaml"], "appId: x\n", "appId: x\nenv:\n  ITEM: hats\n", 1) +
+		"- inputText: ${ITEM + ' at ' + SHOP}\n"
 	result, seen, out := runFiles(t, files, "checkout.yaml", RunnerConfig{})
 	if result.TotalFlows != 2 {
 		t.Fatalf("%d flows, want 2: %+v", result.TotalFlows, result.FlowResults)
@@ -280,7 +282,8 @@ func TestParallelRunnerSplitsOnlyASuiteKeyFile(t *testing.T) {
 
 // Each way a runFlow-only file goes is in the run's log: split by its key,
 // one flow (the default, with the key to split it), one flow because its key
-// cannot be honoured, or nested because a runFlow runs it.
+// cannot be honoured, nested because a runFlow runs it, or one flow because it
+// is a part of a suite.
 func TestSuiteDecisionIsLogged(t *testing.T) {
 	cannot := withSuiteKey()
 	cannot["checkout.yaml"] += "- tapOn: Done\n"
@@ -288,6 +291,10 @@ func TestSuiteDecisionIsLogged(t *testing.T) {
 	nested := withSuiteKey()
 	nested["suite.yaml"] = nested["checkout.yaml"]
 	nested["checkout.yaml"] = "appId: x\n---\n- runFlow: suite.yaml\n- tapOn: Done\n"
+	// A suite file that is a part of another suite runs as one flow.
+	part := withSuiteKey()
+	part["suite.yaml"] = part["checkout.yaml"]
+	part["checkout.yaml"] = "appId: x\nsuite: true\n---\n- runFlow: suite.yaml\n- runFlow: login.yaml\n"
 	for _, c := range []struct {
 		name  string
 		files map[string]string
@@ -297,6 +304,7 @@ func TestSuiteDecisionIsLogged(t *testing.T) {
 		{"no key", suiteFiles, "checkout.yaml is made only of runFlow steps: running it as one flow (suite: true in its header runs each as a flow of its own)"},
 		{"cannot split", cannot, "[WARN] " + "DIR/checkout.yaml has suite: true, but step 3 is tapOn, not a runFlow: running it as one flow"},
 		{"reached by runFlow", nested, "[WARN] " + "DIR/suite.yaml has suite: true, but a runFlow or retry runs it: running it as one sub-flow (suite: true splits only a top-level flow file)"},
+		{"part of a suite", part, "[WARN] " + "DIR/suite.yaml has suite: true, but it is a part of the suite DIR/checkout.yaml: running it as one flow (suite: true splits only a top-level flow file)"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			logPath := filepath.Join(t.TempDir(), "maestro-runner.log")
@@ -309,9 +317,49 @@ func TestSuiteDecisionIsLogged(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := strings.Replace(c.want, "DIR", filepath.Dir(out), 1)
+			want := strings.ReplaceAll(c.want, "DIR", filepath.Dir(out))
 			if !strings.Contains(string(data), want) {
 				t.Errorf("the log has no %q:\n%s", want, data)
+			}
+		})
+	}
+}
+
+// A retry of a suite: true file warns once each time the retry runs, not once
+// per attempt; a repeat around it still warns once per round, as a runFlow
+// does.
+func TestNestedSuiteWarnsOncePerRetry(t *testing.T) {
+	const warning = "suite.yaml has suite: true, but a runFlow or retry runs it"
+	files := map[string]string{
+		"suite.yaml": "appId: x\nsuite: true\n---\n- runFlow: a.yaml\n- runFlow: b.yaml\n",
+		"a.yaml":     "appId: x\n---\n- tapOn: Next\n",
+		"b.yaml":     "appId: x\n---\n- tapOn: Missing\n",
+	}
+	for _, c := range []struct {
+		name, main string
+		taps, want int
+	}{
+		{"retry", "appId: x\n---\n- retry:\n    maxRetries: 2\n    file: suite.yaml\n", 3, 1},
+		{"repeat of a retry", "appId: x\n---\n- repeat:\n    times: 2\n    commands:\n      - retry:\n          maxRetries: 2\n          file: suite.yaml\n          optional: true\n", 6, 2},
+		{"repeat of a runFlow", "appId: x\n---\n- repeat:\n    times: 2\n    commands:\n      - runFlow:\n          file: suite.yaml\n          optional: true\n", 2, 2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			files["main.yaml"] = c.main
+			logPath := filepath.Join(t.TempDir(), "maestro-runner.log")
+			if err := logger.Init(logPath); err != nil {
+				t.Fatal(err)
+			}
+			_, seen, _ := runFiles(t, files, "main.yaml", RunnerConfig{})
+			logger.Close()
+			data, err := os.ReadFile(logPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n := strings.Count(strings.Join(typed(seen), ", "), "tapOn Missing"); n != c.taps {
+				t.Fatalf("the suite file ran %d times, want %d: %v", n, c.taps, typed(seen))
+			}
+			if n := strings.Count(string(data), warning); n != c.want {
+				t.Errorf("the log warns %d times, want %d:\n%s", n, c.want, data)
 			}
 		})
 	}
