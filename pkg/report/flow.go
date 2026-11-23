@@ -193,14 +193,19 @@ func (w *FlowWriter) applyLive() {
 	}
 }
 
-// Stop stops CommandSubs' timer and drops the list it left waiting, so
-// nothing more is written for a running command's sub-commands: not by the
-// timer once Stop returns, nor for a later call. End does the same after
+// Stop writes the list CommandSubs left waiting, once, and stops its timer,
+// so nothing more is written for a running command's sub-commands: not by
+// the timer once Stop returns, nor for a later call. End does the same with
 // its write; Stop is for a flow that may not reach End (a step that
-// panicked). It may be called more than once, and after End.
+// panicked), whose file then shows the nested step that was running. It may
+// be called more than once, and after End, and writes only the first time
+// a list waits.
 func (w *FlowWriter) Stop() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.live != nil && !w.ended {
+		w.writeSubs()
+	}
 	w.ended = true
 	w.live = nil
 	if w.liveTimer != nil {

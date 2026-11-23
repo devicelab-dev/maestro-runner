@@ -645,9 +645,10 @@ func TestFlowWriter_CommandSubs_NoWriteAfterEnd(t *testing.T) {
 	}
 }
 
-// Stop drops a list left waiting and stops its timer, so nothing is written
-// for the flow from CommandSubs once it returns, a later list included, with
-// or without End. It may be called again, and after End.
+// Stop writes a list left waiting, once (End wrote it when the flow ended),
+// and stops its timer, so nothing is written for the flow from CommandSubs
+// once it returns, a later list included, with or without End. It may be
+// called again, and after End.
 func TestFlowWriter_Stop(t *testing.T) {
 	for _, end := range []bool{false, true} {
 		fw, iw, tmpDir := createTestFlowWriter(t)
@@ -667,8 +668,8 @@ func TestFlowWriter_Stop(t *testing.T) {
 		if got := fw.Writes() - after; got != 0 {
 			t.Errorf("end %v: the file was written %d times after Stop, want 0", end, got)
 		}
-		if subs := readSubs(t, tmpDir); end != (len(subs) == 1) {
-			t.Errorf("end %v: the file has %+v", end, subs)
+		if subs := readSubs(t, tmpDir); len(subs) != 1 || subs[0].Status != StatusRunning || built != 1 {
+			t.Errorf("end %v: the file has %+v after %d lists built, want the running tap of the one list given before Stop", end, subs, built)
 		}
 		iw.Close()
 	}
