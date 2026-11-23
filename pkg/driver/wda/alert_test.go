@@ -423,7 +423,7 @@ func tapCalls(calls []string) []string {
 
 // A flow that answers the tracking prompt itself gets the notification prompt
 // answered before its next tap, not after a lookup under the prompt misses:
-// the tap went to the prompt and was lost (G15's late answer).
+// the tap went to the prompt and was lost.
 func TestTapAnswersAnUnnamedPromptFirst(t *testing.T) {
 	d, calls := promptOverAppServer(t)
 	tracking := &flow.TapOnStep{Selector: textSelector("Ask App Not to Track")}

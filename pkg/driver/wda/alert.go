@@ -192,9 +192,9 @@ func promptButtonsNamed(steps []flow.Step) (names []string, any bool) {
 // on one of its buttons, a check of its text), as DeviceLab's driver does, or
 // when the flow has an acceptAlert or dismissAlert; else it taps the button
 // WDA's own answer would have (autoClickAlertSelector's) and reports whether
-// it did. Called before a step in the watch after a launch
-// (answerPromptsBeforeStep) and by a lookup that finds nothing
-// (answerPromptOnMiss).
+// it did. Called by a tap after its find, in the watch after a launch or an
+// answered prompt (answerPromptsBeforeTap), and by a lookup that finds
+// nothing (answerPromptOnMiss).
 func (d *Driver) answerUnnamedPrompt() bool {
 	if !d.answersPrompts() {
 		return false

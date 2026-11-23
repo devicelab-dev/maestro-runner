@@ -39,18 +39,18 @@ type Driver struct {
 	// flowAnswersAlerts: the flow answers permission prompts itself, so WDA
 	// must not (see stepsAnswerAlerts).
 	flowAnswersAlerts bool
-	// flowPromptButtons: the prompt buttons the flow's taps name; a prompt
-	// with one of them is the flow's to answer. flowAnswersAnyPrompt: the
-	// flow has an acceptAlert or dismissAlert, which may be meant for any
-	// prompt. promptAction: what WDA would have answered the flow's other
-	// prompts with ("accept", "dismiss" or "") had the flow named none, which
-	// a lookup that finds nothing answers them with (answerUnnamedPrompt).
+	// flowPromptButtons: the prompt buttons the flow's taps name, which turn
+	// WDA's monitor off. flowAnswersAnyPrompt: the flow has an acceptAlert or
+	// dismissAlert, which may be meant for any prompt. promptAction: what WDA
+	// would have answered the flow's prompts with ("accept", "dismiss" or "")
+	// had the flow named none, which the driver answers a prompt with when
+	// the step running is not aimed at it (answerUnnamedPrompt).
 	flowPromptButtons    []string
 	flowAnswersAnyPrompt bool
 	promptAction         string
 	// step: the step Execute runs, which a prompt is left to when it is
-	// aimed at it (stepAimsAtAlert). promptWatchUntil: until when a step that
-	// looks at the screen asks for a prompt first (after launchApp and after
+	// aimed at it (stepAimsAtAlert). promptWatchUntil: until when a tap asks
+	// for a prompt after its find, before it taps (after launchApp and after
 	// an answered prompt); lastPromptCheck spaces those asks and a lookup's
 	// (an alert check costs a quarter second on a heavy page).
 	step             flow.Step
@@ -308,11 +308,8 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	if d.screenMayMove && !d.settleOff && actsOnScreen(step) && !flow.RepeatTapAfterFirst(step) {
 		d.settleScreen()
 	}
-	// A permission prompt the flow does not answer itself is answered before
-	// the step acts, not after a lookup under it misses: a tap on the app
-	// under a prompt is lost, and the flow then waited out a lookup for what
-	// the lost tap should have opened (about 20 s on onboarding). Only a
-	// flow that answers some prompts itself pays the alert check (G15).
+	// The step running: a permission prompt is left to it when it is aimed
+	// at the prompt (answerUnnamedPrompt).
 	d.step = step
 	// A step that neither acts nor moves the screen (an assert, a script, a
 	// flow's condition) leaves the flag as it was, so the next action still
