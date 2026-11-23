@@ -343,6 +343,28 @@ func TestBringBackChecksTheAppIsInFront(t *testing.T) {
 		}
 	})
 
+	t.Run("the agent hangs", func(t *testing.T) {
+		log := captureFront(t)
+		f := &fakeFront{}
+		f.install(t)
+		saved := agentFrontTimeout
+		t.Cleanup(func() { agentFrontTimeout = saved })
+		agentFrontTimeout = 50 * time.Millisecond
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			a.bringBack(ctx, hangingAgent{}, prefs, "")
+		}()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("bringBack still waits for an agent that hangs")
+		}
+		if l := log(); !strings.Contains(l, "but the agent reads no answer (context deadline exceeded) in front") || len(f.launches) != 2 {
+			t.Errorf("log %q; launches %v", l, f.launches)
+		}
+	})
+
 	t.Run("the agent does not answer", func(t *testing.T) {
 		log := captureFront(t)
 		f := &fakeFront{}
@@ -465,4 +487,12 @@ func TestStartAgentReattachLeavesTheFrontApp(t *testing.T) {
 	if err != nil || a.Mode() != "reattached" {
 		t.Fatalf("a=%+v err=%v; want a re-attach", a, err)
 	}
+}
+
+// hangingAgent answers no call until its context ends.
+type hangingAgent struct{}
+
+func (hangingAgent) Call(ctx context.Context, _ string, _ *Args) (*Response, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
 }

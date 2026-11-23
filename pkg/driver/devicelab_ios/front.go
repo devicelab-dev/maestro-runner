@@ -244,9 +244,16 @@ var (
 	bringBackSettle = 500 * time.Millisecond
 )
 
+// agentFrontTimeout bounds each question agentFront asks, as working's
+// bounds the agent's first answers: an agent that hangs right after its start
+// would otherwise hold the run for the client's own timeout at each try.
+var agentFrontTimeout = 2 * time.Second
+
 // agentFront asks the agent which app is in front: its frontmost bundle.
 func agentFront(ctx context.Context, agent agentAPI) (string, error) {
-	resp, err := agent.Call(ctx, "snapshot", &Args{MaxNodes: 1})
+	callCtx, cancel := context.WithTimeout(ctx, agentFrontTimeout)
+	defer cancel()
+	resp, err := agent.Call(callCtx, "snapshot", &Args{MaxNodes: 1})
 	if err != nil {
 		return "", err
 	}
