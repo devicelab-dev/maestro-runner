@@ -313,15 +313,23 @@ func TestLookupLeavesThePromptToTheStepAimedAtIt(t *testing.T) {
 	}
 }
 
-// A prompt whose button the flow taps elsewhere is still answered for a step
-// aimed at something else, as DeviceLab's driver answers it: the tracking
-// prompt over the onboarding held a 10 s wait for the screen beneath it.
-func TestLookupAnswersAPromptTheFlowAnswersElsewhere(t *testing.T) {
+// A prompt whose button a later optional tap names is left up until that tap,
+// which answers it: `launchApp`, a lookup that misses, then an optional
+// `tapOn: "Ask App Not to Track"`. Answered "Allow" for the lookup, the flow
+// that says not to track would end up tracked, and nothing would fail.
+func TestAPromptIsLeftToALaterOptionalTapOnItsButton(t *testing.T) {
 	d, accepted := alertServer(t, true, "Ask App Not to Track", "Allow")
-	d.PrepareForFlow([]flow.Step{&flow.LaunchAppStep{}, &flow.TapOnStep{Selector: textSelector("Ask app not to track")}})
+	tracking := &flow.TapOnStep{Selector: textSelector("Ask App Not to Track")}
+	tracking.Optional = true
+	tracking.TimeoutMs = 300
+	d.PrepareForFlow([]flow.Step{&flow.LaunchAppStep{}, tracking})
 	lookFor(d)
-	if len(*accepted) != 1 || (*accepted)[0] != "Allow" {
-		t.Errorf("accepted = %v, want [Allow]", *accepted)
+	if len(*accepted) != 0 {
+		t.Fatalf("a lookup before the tap answered the prompt: %v", *accepted)
+	}
+	d.Execute(tracking)
+	if len(*accepted) != 1 || (*accepted)[0] != "Ask App Not to Track" {
+		t.Errorf("accepted = %v, want [Ask App Not to Track]", *accepted)
 	}
 }
 
@@ -569,5 +577,79 @@ func TestLookupAnswersAPromptForAStepThatCannotReachIt(t *testing.T) {
 		if len(*accepted) != 1 || (*accepted)[0] != "Allow" {
 			t.Errorf("%s: accepted = %v, want [Allow]", step.Describe(), *accepted)
 		}
+	}
+}
+
+// A prompt is left to the flow while a later tapOn that is not optional and
+// names one of its buttons has not run: `launchApp`, `tapOn: {id: next}`,
+// `tapOn: "Don't Allow"` with the notification prompt up at the first tap
+// leaves the prompt for the last step, which answers it, as on a flow WDA's
+// monitor was off for.
+func TestAPromptIsLeftToALaterTapOnItsButton(t *testing.T) {
+	dontAllow := &flow.TapOnStep{Selector: textSelector("Don't Allow")}
+	dontAllow.TimeoutMs = 300
+	next := &flow.TapOnStep{Selector: flow.Selector{ID: "next"}}
+	steps := []flow.Step{&flow.LaunchAppStep{}, next, dontAllow}
+
+	d, calls := promptOverAppServer(t)
+	d.PrepareForFlow(steps)
+	d.watchForPrompts(promptLaunchWindow) // as launchApp does
+	d.Execute(next)
+	if got := strings.Join(tapCalls(*calls), ", "); got != "tap under the prompt" {
+		t.Errorf("before the tap: calls = %s, want the prompt left up", got)
+	}
+
+	d, accepted := alertServer(t, true, "Don’t Allow", "Allow")
+	d.PrepareForFlow(steps)
+	lookFor(d)
+	if len(*accepted) != 0 {
+		t.Fatalf("a lookup that missed answered the prompt: %v", *accepted)
+	}
+	if res := d.Execute(dontAllow); !res.Success {
+		t.Fatalf("tapOn \"Don't Allow\" failed: %s", res.Message)
+	}
+	if len(*accepted) != 1 || (*accepted)[0] != "Don’t Allow" {
+		t.Errorf("accepted = %v, want [Don’t Allow]", *accepted)
+	}
+}
+
+// The prompts a tap holds are answered again once it has run: a prompt that
+// comes up after `tapOn: "Allow"` is answered for a lookup that misses.
+func TestAPromptIsAnsweredOnceTheTapOnItsButtonHasRun(t *testing.T) {
+	allow := &flow.TapOnStep{Selector: textSelector("Allow")}
+	allow.TimeoutMs = 300
+	d, accepted := alertServer(t, true, "Don’t Allow", "Allow")
+	d.PrepareForFlow([]flow.Step{&flow.LaunchAppStep{}, allow})
+	lookFor(d)
+	if len(*accepted) != 0 {
+		t.Fatalf("a lookup before the tap answered the prompt: %v", *accepted)
+	}
+	d.Execute(allow)
+	// A second prompt, on the same session.
+	next, accepted := alertServer(t, true, "Don’t Allow", "Allow")
+	d.client = next.client
+	lookFor(d)
+	if len(*accepted) != 1 || (*accepted)[0] != "Allow" {
+		t.Errorf("after the tap ran: accepted = %v, want [Allow]", *accepted)
+	}
+}
+
+// A tap that could answer the prompt holds it, optional or not.
+func TestPromptTapsFor(t *testing.T) {
+	optional := &flow.TapOnStep{Selector: textSelector("Ask App Not to Track")}
+	optional.Optional = true
+	steps := []flow.Step{
+		&flow.LaunchAppStep{},
+		&flow.TapOnStep{Selector: textSelector("Don't Allow")},
+		optional,
+		&flow.TapOnStep{Selector: textSelector("Next")},
+		&flow.TapOnStep{Selector: flow.Selector{Text: "Allow", Index: "1"}},
+		&flow.TapOnStep{Selector: textSelector("Allow"), LongPress: true},
+		&flow.LongPressOnStep{Selector: textSelector("Allow")},
+		&flow.TapOnStep{Selector: textSelector("Allow ${WHEN}")},
+		&flow.TapOnStep{Selector: textSelector("Allow")},
+	}
+	if got := strings.Join(promptTapsFor(steps), ", "); got != "Don't Allow, Ask App Not to Track, Allow" {
+		t.Errorf("promptTapsFor = %s, want Don't Allow, Ask App Not to Track, Allow", got)
 	}
 }

@@ -48,6 +48,10 @@ type Driver struct {
 	flowPromptButtons    []string
 	flowAnswersAnyPrompt bool
 	promptAction         string
+	// promptTapsToRun: the text of each tap still to run that names a
+	// prompt's button and could answer it; a prompt with that button is left
+	// to the flow until the tap has run (promptTapsFor).
+	promptTapsToRun []string
 	// step: the step Execute runs, which a prompt is left to when it is
 	// aimed at it (stepAimsAtAlert). promptWatchUntil: until when a tap asks
 	// for a prompt after its find, before it taps (after launchApp and after
@@ -144,6 +148,7 @@ func NewDriver(client *Client, info *core.PlatformInfo, udid string) *Driver {
 func (d *Driver) PrepareForFlow(steps []flow.Step) {
 	d.flowPromptButtons, d.flowAnswersAnyPrompt = promptButtonsNamed(steps)
 	d.flowAnswersAlerts = d.flowAnswersAnyPrompt || len(d.flowPromptButtons) > 0
+	d.promptTapsToRun = promptTapsFor(steps)
 	for _, s := range steps {
 		launchApp, ok := s.(*flow.LaunchAppStep)
 		if !ok {
@@ -447,6 +452,7 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 	if _, ok := step.(*flow.LaunchAppStep); ok {
 		d.watchForPrompts(promptLaunchWindow)
 	}
+	d.promptTapRan(step)
 	result.Duration = time.Since(start)
 	d.trackCrashLoop(result)
 	return result

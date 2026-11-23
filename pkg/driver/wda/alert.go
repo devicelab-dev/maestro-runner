@@ -2,6 +2,7 @@ package wda
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -189,7 +190,8 @@ func promptButtonsNamed(steps []flow.Step) (names []string, any bool) {
 // prompt's "Ask App Not to Track", say) turned it off for every prompt, and
 // one the flow does not answer then (the notification prompt) stayed up over
 // the app. It leaves the prompt when the step running is aimed at it (a tap
-// on one of its buttons, a check of its text), as DeviceLab's driver does, or
+// on one of its buttons, a check of its text), as DeviceLab's driver does,
+// while a later tap on one of its buttons has not run (promptTapsFor), or
 // when the flow has an acceptAlert or dismissAlert; else it taps the button
 // WDA's own answer would have (autoClickAlertSelector's) and reports whether
 // it did. Called by a tap after its find, in the watch after a launch or an
@@ -208,7 +210,7 @@ func (d *Driver) answerUnnamedPrompt() bool {
 	if err != nil {
 		return false
 	}
-	if stepAimsAtAlert(d.step, text, buttons) {
+	if stepAimsAtAlert(d.step, text, buttons) || d.promptTapToRun(buttons) {
 		return false
 	}
 	label := ""
@@ -316,6 +318,57 @@ func stepAimsAtAlert(step flow.Step, text string, buttons []string) bool {
 		}
 	}
 	return sel != nil && matchOnAlert(alertLookupFor(step), *sel, text, buttons) != nil
+}
+
+// promptTapsFor returns the text of each tap in steps that leaves a prompt to
+// the flow until it has run: a tapOn that names a prompt's button and could
+// answer the prompt (stepAimsAtAlert's rule). Answered earlier, as
+// launchApp's permissions say, the prompt would be gone when the flow taps
+// it, and with `tapOn: "Ask App Not to Track"` a flow that says not to track
+// would end up tracked whenever an earlier lookup missed; an optional tap
+// counts too, since nothing would fail to show it. Only a prompt with that
+// button is held: the notification prompt is still answered for a flow that
+// taps only the tracking prompt's. The steps
+// are those PrepareForFlow gets, onFlowStart's and the body's with runFlow,
+// retry and repeat inlined, so a tap inside them is waited for as well; one
+// in a runFlow whose condition never holds keeps its prompts to the flow to
+// its end. A text with ${...} is left out, since the tap's own text is known
+// only when it runs.
+func promptTapsFor(steps []flow.Step) []string {
+	var texts []string
+	for _, step := range steps {
+		tap, ok := step.(*flow.TapOnStep)
+		if !ok || !namesPromptButton(tap.Selector.Text) ||
+			strings.Contains(tap.Selector.Text, "${") ||
+			alertLookupFor(tap) == alertLookupNone || !matchesOnAlert(tap.Selector) {
+			continue
+		}
+		texts = append(texts, tap.Selector.Text)
+	}
+	return texts
+}
+
+// promptTapToRun reports whether a tap still to run names one of buttons.
+func (d *Driver) promptTapToRun(buttons []string) bool {
+	for _, text := range d.promptTapsToRun {
+		if _, ok := pickAlertButton(text, buttons); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// promptTapRan drops a tap that has run from promptTapsToRun, whether it
+// passed, failed or found nothing as optional: its prompts are then answered
+// for other steps again.
+func (d *Driver) promptTapRan(step flow.Step) {
+	tap, ok := step.(*flow.TapOnStep)
+	if !ok {
+		return
+	}
+	if i := slices.Index(d.promptTapsToRun, tap.Selector.Text); i >= 0 {
+		d.promptTapsToRun = slices.Delete(d.promptTapsToRun, i, i+1)
+	}
 }
 
 func firstLine(s string) string {
