@@ -549,6 +549,175 @@ func TestFlowWriter_commandSummary(t *testing.T) {
 	}
 }
 
+// subsOf is a CommandSubs list builder that counts its calls.
+func subsOf(calls *int, cs ...Command) func() []Command {
+	return func() []Command {
+		*calls++
+		return cs
+	}
+}
+
+func readSubs(t *testing.T, tmpDir string) []Command {
+	t.Helper()
+	d, err := ReadFlowDetail(filepath.Join(tmpDir, "flows", "flow-000.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d.Commands[1].SubCommands
+}
+
+// A running command's sub-commands are written at most once every
+// liveEvery, and built only when written: the end's write takes the last.
+func TestFlowWriter_CommandSubs_WritesAtMostEveryInterval(t *testing.T) {
+	fw, iw, tmpDir := createTestFlowWriter(t)
+	defer iw.Close()
+	fw.liveEvery = time.Hour
+
+	fw.Start()
+	fw.CommandStart(1)
+	before := fw.Writes()
+	var built int
+	for i := 0; i < 1000; i++ {
+		fw.CommandSubs(1, subsOf(&built, Command{Type: "tapOn", Status: StatusRunning, Index: i}))
+	}
+	if got := fw.Writes() - before; got != 0 {
+		t.Errorf("1000 calls within the interval wrote the file %d times, want 0", got)
+	}
+	if built != 0 {
+		t.Errorf("the lists were built %d times before a write, want 0", built)
+	}
+	fw.CommandEndWithSubs(1, StatusPassed, nil, nil, CommandArtifacts{}, []Command{{Type: "tapOn", Status: StatusPassed}})
+	if got := fw.Writes() - before; got != 1 {
+		t.Errorf("the end wrote the file %d times, want 1", got)
+	}
+	if subs := readSubs(t, tmpDir); len(subs) != 1 || subs[0].Status != StatusPassed {
+		t.Errorf("after the end the file has %+v, want the end's list", subs)
+	}
+}
+
+// A list given within the interval is written when it is up, without
+// another call: the last one given.
+func TestFlowWriter_CommandSubs_WritesTheLastListWhenTheIntervalIsUp(t *testing.T) {
+	fw, iw, tmpDir := createTestFlowWriter(t)
+	defer iw.Close()
+	fw.liveEvery = 50 * time.Millisecond
+
+	fw.Start()
+	before := fw.Writes()
+	var built int
+	fw.CommandSubs(1, subsOf(&built, Command{Type: "tapOn", Status: StatusRunning}))
+	fw.CommandSubs(1, subsOf(&built, Command{Type: "tapOn", Status: StatusPassed}, Command{Type: "assertVisible", Status: StatusRunning}))
+	deadline := time.Now().Add(5 * time.Second)
+	for fw.Writes() == before && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond) // a second write would come by now
+	if got := fw.Writes() - before; got != 1 {
+		t.Errorf("the file was written %d times, want 1", got)
+	}
+	if subs := readSubs(t, tmpDir); len(subs) != 2 || subs[1].Status != StatusRunning {
+		t.Errorf("the file has %+v, want the last list", subs)
+	}
+	if built != 1 {
+		t.Errorf("the lists were built %d times, want 1", built)
+	}
+}
+
+// Nothing is written for a running command's list after the flow's end: a
+// list left waiting goes into the end's write, and a later one is dropped.
+func TestFlowWriter_CommandSubs_NoWriteAfterEnd(t *testing.T) {
+	fw, iw, tmpDir := createTestFlowWriter(t)
+	defer iw.Close()
+	fw.liveEvery = 50 * time.Millisecond
+
+	fw.Start()
+	var built int
+	fw.CommandSubs(1, subsOf(&built, Command{Type: "tapOn", Status: StatusRunning}))
+	fw.End(StatusFailed)
+	after := fw.Writes()
+	fw.CommandSubs(1, subsOf(&built, Command{Type: "tapOn", Status: StatusPassed}))
+	time.Sleep(150 * time.Millisecond)
+	if got := fw.Writes() - after; got != 0 {
+		t.Errorf("the file was written %d times after the end, want 0", got)
+	}
+	if subs := readSubs(t, tmpDir); len(subs) != 1 || subs[0].Status != StatusRunning {
+		t.Errorf("the file has %+v, want the list the end wrote", subs)
+	}
+}
+
+// Stop drops a list left waiting and stops its timer, so nothing is written
+// for the flow from CommandSubs once it returns, a later list included, with
+// or without End. It may be called again, and after End.
+func TestFlowWriter_Stop(t *testing.T) {
+	for _, end := range []bool{false, true} {
+		fw, iw, tmpDir := createTestFlowWriter(t)
+		fw.liveEvery = 50 * time.Millisecond
+
+		fw.Start()
+		var built int
+		fw.CommandSubs(1, subsOf(&built, Command{Type: "tapOn", Status: StatusRunning}))
+		if end {
+			fw.End(StatusPassed)
+		}
+		fw.Stop()
+		after := fw.Writes()
+		fw.CommandSubs(1, subsOf(&built, Command{Type: "tapOn", Status: StatusPassed}))
+		fw.Stop()
+		time.Sleep(150 * time.Millisecond)
+		if got := fw.Writes() - after; got != 0 {
+			t.Errorf("end %v: the file was written %d times after Stop, want 0", end, got)
+		}
+		if subs := readSubs(t, tmpDir); end != (len(subs) == 1) {
+			t.Errorf("end %v: the file has %+v", end, subs)
+		}
+		iw.Close()
+	}
+}
+
+// With no interval each call writes, as before.
+func TestFlowWriter_CommandSubs_NoInterval(t *testing.T) {
+	fw, iw, _ := createTestFlowWriter(t)
+	defer iw.Close()
+	fw.liveEvery = 0
+
+	fw.Start()
+	before := fw.Writes()
+	var built int
+	for i := 0; i < 3; i++ {
+		fw.CommandSubs(1, subsOf(&built, Command{Type: "tapOn", Status: StatusRunning}))
+	}
+	if got := fw.Writes() - before; got != 3 || built != 3 {
+		t.Errorf("3 calls wrote %d times and built %d lists, want 3 and 3", got, built)
+	}
+}
+
+// The interval starts once a write is done, index included: a write slower
+// than the interval (a large flow on a slow machine) does not let the next
+// call write at once, which wrote at every step again.
+func TestFlowWriter_CommandSubs_IntervalStartsAfterTheWrite(t *testing.T) {
+	fw, iw, _ := createTestFlowWriter(t)
+	defer iw.Close()
+	fw.liveEvery = 100 * time.Millisecond
+
+	fw.Start()
+	time.Sleep(150 * time.Millisecond) // the next call writes at once
+	var built int
+	iw.mu.Lock() // the index is busy: the write's index update waits for it
+	done := make(chan struct{})
+	go func() {
+		fw.CommandSubs(1, subsOf(&built, Command{Type: "tapOn", Status: StatusRunning}))
+		close(done)
+	}()
+	time.Sleep(300 * time.Millisecond)
+	iw.mu.Unlock()
+	<-done
+	before := fw.Writes()
+	fw.CommandSubs(1, subsOf(&built, Command{Type: "tapOn", Status: StatusPassed}))
+	if got := fw.Writes() - before; got != 0 {
+		t.Errorf("a call right after a write that took 300 ms wrote %d times, want 0 (it waits for the interval)", got)
+	}
+}
+
 // A passed command's outcome message reaches the flow detail (and so
 // report.json's flow files); an empty one or a bad index changes nothing.
 func TestFlowWriter_CommandMessage(t *testing.T) {
@@ -563,5 +732,30 @@ func TestFlowWriter_CommandMessage(t *testing.T) {
 	}
 	if cmds[2].Message != "" {
 		t.Errorf("empty message set %q", cmds[2].Message)
+	}
+}
+
+// CommandMessage changes the flow under the writer's lock, as the other
+// writers do: CommandSubs' timer may be writing the same commands meanwhile
+// (go test -race).
+func TestFlowWriter_CommandMessage_WhileTheTimerWrites(t *testing.T) {
+	fw, iw, tmpDir := createTestFlowWriter(t)
+	defer iw.Close()
+	fw.liveEvery = time.Millisecond
+
+	fw.Start()
+	subs := func() []Command { return []Command{{Type: "tapOn", Status: StatusRunning}} }
+	for deadline := time.Now().Add(100 * time.Millisecond); time.Now().Before(deadline); {
+		fw.CommandSubs(1, subs)
+		fw.CommandMessage(2, "Airplane mode already enabled")
+		time.Sleep(200 * time.Microsecond)
+	}
+	fw.End(StatusPassed)
+	d, err := ReadFlowDetail(filepath.Join(tmpDir, "flows", "flow-000.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Commands[2].Message != "Airplane mode already enabled" {
+		t.Errorf("message = %q", d.Commands[2].Message)
 	}
 }

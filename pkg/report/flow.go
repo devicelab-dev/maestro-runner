@@ -5,18 +5,43 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/devicelab-dev/maestro-runner/pkg/logger"
 )
 
+// LiveWriteInterval is the shortest time between two writes of the flow's
+// file for a running command's sub-commands (CommandSubs).
+const LiveWriteInterval = 250 * time.Millisecond
+
 // FlowWriter writes updates for a single flow.
-// Each flow goroutine has its own FlowWriter - no locking needed.
+// Each flow goroutine has its own FlowWriter. A running command's
+// sub-commands may also be written from a timer (CommandSubs), so the methods
+// that change or write the flow hold mu.
 type FlowWriter struct {
+	mu        sync.Mutex
 	flow      *FlowDetail
 	path      string
 	assetsDir string
 	index     *IndexWriter
+
+	// The sub-commands CommandSubs was given last and has not written yet,
+	// and the timer that writes them once liveEvery has passed since the
+	// last write; liveGen tells a timer that fires after it was superseded.
+	liveEvery time.Duration
+	live      *liveList
+	liveTimer *time.Timer
+	liveGen   int
+	lastWrite time.Time
+	writes    int
+	ended     bool
+}
+
+// liveList is a running command's sub-commands as CommandSubs was given them.
+type liveList struct {
+	cmd  int
+	subs func() []Command
 }
 
 // NewFlowWriter creates a new FlowWriter for a flow.
@@ -34,11 +59,14 @@ func NewFlowWriter(flowDetail *FlowDetail, outputDir string, index *IndexWriter)
 		path:      flowPath,
 		assetsDir: assetsDir,
 		index:     index,
+		liveEvery: LiveWriteInterval,
 	}
 }
 
 // Start marks the flow as started.
 func (w *FlowWriter) Start() {
+	w.lock()
+	defer w.mu.Unlock()
 	now := time.Now()
 	w.flow.StartTime = now
 
@@ -48,6 +76,8 @@ func (w *FlowWriter) Start() {
 
 // CommandStart marks a command as started.
 func (w *FlowWriter) CommandStart(cmdIndex int) {
+	w.lock()
+	defer w.mu.Unlock()
 	if cmdIndex < 0 || cmdIndex >= len(w.flow.Commands) {
 		return
 	}
@@ -68,6 +98,8 @@ func (w *FlowWriter) CommandEnd(cmdIndex int, status Status, element *Element, e
 
 // CommandEndWithSubs marks a command as complete with optional sub-commands.
 func (w *FlowWriter) CommandEndWithSubs(cmdIndex int, status Status, element *Element, err *Error, artifacts CommandArtifacts, subCommands []Command) {
+	w.lock()
+	defer w.mu.Unlock()
 	if cmdIndex < 0 || cmdIndex >= len(w.flow.Commands) {
 		return
 	}
@@ -91,9 +123,105 @@ func (w *FlowWriter) CommandEndWithSubs(cmdIndex int, status Status, element *El
 	w.updateIndexProgress()
 }
 
+// CommandSubs writes a running command's sub-commands so far: the steps of a
+// runFlow, repeat or retry that ended, and the ones running now, so a reader
+// of the report sees them before the command ends. CommandEndWithSubs writes
+// the final list.
+//
+// The file is written at most once every liveEvery for them: a call within
+// that time of the last write leaves its list to a timer, which writes the
+// list of the last call when the time is up, unless another write took it
+// first. So a long repeat does not rewrite the whole file at each of its
+// steps, and a step that runs long after short ones still finds them in the
+// file. subs builds the list when it is written, which may be later and on
+// the timer's goroutine, so it must read only what no longer changes.
+func (w *FlowWriter) CommandSubs(cmdIndex int, subs func() []Command) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if cmdIndex < 0 || cmdIndex >= len(w.flow.Commands) || w.ended {
+		return
+	}
+	w.live = &liveList{cmd: cmdIndex, subs: subs}
+	if wait := w.liveEvery - time.Since(w.lastWrite); wait > 0 {
+		if w.liveTimer == nil {
+			gen := w.liveGen
+			w.liveTimer = time.AfterFunc(wait, func() { w.writeLive(gen) })
+		}
+		return
+	}
+	w.writeSubs()
+}
+
+// writeLive is CommandSubs' timer: it writes the list waiting, unless a
+// write took it meanwhile (liveGen moved) or the flow ended.
+func (w *FlowWriter) writeLive(gen int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if gen != w.liveGen || w.live == nil || w.ended {
+		return
+	}
+	w.writeSubs()
+}
+
+// writeSubs writes the list waiting and updates the index. The next interval
+// starts once both are done: a write that takes longer than the interval (a
+// large flow on a slow machine) still leaves the flow that long to run.
+func (w *FlowWriter) writeSubs() {
+	w.applyLive()
+	w.flush()
+	w.updateIndexProgress()
+	w.lastWrite = time.Now()
+}
+
+// lock takes mu and puts the list CommandSubs left waiting into the flow, so
+// the write the caller makes carries it.
+func (w *FlowWriter) lock() {
+	w.mu.Lock()
+	w.applyLive()
+}
+
+// applyLive puts the waiting list, if any, into the flow and stops its timer.
+func (w *FlowWriter) applyLive() {
+	if w.liveTimer != nil {
+		w.liveTimer.Stop()
+		w.liveTimer = nil
+	}
+	w.liveGen++
+	if w.live != nil {
+		w.flow.Commands[w.live.cmd].SubCommands = w.live.subs()
+		w.live = nil
+	}
+}
+
+// Stop stops CommandSubs' timer and drops the list it left waiting, so
+// nothing more is written for a running command's sub-commands: not by the
+// timer once Stop returns, nor for a later call. End does the same after
+// its write; Stop is for a flow that may not reach End (a step that
+// panicked). It may be called more than once, and after End.
+func (w *FlowWriter) Stop() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.ended = true
+	w.live = nil
+	if w.liveTimer != nil {
+		w.liveTimer.Stop()
+		w.liveTimer = nil
+	}
+	w.liveGen++
+}
+
+// Writes returns how many times the flow's file was written so far.
+func (w *FlowWriter) Writes() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.writes
+}
+
 // CommandYAML replaces the command's description, written when the report
 // was built, with the one known once it ran.
 func (w *FlowWriter) CommandYAML(cmdIndex int, yaml string) {
+	w.lock()
+	defer w.mu.Unlock()
 	if cmdIndex < 0 || cmdIndex >= len(w.flow.Commands) {
 		return
 	}
@@ -104,6 +232,8 @@ func (w *FlowWriter) CommandYAML(cmdIndex int, yaml string) {
 // CommandLogs attaches what the command's scripts printed with console.log,
 // warn or error.
 func (w *FlowWriter) CommandLogs(cmdIndex int, logs []string) {
+	w.lock()
+	defer w.mu.Unlock()
 	if cmdIndex < 0 || cmdIndex >= len(w.flow.Commands) || len(logs) == 0 {
 		return
 	}
@@ -113,6 +243,8 @@ func (w *FlowWriter) CommandLogs(cmdIndex int, logs []string) {
 
 // CommandMessage records what a passed command reports about its outcome.
 func (w *FlowWriter) CommandMessage(cmdIndex int, msg string) {
+	w.lock()
+	defer w.mu.Unlock()
 	if cmdIndex < 0 || cmdIndex >= len(w.flow.Commands) || msg == "" {
 		return
 	}
@@ -124,6 +256,9 @@ func (w *FlowWriter) CommandMessage(cmdIndex int, msg string) {
 // as the failure message when no individual command recorded one — covers
 // flow-level failures like failOnConsoleError.
 func (w *FlowWriter) End(status Status, flowLevelError ...string) {
+	w.lock()
+	defer w.mu.Unlock()
+	w.ended = true
 	now := time.Now()
 	w.flow.EndTime = &now
 
@@ -174,6 +309,8 @@ func (w *FlowWriter) End(status Status, flowLevelError ...string) {
 
 // SetFlowArtifacts sets flow-level artifacts (video, logs).
 func (w *FlowWriter) SetFlowArtifacts(artifacts FlowArtifacts) {
+	w.lock()
+	defer w.mu.Unlock()
 	w.flow.Artifacts = artifacts
 	w.flush()
 }
@@ -181,12 +318,16 @@ func (w *FlowWriter) SetFlowArtifacts(artifacts FlowArtifacts) {
 // SetConsoleLogs records browser console / page error entries captured during
 // the flow. Web flows only — mobile / native drivers leave this nil.
 func (w *FlowWriter) SetConsoleLogs(logs []ConsoleLog) {
+	w.lock()
+	defer w.mu.Unlock()
 	w.flow.ConsoleLogs = logs
 	w.flush()
 }
 
 // AddVideoTimestamp adds a video timestamp mapping.
 func (w *FlowWriter) AddVideoTimestamp(cmdIndex int, videoTimeMs int64) {
+	w.lock()
+	defer w.mu.Unlock()
 	w.flow.Artifacts.VideoTimestamps = append(w.flow.Artifacts.VideoTimestamps, VideoTimestamp{
 		CommandIndex: cmdIndex,
 		VideoTimeMs:  videoTimeMs,
@@ -292,6 +433,8 @@ func (w *FlowWriter) RecordingTarget() string {
 // SetVideo records that a screen recording exists at RecordingTarget,
 // storing the report-relative path alongside the other flow artifacts.
 func (w *FlowWriter) SetVideo() {
+	w.lock()
+	defer w.mu.Unlock()
 	w.flow.Artifacts.Video = filepath.Join("assets", w.flow.ID, "recording.mp4")
 	w.flush()
 }
@@ -313,11 +456,13 @@ func (w *FlowWriter) GetFlowDetail() *FlowDetail {
 	return w.flow
 }
 
-// flush writes the flow detail to disk.
+// flush writes the flow detail to disk. The caller holds mu.
 func (w *FlowWriter) flush() {
+	w.writes++
 	if err := atomicWriteJSON(w.path, w.flow); err != nil {
 		logger.Warn("failed to write flow detail to %s: %v", w.path, err)
 	}
+	w.lastWrite = time.Now()
 }
 
 // updateIndex updates the index with current flow state.
@@ -368,6 +513,8 @@ func (w *FlowWriter) commandSummary() CommandSummary {
 // SkipRemainingCommands marks all pending commands as skipped.
 // Called when a command fails and we need to skip the rest.
 func (w *FlowWriter) SkipRemainingCommands(fromIndex int) {
+	w.lock()
+	defer w.mu.Unlock()
 	for i := fromIndex; i < len(w.flow.Commands); i++ {
 		if w.flow.Commands[i].Status == StatusPending {
 			w.flow.Commands[i].Status = StatusSkipped
