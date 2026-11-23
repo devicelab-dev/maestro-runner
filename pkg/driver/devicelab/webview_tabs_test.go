@@ -326,3 +326,107 @@ func TestConnectBringsTheTabToTheFront(t *testing.T) {
 		t.Errorf("brought %v to the front; want %v, each tab attached to", got, want)
 	}
 }
+
+// twoBrowsers is a device with two browser processes, each with its own
+// DevTools socket and tabs: a forward reaches the one its device socket names.
+type twoBrowsers struct {
+	*fakeChrome // the forward's local socket
+	byName      map[string]*fakeChrome
+	current     *fakeChrome
+}
+
+func (b *twoBrowsers) ForwardToAbstractSocket(local, device string) error {
+	if b.current != nil {
+		_ = b.current.RemoveSocketForward(local)
+	}
+	b.current = b.byName[device]
+	return b.current.ForwardToAbstractSocket(local, device)
+}
+
+func (b *twoBrowsers) RemoveSocketForward(local string) error {
+	if b.current != nil {
+		_ = b.current.RemoveSocketForward(local)
+	}
+	b.current = nil
+	return nil
+}
+
+// The tabs seen at the first look are those of the socket it was taken on:
+// a connect to another browser's DevTools socket is that socket's first look,
+// so it closes none of that browser's tabs. They were all taken for the
+// runner's, and the connect closed every one but the tab it attached to.
+func TestConnectToAnotherSocketIsItsFirstLook(t *testing.T) {
+	a := newFakeChrome(t, "1", "2")
+	b := newFakeChrome(t, "5", "6", "7")
+	browsers := &twoBrowsers{fakeChrome: newFakeChrome(t), byName: map[string]*fakeChrome{"chrome_devtools_remote": a, "chrome_devtools_remote_4321": b}}
+	m := newWebViewManager(browsers)
+	socketB := &core.CDPInfo{Available: true, Socket: "chrome_devtools_remote_4321"}
+
+	_ = m.connect(chromeSocket, "browser") // the first look, at A
+	m.disconnect()
+	_ = m.connect(socketB, "browser")
+	b.openTab("8") // an openLink, on B
+	m.disconnect()
+	_ = m.connect(socketB, "browser")
+	m.closeOpenedTabs()
+
+	tabsA, closedA, _ := a.record()
+	tabsB, closedB, attachedB := b.record()
+	if !reflect.DeepEqual(tabsA, []string{"1", "2"}) || len(closedA) != 0 {
+		t.Errorf("A's tabs %v, closed %v; want [1 2] open", tabsA, closedA)
+	}
+	if want := []string{"5", "6", "7"}; !reflect.DeepEqual(tabsB, want) {
+		t.Errorf("B's tabs %v (closed %v, attached %v); want only the ones open before the runner, %v", tabsB, closedB, attachedB, want)
+	}
+}
+
+// An openLink before the first connect looks at the tabs on the socket the
+// connect then goes to, the last browser socket listed (scanCDPSocket's
+// pick): looking at the first one, the connect to the other took its first
+// look after the link opened, and the link's tab was never closed.
+func TestOpenLinkLooksFirstAtTheSocketTheConnectUses(t *testing.T) {
+	a := newFakeChrome(t, "1", "2")
+	b := newFakeChrome(t, "5", "6", "7")
+	browsers := &twoBrowsers{fakeChrome: newFakeChrome(t), byName: map[string]*fakeChrome{"chrome_devtools_remote": a, "chrome_devtools_remote_4321": b}}
+	shell := &twoBrowsersShell{chrome: b, tab: "8"}
+	d := New(newTrackingClient(), &core.PlatformInfo{}, shell)
+	d.SetWebViewForwarder(browsers)
+
+	if res := d.openLink(&flow.OpenLinkStep{Link: "https://example.com"}); !res.Success {
+		t.Fatalf("openLink failed: %v", res.Error)
+	}
+	info := d.scanCDPSocket()
+	if info == nil || info.Socket != "chrome_devtools_remote_4321" {
+		t.Fatalf("scanCDPSocket = %+v; want chrome_devtools_remote_4321", info)
+	}
+	_ = d.webView.connect(info, "browser")
+	d.Close()
+
+	if tabs, closed, _ := b.record(); !reflect.DeepEqual(tabs, []string{"5", "6", "7"}) {
+		t.Errorf("B's tabs after Close: %v (closed %v); want [5 6 7]", tabs, closed)
+	}
+	if tabs, closed, _ := a.record(); !reflect.DeepEqual(tabs, []string{"1", "2"}) {
+		t.Errorf("A's tabs after Close: %v (closed %v); want [1 2]", tabs, closed)
+	}
+}
+
+// twoBrowsersShell is a device shell listing two browser DevTools sockets,
+// with a browser in the foreground, on which an `am start` opens a tab in
+// the second browser.
+type twoBrowsersShell struct {
+	chrome *fakeChrome
+	tab    string
+}
+
+func (s *twoBrowsersShell) Shell(cmd string) (string, error) {
+	switch {
+	case cmd == "cat /proc/net/unix":
+		return "0000000000000000: 00000002 00000000 00010000 0001 01 123456 @chrome_devtools_remote\n" +
+			"0000000000000000: 00000002 00000000 00010000 0001 01 123457 @chrome_devtools_remote_4321\n", nil
+	case strings.HasPrefix(cmd, "dumpsys activity activities"):
+		return "  topResumedActivity=ActivityRecord{1 u0 com.android.chrome/org.chromium.chrome.browser.ChromeTabbedActivity t1}\n", nil
+	case strings.HasPrefix(cmd, "am start"):
+		s.chrome.openTab(s.tab)
+	}
+	return "", nil
+}

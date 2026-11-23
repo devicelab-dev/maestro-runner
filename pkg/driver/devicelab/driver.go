@@ -983,12 +983,14 @@ func (d *Driver) scanCDPSocket() *core.CDPInfo {
 
 // browserDevToolsSocket returns the browser's DevTools socket on the device
 // (chrome_devtools_remote), whether or not the browser is in the foreground,
-// or "" when there is none.
+// or "" when there is none. With several, it is the last one listed, the one
+// scanCDPSocket connects to, so the first look is taken on that socket.
 func (d *Driver) browserDevToolsSocket() string {
 	output, err := d.device.Shell("cat /proc/net/unix")
 	if err != nil {
 		return ""
 	}
+	var browserSocket string
 	for _, line := range strings.Split(output, "\n") {
 		atIdx := strings.Index(line, "@")
 		if atIdx < 0 {
@@ -996,10 +998,10 @@ func (d *Driver) browserDevToolsSocket() string {
 		}
 		socket := strings.TrimSpace(line[atIdx+1:])
 		if strings.HasPrefix(socket, "chrome_devtools_remote") || strings.HasPrefix(socket, "chromium_devtools_remote") {
-			return socket
+			browserSocket = socket
 		}
 	}
-	return ""
+	return browserSocket
 }
 
 // knownBrowserPackages is the set of Android packages that are browsers.

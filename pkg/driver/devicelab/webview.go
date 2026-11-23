@@ -72,19 +72,19 @@ type webViewManager struct {
 	helperBroken bool
 
 	// preexistingTabs holds the page targets Chrome listed the first time
-	// this manager read them: tabs the runner did not open (the device
-	// user's own), which closeOtherTabs never closes. nil until that first
-	// read; disconnect and cleanup keep it, since openLink disconnects every
-	// time.
+	// this manager read them on browserSocket: tabs the runner did not open
+	// (the device user's own), which closeOtherTabs never closes. nil until
+	// that first read, and again when a connect goes to another socket;
+	// disconnect and cleanup keep it, since openLink disconnects every time.
 	preexistingTabs map[string]bool
 
 	// lastListing holds the page targets of the previous look at Chrome's
 	// tabs, so a connect can tell the tab that is new since (an openLink's).
 	lastListing map[string]bool
 
-	// browserSocket is Chrome's DevTools socket on the device, remembered
-	// from the first look so that closeOpenedTabs can reach Chrome after
-	// openLink's disconnect.
+	// browserSocket is Chrome's DevTools socket on the device that
+	// preexistingTabs and lastListing were read on, remembered so that
+	// closeOpenedTabs can reach Chrome after openLink's disconnect.
 	browserSocket string
 
 	forwarder CDPForwarder
@@ -943,6 +943,16 @@ func (m *webViewManager) connectBrowserViaHTTP(cdpInfo *core.CDPInfo, cdpType st
 	}
 	logger.Info("[cdp:4-forward] ADB forward established: local=%s → device=%s", socketPath, cdpInfo.Socket)
 
+	// The tabs seen at the first look are those of one browser process: a
+	// connect to another DevTools socket (a second browser) is that
+	// socket's first look, so none of its tabs count as the runner's.
+	if cdpInfo.Socket != m.browserSocket {
+		if m.browserSocket != "" {
+			logger.Info("[cdp:5-cleanup] DevTools socket changed (%s → %s): taking a first look at its tabs", m.browserSocket, cdpInfo.Socket)
+		}
+		m.preexistingTabs = nil
+		m.lastListing = nil
+	}
 	m.browserSocket = cdpInfo.Socket
 
 	// Step 5: HTTP GET /json to discover page targets
