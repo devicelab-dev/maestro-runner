@@ -346,9 +346,9 @@ func (d *Driver) execute(step flow.Step) *core.CommandResult {
 	case *flow.TapOnStep:
 		return d.tapOn(s)
 	case *flow.DoubleTapOnStep:
-		return d.tapSelector(s.Selector, s.Optional, s.TimeoutMs, "doubleTap", 0)
+		return d.pressSelectorOrPoint(s.Selector, s.Optional, s.TimeoutMs, "doubleTap", 0)
 	case *flow.LongPressOnStep:
-		return d.tapSelector(s.Selector, s.Optional, s.TimeoutMs, "longPress", s.DurationMs)
+		return d.pressSelectorOrPoint(s.Selector, s.Optional, s.TimeoutMs, "longPress", s.DurationMs)
 	case *flow.TapOnPointStep:
 		return d.tapOnPoint(s)
 	case *flow.SwipeStep:
