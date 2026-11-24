@@ -174,6 +174,29 @@ func (d *Driver) tapOnPoint(s *flow.TapOnPointStep) *core.CommandResult {
 	return core.SuccessResult(fmt.Sprintf("%s at (%.0f, %.0f)", kind, x, y), nil)
 }
 
+// pressSelectorOrPoint is doubleTapOn and longPressOn. A bare point has no
+// element to be relative to: it is a place on the screen, as it is for tapOn.
+// Without this the step took whatever element a selector-less lookup found
+// first and pressed its middle.
+func (d *Driver) pressSelectorOrPoint(sel flow.Selector, optional bool, timeoutMs int, kind string, holdMs int) *core.CommandResult {
+	if !sel.IsEmpty() || sel.Point == "" {
+		return d.tapSelector(sel, optional, timeoutMs, kind, holdMs)
+	}
+	w, h := d.screenSize(nil)
+	px, py, err := core.ParsePointCoords(sel.Point, w, h)
+	if err != nil {
+		return core.ErrorResult(err, fmt.Sprintf("invalid point %q: %v", sel.Point, err))
+	}
+	var extra *Args
+	if kind == "longPress" {
+		extra = &Args{HoldMs: f64(float64(core.LongPressMs(holdMs)))}
+	}
+	if err := d.act(kind, float64(px), float64(py), extra); err != nil {
+		return core.ErrorResult(err, fmt.Sprintf("%s failed: %v", kind, err))
+	}
+	return core.SuccessResult(fmt.Sprintf("%s at (%d, %d)", kind, px, py), nil)
+}
+
 // notFound turns a failed lookup into a result: success for an optional step.
 func notFound(err error, optional bool, what string) *core.CommandResult {
 	if optional {

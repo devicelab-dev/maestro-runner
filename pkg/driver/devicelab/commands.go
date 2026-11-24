@@ -589,6 +589,19 @@ func (d *Driver) doubleTapOn(step *flow.DoubleTapOnStep) *core.CommandResult {
 		return result
 	}
 
+	// A bare point has no element to be relative to: it is a place on the
+	// screen, as it is for tapOn.
+	if step.Selector.IsEmpty() && step.Selector.Point != "" {
+		x, y, _, err := d.resolveGesturePoint(step.Selector, step.IsOptional(), step.TimeoutMs)
+		if err != nil {
+			return errorResult(err, fmt.Sprintf("Invalid point coordinates: %v", err))
+		}
+		if err := d.client.DoubleClick(x, y); err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to double tap at coordinates: %v", err))
+		}
+		return successResult(fmt.Sprintf("Double tapped at (%d, %d)", x, y), nil)
+	}
+
 	_, info, err := d.findElementForTap(step.Selector, step.IsOptional(), step.TimeoutMs)
 	if err != nil {
 		err = d.notFoundOrCrash(err)
@@ -614,6 +627,19 @@ func (d *Driver) longPressOn(step *flow.LongPressOnStep) *core.CommandResult {
 
 	if result := d.checkKeyboardBlocking(wasInput, step.Selector); result != nil {
 		return result
+	}
+
+	// A bare point has no element to be relative to: it is a place on the
+	// screen, as it is for tapOn.
+	if step.Selector.IsEmpty() && step.Selector.Point != "" {
+		x, y, _, err := d.resolveGesturePoint(step.Selector, step.IsOptional(), step.TimeoutMs)
+		if err != nil {
+			return errorResult(err, fmt.Sprintf("Invalid point coordinates: %v", err))
+		}
+		if err := d.client.LongClick(x, y, core.LongPressMs(step.DurationMs)); err != nil {
+			return errorResult(err, fmt.Sprintf("Failed to long press at coordinates: %v", err))
+		}
+		return successResult(fmt.Sprintf("Long pressed at (%d, %d)", x, y), nil)
 	}
 
 	_, info, err := d.findElementForTap(step.Selector, step.IsOptional(), step.TimeoutMs)

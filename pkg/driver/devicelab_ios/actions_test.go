@@ -110,6 +110,51 @@ func TestLongPressHonoursShortDuration(t *testing.T) {
 	}
 }
 
+// A bare point (no selector) is a place on the screen, as it is for tapOn: the
+// step used to press the middle of whatever element a selector-less lookup
+// found first. No element is looked up now.
+func TestLongPressAndDoubleTapOnBarePoint(t *testing.T) {
+	d, fa, _ := newTestDriver(t, screenOf(node(1, "Cell", "Row", 0, 100, 400, 50)))
+	if res := d.Execute(&flow.LongPressOnStep{Selector: flow.Selector{Point: "50%, 25%"}, DurationMs: 500}); !res.Success {
+		t.Fatal(res.Message)
+	}
+	if res := d.Execute(&flow.LongPressOnStep{Selector: flow.Selector{Point: "10, 20"}}); !res.Success {
+		t.Fatal(res.Message)
+	}
+	if res := d.Execute(&flow.DoubleTapOnStep{Selector: flow.Selector{Point: "10, 20"}}); !res.Success {
+		t.Fatal(res.Message)
+	}
+	acts := fa.sent("act")
+	if len(acts) != 3 {
+		t.Fatalf("acts = %d", len(acts))
+	}
+	if acts[0].Kind != "longPress" || *acts[0].X != 200 || *acts[0].Y != 200 || *acts[0].HoldMs != 500 {
+		t.Errorf("longPress at a percent point = %+v", acts[0])
+	}
+	if acts[1].Kind != "longPress" || *acts[1].X != 10 || *acts[1].Y != 20 || *acts[1].HoldMs != 3000 {
+		t.Errorf("longPress at an absolute point = %+v", acts[1])
+	}
+	if acts[2].Kind != "doubleTap" || *acts[2].X != 10 || *acts[2].Y != 20 {
+		t.Errorf("doubleTap at a point = %+v", acts[2])
+	}
+	if n := len(fa.sent("find")) + len(fa.sent("snapshot")); n != 0 {
+		t.Errorf("a bare point should not look up an element, got %d lookups", n)
+	}
+}
+
+func TestLongPressAndDoubleTapOnBadPointFail(t *testing.T) {
+	d, fa, _ := newTestDriver(t, nil)
+	if res := d.Execute(&flow.LongPressOnStep{Selector: flow.Selector{Point: "nonsense"}}); res.Success {
+		t.Error("longPressOn with a bad point should fail")
+	}
+	if res := d.Execute(&flow.DoubleTapOnStep{Selector: flow.Selector{Point: "150%, 10%"}}); res.Success {
+		t.Error("doubleTapOn with a point outside the screen should fail")
+	}
+	if acts := fa.sent("act"); len(acts) != 0 {
+		t.Errorf("nothing should be pressed, got %+v", acts)
+	}
+}
+
 func TestTapOnPoint(t *testing.T) {
 	d, fa, _ := newTestDriver(t, nil)
 	if res := d.Execute(&flow.TapOnPointStep{Point: "50%, 25%"}); !res.Success {

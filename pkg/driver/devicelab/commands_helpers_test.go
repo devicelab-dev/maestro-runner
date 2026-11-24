@@ -2166,6 +2166,75 @@ func TestLongPressOn_CustomDuration(t *testing.T) {
 }
 
 // =============================================================================
+// longPressOn / doubleTapOn — a bare point (no selector) is a place on the
+// screen, as it is for tapOn: no element is looked up.
+// =============================================================================
+
+func newPointOnlyDriver() (*Driver, *scriptedClickClient) {
+	client := &scriptedClickClient{scriptedClient: &scriptedClient{trackingClient: newTrackingClient()}}
+	client.findElementErr = errors.New("a bare point must not look up an element")
+	return New(client, &core.PlatformInfo{ScreenWidth: 1080, ScreenHeight: 2400}, &mockShell{}), client
+}
+
+func TestLongPressOn_PointOnly(t *testing.T) {
+	driver, client := newPointOnlyDriver()
+
+	res := driver.longPressOn(&flow.LongPressOnStep{Selector: flow.Selector{Point: "50%,25%"}, DurationMs: 1000})
+	if !res.Success {
+		t.Fatalf("longPressOn with a bare point: %v", res.Error)
+	}
+	if len(client.longClicks) != 1 || client.longClicks[0] != (longClickArgs{540, 600, 1000}) {
+		t.Errorf("expected LongClick(540, 600, 1000), got %v", client.longClicks)
+	}
+}
+
+func TestLongPressOn_PointOnlyDefaultDurationAndAbsolute(t *testing.T) {
+	driver, client := newPointOnlyDriver()
+
+	res := driver.longPressOn(&flow.LongPressOnStep{Selector: flow.Selector{Point: "100, 200"}})
+	if !res.Success {
+		t.Fatalf("longPressOn with a bare point: %v", res.Error)
+	}
+	if len(client.longClicks) != 1 || client.longClicks[0] != (longClickArgs{100, 200, 3000}) {
+		t.Errorf("expected LongClick(100, 200, 3000), got %v", client.longClicks)
+	}
+}
+
+func TestLongPressOn_PointOnlyOutOfRange(t *testing.T) {
+	driver, client := newPointOnlyDriver()
+
+	if res := driver.longPressOn(&flow.LongPressOnStep{Selector: flow.Selector{Point: "150%,10%"}}); res.Success {
+		t.Error("a point outside the screen should fail")
+	}
+	if len(client.longClicks) != 0 {
+		t.Errorf("nothing should be pressed, got %v", client.longClicks)
+	}
+}
+
+func TestDoubleTapOn_PointOnly(t *testing.T) {
+	driver, client := newPointOnlyDriver()
+
+	res := driver.doubleTapOn(&flow.DoubleTapOnStep{Selector: flow.Selector{Point: "50%,25%"}})
+	if !res.Success {
+		t.Fatalf("doubleTapOn with a bare point: %v", res.Error)
+	}
+	if len(client.doubleClicks) != 1 || client.doubleClicks[0] != [2]int{540, 600} {
+		t.Errorf("expected DoubleClick(540, 600), got %v", client.doubleClicks)
+	}
+}
+
+func TestDoubleTapOn_PointOnlyOutOfRange(t *testing.T) {
+	driver, client := newPointOnlyDriver()
+
+	if res := driver.doubleTapOn(&flow.DoubleTapOnStep{Selector: flow.Selector{Point: "10%,150%"}}); res.Success {
+		t.Error("a point outside the screen should fail")
+	}
+	if len(client.doubleClicks) != 0 {
+		t.Errorf("nothing should be tapped, got %v", client.doubleClicks)
+	}
+}
+
+// =============================================================================
 // assertVisible — uses findElementFast which calls FindElement
 // =============================================================================
 

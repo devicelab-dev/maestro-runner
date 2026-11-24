@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+**DeviceLab: `longPressOn` and `doubleTapOn` with only a `point:` press that place on the screen, as `tapOn`'s `point:` does.** The point was read only as a place inside an element a selector found, so with no selector DeviceLab Android failed with `Element not found: no selector specified`, and DeviceLab iOS pressed the middle of whichever element a selector-less lookup found first (a status-bar clock, a widget) while the step passed. A `point:` next to a selector is unchanged: still a place inside that element.
+
 **`appId: ${X}` can use an `X` from the flow's own `env:`.** The appId was expanded before the flow's `env:` was applied, so it read "undefined"; only `-e` worked.
 
 **Android: adb calls time out instead of hanging the run.** A call to adb that never answered (a device dropping off USB, a stuck `adbd`) hung the whole run. Calls now stop after 60 s with an error naming the adb command; installs, push and pull get 10 minutes.
