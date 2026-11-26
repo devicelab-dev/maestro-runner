@@ -38,6 +38,10 @@ func unansweredTap(step *flow.TapOnStep, err error) *core.CommandResult {
 }
 
 func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
+	// Only the first tap after a launch waits for its target to stay put.
+	afterLaunch := d.launchMayMove && d.settlingOn() && launchStillWindow > 0
+	d.launchMayMove = false
+
 	// Check if using Point WITHOUT selector (screen-relative tap)
 	if step.Point != "" && step.Selector.IsEmpty() {
 		return d.tapOnPointWithCoords(step.Point)
@@ -163,6 +167,20 @@ func (d *Driver) tapOn(step *flow.TapOnStep) *core.CommandResult {
 				// Re-check: browser mode may have been detected after ensureWebViewConnection
 				if d.isBrowserMode() {
 					return d.tapOnBrowser(step)
+				}
+
+				// Right after a launch the target can be reported where the
+				// window started its slide-in; wait until it stays put.
+				if afterLaunch {
+					found, err := d.waitTargetStill(ctx, strategies)
+					if !found {
+						if err != nil {
+							lastErr = err
+						}
+						time.Sleep(snapshotPollGap)
+						continue
+					}
+					afterLaunch = false
 				}
 
 				// Capture the pre-tap tree hash so a later failing assertion
@@ -2347,10 +2365,95 @@ func (d *Driver) launchApp(step *flow.LaunchAppStep) *core.CommandResult {
 	if err := d.client.LaunchApp(appID, arguments); err != nil {
 		// RPC launch failed — fall back to shell
 		logger.Warn("launchApp: RPC launch failed for %s: %v — falling back to shell", appID, err)
-		return d.launchAppViaShell(appID, arguments)
+		res := d.launchAppViaShell(appID, arguments)
+		d.launchMayMove = res.Success && startsAfresh(step)
+		return res
 	}
+	d.launchMayMove = startsAfresh(step)
 
 	return successResult(fmt.Sprintf("Launched app: %s", appID), nil)
+}
+
+// startsAfresh reports whether step stops or clears the app before
+// launching it, so the app comes up through its launch screens.
+func startsAfresh(step *flow.LaunchAppStep) bool {
+	return step.ClearState || step.StopApp == nil || *step.StopApp
+}
+
+// The first tap after a launch that started the app afresh waits for its
+// target to stay at the same place for launchStillWindow, at most
+// launchStillCap after the target first shows.
+//
+// An app often goes from a splash Activity to its main one while the window
+// is still sliding in. On a Samsung Galaxy Note20 (Android 13) the main
+// window comes up from 403px lower, and accessibility reports its nodes at
+// that starting place for 380-470ms (70 launches of two apps), with no step
+// in between. The agent's tap waits for the bounds to read the same 4 times
+// 50ms apart, which that passes, so the tap went 403px below the target once
+// the window came to rest. The window must outlast that; 400ms did not.
+// MAESTRO_DEVICELAB_LAUNCH_STILL_MS overrides it; 0 turns the wait off.
+var launchStillWindow = durationFromEnvMs("MAESTRO_DEVICELAB_LAUNCH_STILL_MS", 600*time.Millisecond)
+
+// launchStillCap stops the wait for a target that keeps moving (a carousel).
+var launchStillCap = 3 * time.Second
+
+// waitTargetStill reads the first of strategies that matches until its
+// bounds have stayed the same for launchStillWindow. It returns false, with
+// the lookup's error, when nothing matches, so the caller keeps polling.
+//
+// A read can take 200ms on a large tree (a WebView home screen), and the
+// bounds it returns are from some moment within it. The place counts as
+// held only from the end of the first read that returned it to the start of
+// the latest one; timing from when reads return counted a 410ms slide as
+// 613ms.
+func (d *Driver) waitTargetStill(ctx context.Context, strategies []LocatorStrategy) (bool, error) {
+	pairs := make([]string, 0, 2*len(strategies))
+	for _, s := range strategies {
+		pairs = append(pairs, s.Strategy, s.Value)
+	}
+	read := func() (uiautomator2.ElementRect, error) {
+		elem, err := d.client.FindFirstOf(pairs)
+		if err != nil {
+			return uiautomator2.ElementRect{}, err
+		}
+		if elem == nil {
+			return uiautomator2.ElementRect{}, fmt.Errorf("no element")
+		}
+		return elem.Rect()
+	}
+	last, err := read()
+	if err != nil {
+		return false, err
+	}
+	seen := time.Now()
+	heldFrom := seen // end of the first read that returned last
+	for {
+		if time.Since(seen) >= launchStillCap {
+			logger.Debug("[devicelab] tap after launch: target still moving after %v, tapping", launchStillCap)
+			return true, nil
+		}
+		select {
+		case <-ctx.Done():
+			return true, nil
+		case <-time.After(snapshotPollGap):
+		}
+		readStart := time.Now()
+		cur, err := read()
+		if err != nil {
+			// Gone for a moment (a relayout): count again once it is back.
+			heldFrom = time.Now()
+			continue
+		}
+		if cur != last {
+			logger.Debug("[devicelab] tap after launch: target moved from %v to %v", last, cur)
+			last, heldFrom = cur, time.Now()
+			continue
+		}
+		if readStart.Sub(heldFrom) >= launchStillWindow {
+			logger.Debug("[devicelab] tap after launch: target still at %v after %v", last, time.Since(seen).Round(time.Millisecond))
+			return true, nil
+		}
+	}
 }
 
 // declaredOf keeps the permissions in perms that appID declares, as Maestro
