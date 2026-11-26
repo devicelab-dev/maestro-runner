@@ -2386,11 +2386,11 @@ func startsAfresh(step *flow.LaunchAppStep) bool {
 //
 // An app often goes from a splash Activity to its main one while the window
 // is still sliding in. On a Samsung Galaxy Note20 (Android 13) the main
-// window comes up from 403px lower over ~0.4s, and accessibility reports its
-// nodes at that starting place for the whole slide, with no step in between.
-// The agent's tap waits for the bounds to read the same 4 times 50ms apart,
-// which that passes, so the tap went 403px below the target once the window
-// came to rest. The window must outlast the slide; 400ms did not always.
+// window comes up from 403px lower, and accessibility reports its nodes at
+// that starting place for 380-470ms (70 launches of two apps), with no step
+// in between. The agent's tap waits for the bounds to read the same 4 times
+// 50ms apart, which that passes, so the tap went 403px below the target once
+// the window came to rest. The window must outlast that; 400ms did not.
 // MAESTRO_DEVICELAB_LAUNCH_STILL_MS overrides it; 0 turns the wait off.
 var launchStillWindow = durationFromEnvMs("MAESTRO_DEVICELAB_LAUNCH_STILL_MS", 600*time.Millisecond)
 
@@ -2400,6 +2400,12 @@ var launchStillCap = 3 * time.Second
 // waitTargetStill reads the first of strategies that matches until its
 // bounds have stayed the same for launchStillWindow. It returns false, with
 // the lookup's error, when nothing matches, so the caller keeps polling.
+//
+// A read can take 200ms on a large tree (a WebView home screen), and the
+// bounds it returns are from some moment within it. The place counts as
+// held only from the end of the first read that returned it to the start of
+// the latest one; timing from when reads return counted a 410ms slide as
+// 613ms.
 func (d *Driver) waitTargetStill(ctx context.Context, strategies []LocatorStrategy) (bool, error) {
 	pairs := make([]string, 0, 2*len(strategies))
 	for _, s := range strategies {
@@ -2420,12 +2426,8 @@ func (d *Driver) waitTargetStill(ctx context.Context, strategies []LocatorStrate
 		return false, err
 	}
 	seen := time.Now()
-	since := seen
+	heldFrom := seen // end of the first read that returned last
 	for {
-		if time.Since(since) >= launchStillWindow {
-			logger.Debug("[devicelab] tap after launch: target still at %v after %v", last, time.Since(seen).Round(time.Millisecond))
-			return true, nil
-		}
 		if time.Since(seen) >= launchStillCap {
 			logger.Debug("[devicelab] tap after launch: target still moving after %v, tapping", launchStillCap)
 			return true, nil
@@ -2435,15 +2437,21 @@ func (d *Driver) waitTargetStill(ctx context.Context, strategies []LocatorStrate
 			return true, nil
 		case <-time.After(snapshotPollGap):
 		}
+		readStart := time.Now()
 		cur, err := read()
 		if err != nil {
-			// Gone for a moment (a relayout): the window starts again.
-			since = time.Now()
+			// Gone for a moment (a relayout): count again once it is back.
+			heldFrom = time.Now()
 			continue
 		}
 		if cur != last {
 			logger.Debug("[devicelab] tap after launch: target moved from %v to %v", last, cur)
-			last, since = cur, time.Now()
+			last, heldFrom = cur, time.Now()
+			continue
+		}
+		if readStart.Sub(heldFrom) >= launchStillWindow {
+			logger.Debug("[devicelab] tap after launch: target still at %v after %v", last, time.Since(seen).Round(time.Millisecond))
+			return true, nil
 		}
 	}
 }

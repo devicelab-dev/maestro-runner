@@ -17,12 +17,16 @@ type stillClient struct {
 	*appLifecycleClient
 	rects        []uiautomator2.ElementRect
 	findFirstErr error
+	readDelay    time.Duration
 	reads        int
 	readsAtTap   []int
+	lastRect     uiautomator2.ElementRect
+	rectAtTap    []uiautomator2.ElementRect
 }
 
 func (s *stillClient) FindFirstOf([]string) (*uiautomator2.Element, error) {
 	s.reads++
+	time.Sleep(s.readDelay)
 	if s.findFirstErr != nil {
 		return nil, s.findFirstErr
 	}
@@ -30,11 +34,13 @@ func (s *stillClient) FindFirstOf([]string) (*uiautomator2.Element, error) {
 	if i >= len(s.rects) {
 		i = len(s.rects) - 1
 	}
+	s.lastRect = s.rects[i]
 	return uiautomator2.NewCachedElement("e", "Start", s.rects[i]), nil
 }
 
 func (s *stillClient) FindAndClickChecked(strategy, selector string, w, h int, hitTest bool) (*uiautomator2.Element, bool, string, error) {
 	s.readsAtTap = append(s.readsAtTap, s.reads)
+	s.rectAtTap = append(s.rectAtTap, s.lastRect)
 	return s.scriptedClient.FindAndClickChecked(strategy, selector, w, h, hitTest)
 }
 
@@ -93,6 +99,20 @@ func TestTapOn_FirstTapAfterLaunch_WaitsForTargetToStayPut(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed < 250*time.Millisecond {
 		t.Errorf("tapped after %v, before the target had stayed put for the window", elapsed)
+	}
+}
+
+// Reads that take long (a large tree) must not stretch how long the target
+// counts as held: two slow reads of the slide-in place, back to back, span
+// more than the window from when they returned, but not from what they saw.
+func TestTapOn_FirstTapAfterLaunch_SlowReadsDoNotCountAsHeld(t *testing.T) {
+	d, client := newStillDriver(t, stillMoved, stillMoved, stillRest)
+	client.readDelay = 100 * time.Millisecond
+	launch(t, d, &flow.LaunchAppStep{})
+
+	tapStart(t, d)
+	if len(client.rectAtTap) != 1 || client.rectAtTap[0] != stillRest {
+		t.Errorf("tapped after reading %v, want the place the target came to rest", client.rectAtTap)
 	}
 }
 
