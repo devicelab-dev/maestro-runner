@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+**DeviceLab Android: the first tap after `launchApp` waits for its target to stay put.** Right after a launch an app often goes from its splash Activity to its main one while the new window is still sliding in. On a Samsung Galaxy Note20 (Android 13) that window comes up from 403 px lower over about 0.4 s, and accessibility reports its nodes at that starting place for the whole slide, with nothing in between. The agent's tap waits for the bounds to read the same 4 times 50 ms apart, which that passes, so the tap went to whatever lay 403 px below the target once the window came to rest. The first tap after a `launchApp` that stops or clears the app now waits until its target has stayed in the same place for 600 ms, at most 3 s after it shows (`MAESTRO_DEVICELAB_LAUNCH_STILL_MS`; `0` turns the wait off). Later taps, taps by point and taps that go through the page source are unchanged.
+
 **`appId: ${X}` can use an `X` from the flow's own `env:`.** The appId was expanded before the flow's `env:` was applied, so it read "undefined"; only `-e` worked.
 
 **Android: adb calls time out instead of hanging the run.** A call to adb that never answered (a device dropping off USB, a stuck `adbd`) hung the whole run. Calls now stop after 60 s with an error naming the adb command; installs, push and pull get 10 minutes.

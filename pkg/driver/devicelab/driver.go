@@ -118,6 +118,11 @@ type Driver struct {
 	// mid-flow death can be explained rather than surfacing as "not found".
 	currentAppID string
 
+	// launchMayMove is set by a launchApp that started the app afresh and
+	// cleared by the next step that acts on the screen. A tapOn that finds
+	// it set first waits for its target to stay put (waitTargetStill).
+	launchMayMove bool
+
 	// Parent context for element-finding operations (nil = context.Background())
 	ctx context.Context
 
@@ -569,6 +574,12 @@ func (d *Driver) Execute(step flow.Step) *core.CommandResult {
 		// on the page still sliding in, then a swipe on that page went to the
 		// outer pager still animating (pager-view nested_pagerView_example).
 		d.settle(settleAfterTapTimeoutMs, "swipe")
+	}
+
+	// Only the first step after a launch can start mid-transition; tapOn
+	// reads and clears the flag itself.
+	if _, tap := step.(*flow.TapOnStep); !tap && actsOnScreen(step) {
+		d.launchMayMove = false
 	}
 
 	// A tap returns only once the screen has started to react, or after
